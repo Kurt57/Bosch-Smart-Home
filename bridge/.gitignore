@@ -1,0 +1,8 @@
+# Local runtime files — never commit secrets or data
+config.json
+energy.db
+energy.db-journal
+shc-client-cert.pem
+shc-client-key.pem
+__pycache__/
+*.pyc
