@@ -205,4 +205,5 @@ sudo systemctl enable --now bosch-strom
 | iPhone zeigt „Offline / Demo" | Bridge läuft nicht, falsche Adresse, oder iPhone in anderem WLAN. Adresse in **Setup** prüfen. |
 | Keine Geräte / 0 W | Deine Module haben evtl. keine Leistungsmessung, oder `device_filter` ist zu streng. Filter leeren. |
 | `last_error` in **Setup → Diagnose** | Zeigt den letzten Abruf-Fehler (z. B. Zertifikat abgelaufen → neu `pair`en). |
+| `certificate unknown` / `SSLV3_ALERT_CERTIFICATE_UNKNOWN` beim Koppeln | Controller **wurde erreicht** (IP/WLAN stimmen!), war aber **nicht im Kopplungsmodus**. Kurz den Knopf am Controller II drücken und **sofort** erneut koppeln. |
 | Wenig Historie | Normal am Anfang – die Bridge sammelt ab dem ersten Start. Einfach laufen lassen. |

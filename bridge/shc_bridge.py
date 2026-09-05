@@ -793,6 +793,18 @@ class Handler(BaseHTTPRequestHandler):
         client = SHCClient(ip, cert, key)
         try:
             status, data = client.register(pw)
+        except ssl.SSLError as exc:
+            # TLS handshake reached the controller but our client cert was
+            # rejected – almost always because it is NOT in registration mode.
+            msg = str(exc)
+            if "CERTIFICATE_UNKNOWN" in msg or "certificate unknown" in msg or "alert" in msg:
+                hint = ("Controller erreichbar, aber das Zertifikat wurde abgewiesen. "
+                        "Das heißt fast immer: der Kopplungsmodus war nicht aktiv. "
+                        "Bitte KURZ den Knopf am Controller II drücken (LED beachten) und "
+                        "innerhalb weniger Sekunden erneut koppeln.")
+            else:
+                hint = f"TLS-Fehler beim Koppeln: {exc}"
+            return self._send_json({"ok": False, "error": hint}, 200)
         except Exception as exc:
             return self._send_json(
                 {"ok": False, "error": f"Controller nicht erreichbar: {exc}. "
@@ -1002,7 +1014,13 @@ def cmd_pair(args, cfg):
         pass
 
     client = SHCClient(ip, cert, key)
-    status, data = client.register(password)
+    try:
+        status, data = client.register(password)
+    except ssl.SSLError as exc:
+        sys.exit(f"[pair] TLS handshake rejected ({exc}).\n"
+                 "The controller was reached but refused the certificate – it was most "
+                 "likely NOT in registration mode. Short-press the button on the SHC II "
+                 "and run `pair` again immediately.")
     if status in (200, 201):
         print("[pair] success! Client registered. You can now run `serve`.")
     elif status == 401:
