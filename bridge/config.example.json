@@ -1,0 +1,8 @@
+{
+  "shc_ip": "192.168.1.50",
+  "system_password": "DEIN-SYSTEMPASSWORT",
+  "poll_interval": 30,
+  "price_per_kwh": 0.35,
+  "currency": "€",
+  "device_filter": []
+}
