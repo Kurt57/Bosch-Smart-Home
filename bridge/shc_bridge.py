@@ -87,6 +87,41 @@ def load_config(path: str) -> dict:
     return cfg
 
 
+def _parse_start_date(raw) -> int | None:
+    """Best-effort parse of energyConsumptionStartDate to epoch seconds.
+
+    Controllers may report this as epoch milliseconds (int) OR as an ISO-8601
+    string like '2025-11-28T18:02:46Z'. Never raises – returns None on anything
+    unexpected, so it can never break the polling loop.
+    """
+    if raw is None:
+        return None
+    try:
+        if isinstance(raw, (int, float)):
+            v = float(raw)
+            return int(v / 1000) if v > 1e12 else int(v)
+        s = str(raw).strip()
+        if not s:
+            return None
+        if s.isdigit():
+            v = int(s)
+            return int(v / 1000) if v > 1e12 else v
+        # ISO-8601; normalise the trailing 'Z' and drop fractional seconds
+        s = s.replace("Z", "+00:00")
+        if "." in s:
+            head, _, tail = s.partition(".")
+            off = ""
+            for sign in ("+", "-"):
+                idx = tail.find(sign)
+                if idx != -1:
+                    off = tail[idx:]
+                    break
+            s = head + off
+        return int(datetime.fromisoformat(s).timestamp())
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
 # --------------------------------------------------------------------------- #
 # SHC client (mutual TLS, standard library only)
 # --------------------------------------------------------------------------- #
@@ -189,17 +224,15 @@ class SHCClient:
         return result
 
     def read_power(self, device_id: str) -> dict | None:
-        """Return {power_w, energy_wh} for a device's PowerMeter service."""
+        """Return {power_w, energy_wh, energy_start} for a device's PowerMeter."""
         state = self.get(f"/smarthome/devices/{device_id}/services/PowerMeter")
         if not state:
             return None
         st = state.get("state", state)
-        start_ms = st.get("energyConsumptionStartDate")
         return {
             "power_w": float(st.get("powerConsumption", 0.0) or 0.0),
             "energy_wh": float(st.get("energyConsumption", 0.0) or 0.0),
-            # epoch seconds the cumulative counter started at (None if absent)
-            "energy_start": int(int(start_ms) / 1000) if start_ms else None,
+            "energy_start": _parse_start_date(st.get("energyConsumptionStartDate")),
         }
 
 
@@ -518,10 +551,13 @@ class Poller(threading.Thread):
         ts = int(time.time())
         devices = self.client.list_power_devices(self.cfg.get("device_filter") or None)
         for dev in devices:
-            reading = self.client.read_power(dev["id"])
-            self.store.upsert_device(dev, ts, reading.get("energy_start") if reading else None)
-            if reading:
-                self.store.add_sample(dev["id"], ts, reading["power_w"], reading["energy_wh"])
+            try:
+                reading = self.client.read_power(dev["id"])
+                self.store.upsert_device(dev, ts, reading.get("energy_start") if reading else None)
+                if reading:
+                    self.store.add_sample(dev["id"], ts, reading["power_w"], reading["energy_wh"])
+            except Exception as exc:  # one bad device must not stop the others
+                print(f"[poll] device {dev.get('id')}: {exc}", file=sys.stderr)
         self.last_poll = ts
 
     def stop(self):
@@ -943,7 +979,10 @@ def local_subnet() -> str:
 
 
 def _port_open(ip: str, port: int, timeout: float) -> bool:
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    except OSError:
+        return False
     s.settimeout(timeout)
     try:
         s.connect((ip, port))
@@ -959,25 +998,28 @@ def discover_shc(timeout: float = 0.4) -> list[str]:
 
     The controller listens on the registration port (8443) *and* the data port
     (8444); requiring both open makes false positives on a home network rare.
+    A bounded worker pool keeps the number of concurrent sockets well under the
+    OS file-descriptor limit (macOS defaults to 256).
     """
+    from concurrent.futures import ThreadPoolExecutor
+
     prefix = local_subnet()
     mine = local_ip()
-    found: list[str] = []
-    lock = threading.Lock()
 
     def check(ip):
         if ip == mine:
-            return
+            return None
+        # probe the data port first; only try 8443 if 8444 answered
         if _port_open(ip, 8444, timeout) and _port_open(ip, 8443, timeout):
-            with lock:
-                found.append(ip)
+            return ip
+        return None
 
-    threads = [threading.Thread(target=check, args=(f"{prefix}.{i}",))
-               for i in range(1, 255)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
+    hosts = [f"{prefix}.{i}" for i in range(1, 255)]
+    found = []
+    with ThreadPoolExecutor(max_workers=40) as pool:
+        for res in pool.map(check, hosts):
+            if res:
+                found.append(res)
     return sorted(found, key=lambda x: int(x.rsplit(".", 1)[1]))
 
 
