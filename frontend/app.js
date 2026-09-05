@@ -18,6 +18,7 @@ let STATE = {
   useDays: 14,
   data: null,     // analytics for the profile/forecast window (90d)
   live: null,     // frequently-refreshed analytics (short window)
+  health: null,   // last /api/health payload
   cur: '€',
 };
 
@@ -45,6 +46,7 @@ async function loadAll() {
   if (STATE.demo) return applyData(demoAnalytics(90), demoAnalytics(2, true), 'demo');
   try {
     const health = await api('/api/health');
+    STATE.health = health;
     STATE.cur = health.currency || '€';
     if (health.price_per_kwh && !localStorage.getItem(LS.price)) {
       STATE.price = health.price_per_kwh; $('price').value = STATE.price;
@@ -55,13 +57,16 @@ async function loadAll() {
     ]);
     applyData(full, live, health.mode || 'live');
     $('diag').textContent = JSON.stringify(health, null, 1);
+    renderSettings();
   } catch (e) {
     // no bridge → demo
+    STATE.health = null;
     setMode('err');
     $('conn-note').innerHTML =
       'Keine Bridge erreichbar (' + e.message + '). Es werden <b>Demo-Daten</b> gezeigt. ' +
-      'Trage in „Setup" die Adresse deiner Bridge ein.';
+      'Trage hier die Adresse deiner Bridge ein oder öffne diese Seite direkt von der Bridge.';
     applyData(demoAnalytics(90), demoAnalytics(2, true), 'demo');
+    renderSettings();
   }
 }
 
@@ -76,8 +81,10 @@ function applyData(full, live, mode) {
 
 function setMode(m) {
   const el = $('mode');
-  el.className = 'pill ' + (m === 'live' ? 'live' : m === 'demo' ? 'demo' : 'err');
-  el.textContent = m === 'live' ? '● Live' : m === 'demo' ? '◆ Demo' : '⚠︎ Offline';
+  const cls = { live: 'live', demo: 'demo', idle: 'demo', err: 'err' }[m] || 'err';
+  const txt = { live: '● Live', demo: '◆ Demo', idle: '⚙︎ Setup nötig', err: '⚠︎ Offline' }[m] || '⚠︎ Offline';
+  el.className = 'pill ' + cls;
+  el.textContent = txt;
 }
 
 /* -------------------------------------------------------------- SVG charts */
@@ -272,6 +279,20 @@ function renderAway() {
 
 function renderForecast() {
   const S = STATE.data.stats;
+  // counter-based "day 1" estimate (from the cumulative meter + start date)
+  const C = STATE.data.counter_estimate;
+  const cc = $('counter-card');
+  if (C) {
+    cc.hidden = false;
+    $('counter-body').innerHTML = [
+      ['Ø pro Tag (seit Installation)', kwh(C.avg_daily_kwh, 2)],
+      ['Jahres-Hochrechnung', `${kwh(C.year_estimate_kwh, 0)} · ${money(C.year_estimate_cost)}`],
+      ['Zählerbasis', `${kwh(C.total_kwh, 1)} über ${fmt(C.since_days, 0)} Tage`],
+    ].map(([k, v]) => `<div class="devrow"><div class="nm"><b>${k}</b></div><div class="val"><small>${v}</small></div></div>`).join('');
+  } else {
+    cc.hidden = true;
+  }
+
   $('f-year').innerHTML = kwh(S.year_estimate_kwh, 0);
   $('f-year-cost').textContent = money(S.year_estimate_cost);
   $('f-month').innerHTML = kwh(S.month_estimate_kwh, 1);
@@ -294,6 +315,89 @@ function renderForecast() {
     ['Median pro Tag', kwh(S.median_daily_kwh, 2)],
     ['Vermutete Abwesenheit', `${away.count} Tage → grob ${money(away.count * S.day_avg_cost)} nicht angefallen`],
   ].map(([k, v]) => `<div class="devrow"><div class="nm"><b>${k}</b></div><div class="val"><small>${v}</small></div></div>`).join('');
+}
+
+/* --------------------------------------------------------------- settings */
+function statusRow(k, v) {
+  return `<div class="devrow"><div class="nm"><b>${k}</b></div><div class="val"><small>${v}</small></div></div>`;
+}
+
+function renderSettings() {
+  const h = STATE.health;
+  const rows = $('status-rows');
+  if (!h) {
+    rows.innerHTML = statusRow('Bridge', 'nicht erreichbar – Demo-Ansicht');
+    $('pair-note').innerHTML =
+      'Kopplung ist nur möglich, wenn diese Seite direkt <b>von der Bridge</b> geöffnet wird ' +
+      '(nicht in dieser Vorschau).';
+    return;
+  }
+  const modeTxt = { live: 'Live · Controller verbunden', demo: 'Demo-Daten',
+    idle: 'Noch nicht gekoppelt' }[h.mode] || h.mode;
+  const last = h.last_poll ? new Date(h.last_poll * 1000).toLocaleTimeString('de-DE') : '–';
+  rows.innerHTML = [
+    ['Modus', modeTxt],
+    ['Geräte gefunden', fmt(h.device_count || 0, 0)],
+    ['Messpunkte gespeichert', fmt(h.sample_count || 0, 0)],
+    ['Letzte Messung', last],
+    ['Zertifikat', h.has_cert ? 'vorhanden ✓' : 'fehlt'],
+    h.last_error ? ['Letzter Fehler', esc(h.last_error)] : null,
+  ].filter(Boolean).map(([k, v]) => statusRow(k, v)).join('');
+  if (h.shc_ip && !$('shc-ip').value) $('shc-ip').value = h.shc_ip;
+  if (h.price_per_kwh) $('shc-price').value = h.price_per_kwh;
+  if (h.poll_interval) $('shc-interval').value = h.poll_interval;
+}
+
+async function postJSON(path, body) {
+  const r = await fetch((STATE.base || '') + path, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return r.json();
+}
+
+async function doDiscover() {
+  const note = $('discover-note');
+  note.textContent = 'Suche Controller im Netzwerk … (kann ein paar Sekunden dauern)';
+  try {
+    const r = await api('/api/discover');
+    if (r.suggested) {
+      $('shc-ip').value = r.suggested;
+      note.innerHTML = `Gefunden: <b>${r.candidates.join(', ')}</b> – oben übernommen. ` +
+        'Passt das nicht, IP manuell eintragen.';
+    } else {
+      note.innerHTML = `Nichts gefunden im Bereich ${esc(r.scanned)}. IP bitte manuell eintragen ` +
+        '(Bosch-App → Einstellungen → System → Controller).';
+    }
+  } catch (e) {
+    note.textContent = 'Automatische Suche geht nur, wenn die Seite von der Bridge geöffnet ist.';
+  }
+}
+
+async function doPair() {
+  const note = $('pair-note'), btn = $('pair-btn');
+  const ip = $('shc-ip').value.trim(), pw = $('shc-pw').value;
+  if (!ip || !pw) { note.textContent = 'Bitte IP-Adresse und Systempasswort eingeben.'; return; }
+  btn.disabled = true;
+  note.textContent = 'Koppeln … hast du gerade kurz den Knopf am Controller II gedrückt?';
+  try {
+    const r = await postJSON('/api/pair', {
+      ip, password: pw,
+      price_per_kwh: parseFloat($('shc-price').value) || 0.35,
+      poll_interval: parseInt($('shc-interval').value, 10) || 30,
+    });
+    if (r.ok) {
+      note.innerHTML = '✅ ' + (r.message || 'Erfolgreich gekoppelt.');
+      STATE.demo = false; localStorage.setItem(LS.demo, '0');
+      setTimeout(loadAll, 1400);
+    } else {
+      note.innerHTML = '⚠︎ ' + esc(r.error || 'Kopplung fehlgeschlagen.') +
+        (r.detail ? '<br><small>' + esc(r.detail) + '</small>' : '');
+    }
+  } catch (e) {
+    note.textContent = 'Fehler: ' + e.message + ' – ist die Seite von der Bridge geöffnet?';
+  }
+  btn.disabled = false;
 }
 
 /* ---------------------------------------------------------------- helpers */
@@ -404,8 +508,15 @@ function demoAnalytics(days, shortWindow) {
   const totalNow = perDevice.reduce((a, d) => a + d.power_w, 0);
   const totalKwh = perDevice.reduce((a, d) => a + d.energy_kwh_total, 0);
 
+  const cAvg = totalKwh / Math.max(1, days);
   return {
     currency: '€', price_per_kwh: STATE.price, baseline_w: round(baseline, 2), window_days: days,
+    counter_estimate: {
+      since: Math.floor(start.getTime() / 1000), since_days: round(days, 1),
+      total_kwh: round(totalKwh, 3), avg_daily_kwh: round(cAvg, 3),
+      year_estimate_kwh: round(cAvg * 365, 1), year_estimate_cost: round(cAvg * 365 * STATE.price, 2),
+      month_estimate_kwh: round(cAvg * 30.4, 2),
+    },
     live: { total_power_w: round(totalNow, 2), total_energy_kwh: round(totalKwh, 3), devices: perDevice },
     daily, hourly_profile: hourly, weekday_profile: weekday, heatmap: heat,
     stats: {
@@ -452,6 +563,8 @@ function init() {
     $('conn-note').textContent = 'Demo-Modus aktiv.';
     loadAll();
   });
+  $('discover').addEventListener('click', doDiscover);
+  $('pair-btn').addEventListener('click', doPair);
   $('price').addEventListener('change', () => {
     STATE.price = parseFloat($('price').value) || 0.35;
     localStorage.setItem(LS.price, String(STATE.price));

@@ -14,7 +14,8 @@ Prognose. Läuft komplett in deinem Heimnetz, ohne Cloud.
 | **Verbrauch** | kWh **pro Tag** (14/30/90 Tage), abwesende Tage rot markiert, Anteil je Gerät am Gesamtverbrauch |
 | **Profil** | Ø-Leistung je **Stunde** (Tagesprofil), Ø-kWh je **Wochentag**, **Wärmekarte** Wochentag × Stunde |
 | **Abwesenheit** | Heuristische Schätzung, **wie oft ihr nicht zuhause wart**, Anwesenheit pro Tag + Kalender |
-| **Prognose** | **Jahres-Hochrechnung** (kWh + €), Monat/Tag, Standby-Anteil, Einordnung, konfigurierbarer Strompreis |
+| **Prognose** | **Jahres-Hochrechnung** (kWh + €), Monat/Tag, Standby-Anteil, Einordnung, **Sofort-Schätzung aus dem Zählerstand** (ab Minute 1), konfigurierbarer Strompreis |
+| **Setup** | **Controller automatisch finden**, Kopplung per Formular (kurzer Knopfdruck → live), Live-Status |
 
 Alles basiert ausschließlich auf den `PowerMeter`-Daten (Wirkleistung in W,
 Energiezähler in Wh) der Bosch-Module – genau wie gewünscht.
@@ -45,16 +46,22 @@ z. B. `http://192.168.x.x:8090/`.
 
 ## Mit deinem echten Controller
 
-1. Einmalig anmelden (Client-Zertifikat wird erzeugt und gekoppelt):
-   ```bash
-   cd bridge
-   cp config.example.json config.json      # IP + Systempasswort eintragen
-   python3 shc_bridge.py pair               # dann Knopf am SHC drücken
-   ```
-2. Starten:
-   ```bash
-   python3 shc_bridge.py serve
-   ```
+**Am einfachsten – Kopplung direkt in der App:**
+```bash
+cd bridge
+python3 shc_bridge.py serve      # ohne Argumente starten
+```
+Seite am iPhone öffnen → Tab **Setup** → **„Controller automatisch finden"** →
+Systempasswort eingeben → kurz den Knopf am Controller II drücken → **„Jetzt
+koppeln"**. Die App schaltet automatisch auf Live.
+
+*Alternativ per Kommandozeile:*
+```bash
+cd bridge
+cp config.example.json config.json      # IP + Systempasswort eintragen
+python3 shc_bridge.py pair               # dann kurz Knopf am Controller II drücken
+python3 shc_bridge.py serve
+```
 
 Ausführliche Anleitung inkl. „Zum Home-Bildschirm hinzufügen":
 siehe **[docs/SETUP.md](docs/SETUP.md)**.
