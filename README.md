@@ -44,6 +44,24 @@ python3 shc_bridge.py serve --demo
 Dann am iPhone (gleiches WLAN) die angezeigte Adresse öffnen,
 z. B. `http://192.168.x.x:8090/`.
 
+### macOS – per Doppelklick
+
+Nach dem Klonen (siehe unten) im Finder einfach doppelklicken:
+
+* **`demo-macos.command`** – startet die Demo.
+* **`start-macos.command`** – startet den Normalbetrieb (Kopplung dann am iPhone im Tab *Setup*).
+
+Beim allerersten Start fragt macOS evtl. „Eingehende Verbindungen erlauben?" → **Erlauben**.
+Falls Gatekeeper meckert: Rechtsklick auf die Datei → **Öffnen**.
+Tipp: Statt der IP kannst du am iPhone auch `http://<Mac-Name>.local:8090/` als festen Link nutzen.
+
+**Klonen auf dem Mac** (Terminal):
+```bash
+git clone https://github.com/Kurt57/Bosch-Smart-Home.git
+cd Bosch-Smart-Home
+git checkout claude/bosch-smart-home-energy-c6p99e
+```
+
 ## Mit deinem echten Controller
 
 **Am einfachsten – Kopplung direkt in der App:**
