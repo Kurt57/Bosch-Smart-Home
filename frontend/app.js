@@ -207,12 +207,14 @@ function renderLive() {
   $('k-baseline').innerHTML = fmt(STATE.data.baseline_w, 1) + ' W';
 
   const max = Math.max(1, ...dev.map(d => d.power_w));
-  $('live-devices').innerHTML = dev.map(d => `
+  $('live-devices').innerHTML = dev.map(d => {
+    const L = devLabel(d);
+    return `
     <div class="devrow">
-      <div class="nm"><b>${esc(d.name)}</b><small>${esc(d.room || d.model || '')}</small>
+      <div class="nm"><b>${esc(L.title)}</b><small>${esc(L.sub)}</small>
         <div class="bar"><i style="width:${(d.power_w / max * 100).toFixed(0)}%"></i></div></div>
       <div class="val"><b>${fmt(d.power_w, 1)} W</b><small>${kwh(d.energy_kwh_total, 1)} gesamt</small></div>
-    </div>`).join('');
+    </div>`; }).join('');
 
   // 24h line from the short-window daily/hourly — use hourly profile as proxy shape
   const hp = STATE.data.hourly_profile.map(h => ({ v: h.avg_w, label: h.hour % 6 === 0 ? h.hour + 'h' : '' }));
@@ -237,7 +239,7 @@ function renderUse() {
   const tot = dev.reduce((a, d) => a + d.energy_kwh_total, 0) || 1;
   $('dev-share').innerHTML = dev.map(d => `
     <div class="devrow">
-      <div class="nm"><b>${esc(d.name)}</b><small>${(d.energy_kwh_total / tot * 100).toFixed(0)} % des Gesamtverbrauchs</small>
+      <div class="nm"><b>${esc(devLabel(d).title)}</b><small>${(d.energy_kwh_total / tot * 100).toFixed(0)} % des Gesamtverbrauchs</small>
         <div class="bar"><i style="width:${(d.energy_kwh_total / tot * 100).toFixed(0)}%"></i></div></div>
       <div class="val"><b>${kwh(d.energy_kwh_total, 1)}</b></div>
     </div>`).join('');
@@ -405,6 +407,17 @@ function windowDays(daily, n) { return daily.slice(-n); }
 function shortDay(s) { const d = new Date(s + 'T00:00'); return d.getDate() + '.'; }
 function longDay(s) { const d = new Date(s + 'T00:00'); return WD[(d.getDay() + 6) % 7] + ' ' + d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }); }
 function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+// Choose a friendly title/subtitle for a device. Bosch often reports the
+// device `name` as the generic product type; in that case the room name is
+// usually what the user actually assigned, so prefer it as the title.
+function devLabel(d) {
+  const name = d.name || '';
+  const generic = /steuerung|micromodule|light[\s_-]?control|shutter[\s_-]?control/i.test(name)
+    || name.toLowerCase() === (d.model || '').toLowerCase();
+  if (generic && d.room) return { title: d.room, sub: name || d.model || '' };
+  return { title: name || d.room || 'Gerät', sub: d.room || d.model || '' };
+}
 
 /* --------------------------------------------------------- demo generator */
 function demoPower(id, dt, away) {

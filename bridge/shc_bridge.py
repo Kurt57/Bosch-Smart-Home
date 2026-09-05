@@ -198,9 +198,13 @@ class SHCClient:
         devices = self.get("/smarthome/devices") or []
         rooms = {}
         try:
-            for room in (self.get("/smarthome/rooms") or []):
-                rooms[room.get("id")] = room.get("name")
-        except RuntimeError:
+            raw_rooms = self.get("/smarthome/rooms") or []
+            if isinstance(raw_rooms, dict):  # some firmwares wrap the list
+                raw_rooms = raw_rooms.get("rooms") or raw_rooms.get("items") or []
+            for room in raw_rooms:
+                if isinstance(room, dict):
+                    rooms[room.get("id")] = room.get("name")
+        except Exception:
             pass
 
         result = []
@@ -921,6 +925,20 @@ class Handler(BaseHTTPRequestHandler):
                     "suggested": found[0] if found else "",
                     "scanned": local_subnet() + ".0/24",
                 })
+            if path == "/api/raw-devices":
+                # diagnostic: raw controller device + room JSON (live only)
+                if self.ctx.mode != "live":
+                    return self._send_json({"error": "nur im Live-Modus verfügbar"}, 400)
+                client = SHCClient(self.cfg.get("shc_ip", ""), self.cfg["cert"], self.cfg["key"])
+                devs = client.get("/smarthome/devices") or []
+                try:
+                    rooms = client.get("/smarthome/rooms")
+                except Exception:
+                    rooms = None
+                slim = [{k: d.get(k) for k in
+                         ("id", "name", "deviceModel", "roomId", "deviceServiceIds")}
+                        for d in devs if "PowerMeter" in (d.get("deviceServiceIds") or [])]
+                return self._send_json({"power_devices": slim, "rooms": rooms})
             return self._send_json({"error": "unknown endpoint"}, 404)
         except Exception as exc:
             return self._send_json({"error": str(exc)}, 500)
