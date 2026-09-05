@@ -348,6 +348,39 @@ function renderSettings() {
   if (h.shc_ip && !$('shc-ip').value) $('shc-ip').value = h.shc_ip;
   if (h.price_per_kwh) $('shc-price').value = h.price_per_kwh;
   if (h.poll_interval) $('shc-interval').value = h.poll_interval;
+  renderRenameList();
+}
+
+function friendlyModel(m) {
+  m = m || '';
+  if (/SHUTTER/i.test(m)) return 'Rollladen-Modul';
+  if (/LIGHT/i.test(m)) return 'Licht-/Rollladen-Modul';
+  return m || 'Modul';
+}
+
+function renderRenameList() {
+  const box = $('rename-list');
+  if (!box) return;
+  const devs = (STATE.data && STATE.data.live && STATE.data.live.devices) || [];
+  if (!devs.length) { box.innerHTML = '<div class="note">Noch keine Geräte gefunden.</div>'; return; }
+  const list = [...devs].sort((a, b) => devLabel(a).title.localeCompare(devLabel(b).title));
+  box.innerHTML = list.map(d => {
+    const cap = [friendlyModel(d.model), d.room || null, 'ID ' + shortId(d.id)]
+      .filter(Boolean).join(' · ');
+    return `<div style="margin-bottom:12px">
+      <label>${esc(cap)}</label>
+      <input class="rn" data-id="${esc(d.id)}" value="${esc(d.custom_name || '')}"
+             placeholder="${esc(devLabel(d).title)}" autocomplete="off"
+             autocapitalize="words" spellcheck="false">
+    </div>`;
+  }).join('');
+}
+
+function applyCustomName(id, name) {
+  for (const arr of [STATE.data && STATE.data.live && STATE.data.live.devices,
+                     STATE.live && STATE.live.live && STATE.live.live.devices]) {
+    if (arr) for (const d of arr) if (d.id === id) d.custom_name = name;
+  }
 }
 
 async function postJSON(path, body) {
@@ -411,11 +444,18 @@ function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<':
 // Choose a friendly title/subtitle for a device. Bosch often reports the
 // device `name` as the generic product type; in that case the room name is
 // usually what the user actually assigned, so prefer it as the title.
+function shortId(id) {
+  const m = String(id || '').match(/([0-9a-f]{6})$/i);
+  return m ? m[1] : String(id || '').slice(-6);
+}
 function devLabel(d) {
+  const custom = (d.custom_name || '').trim();
+  if (custom) return { title: custom, sub: d.room || d.name || '' };
   const name = d.name || '';
   const generic = /steuerung|micromodule|light[\s_-]?control|shutter[\s_-]?control/i.test(name)
     || name.toLowerCase() === (d.model || '').toLowerCase();
-  if (generic && d.room) return { title: d.room, sub: name || d.model || '' };
+  if (generic && d.room) return { title: d.room, sub: name };
+  if (generic) return { title: 'Licht/Rollladen · ' + shortId(d.id), sub: name };
   return { title: name || d.room || 'Gerät', sub: d.room || d.model || '' };
 }
 
@@ -578,6 +618,22 @@ function init() {
   });
   $('discover').addEventListener('click', doDiscover);
   $('pair-btn').addEventListener('click', doPair);
+  $('rename-list').addEventListener('change', async (e) => {
+    const inp = e.target.closest('input.rn');
+    if (!inp) return;
+    const id = inp.dataset.id, name = inp.value.trim();
+    inp.disabled = true;
+    try {
+      const r = await postJSON('/api/device-name', { id, name });
+      if (r && r.ok) {
+        applyCustomName(id, name);
+        inp.placeholder = name || devLabel({ id, name: '', model: '', room: '' }).title;
+        inp.style.borderColor = '#4be0b0';
+        renderLive(); renderUse();
+      } else { inp.style.borderColor = '#ff6b8a'; }
+    } catch (err) { inp.style.borderColor = '#ff6b8a'; }
+    inp.disabled = false;
+  });
   $('price').addEventListener('change', () => {
     STATE.price = parseFloat($('price').value) || 0.35;
     localStorage.setItem(LS.price, String(STATE.price));

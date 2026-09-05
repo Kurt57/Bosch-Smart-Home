@@ -258,10 +258,12 @@ class Store:
                 " id TEXT PRIMARY KEY, name TEXT, room TEXT, model TEXT,"
                 " last_seen INTEGER, energy_start INTEGER)"
             )
-            # add column for databases created before energy_start existed
+            # add columns for databases created before these existed
             cols = [r[1] for r in self.conn.execute("PRAGMA table_info(devices)")]
             if "energy_start" not in cols:
                 self.conn.execute("ALTER TABLE devices ADD COLUMN energy_start INTEGER")
+            if "custom_name" not in cols:
+                self.conn.execute("ALTER TABLE devices ADD COLUMN custom_name TEXT")
             self.conn.execute(
                 "CREATE TABLE IF NOT EXISTS samples("
                 " device_id TEXT, ts INTEGER, power_w REAL, energy_wh REAL)"
@@ -280,6 +282,14 @@ class Store:
                 " energy_start=COALESCE(excluded.energy_start, devices.energy_start)",
                 (dev["id"], dev["name"], dev.get("room", ""), dev.get("model", ""),
                  ts, energy_start),
+            )
+
+    def set_custom_name(self, device_id: str, name: str | None):
+        """Store a user-assigned name for a device (local only, never pushed)."""
+        with self.lock, self.conn:
+            self.conn.execute(
+                "UPDATE devices SET custom_name=? WHERE id=?",
+                ((name or "").strip() or None, device_id),
             )
 
     def add_sample(self, device_id: str, ts: int, power_w: float, energy_wh: float):
@@ -383,6 +393,7 @@ def compute_analytics(store: Store, days: int, price: float) -> dict:
         per_device.append({
             "id": dev_id,
             "name": dev["name"],
+            "custom_name": dev.get("custom_name") or "",
             "room": dev.get("room", ""),
             "model": dev.get("model", ""),
             "power_w": round(p, 2),
@@ -786,6 +797,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._post_pair(body)
             if parsed.path == "/api/mode":
                 return self._post_mode(body)
+            if parsed.path == "/api/device-name":
+                return self._post_device_name(body)
             return self._send_json({"error": "unknown endpoint"}, 404)
         except Exception as exc:
             return self._send_json({"error": str(exc)}, 500)
@@ -884,6 +897,13 @@ class Handler(BaseHTTPRequestHandler):
             self.ctx.start_live()
             return self._send_json({"ok": True, "mode": "live"})
         return self._send_json({"error": "mode muss 'live' oder 'demo' sein"}, 400)
+
+    def _post_device_name(self, body):
+        dev_id = str(body.get("id") or "").strip()
+        if not dev_id:
+            return self._send_json({"ok": False, "error": "device id fehlt"}, 400)
+        self.store.set_custom_name(dev_id, body.get("name"))
+        return self._send_json({"ok": True})
 
     # -- REST API ---------------------------------------------------------- #
     def _api(self, path, qs):

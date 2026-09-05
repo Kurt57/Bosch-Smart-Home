@@ -15,7 +15,7 @@ Prognose. Läuft komplett in deinem Heimnetz, ohne Cloud.
 | **Profil** | Ø-Leistung je **Stunde** (Tagesprofil), Ø-kWh je **Wochentag**, **Wärmekarte** Wochentag × Stunde |
 | **Abwesenheit** | Heuristische Schätzung, **wie oft ihr nicht zuhause wart**, Anwesenheit pro Tag + Kalender |
 | **Prognose** | **Jahres-Hochrechnung** (kWh + €), Monat/Tag, Standby-Anteil, Einordnung, **Sofort-Schätzung aus dem Zählerstand** (ab Minute 1), konfigurierbarer Strompreis |
-| **Setup** | **Controller automatisch finden**, Kopplung per Formular (kurzer Knopfdruck → live), Live-Status |
+| **Setup** | **Controller automatisch finden**, Kopplung per Formular (kurzer Knopfdruck → live), Live-Status, **Geräte lokal umbenennen** |
 
 Alles basiert ausschließlich auf den `PowerMeter`-Daten (Wirkleistung in W,
 Energiezähler in Wh) der Bosch-Module – genau wie gewünscht.
