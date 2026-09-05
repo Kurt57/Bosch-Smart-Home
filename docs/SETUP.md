@@ -7,7 +7,14 @@ Bosch Smart Home Controller (SHC).
 
 ## 0. Überblick
 
-Du brauchst ein Gerät im Heimnetz, das dauerhaft läuft und die **Bridge**
+**Zwei Bosch-Geräte, nicht verwechseln:**
+
+* **Smart Home Controller II** – die *Zentrale* (Gateway). Mit ihr redet die
+  Bridge. Sie misst selbst keinen Strom.
+* **Licht-/Rollladensteuerung II** – die *Unterputz-Module* an Lampen/Rollläden.
+  Diese messen die Leistung und liefern die Verbrauchsdaten, die die App anzeigt.
+
+Du brauchst außerdem ein Gerät im Heimnetz, das dauerhaft läuft und die **Bridge**
 ausführt (Raspberry Pi, NAS, alter Laptop, Mac oder PC). Das iPhone öffnet nur
 die Web-Seite dieser Bridge – es muss nichts installiert werden.
 
@@ -93,9 +100,11 @@ python3 shc_bridge.py pair
 Ablauf:
 
 1. Das Skript erzeugt einmalig ein Client-Zertifikat (`openssl` wird benötigt).
-2. Es fordert dich auf, den **Knopf an der Vorderseite des Controllers** zu
-   **drücken und zu halten, bis die LED blinkt**.
-3. Sobald die LED blinkt: im Terminal **Enter** drücken.
+2. Es fordert dich auf, den Controller in den **Kopplungsmodus** zu bringen:
+   * **Smart Home Controller II** (deine Zentrale): **kurz** auf den Knopf an der
+     Vorderseite drücken.
+   * Original-Controller (Gen 1): Knopf **drücken und halten, bis die LED blinkt**.
+3. Direkt danach im Terminal **Enter** drücken.
 4. Bei Erfolg erscheint `success! Client registered.`
 
 Häufige Meldungen:

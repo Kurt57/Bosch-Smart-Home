@@ -740,8 +740,9 @@ def cmd_pair(args, cfg):
             sys.exit(f"[pair] could not run openssl to create the certificate: {exc}\n"
                      "Install openssl or generate cert/key manually.")
 
-    print("\n>>> Press and HOLD the button on the front of your Bosch Smart Home")
-    print(">>> Controller until the LED starts flashing, THEN press Enter here.")
+    print("\n>>> Put the controller into client-registration mode, THEN press Enter here:")
+    print(">>>   • Smart Home Controller II: SHORT press the button on the front.")
+    print(">>>   • Original Smart Home Controller (gen 1): press and HOLD until the LED flashes.")
     try:
         input()
     except EOFError:
@@ -755,7 +756,8 @@ def cmd_pair(args, cfg):
         sys.exit("[pair] HTTP 401 – wrong system password.")
     else:
         sys.exit(f"[pair] registration failed (HTTP {status}): {data[:300]!r}\n"
-                 "Make sure the controller button LED was flashing when you pressed Enter.")
+                 "Make sure the controller was in registration mode (SHC II: short button "
+                 "press; gen 1: hold until LED flashes) when you pressed Enter, then retry.")
 
 
 def cmd_serve(args, cfg):
