@@ -209,15 +209,12 @@ class SHCClient:
             pass
 
         by_id = {d.get("id"): d for d in devices if isinstance(d, dict)}
-        # child -> parent lookup, so a module can inherit a linked device's name
-        parent_of = {}
-        for d in devices:
-            for child in (d.get("childDeviceIds") or []):
-                parent_of[child] = d.get("id")
 
         def is_generic(nm: str) -> bool:
+            # matches only Bosch's default product label, not user names that
+            # merely contain "…steuerung" (e.g. "Lichtsteuerung Elif")
             return (not nm) or bool(re.search(
-                r"steuerung|micromodule|light[\s_-]?control|shutter[\s_-]?control",
+                r"rollladensteuerung|micromodule|light[\s_-]?control|shutter[\s_-]?control",
                 nm, re.I))
 
         result = []
@@ -229,13 +226,22 @@ class SHCClient:
             name = dev.get("name") or ""
             model = dev.get("deviceModel") or ""
             room_id = dev.get("roomId")
-            # if unnamed/roomless, inherit from a linked parent device
-            linked = by_id.get(dev.get("parentDeviceId")) or by_id.get(parent_of.get(dev_id))
-            if linked:
-                if is_generic(name) and linked.get("name") and not is_generic(linked.get("name")):
-                    name = linked.get("name")
-                if not room_id:
-                    room_id = linked.get("roomId")
+            # Bosch puts the PowerMeter on the LIGHT_CONTROL module, but the
+            # user-given names/rooms live on its attached child lights
+            # (MICROMODULE_LIGHT_ATTACHED) or, less often, a parent device.
+            # Inherit from those when this device itself is generic/roomless.
+            if is_generic(name) or not room_id:
+                linked = [by_id.get(dev.get("parentDeviceId"))]
+                linked += [by_id.get(cid) for cid in (dev.get("childDeviceIds") or [])]
+                linked = [d for d in linked if d]
+                names = [d.get("name") for d in linked
+                         if d.get("name") and not is_generic(d.get("name"))]
+                rooms_c = [d.get("roomId") for d in linked if d.get("roomId")]
+                if is_generic(name) and names:
+                    uniq = list(dict.fromkeys(names))
+                    name = " + ".join(uniq[:2]) + (" …" if len(uniq) > 2 else "")
+                if not room_id and rooms_c:
+                    room_id = max(set(rooms_c), key=rooms_c.count)
             name = name or dev_id
             if name_filter:
                 hay = f"{name} {model}".lower()

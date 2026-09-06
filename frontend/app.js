@@ -452,7 +452,7 @@ function devLabel(d) {
   const custom = (d.custom_name || '').trim();
   if (custom) return { title: custom, sub: d.room || d.name || '' };
   const name = d.name || '';
-  const generic = /steuerung|micromodule|light[\s_-]?control|shutter[\s_-]?control/i.test(name)
+  const generic = /rollladensteuerung|micromodule|light[\s_-]?control|shutter[\s_-]?control/i.test(name)
     || name.toLowerCase() === (d.model || '').toLowerCase();
   if (generic && d.room) return { title: d.room, sub: name };
   if (generic) return { title: 'Licht/Rollladen · ' + shortId(d.id), sub: name };
