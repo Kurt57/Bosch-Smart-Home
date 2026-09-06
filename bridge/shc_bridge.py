@@ -87,6 +87,41 @@ def load_config(path: str) -> dict:
     return cfg
 
 
+def _parse_start_date(raw) -> int | None:
+    """Best-effort parse of energyConsumptionStartDate to epoch seconds.
+
+    Controllers may report this as epoch milliseconds (int) OR as an ISO-8601
+    string like '2025-11-28T18:02:46Z'. Never raises – returns None on anything
+    unexpected, so it can never break the polling loop.
+    """
+    if raw is None:
+        return None
+    try:
+        if isinstance(raw, (int, float)):
+            v = float(raw)
+            return int(v / 1000) if v > 1e12 else int(v)
+        s = str(raw).strip()
+        if not s:
+            return None
+        if s.isdigit():
+            v = int(s)
+            return int(v / 1000) if v > 1e12 else v
+        # ISO-8601; normalise the trailing 'Z' and drop fractional seconds
+        s = s.replace("Z", "+00:00")
+        if "." in s:
+            head, _, tail = s.partition(".")
+            off = ""
+            for sign in ("+", "-"):
+                idx = tail.find(sign)
+                if idx != -1:
+                    off = tail[idx:]
+                    break
+            s = head + off
+        return int(datetime.fromisoformat(s).timestamp())
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
 # --------------------------------------------------------------------------- #
 # SHC client (mutual TLS, standard library only)
 # --------------------------------------------------------------------------- #
@@ -163,9 +198,13 @@ class SHCClient:
         devices = self.get("/smarthome/devices") or []
         rooms = {}
         try:
-            for room in (self.get("/smarthome/rooms") or []):
-                rooms[room.get("id")] = room.get("name")
-        except RuntimeError:
+            raw_rooms = self.get("/smarthome/rooms") or []
+            if isinstance(raw_rooms, dict):  # some firmwares wrap the list
+                raw_rooms = raw_rooms.get("rooms") or raw_rooms.get("items") or []
+            for room in raw_rooms:
+                if isinstance(room, dict):
+                    rooms[room.get("id")] = room.get("name")
+        except Exception:
             pass
 
         result = []
@@ -189,7 +228,7 @@ class SHCClient:
         return result
 
     def read_power(self, device_id: str) -> dict | None:
-        """Return {power_w, energy_wh} for a device's PowerMeter service."""
+        """Return {power_w, energy_wh, energy_start} for a device's PowerMeter."""
         state = self.get(f"/smarthome/devices/{device_id}/services/PowerMeter")
         if not state:
             return None
@@ -197,6 +236,7 @@ class SHCClient:
         return {
             "power_w": float(st.get("powerConsumption", 0.0) or 0.0),
             "energy_wh": float(st.get("energyConsumption", 0.0) or 0.0),
+            "energy_start": _parse_start_date(st.get("energyConsumptionStartDate")),
         }
 
 
@@ -216,8 +256,14 @@ class Store:
             self.conn.execute(
                 "CREATE TABLE IF NOT EXISTS devices("
                 " id TEXT PRIMARY KEY, name TEXT, room TEXT, model TEXT,"
-                " last_seen INTEGER)"
+                " last_seen INTEGER, energy_start INTEGER)"
             )
+            # add columns for databases created before these existed
+            cols = [r[1] for r in self.conn.execute("PRAGMA table_info(devices)")]
+            if "energy_start" not in cols:
+                self.conn.execute("ALTER TABLE devices ADD COLUMN energy_start INTEGER")
+            if "custom_name" not in cols:
+                self.conn.execute("ALTER TABLE devices ADD COLUMN custom_name TEXT")
             self.conn.execute(
                 "CREATE TABLE IF NOT EXISTS samples("
                 " device_id TEXT, ts INTEGER, power_w REAL, energy_wh REAL)"
@@ -226,13 +272,24 @@ class Store:
                 "CREATE INDEX IF NOT EXISTS idx_samples ON samples(device_id, ts)"
             )
 
-    def upsert_device(self, dev: dict, ts: int):
+    def upsert_device(self, dev: dict, ts: int, energy_start: int | None = None):
         with self.lock, self.conn:
             self.conn.execute(
-                "INSERT INTO devices(id,name,room,model,last_seen) VALUES(?,?,?,?,?)"
+                "INSERT INTO devices(id,name,room,model,last_seen,energy_start)"
+                " VALUES(?,?,?,?,?,?)"
                 " ON CONFLICT(id) DO UPDATE SET name=excluded.name, room=excluded.room,"
-                " model=excluded.model, last_seen=excluded.last_seen",
-                (dev["id"], dev["name"], dev.get("room", ""), dev.get("model", ""), ts),
+                " model=excluded.model, last_seen=excluded.last_seen,"
+                " energy_start=COALESCE(excluded.energy_start, devices.energy_start)",
+                (dev["id"], dev["name"], dev.get("room", ""), dev.get("model", ""),
+                 ts, energy_start),
+            )
+
+    def set_custom_name(self, device_id: str, name: str | None):
+        """Store a user-assigned name for a device (local only, never pushed)."""
+        with self.lock, self.conn:
+            self.conn.execute(
+                "UPDATE devices SET custom_name=? WHERE id=?",
+                ((name or "").strip() or None, device_id),
             )
 
     def add_sample(self, device_id: str, ts: int, power_w: float, energy_wh: float):
@@ -336,6 +393,7 @@ def compute_analytics(store: Store, days: int, price: float) -> dict:
         per_device.append({
             "id": dev_id,
             "name": dev["name"],
+            "custom_name": dev.get("custom_name") or "",
             "room": dev.get("room", ""),
             "model": dev.get("model", ""),
             "power_w": round(p, 2),
@@ -423,11 +481,31 @@ def compute_analytics(store: Store, days: int, price: float) -> dict:
         d["presence"] = round(presence, 2)
         d["likely_away"] = is_away
 
+    # --- counter-based "day 1" estimate ---------------------------------- #
+    # The PowerMeter counter is cumulative since energyConsumptionStartDate,
+    # so total / age gives an average even before we have our own history.
+    starts = [d.get("energy_start") for d in devices.values() if d.get("energy_start")]
+    counter = None
+    if starts and total_energy_kwh > 0:
+        earliest = min(starts)
+        since_days = max(0.5, (now - earliest) / 86400.0)
+        c_avg = total_energy_kwh / since_days
+        counter = {
+            "since": earliest,
+            "since_days": round(since_days, 1),
+            "total_kwh": round(total_energy_kwh, 3),
+            "avg_daily_kwh": round(c_avg, 3),
+            "year_estimate_kwh": round(c_avg * 365, 1),
+            "year_estimate_cost": round(c_avg * 365 * price, 2),
+            "month_estimate_kwh": round(c_avg * 30.4, 2),
+        }
+
     return {
         "generated_at": now,
         "window_days": days,
         "price_per_kwh": price,
         "baseline_w": round(baseline_w, 2),
+        "counter_estimate": counter,
         "live": {
             "total_power_w": round(total_now, 2),
             "total_energy_kwh": round(total_energy_kwh, 3),
@@ -488,10 +566,13 @@ class Poller(threading.Thread):
         ts = int(time.time())
         devices = self.client.list_power_devices(self.cfg.get("device_filter") or None)
         for dev in devices:
-            self.store.upsert_device(dev, ts)
-            reading = self.client.read_power(dev["id"])
-            if reading:
-                self.store.add_sample(dev["id"], ts, reading["power_w"], reading["energy_wh"])
+            try:
+                reading = self.client.read_power(dev["id"])
+                self.store.upsert_device(dev, ts, reading.get("energy_start") if reading else None)
+                if reading:
+                    self.store.add_sample(dev["id"], ts, reading["power_w"], reading["energy_wh"])
+            except Exception as exc:  # one bad device must not stop the others
+                print(f"[poll] device {dev.get('id')}: {exc}", file=sys.stderr)
         self.last_poll = ts
 
     def stop(self):
@@ -562,8 +643,11 @@ def seed_demo(store: Store, days: int = 90):
     step = timedelta(minutes=15)
     counters = {d["id"]: 0.0 for d in DEMO_DEVICES}
     rows = []
+    # counter start date = start of the seeded history (keeps the counter-based
+    # estimate consistent with the measured daily average in demo mode)
+    install = int(start.timestamp())
     for dev in DEMO_DEVICES:
-        store.upsert_device(dev, int(now.timestamp()))
+        store.upsert_device(dev, int(now.timestamp()), energy_start=install)
     t = start
     while t <= now:
         away = is_away(t)
@@ -607,16 +691,70 @@ class DemoPoller(threading.Thread):
 
 
 # --------------------------------------------------------------------------- #
+# Runtime – holds the store/config and the currently running poller so the
+# poller can be (re)started from the web UI (pair / switch demo↔live).
+# --------------------------------------------------------------------------- #
+class Runtime:
+    def __init__(self, store: Store, cfg: dict):
+        self.store = store
+        self.cfg = cfg
+        self.poller = None
+        self.mode = "idle"
+
+    def stop(self):
+        if self.poller:
+            self.poller.stop()
+            self.poller = None
+
+    def start_demo(self, days: int = 90):
+        self.stop()
+        seed_demo(self.store, days)
+        self.cfg["_demo"] = True
+        self.mode = "demo"
+        self.poller = DemoPoller(self.store, int(self.cfg.get("poll_interval", 30)))
+        self.poller.start()
+
+    def start_live(self):
+        self.stop()
+        self.cfg["_demo"] = False
+        self.mode = "live"
+        client = SHCClient(self.cfg.get("shc_ip", ""), self.cfg["cert"], self.cfg["key"])
+        self.poller = Poller(client, self.store, self.cfg)
+        self.poller.start()
+
+
+def save_config(cfg: dict, path: str):
+    keep = ("shc_ip", "system_password", "cert", "key", "db", "poll_interval",
+            "price_per_kwh", "currency", "device_filter")
+    data = {k: cfg[k] for k in keep if k in cfg and not str(k).startswith("_")}
+    try:
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, indent=2, ensure_ascii=False)
+    except OSError as exc:
+        print(f"[config] could not write {path}: {exc}", file=sys.stderr)
+
+
+# --------------------------------------------------------------------------- #
 # HTTP server
 # --------------------------------------------------------------------------- #
 class Handler(BaseHTTPRequestHandler):
     server_version = "BoschHomeEnergyBridge/1.0"
 
-    # injected by the server factory
-    store: Store = None
-    cfg: dict = None
-    poller = None
+    ctx: Runtime = None          # injected by the server factory
     frontend_dir: str = DEFAULT_FRONTEND
+
+    # convenience accessors onto the shared runtime
+    @property
+    def store(self):
+        return self.ctx.store
+
+    @property
+    def cfg(self):
+        return self.ctx.cfg
+
+    @property
+    def poller(self):
+        return self.ctx.poller
 
     def log_message(self, fmt, *args):  # quieter logging
         pass
@@ -638,20 +776,156 @@ class Handler(BaseHTTPRequestHandler):
             return self._api(path, qs)
         return self._static(path)
 
+    # -- write actions (pairing / config / mode from the web UI) ----------- #
+    def _read_json(self) -> dict:
+        n = int(self.headers.get("Content-Length", "0") or 0)
+        raw = self.rfile.read(n) if n else b""
+        return json.loads(raw) if raw else {}
+
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        if not parsed.path.startswith("/api/"):
+            return self.send_error(404)
+        try:
+            body = self._read_json()
+        except ValueError:
+            return self._send_json({"error": "invalid json"}, 400)
+        try:
+            if parsed.path == "/api/config":
+                return self._post_config(body)
+            if parsed.path == "/api/pair":
+                return self._post_pair(body)
+            if parsed.path == "/api/mode":
+                return self._post_mode(body)
+            if parsed.path == "/api/device-name":
+                return self._post_device_name(body)
+            return self._send_json({"error": "unknown endpoint"}, 404)
+        except Exception as exc:
+            return self._send_json({"error": str(exc)}, 500)
+
+    def _post_config(self, body):
+        cfg = self.cfg
+        for k in ("shc_ip", "system_password", "currency"):
+            if body.get(k) is not None:
+                cfg[k] = str(body[k])
+        if body.get("price_per_kwh") is not None:
+            cfg["price_per_kwh"] = float(body["price_per_kwh"])
+        if body.get("poll_interval") is not None:
+            cfg["poll_interval"] = max(5, int(body["poll_interval"]))
+        if isinstance(body.get("device_filter"), list):
+            cfg["device_filter"] = body["device_filter"]
+        save_config(cfg, cfg.get("_config_path", DEFAULT_CONFIG))
+        return self._send_json({"ok": True})
+
+    def _post_pair(self, body):
+        cfg = self.cfg
+        ip = str(body.get("ip") or cfg.get("shc_ip") or "").strip()
+        pw = str(body.get("password") or cfg.get("system_password") or "")
+        if not ip or not pw:
+            return self._send_json(
+                {"ok": False, "error": "IP-Adresse und Systempasswort sind erforderlich."}, 400)
+        cfg["shc_ip"], cfg["system_password"] = ip, pw
+        if body.get("price_per_kwh") is not None:
+            cfg["price_per_kwh"] = float(body["price_per_kwh"])
+        if body.get("poll_interval") is not None:
+            cfg["poll_interval"] = max(5, int(body["poll_interval"]))
+
+        cert, key = cfg["cert"], cfg["key"]
+        if not (os.path.exists(cert) and os.path.exists(key)):
+            try:
+                subprocess.run([
+                    "openssl", "req", "-x509", "-nodes", "-newkey", "rsa:2048",
+                    "-keyout", key, "-out", cert, "-days", "3650",
+                    "-subj", f"/CN={CLIENT_ID}",
+                ], check=True, capture_output=True)
+            except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+                return self._send_json(
+                    {"ok": False, "error": f"Zertifikat konnte nicht erzeugt werden "
+                     f"(ist openssl installiert?): {exc}"}, 500)
+
+        client = SHCClient(ip, cert, key)
+        try:
+            status, data = client.register(pw)
+        except ssl.SSLError as exc:
+            # TLS handshake reached the controller but our client cert was
+            # rejected – almost always because it is NOT in registration mode.
+            msg = str(exc)
+            if "CERTIFICATE_UNKNOWN" in msg or "certificate unknown" in msg or "alert" in msg:
+                hint = ("Controller erreichbar, aber das Zertifikat wurde abgewiesen. "
+                        "Das heißt fast immer: der Kopplungsmodus war nicht aktiv. "
+                        "Bitte KURZ den Knopf am Controller II drücken (LED beachten) und "
+                        "innerhalb weniger Sekunden erneut koppeln.")
+            else:
+                hint = f"TLS-Fehler beim Koppeln: {exc}"
+            return self._send_json({"ok": False, "error": hint}, 200)
+        except Exception as exc:
+            return self._send_json(
+                {"ok": False, "error": f"Controller nicht erreichbar: {exc}. "
+                 "Stimmt die IP-Adresse? Gleiches WLAN?"}, 502)
+
+        if status in (200, 201):
+            save_config(cfg, cfg.get("_config_path", DEFAULT_CONFIG))
+            try:
+                self.ctx.start_live()
+            except Exception as exc:
+                return self._send_json(
+                    {"ok": True, "live": False,
+                     "message": f"Gekoppelt, aber Live-Start schlug fehl: {exc}"})
+            return self._send_json(
+                {"ok": True, "live": True,
+                 "message": "Erfolgreich gekoppelt und live geschaltet."})
+        if status == 401:
+            return self._send_json(
+                {"ok": False, "error": "Falsches Systempasswort (HTTP 401)."}, 200)
+        return self._send_json(
+            {"ok": False, "error": f"Registrierung fehlgeschlagen (HTTP {status}). "
+             "Am Controller II kurz den Knopf drücken und sofort erneut koppeln.",
+             "detail": data[:200].decode("utf-8", "replace")}, 200)
+
+    def _post_mode(self, body):
+        mode = body.get("mode")
+        if mode == "demo":
+            self.ctx.start_demo()
+            return self._send_json({"ok": True, "mode": "demo"})
+        if mode == "live":
+            cfg = self.cfg
+            if not (os.path.exists(cfg["cert"]) and os.path.exists(cfg["key"])):
+                return self._send_json(
+                    {"ok": False, "error": "Noch nicht gekoppelt – zuerst koppeln."}, 200)
+            if not cfg.get("shc_ip"):
+                return self._send_json({"ok": False, "error": "Keine Controller-IP gesetzt."}, 200)
+            self.ctx.start_live()
+            return self._send_json({"ok": True, "mode": "live"})
+        return self._send_json({"error": "mode muss 'live' oder 'demo' sein"}, 400)
+
+    def _post_device_name(self, body):
+        dev_id = str(body.get("id") or "").strip()
+        if not dev_id:
+            return self._send_json({"ok": False, "error": "device id fehlt"}, 400)
+        self.store.set_custom_name(dev_id, body.get("name"))
+        return self._send_json({"ok": True})
+
     # -- REST API ---------------------------------------------------------- #
     def _api(self, path, qs):
         try:
             if path == "/api/health":
+                cfg = self.cfg
+                have_cert = os.path.exists(cfg.get("cert", "")) and os.path.exists(cfg.get("key", ""))
                 return self._send_json({
                     "ok": True,
-                    "mode": "demo" if self.cfg.get("_demo") else "live",
+                    "mode": self.ctx.mode,
                     "sample_count": self.store.count(),
+                    "device_count": len(self.store.devices()),
                     "last_poll": getattr(self.poller, "last_poll", None),
                     "last_error": getattr(self.poller, "last_error", None),
                     "since": self.store.min_ts(),
                     "server_time": int(time.time()),
                     "price_per_kwh": self.cfg.get("price_per_kwh"),
+                    "poll_interval": self.cfg.get("poll_interval", 30),
                     "currency": self.cfg.get("currency", "€"),
+                    "shc_ip": self.cfg.get("shc_ip", ""),
+                    "has_password": bool(self.cfg.get("system_password")),
+                    "has_cert": have_cert,
                 })
             if path == "/api/devices":
                 return self._send_json({"devices": self.store.devices()})
@@ -664,6 +938,27 @@ class Handler(BaseHTTPRequestHandler):
                 since = int(time.time()) - days * 86400
                 rows = self.store.samples_since(since, device)
                 return self._send_json({"device": device, "samples": rows})
+            if path == "/api/discover":
+                found = discover_shc()
+                return self._send_json({
+                    "candidates": found,
+                    "suggested": found[0] if found else "",
+                    "scanned": local_subnet() + ".0/24",
+                })
+            if path == "/api/raw-devices":
+                # diagnostic: raw controller device + room JSON (live only)
+                if self.ctx.mode != "live":
+                    return self._send_json({"error": "nur im Live-Modus verfügbar"}, 400)
+                client = SHCClient(self.cfg.get("shc_ip", ""), self.cfg["cert"], self.cfg["key"])
+                devs = client.get("/smarthome/devices") or []
+                try:
+                    rooms = client.get("/smarthome/rooms")
+                except Exception:
+                    rooms = None
+                slim = [{k: d.get(k) for k in
+                         ("id", "name", "deviceModel", "roomId", "deviceServiceIds")}
+                        for d in devs if "PowerMeter" in (d.get("deviceServiceIds") or [])]
+                return self._send_json({"power_devices": slim, "rooms": rooms})
             return self._send_json({"error": "unknown endpoint"}, 404)
         except Exception as exc:
             return self._send_json({"error": str(exc)}, 500)
@@ -697,9 +992,9 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
 
-def make_server(host, port, store, cfg, poller, frontend_dir):
+def make_server(host, port, ctx, frontend_dir):
     handler = type("BoundHandler", (Handler,), {
-        "store": store, "cfg": cfg, "poller": poller, "frontend_dir": frontend_dir,
+        "ctx": ctx, "frontend_dir": frontend_dir,
     })
     httpd = ThreadingHTTPServer((host, port), handler)
     return httpd
@@ -714,6 +1009,56 @@ def local_ip() -> str:
         return ip
     except OSError:
         return "127.0.0.1"
+
+
+def local_subnet() -> str:
+    """Return the /24 prefix of the local address, e.g. '192.168.1'."""
+    return local_ip().rsplit(".", 1)[0]
+
+
+def _port_open(ip: str, port: int, timeout: float) -> bool:
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    except OSError:
+        return False
+    s.settimeout(timeout)
+    try:
+        s.connect((ip, port))
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
+
+
+def discover_shc(timeout: float = 0.4) -> list[str]:
+    """Scan the local /24 for the Bosch SHC.
+
+    The controller listens on the registration port (8443) *and* the data port
+    (8444); requiring both open makes false positives on a home network rare.
+    A bounded worker pool keeps the number of concurrent sockets well under the
+    OS file-descriptor limit (macOS defaults to 256).
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    prefix = local_subnet()
+    mine = local_ip()
+
+    def check(ip):
+        if ip == mine:
+            return None
+        # probe the data port first; only try 8443 if 8444 answered
+        if _port_open(ip, 8444, timeout) and _port_open(ip, 8443, timeout):
+            return ip
+        return None
+
+    hosts = [f"{prefix}.{i}" for i in range(1, 255)]
+    found = []
+    with ThreadPoolExecutor(max_workers=40) as pool:
+        for res in pool.map(check, hosts):
+            if res:
+                found.append(res)
+    return sorted(found, key=lambda x: int(x.rsplit(".", 1)[1]))
 
 
 # --------------------------------------------------------------------------- #
@@ -749,7 +1094,13 @@ def cmd_pair(args, cfg):
         pass
 
     client = SHCClient(ip, cert, key)
-    status, data = client.register(password)
+    try:
+        status, data = client.register(password)
+    except ssl.SSLError as exc:
+        sys.exit(f"[pair] TLS handshake rejected ({exc}).\n"
+                 "The controller was reached but refused the certificate – it was most "
+                 "likely NOT in registration mode. Short-press the button on the SHC II "
+                 "and run `pair` again immediately.")
     if status in (200, 201):
         print("[pair] success! Client registered. You can now run `serve`.")
     elif status == 401:
@@ -762,29 +1113,29 @@ def cmd_pair(args, cfg):
 
 def cmd_serve(args, cfg):
     store = Store(cfg["db"])
-    demo = args.demo
-    cfg["_demo"] = demo
+    cfg["_config_path"] = args.config
+    if args.ip:
+        cfg["shc_ip"] = args.ip
     if args.price is not None:
         cfg["price_per_kwh"] = args.price
 
-    if demo:
-        seed_demo(store, days=args.demo_days)
-        poller = DemoPoller(store, interval=int(cfg.get("poll_interval", 30)))
+    ctx = Runtime(store, cfg)
+    have_cert = os.path.exists(cfg["cert"]) and os.path.exists(cfg["key"])
+    if args.demo:
+        ctx.start_demo(days=args.demo_days)
+    elif cfg.get("shc_ip") and have_cert:
+        ctx.start_live()
     else:
-        ip = args.ip or cfg.get("shc_ip")
-        if not ip:
-            sys.exit("Missing SHC IP. Use --ip, set shc_ip in config.json, or run with --demo.")
-        if not (os.path.exists(cfg["cert"]) and os.path.exists(cfg["key"])):
-            sys.exit("No client certificate found. Run `pair` first (or use --demo).")
-        client = SHCClient(ip, cfg["cert"], cfg["key"])
-        poller = Poller(client, store, cfg)
-    poller.start()
+        # not configured yet – stay idle so the web UI can pair the controller
+        ctx.mode = "idle"
 
     frontend = args.frontend or DEFAULT_FRONTEND
-    httpd = make_server(args.host, args.port, store, cfg, poller, frontend)
+    httpd = make_server(args.host, args.port, ctx, frontend)
     ip_hint = local_ip()
+    mode_txt = {"demo": "DEMO", "live": "LIVE (" + cfg.get("shc_ip", "") + ")",
+                "idle": "IDLE – noch nicht gekoppelt, bitte Setup im Browser öffnen"}[ctx.mode]
     print("\n  Bosch Home Energy bridge running")
-    print(f"  Mode:        {'DEMO' if demo else 'LIVE (' + (args.ip or cfg.get('shc_ip','')) + ')'}")
+    print(f"  Mode:        {mode_txt}")
     print(f"  Open on this machine:  http://localhost:{args.port}/")
     print(f"  Open on your iPhone:   http://{ip_hint}:{args.port}/")
     print("  (iPhone must be on the same Wi-Fi. Press Ctrl+C to stop.)\n")
@@ -793,7 +1144,7 @@ def cmd_serve(args, cfg):
     except KeyboardInterrupt:
         print("\nStopping …")
     finally:
-        poller.stop()
+        ctx.stop()
         httpd.server_close()
 
 

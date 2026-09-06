@@ -57,6 +57,17 @@ komplette App mit realistischen Demo-Daten. Zum Beenden `Strg+C`.
 
 ## 3. Mit dem echten Controller koppeln
 
+> **Am einfachsten – alles in der App:** Starte die Bridge ohne Argumente
+> (`python3 shc_bridge.py serve`) und öffne die Seite am iPhone. Im Tab
+> **Setup** kannst du dann:
+> 1. **„Controller automatisch finden"** tippen – die Bridge durchsucht dein
+>    Netzwerk nach dem Controller und trägt die IP automatisch ein.
+> 2. **Systempasswort** eingeben, kurz den **Knopf am Controller II** drücken,
+>    **„Jetzt koppeln"** tippen – fertig, die App schaltet automatisch auf Live.
+>
+> Die folgenden Schritte 3.1–3.4 beschreiben denselben Vorgang über die
+> Kommandozeile (falls du das lieber magst oder die App-Kopplung nicht klappt).
+
 ### 3.1 IP-Adresse und Systempasswort
 
 * **IP des Controllers:** in der Bosch-Smart-Home-App unter
@@ -179,6 +190,11 @@ sudo systemctl enable --now bosch-strom
   wurden also kaum bedient. Das ist eine **Schätzung** rein aus diesen Sensoren.
 * **Jahres-Prognose:** Ø-Tagesverbrauch × 365. Saisonale Schwankungen (mehr Licht
   im Winter) sind darin noch nicht enthalten – der Wert wird über die Zeit besser.
+* **Sofort-Schätzung aus dem Zählerstand:** Die Module führen einen kumulativen
+  Energiezähler seit ihrer Installation (`energyConsumptionStartDate`). Daraus
+  rechnet die App schon ab der ersten Messung einen Ø/Tag und eine grobe
+  Jahresprognose – noch bevor eigene Historie da ist. Die echte Tageskurve und
+  das Profil entstehen dann über die Laufzeit.
 
 ---
 
@@ -189,4 +205,5 @@ sudo systemctl enable --now bosch-strom
 | iPhone zeigt „Offline / Demo" | Bridge läuft nicht, falsche Adresse, oder iPhone in anderem WLAN. Adresse in **Setup** prüfen. |
 | Keine Geräte / 0 W | Deine Module haben evtl. keine Leistungsmessung, oder `device_filter` ist zu streng. Filter leeren. |
 | `last_error` in **Setup → Diagnose** | Zeigt den letzten Abruf-Fehler (z. B. Zertifikat abgelaufen → neu `pair`en). |
+| `certificate unknown` / `SSLV3_ALERT_CERTIFICATE_UNKNOWN` beim Koppeln | Controller **wurde erreicht** (IP/WLAN stimmen!), war aber **nicht im Kopplungsmodus**. Kurz den Knopf am Controller II drücken und **sofort** erneut koppeln. |
 | Wenig Historie | Normal am Anfang – die Bridge sammelt ab dem ersten Start. Einfach laufen lassen. |

@@ -229,6 +229,14 @@
       <div class="kpi"><div class="v" id="f-month">–</div><div class="l">Ø pro Monat</div></div>
       <div class="kpi"><div class="v" id="f-month-cost">–</div><div class="l">Kosten / Monat</div></div>
     </div>
+    <div class="card" id="counter-card" hidden>
+      <h2>Sofort-Schätzung aus dem Zählerstand</h2>
+      <div id="counter-body"></div>
+      <div class="note" style="margin-top:10px">
+        Aus dem kumulativen Energiezähler der Module (seit deren Installation) –
+        verfügbar ab der ersten Messung, noch bevor eigene Historie da ist.
+      </div>
+    </div>
     <div class="card">
       <h2>Hochrechnung übers Jahr</h2>
       <div id="chart-forecast"></div>
@@ -243,14 +251,54 @@
   <!-- SETTINGS ------------------------------------------------------------>
   <section class="view" id="v-settings">
     <div class="card">
-      <h2>Verbindung zur Bridge</h2>
+      <h2>Status</h2>
+      <div id="status-rows"></div>
+    </div>
+
+    <div class="card" id="pair-card">
+      <h2>Controller II koppeln</h2>
+      <button class="btn sec" id="discover" style="margin-top:0">🔎 Controller automatisch finden</button>
+      <div class="note" id="discover-note" style="margin:8px 0 4px"></div>
+
+      <label>IP-Adresse des Controllers II</label>
+      <input id="shc-ip" inputmode="decimal" placeholder="z. B. 192.168.1.50"
+             autocomplete="off" autocapitalize="off" spellcheck="false">
+      <label style="margin-top:10px; display:block">Systempasswort (aus der Ersteinrichtung)</label>
+      <input id="shc-pw" type="password" placeholder="Systempasswort" autocomplete="off">
+      <div class="grid2" style="margin-top:10px">
+        <div><label>Preis / kWh</label><input id="shc-price" type="number" step="0.01" inputmode="decimal" value="0.35"></div>
+        <div><label>Messintervall (s)</label><input id="shc-interval" type="number" inputmode="numeric" value="30"></div>
+      </div>
+
+      <div class="note" style="margin-top:12px; line-height:1.6">
+        <b>So koppelst du:</b><br>
+        1. <b>Kurz</b> auf den Knopf an der Vorderseite des Controllers II drücken.<br>
+        2. Innerhalb weniger Sekunden hier auf „Jetzt koppeln" tippen.
+      </div>
+      <button class="btn" id="pair-btn">🔗 Jetzt koppeln &amp; live schalten</button>
+      <div class="note" id="pair-note" style="margin-top:10px"></div>
+    </div>
+
+    <div class="card">
+      <h2>Anzeige</h2>
       <label>Bridge-Adresse (leer = gleicher Server)</label>
       <input id="base" placeholder="http://192.168.1.20:8090" autocomplete="off"
              autocapitalize="off" spellcheck="false">
-      <button class="btn" id="save-base">Speichern &amp; neu laden</button>
+      <button class="btn sec" id="save-base">Adresse speichern &amp; neu laden</button>
       <button class="btn sec" id="use-demo">Demo-Daten anzeigen</button>
       <div class="note" id="conn-note" style="margin-top:10px"></div>
     </div>
+
+    <div class="card" id="rename-card">
+      <h2>Geräte benennen</h2>
+      <div class="note" style="margin-bottom:10px">
+        Eigene Namen werden <b>nur lokal</b> auf der Bridge gespeichert (nichts wird ins
+        Internet geladen). Leer lassen = automatischer Name. Änderung wird beim Verlassen
+        des Feldes gespeichert.
+      </div>
+      <div id="rename-list"></div>
+    </div>
+
     <div class="card">
       <h2>Info</h2>
       <div class="note">

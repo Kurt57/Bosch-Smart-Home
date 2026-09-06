@@ -18,6 +18,7 @@ let STATE = {
   useDays: 14,
   data: null,     // analytics for the profile/forecast window (90d)
   live: null,     // frequently-refreshed analytics (short window)
+  health: null,   // last /api/health payload
   cur: '€',
 };
 
@@ -45,6 +46,7 @@ async function loadAll() {
   if (STATE.demo) return applyData(demoAnalytics(90), demoAnalytics(2, true), 'demo');
   try {
     const health = await api('/api/health');
+    STATE.health = health;
     STATE.cur = health.currency || '€';
     if (health.price_per_kwh && !localStorage.getItem(LS.price)) {
       STATE.price = health.price_per_kwh; $('price').value = STATE.price;
@@ -55,13 +57,16 @@ async function loadAll() {
     ]);
     applyData(full, live, health.mode || 'live');
     $('diag').textContent = JSON.stringify(health, null, 1);
+    renderSettings();
   } catch (e) {
     // no bridge → demo
+    STATE.health = null;
     setMode('err');
     $('conn-note').innerHTML =
       'Keine Bridge erreichbar (' + e.message + '). Es werden <b>Demo-Daten</b> gezeigt. ' +
-      'Trage in „Setup" die Adresse deiner Bridge ein.';
+      'Trage hier die Adresse deiner Bridge ein oder öffne diese Seite direkt von der Bridge.';
     applyData(demoAnalytics(90), demoAnalytics(2, true), 'demo');
+    renderSettings();
   }
 }
 
@@ -76,8 +81,10 @@ function applyData(full, live, mode) {
 
 function setMode(m) {
   const el = $('mode');
-  el.className = 'pill ' + (m === 'live' ? 'live' : m === 'demo' ? 'demo' : 'err');
-  el.textContent = m === 'live' ? '● Live' : m === 'demo' ? '◆ Demo' : '⚠︎ Offline';
+  const cls = { live: 'live', demo: 'demo', idle: 'demo', err: 'err' }[m] || 'err';
+  const txt = { live: '● Live', demo: '◆ Demo', idle: '⚙︎ Setup nötig', err: '⚠︎ Offline' }[m] || '⚠︎ Offline';
+  el.className = 'pill ' + cls;
+  el.textContent = txt;
 }
 
 /* -------------------------------------------------------------- SVG charts */
@@ -200,12 +207,14 @@ function renderLive() {
   $('k-baseline').innerHTML = fmt(STATE.data.baseline_w, 1) + ' W';
 
   const max = Math.max(1, ...dev.map(d => d.power_w));
-  $('live-devices').innerHTML = dev.map(d => `
+  $('live-devices').innerHTML = dev.map(d => {
+    const L = devLabel(d);
+    return `
     <div class="devrow">
-      <div class="nm"><b>${esc(d.name)}</b><small>${esc(d.room || d.model || '')}</small>
+      <div class="nm"><b>${esc(L.title)}</b><small>${esc(L.sub)}</small>
         <div class="bar"><i style="width:${(d.power_w / max * 100).toFixed(0)}%"></i></div></div>
       <div class="val"><b>${fmt(d.power_w, 1)} W</b><small>${kwh(d.energy_kwh_total, 1)} gesamt</small></div>
-    </div>`).join('');
+    </div>`; }).join('');
 
   // 24h line from the short-window daily/hourly — use hourly profile as proxy shape
   const hp = STATE.data.hourly_profile.map(h => ({ v: h.avg_w, label: h.hour % 6 === 0 ? h.hour + 'h' : '' }));
@@ -230,7 +239,7 @@ function renderUse() {
   const tot = dev.reduce((a, d) => a + d.energy_kwh_total, 0) || 1;
   $('dev-share').innerHTML = dev.map(d => `
     <div class="devrow">
-      <div class="nm"><b>${esc(d.name)}</b><small>${(d.energy_kwh_total / tot * 100).toFixed(0)} % des Gesamtverbrauchs</small>
+      <div class="nm"><b>${esc(devLabel(d).title)}</b><small>${(d.energy_kwh_total / tot * 100).toFixed(0)} % des Gesamtverbrauchs</small>
         <div class="bar"><i style="width:${(d.energy_kwh_total / tot * 100).toFixed(0)}%"></i></div></div>
       <div class="val"><b>${kwh(d.energy_kwh_total, 1)}</b></div>
     </div>`).join('');
@@ -272,6 +281,20 @@ function renderAway() {
 
 function renderForecast() {
   const S = STATE.data.stats;
+  // counter-based "day 1" estimate (from the cumulative meter + start date)
+  const C = STATE.data.counter_estimate;
+  const cc = $('counter-card');
+  if (C) {
+    cc.hidden = false;
+    $('counter-body').innerHTML = [
+      ['Ø pro Tag (seit Installation)', kwh(C.avg_daily_kwh, 2)],
+      ['Jahres-Hochrechnung', `${kwh(C.year_estimate_kwh, 0)} · ${money(C.year_estimate_cost)}`],
+      ['Zählerbasis', `${kwh(C.total_kwh, 1)} über ${fmt(C.since_days, 0)} Tage`],
+    ].map(([k, v]) => `<div class="devrow"><div class="nm"><b>${k}</b></div><div class="val"><small>${v}</small></div></div>`).join('');
+  } else {
+    cc.hidden = true;
+  }
+
   $('f-year').innerHTML = kwh(S.year_estimate_kwh, 0);
   $('f-year-cost').textContent = money(S.year_estimate_cost);
   $('f-month').innerHTML = kwh(S.month_estimate_kwh, 1);
@@ -296,11 +319,145 @@ function renderForecast() {
   ].map(([k, v]) => `<div class="devrow"><div class="nm"><b>${k}</b></div><div class="val"><small>${v}</small></div></div>`).join('');
 }
 
+/* --------------------------------------------------------------- settings */
+function statusRow(k, v) {
+  return `<div class="devrow"><div class="nm"><b>${k}</b></div><div class="val"><small>${v}</small></div></div>`;
+}
+
+function renderSettings() {
+  const h = STATE.health;
+  const rows = $('status-rows');
+  if (!h) {
+    rows.innerHTML = statusRow('Bridge', 'nicht erreichbar – Demo-Ansicht');
+    $('pair-note').innerHTML =
+      'Kopplung ist nur möglich, wenn diese Seite direkt <b>von der Bridge</b> geöffnet wird ' +
+      '(nicht in dieser Vorschau).';
+    return;
+  }
+  const modeTxt = { live: 'Live · Controller verbunden', demo: 'Demo-Daten',
+    idle: 'Noch nicht gekoppelt' }[h.mode] || h.mode;
+  const last = h.last_poll ? new Date(h.last_poll * 1000).toLocaleTimeString('de-DE') : '–';
+  rows.innerHTML = [
+    ['Modus', modeTxt],
+    ['Geräte gefunden', fmt(h.device_count || 0, 0)],
+    ['Messpunkte gespeichert', fmt(h.sample_count || 0, 0)],
+    ['Letzte Messung', last],
+    ['Zertifikat', h.has_cert ? 'vorhanden ✓' : 'fehlt'],
+    h.last_error ? ['Letzter Fehler', esc(h.last_error)] : null,
+  ].filter(Boolean).map(([k, v]) => statusRow(k, v)).join('');
+  if (h.shc_ip && !$('shc-ip').value) $('shc-ip').value = h.shc_ip;
+  if (h.price_per_kwh) $('shc-price').value = h.price_per_kwh;
+  if (h.poll_interval) $('shc-interval').value = h.poll_interval;
+  renderRenameList();
+}
+
+function friendlyModel(m) {
+  m = m || '';
+  if (/SHUTTER/i.test(m)) return 'Rollladen-Modul';
+  if (/LIGHT/i.test(m)) return 'Licht-/Rollladen-Modul';
+  return m || 'Modul';
+}
+
+function renderRenameList() {
+  const box = $('rename-list');
+  if (!box) return;
+  const devs = (STATE.data && STATE.data.live && STATE.data.live.devices) || [];
+  if (!devs.length) { box.innerHTML = '<div class="note">Noch keine Geräte gefunden.</div>'; return; }
+  const list = [...devs].sort((a, b) => devLabel(a).title.localeCompare(devLabel(b).title));
+  box.innerHTML = list.map(d => {
+    const cap = [friendlyModel(d.model), d.room || null, 'ID ' + shortId(d.id)]
+      .filter(Boolean).join(' · ');
+    return `<div style="margin-bottom:12px">
+      <label>${esc(cap)}</label>
+      <input class="rn" data-id="${esc(d.id)}" value="${esc(d.custom_name || '')}"
+             placeholder="${esc(devLabel(d).title)}" autocomplete="off"
+             autocapitalize="words" spellcheck="false">
+    </div>`;
+  }).join('');
+}
+
+function applyCustomName(id, name) {
+  for (const arr of [STATE.data && STATE.data.live && STATE.data.live.devices,
+                     STATE.live && STATE.live.live && STATE.live.live.devices]) {
+    if (arr) for (const d of arr) if (d.id === id) d.custom_name = name;
+  }
+}
+
+async function postJSON(path, body) {
+  const r = await fetch((STATE.base || '') + path, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return r.json();
+}
+
+async function doDiscover() {
+  const note = $('discover-note');
+  note.textContent = 'Suche Controller im Netzwerk … (kann ein paar Sekunden dauern)';
+  try {
+    const r = await api('/api/discover');
+    if (r.suggested) {
+      $('shc-ip').value = r.suggested;
+      note.innerHTML = `Gefunden: <b>${r.candidates.join(', ')}</b> – oben übernommen. ` +
+        'Passt das nicht, IP manuell eintragen.';
+    } else {
+      note.innerHTML = `Nichts gefunden im Bereich ${esc(r.scanned)}. IP bitte manuell eintragen ` +
+        '(Bosch-App → Einstellungen → System → Controller).';
+    }
+  } catch (e) {
+    note.textContent = 'Automatische Suche geht nur, wenn die Seite von der Bridge geöffnet ist.';
+  }
+}
+
+async function doPair() {
+  const note = $('pair-note'), btn = $('pair-btn');
+  const ip = $('shc-ip').value.trim(), pw = $('shc-pw').value;
+  if (!ip || !pw) { note.textContent = 'Bitte IP-Adresse und Systempasswort eingeben.'; return; }
+  btn.disabled = true;
+  note.textContent = 'Koppeln … hast du gerade kurz den Knopf am Controller II gedrückt?';
+  try {
+    const r = await postJSON('/api/pair', {
+      ip, password: pw,
+      price_per_kwh: parseFloat($('shc-price').value) || 0.35,
+      poll_interval: parseInt($('shc-interval').value, 10) || 30,
+    });
+    if (r.ok) {
+      note.innerHTML = '✅ ' + (r.message || 'Erfolgreich gekoppelt.');
+      STATE.demo = false; localStorage.setItem(LS.demo, '0');
+      setTimeout(loadAll, 1400);
+    } else {
+      note.innerHTML = '⚠︎ ' + esc(r.error || 'Kopplung fehlgeschlagen.') +
+        (r.detail ? '<br><small>' + esc(r.detail) + '</small>' : '');
+    }
+  } catch (e) {
+    note.textContent = 'Fehler: ' + e.message + ' – ist die Seite von der Bridge geöffnet?';
+  }
+  btn.disabled = false;
+}
+
 /* ---------------------------------------------------------------- helpers */
 function windowDays(daily, n) { return daily.slice(-n); }
 function shortDay(s) { const d = new Date(s + 'T00:00'); return d.getDate() + '.'; }
 function longDay(s) { const d = new Date(s + 'T00:00'); return WD[(d.getDay() + 6) % 7] + ' ' + d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }); }
 function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+// Choose a friendly title/subtitle for a device. Bosch often reports the
+// device `name` as the generic product type; in that case the room name is
+// usually what the user actually assigned, so prefer it as the title.
+function shortId(id) {
+  const m = String(id || '').match(/([0-9a-f]{6})$/i);
+  return m ? m[1] : String(id || '').slice(-6);
+}
+function devLabel(d) {
+  const custom = (d.custom_name || '').trim();
+  if (custom) return { title: custom, sub: d.room || d.name || '' };
+  const name = d.name || '';
+  const generic = /steuerung|micromodule|light[\s_-]?control|shutter[\s_-]?control/i.test(name)
+    || name.toLowerCase() === (d.model || '').toLowerCase();
+  if (generic && d.room) return { title: d.room, sub: name };
+  if (generic) return { title: 'Licht/Rollladen · ' + shortId(d.id), sub: name };
+  return { title: name || d.room || 'Gerät', sub: d.room || d.model || '' };
+}
 
 /* --------------------------------------------------------- demo generator */
 function demoPower(id, dt, away) {
@@ -404,8 +561,15 @@ function demoAnalytics(days, shortWindow) {
   const totalNow = perDevice.reduce((a, d) => a + d.power_w, 0);
   const totalKwh = perDevice.reduce((a, d) => a + d.energy_kwh_total, 0);
 
+  const cAvg = totalKwh / Math.max(1, days);
   return {
     currency: '€', price_per_kwh: STATE.price, baseline_w: round(baseline, 2), window_days: days,
+    counter_estimate: {
+      since: Math.floor(start.getTime() / 1000), since_days: round(days, 1),
+      total_kwh: round(totalKwh, 3), avg_daily_kwh: round(cAvg, 3),
+      year_estimate_kwh: round(cAvg * 365, 1), year_estimate_cost: round(cAvg * 365 * STATE.price, 2),
+      month_estimate_kwh: round(cAvg * 30.4, 2),
+    },
     live: { total_power_w: round(totalNow, 2), total_energy_kwh: round(totalKwh, 3), devices: perDevice },
     daily, hourly_profile: hourly, weekday_profile: weekday, heatmap: heat,
     stats: {
@@ -451,6 +615,24 @@ function init() {
     STATE.demo = true; localStorage.setItem(LS.demo, '1');
     $('conn-note').textContent = 'Demo-Modus aktiv.';
     loadAll();
+  });
+  $('discover').addEventListener('click', doDiscover);
+  $('pair-btn').addEventListener('click', doPair);
+  $('rename-list').addEventListener('change', async (e) => {
+    const inp = e.target.closest('input.rn');
+    if (!inp) return;
+    const id = inp.dataset.id, name = inp.value.trim();
+    inp.disabled = true;
+    try {
+      const r = await postJSON('/api/device-name', { id, name });
+      if (r && r.ok) {
+        applyCustomName(id, name);
+        inp.placeholder = name || devLabel({ id, name: '', model: '', room: '' }).title;
+        inp.style.borderColor = '#4be0b0';
+        renderLive(); renderUse();
+      } else { inp.style.borderColor = '#ff6b8a'; }
+    } catch (err) { inp.style.borderColor = '#ff6b8a'; }
+    inp.disabled = false;
   });
   $('price').addEventListener('change', () => {
     STATE.price = parseFloat($('price').value) || 0.35;
