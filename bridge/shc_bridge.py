@@ -38,6 +38,7 @@ import http.client
 import json
 import math
 import os
+import re
 import socket
 import sqlite3
 import ssl
@@ -207,14 +208,41 @@ class SHCClient:
         except Exception:
             pass
 
+        by_id = {d.get("id"): d for d in devices if isinstance(d, dict)}
+
+        def is_generic(nm: str) -> bool:
+            # matches only Bosch's default product label, not user names that
+            # merely contain "…steuerung" (e.g. "Lichtsteuerung Elif")
+            return (not nm) or bool(re.search(
+                r"rollladensteuerung|micromodule|light[\s_-]?control|shutter[\s_-]?control",
+                nm, re.I))
+
         result = []
         for dev in devices:
             dev_id = dev.get("id")
             services = dev.get("deviceServiceIds") or []
             if "PowerMeter" not in services:
                 continue
-            name = dev.get("name") or dev_id
+            name = dev.get("name") or ""
             model = dev.get("deviceModel") or ""
+            room_id = dev.get("roomId")
+            # Bosch puts the PowerMeter on the LIGHT_CONTROL module, but the
+            # user-given names/rooms live on its attached child lights
+            # (MICROMODULE_LIGHT_ATTACHED) or, less often, a parent device.
+            # Inherit from those when this device itself is generic/roomless.
+            if is_generic(name) or not room_id:
+                linked = [by_id.get(dev.get("parentDeviceId"))]
+                linked += [by_id.get(cid) for cid in (dev.get("childDeviceIds") or [])]
+                linked = [d for d in linked if d]
+                names = [d.get("name") for d in linked
+                         if d.get("name") and not is_generic(d.get("name"))]
+                rooms_c = [d.get("roomId") for d in linked if d.get("roomId")]
+                if is_generic(name) and names:
+                    uniq = list(dict.fromkeys(names))
+                    name = " + ".join(uniq[:2]) + (" …" if len(uniq) > 2 else "")
+                if not room_id and rooms_c:
+                    room_id = max(set(rooms_c), key=rooms_c.count)
+            name = name or dev_id
             if name_filter:
                 hay = f"{name} {model}".lower()
                 if not any(f.lower() in hay for f in name_filter):
@@ -222,7 +250,7 @@ class SHCClient:
             result.append({
                 "id": dev_id,
                 "name": name,
-                "room": rooms.get(dev.get("roomId"), ""),
+                "room": rooms.get(room_id, ""),
                 "model": model,
             })
         return result
@@ -955,10 +983,17 @@ class Handler(BaseHTTPRequestHandler):
                     rooms = client.get("/smarthome/rooms")
                 except Exception:
                     rooms = None
-                slim = [{k: d.get(k) for k in
-                         ("id", "name", "deviceModel", "roomId", "deviceServiceIds")}
-                        for d in devs if "PowerMeter" in (d.get("deviceServiceIds") or [])]
-                return self._send_json({"power_devices": slim, "rooms": rooms})
+                keys = ("id", "name", "deviceModel", "roomId", "parentDeviceId",
+                        "childDeviceIds", "deviceServiceIds")
+                power = [{k: d.get(k) for k in keys}
+                         for d in devs if "PowerMeter" in (d.get("deviceServiceIds") or [])]
+                # all devices (trimmed) so named/roomed "light" entities linked to
+                # the power-meter modules can be found and mapped
+                all_devs = [{k: d.get(k) for k in
+                             ("id", "name", "deviceModel", "roomId", "parentDeviceId")}
+                            for d in devs]
+                return self._send_json({"power_devices": power, "all_devices": all_devs,
+                                        "rooms": rooms})
             return self._send_json({"error": "unknown endpoint"}, 404)
         except Exception as exc:
             return self._send_json({"error": str(exc)}, 500)
