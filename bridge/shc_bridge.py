@@ -38,6 +38,7 @@ import http.client
 import json
 import math
 import os
+import re
 import socket
 import sqlite3
 import ssl
@@ -207,14 +208,35 @@ class SHCClient:
         except Exception:
             pass
 
+        by_id = {d.get("id"): d for d in devices if isinstance(d, dict)}
+        # child -> parent lookup, so a module can inherit a linked device's name
+        parent_of = {}
+        for d in devices:
+            for child in (d.get("childDeviceIds") or []):
+                parent_of[child] = d.get("id")
+
+        def is_generic(nm: str) -> bool:
+            return (not nm) or bool(re.search(
+                r"steuerung|micromodule|light[\s_-]?control|shutter[\s_-]?control",
+                nm, re.I))
+
         result = []
         for dev in devices:
             dev_id = dev.get("id")
             services = dev.get("deviceServiceIds") or []
             if "PowerMeter" not in services:
                 continue
-            name = dev.get("name") or dev_id
+            name = dev.get("name") or ""
             model = dev.get("deviceModel") or ""
+            room_id = dev.get("roomId")
+            # if unnamed/roomless, inherit from a linked parent device
+            linked = by_id.get(dev.get("parentDeviceId")) or by_id.get(parent_of.get(dev_id))
+            if linked:
+                if is_generic(name) and linked.get("name") and not is_generic(linked.get("name")):
+                    name = linked.get("name")
+                if not room_id:
+                    room_id = linked.get("roomId")
+            name = name or dev_id
             if name_filter:
                 hay = f"{name} {model}".lower()
                 if not any(f.lower() in hay for f in name_filter):
@@ -222,7 +244,7 @@ class SHCClient:
             result.append({
                 "id": dev_id,
                 "name": name,
-                "room": rooms.get(dev.get("roomId"), ""),
+                "room": rooms.get(room_id, ""),
                 "model": model,
             })
         return result
@@ -955,10 +977,17 @@ class Handler(BaseHTTPRequestHandler):
                     rooms = client.get("/smarthome/rooms")
                 except Exception:
                     rooms = None
-                slim = [{k: d.get(k) for k in
-                         ("id", "name", "deviceModel", "roomId", "deviceServiceIds")}
-                        for d in devs if "PowerMeter" in (d.get("deviceServiceIds") or [])]
-                return self._send_json({"power_devices": slim, "rooms": rooms})
+                keys = ("id", "name", "deviceModel", "roomId", "parentDeviceId",
+                        "childDeviceIds", "deviceServiceIds")
+                power = [{k: d.get(k) for k in keys}
+                         for d in devs if "PowerMeter" in (d.get("deviceServiceIds") or [])]
+                # all devices (trimmed) so named/roomed "light" entities linked to
+                # the power-meter modules can be found and mapped
+                all_devs = [{k: d.get(k) for k in
+                             ("id", "name", "deviceModel", "roomId", "parentDeviceId")}
+                            for d in devs]
+                return self._send_json({"power_devices": power, "all_devices": all_devs,
+                                        "rooms": rooms})
             return self._send_json({"error": "unknown endpoint"}, 404)
         except Exception as exc:
             return self._send_json({"error": str(exc)}, 500)
