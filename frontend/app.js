@@ -9,7 +9,23 @@ const LS = {
   demo: 'bhe_demo',
 };
 const WD = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
+const APP_VERSION = '2026-09-06 · Jahresansicht';
 const $ = (id) => document.getElementById(id);
+
+// Unregister the service worker, drop all caches, and reload fresh code.
+async function hardRefresh() {
+  try {
+    if ('serviceWorker' in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map(r => r.unregister()));
+    }
+    if (window.caches) {
+      const keys = await caches.keys();
+      await Promise.all(keys.map(k => caches.delete(k)));
+    }
+  } catch (e) { /* ignore */ }
+  location.reload();
+}
 
 let STATE = {
   base: localStorage.getItem(LS.base) || '',
@@ -664,6 +680,8 @@ function init() {
   });
   $('discover').addEventListener('click', doDiscover);
   $('pair-btn').addEventListener('click', doPair);
+  const hr = $('hard-refresh'); if (hr) hr.addEventListener('click', hardRefresh);
+  const vn = $('version-note'); if (vn) vn.innerHTML = 'App-Stand: <b>' + APP_VERSION + '</b>';
   $('rename-list').addEventListener('change', async (e) => {
     const inp = e.target.closest('input.rn');
     if (!inp) return;
