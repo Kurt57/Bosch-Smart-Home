@@ -20,6 +20,20 @@ Prognose. Läuft komplett in deinem Heimnetz, ohne Cloud.
 Alles basiert ausschließlich auf den `PowerMeter`-Daten (Wirkleistung in W,
 Energiezähler in Wh) der Bosch-Module – genau wie gewünscht.
 
+## ☀️ PV-Rechner – lohnt sich eine Photovoltaik-Anlage?
+
+Eigenständiges Single-File-Tool: **[`frontend/pv-rechner.html`](frontend/pv-rechner.html)**
+(einfach im Browser öffnen – kein Server nötig).
+
+* Zeigt pro Monat **gestapelt** Hausstrom, Wärmepumpe, E-Auto und Klima gegen den
+  **PV-Ertrag** (selbst genutzt vs. eingespeist) und den **Autarkiegrad**.
+* Eingaben: **kWp**, **Speicher (kWh)**, E-Auto (km/Jahr + kWh/100 km), Klima,
+  **PLZ** (für den Standort-Ertrag).
+* **Amortisation & Rendite**: Investition, Strompreis, Einspeisevergütung, 20-Jahre-Gewinn.
+* Offene APIs **ohne Token**: **Zippopotam** (PLZ → Koordinaten) und **PVGIS** der
+  EU-Kommission (echter Monatsertrag). Fällt automatisch auf ein eingebautes
+  Deutschland-Modell zurück, falls eine API nicht erreichbar ist.
+
 ## Architektur
 
 ```
