@@ -410,7 +410,8 @@ function render(){
     `das entspricht etwa <b>${fmt(rendite,1)} % Rendite pro Jahr</b>. `+
     (payback ? `Bezahlt ist sie nach ca. <b>${fmt(payback,1)} Jahren</b>.` : `Sie amortisiert sich in diesem Szenario nicht innerhalb von 40 Jahren.`);
 
-  drawChart(rows, Math.max(P,L,...rows.map(r=>Math.max(r.P,r.L))));
+  const chartMax = Math.max(1, ...rows.map(r=>Math.max(r.P,r.L)));
+  drawChart(rows, chartMax);
   drawTable(rows,{P,L,self,grid,feed,autY});
   drawAdvice(rows,{autY,eigY,batt:num("battery"),kwp:num("kwp"),self,feed});
 
