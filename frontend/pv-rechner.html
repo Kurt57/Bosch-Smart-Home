@@ -504,21 +504,36 @@ function drawAdvice(rows,d){
   $("advice").innerHTML = t.map(x=>`<p style="margin:0 0 10px">• ${x}</p>`).join("");
 }
 
-// ---- APIs: PLZ -> Koordinaten -> PVGIS ----
+// ---- PLZ -> ungefährer Standort OHNE Netz (erste PLZ-Ziffer -> Region) ----
+function plzToLoc(plz){
+  const T = {
+    "0":[51.1,"Sachsen/Thüringen"], "1":[52.4,"Berlin/Brandenburg"], "2":[53.4,"Hamburg/Norden"],
+    "3":[52.0,"Niedersachsen/Nordhessen"], "4":[51.4,"NRW (Ruhrgebiet)"], "5":[50.7,"Köln/Rheinland"],
+    "6":[49.9,"Frankfurt/Südwesten"], "7":[48.6,"Baden-Württemberg"], "8":[48.1,"Bayern/München"],
+    "9":[49.6,"Franken/Nordbayern"]
+  };
+  const e = T[plz[0]] || [51.0,"Deutschland"];
+  return {lat:e[0], lon:10.0, place:e[1]};
+}
+
+// ---- APIs: PLZ -> Koordinaten -> PVGIS (mit Offline-Fallback) ----
 async function loadLocation(){
   const plz = $("plz").value.trim();
   if(!/^\d{4,5}$/.test(plz)){ $("plzInfo").textContent="Bitte gültige PLZ eingeben."; return; }
-  $("plzInfo").textContent="lade …";
+  // 1) Sofort offline aus der PLZ schätzen -> es gibt immer ein Ergebnis
+  LOC = plzToLoc(plz);
+  $("plzInfo").innerHTML = `📍 Region <b>${LOC.place}</b> (geschätzt)`;
+  render();
+  // 2) Online verfeinern (echter Ort + PVGIS), falls erreichbar
   try{
     const r = await fetch(`https://api.zippopotam.us/de/${plz}`);
-    if(!r.ok) throw new Error("PLZ nicht gefunden");
-    const j = await r.json();
-    const p = j.places[0];
-    LOC = {lat:parseFloat(p.latitude), lon:parseFloat(p.longitude), place:p["place name"]};
-    $("plzInfo").innerHTML = `📍 <b>${LOC.place}</b> (${LOC.lat.toFixed(3)}, ${LOC.lon.toFixed(3)})`;
-  }catch(e){
-    $("plzInfo").textContent = "Ort nicht gefunden – rechne mit Standardstandort.";
-  }
+    if(r.ok){
+      const j = await r.json();
+      const p = j.places[0];
+      LOC = {lat:parseFloat(p.latitude), lon:parseFloat(p.longitude), place:p["place name"]};
+      $("plzInfo").innerHTML = `📍 <b>${LOC.place}</b> (${LOC.lat.toFixed(3)}, ${LOC.lon.toFixed(3)})`;
+    }
+  }catch(e){ /* offline-Schätzung bleibt bestehen */ }
   await loadPVGIS();
   render();
 }
