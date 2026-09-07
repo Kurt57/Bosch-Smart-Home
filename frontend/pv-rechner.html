@@ -4,16 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0b1220">
-<title>PV-Rechner · Lohnt sich meine Anlage?</title>
+<title>Lohnt sich meine PV-Anlage?</title>
 <style>
   :root{
     --bg:#0b1220; --bg2:#111a2e; --card:#16213c; --card2:#1c2a49;
     --ink:#eaf0ff; --muted:#93a2c4; --line:#26355c;
     --accent:#3ba9ff; --accent2:#4be0b0; --warn:#ffb64d; --away:#ff6b8a;
     --grad1:#3ba9ff; --grad2:#7c5cff;
-    /* Kategorie-Farben */
     --c-haus:#3ba9ff; --c-wp:#ff6b8a; --c-auto:#7c5cff; --c-klima:#4be0b0;
-    --c-pv:#ffb64d; --c-pv-eigen:#ffd27a; --c-pv-netz:#5c6a2f;
+    --c-pv-eigen:#ffd27a; --c-pv-netz:#5c6a2f;
     --ok:#4be0b0; --mid:#ffb64d; --low:#ff6b8a;
   }
   *{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
@@ -21,7 +20,7 @@
     font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,sans-serif;
     -webkit-font-smoothing:antialiased}
   a{color:var(--accent)}
-  .wrap{max-width:920px; margin:0 auto; padding:0 14px 60px}
+  .wrap{max-width:960px; margin:0 auto; padding:0 14px 60px}
   header{padding:22px 14px 6px}
   h1{font-size:22px; margin:0; font-weight:800; letter-spacing:-.02em}
   h1 .sun{color:var(--warn)}
@@ -33,41 +32,40 @@
   .grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px}
   .field label{font-size:12px; color:var(--muted); display:block; margin-bottom:4px}
   .field label b{color:var(--ink); font-weight:600}
-  .field .hint{font-size:11px; color:var(--muted); margin-top:4px; opacity:.8}
+  .field .hint{font-size:11px; color:var(--muted); margin-top:4px; opacity:.85}
   input,select{width:100%; padding:11px; border-radius:11px; border:1px solid var(--line);
-    background:var(--bg2); color:var(--ink); font-size:15px}
-  input:focus,select:focus{outline:none; border-color:var(--accent)}
+    background:var(--bg2); color:var(--ink); font-size:15px; font-variant-numeric:tabular-nums}
+  input:focus,select:focus{outline:2px solid var(--accent); outline-offset:1px; border-color:var(--accent)}
   .row2{display:flex; gap:8px}
-  .row2>*{flex:1}
   .btn{display:inline-block; padding:11px 16px; border-radius:11px; border:none;
     font-weight:700; font-size:14px; cursor:pointer; background:var(--accent); color:#04121f}
+  .btn:focus-visible{outline:2px solid var(--ink); outline-offset:2px}
   .btn.ghost{background:var(--card2); color:var(--ink); border:1px solid var(--line)}
   .pill{font-size:11px; padding:4px 9px; border-radius:20px; border:1px solid var(--line);
     color:var(--muted); background:var(--card2); white-space:nowrap; display:inline-block}
   .pill.ok{color:var(--accent2); border-color:#1f6b53}
   .pill.warn{color:var(--warn); border-color:#6b551f}
-  .pill.err{color:var(--away); border-color:#6b1f33}
 
   .kpis{display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:12px}
   .kpi{background:var(--card2); border:1px solid var(--line); border-radius:14px; padding:13px}
-  .kpi .v{font-size:23px; font-weight:800; letter-spacing:-.03em; line-height:1}
+  .kpi .v{font-size:22px; font-weight:800; letter-spacing:-.03em; line-height:1.05; font-variant-numeric:tabular-nums}
   .kpi .v small{font-size:13px; color:var(--muted); font-weight:600}
   .kpi .l{color:var(--muted); font-size:12px; margin-top:6px; line-height:1.35}
   .kpi.hero{background:radial-gradient(120% 120% at 20% 0%,#1b2b52 0%,var(--card2) 70%)}
-  .kpi .v.g{color:var(--ok)} .kpi .v.a{color:var(--warn)} .kpi .v.r{color:var(--low)}
+  .g{color:var(--ok)} .a{color:var(--warn)} .r{color:var(--low)}
 
   svg{display:block; width:100%; height:auto; overflow:visible}
   .axis{fill:var(--muted); font-size:10px}
   .gl{stroke:var(--line); stroke-width:1; stroke-dasharray:2 3}
   .mlabel{fill:var(--muted); font-size:10px; text-anchor:middle}
   .autlab{font-size:9px; text-anchor:middle; font-weight:700}
-
   .legend{display:flex; flex-wrap:wrap; gap:12px; margin-top:10px}
   .legend span{display:flex; align-items:center; gap:6px; font-size:12px; color:var(--muted)}
   .legend i{width:12px; height:12px; border-radius:3px; display:inline-block}
 
   table{width:100%; border-collapse:collapse; font-size:12px}
-  th,td{padding:7px 6px; text-align:right; border-bottom:1px solid var(--line); white-space:nowrap}
+  th,td{padding:7px 6px; text-align:right; border-bottom:1px solid var(--line); white-space:nowrap;
+    font-variant-numeric:tabular-nums}
   th:first-child,td:first-child{text-align:left}
   th{color:var(--muted); font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:.04em}
   td.m{color:var(--muted)}
@@ -76,33 +74,38 @@
   .tip{color:var(--muted); font-size:12px; line-height:1.55}
   .tip b{color:var(--ink)}
   .apis{font-size:11px; color:var(--muted); line-height:1.6; margin-top:6px}
-  details summary{cursor:pointer; color:var(--accent); font-size:13px; font-weight:600}
-  .adv{margin-top:12px}
+  details{margin-top:12px} details summary{cursor:pointer; color:var(--accent); font-size:13px; font-weight:600; padding:4px 0}
   .note{font-size:11px; color:var(--muted); margin-top:8px; line-height:1.5}
+  .subhead{font-size:12px; color:var(--muted); margin:14px 0 8px; font-weight:600}
+  .optbox{background:var(--bg2); border:1px solid var(--line); border-radius:14px; padding:14px; margin-top:12px}
+  .optres{font-size:14px; line-height:1.6}
+  .optres b{color:var(--ink)}
+  .flex{display:flex; gap:10px; align-items:center; flex-wrap:wrap}
 </style>
 </head>
 <body>
 <div class="wrap">
   <header>
-    <h1><span class="sun">☀</span> PV-Rentabilitäts-Rechner</h1>
-    <div class="sub">Lohnt sich eine Photovoltaik-Anlage für dich? Gib deine Werte ein und sieh pro Monat,
-    wie viel du dich selbst versorgst – inkl. Amortisation. Läuft komplett im Browser, keine Daten verlassen dein Gerät.</div>
+    <h1><span class="sun">☀</span> Lohnt sich meine PV-Anlage?</h1>
+    <div class="sub">Stundenscharfe Jahressimulation (8 760 h) mit Batterie, Wärmepumpe, E-Auto und Klima.
+      Zeigt deine monatliche Selbstversorgung und die echte Wirtschaftlichkeit – inkl. E-Auto-Umstieg.
+      Rechnet komplett lokal im Browser.</div>
   </header>
 
-  <!-- STANDORT -->
+  <!-- 1 STANDORT -->
   <div class="card">
     <h2>1 · Standort</h2>
     <div class="grid">
       <div class="field">
-        <label><b>PLZ</b> (für Sonnen­ertrag)</label>
+        <label><b>PLZ</b></label>
         <div class="row2">
           <input id="plz" inputmode="numeric" placeholder="z. B. 70173" value="70173">
           <button class="btn ghost" id="plzBtn" style="flex:0 0 auto">Laden</button>
         </div>
-        <div class="hint" id="plzInfo">Ort wird per Zippopotam ermittelt →</div>
+        <div class="hint" id="plzInfo">Standort für den Sonnenertrag</div>
       </div>
       <div class="field">
-        <label><b>Ausrichtung</b> des Dachs</label>
+        <label><b>Ausrichtung</b></label>
         <select id="orient">
           <option value="0">Süd (optimal)</option>
           <option value="45">Südost / Südwest</option>
@@ -110,120 +113,142 @@
           <option value="flat">Flachdach (aufgeständert)</option>
           <option value="ostwest">Ost-West-Anlage</option>
         </select>
-        <div class="hint">bestimmt den Ertrag pro kWp</div>
       </div>
       <div class="field">
         <label><b>Dachneigung</b></label>
         <select id="tilt">
-          <option value="35" selected>Schräg­dach ~35°</option>
+          <option value="35" selected>Schrägdach ~35°</option>
           <option value="45">Steildach ~45°</option>
           <option value="20">flach geneigt ~20°</option>
           <option value="10">Flachdach ~10°</option>
         </select>
-        <div class="hint">Standard 35° ist meist gut</div>
+      </div>
+      <div class="field">
+        <label>Dachfläche (m², optional)</label>
+        <input id="roof" type="number" step="5" min="0" value="0">
+        <div class="hint">begrenzt den Optimierer (≈6 m²/kWp)</div>
       </div>
     </div>
-    <div style="margin-top:12px">
+    <div style="margin-top:12px" class="flex">
       <span class="pill" id="srcPill">Ertragsquelle: —</span>
       <span class="pill" id="yieldPill">spez. Ertrag: —</span>
     </div>
   </div>
 
-  <!-- ANLAGE -->
+  <!-- 2 ANLAGE -->
   <div class="card">
     <h2>2 · Anlage &amp; Speicher</h2>
     <div class="grid">
-      <div class="field">
-        <label><b>Anlagengröße</b> (kWp)</label>
-        <input id="kwp" type="number" step="0.5" min="0" value="10">
-        <div class="hint">Faustregel: ~1 kWp pro 5–6 m² Dach</div>
-      </div>
-      <div class="field">
-        <label><b>Speicher</b> (kWh nutzbar)</label>
-        <input id="battery" type="number" step="0.5" min="0" value="10">
-        <div class="hint">0 = ohne Batteriespeicher</div>
-      </div>
-      <div class="field">
-        <label><b>Investitionskosten</b> (€)</label>
-        <input id="invest" type="number" step="100" min="0" value="22000">
-        <div class="hint">Anlage + Speicher + Montage, brutto</div>
-      </div>
+      <div class="field"><label><b>Anlagengröße</b> (kWp)</label>
+        <input id="kwp" type="number" step="0.5" min="0" value="10"></div>
+      <div class="field"><label><b>Speicher</b> (kWh nutzbar)</label>
+        <input id="battery" type="number" step="0.5" min="0" value="10"></div>
+      <div class="field"><label><b>Investition</b> Anlage + Speicher (€)</label>
+        <input id="invest" type="number" step="100" min="0" value="22000"></div>
     </div>
+    <details>
+      <summary>Wirtschaftlichkeit im Detail (Betrieb, Verschleiß, Kapital)</summary>
+      <div class="grid" style="margin-top:12px">
+        <div class="field"><label>Betriebskosten/Jahr (% der Investition)</label>
+          <input id="maintPct" type="number" step="0.1" min="0" value="1.0">
+          <div class="hint">Versicherung, Wartung, Zählermiete</div></div>
+        <div class="field"><label>Modul-Degradation (%/Jahr)</label>
+          <input id="degr" type="number" step="0.1" min="0" value="0.5"></div>
+        <div class="field"><label>Betrachtungsdauer (Jahre)</label>
+          <input id="life" type="number" step="1" min="5" value="25"></div>
+        <div class="field"><label>Kalk. Zins / Diskontsatz (%)</label>
+          <input id="disc" type="number" step="0.5" min="0" value="3">
+          <div class="hint">Alternativrendite deines Geldes</div></div>
+        <div class="field"><label>Wechselrichter-Tausch: Jahr</label>
+          <input id="invYear" type="number" step="1" min="0" value="13"></div>
+        <div class="field"><label>Wechselrichter-Tausch: Kosten (€)</label>
+          <input id="invCost" type="number" step="100" min="0" value="1800"></div>
+        <div class="field"><label>Speicher-Tausch: Jahr</label>
+          <input id="battYear" type="number" step="1" min="0" value="15"></div>
+        <div class="field"><label>Speicher-Tausch: Kosten (€)</label>
+          <input id="battCost" type="number" step="100" min="0" value="5000"></div>
+        <div class="field"><label>Einspeisung nach 20 J. (€/kWh)</label>
+          <input id="postEEG" type="number" step="0.01" min="0" value="0.05">
+          <div class="hint">nach EEG-Förderung, Marktwert</div></div>
+      </div>
+    </details>
   </div>
 
-  <!-- VERBRAUCH -->
+  <!-- 3 VERBRAUCH -->
   <div class="card">
-    <h2>3 · Dein Stromverbrauch pro Jahr</h2>
+    <h2>3 · Stromverbrauch pro Jahr</h2>
     <div class="grid">
-      <div class="field">
-        <label><b>Hausstrom</b> (kWh/Jahr)</label>
-        <input id="haus" type="number" step="100" min="0" value="6000">
-        <div class="hint">Haushalt ohne Wärmepumpe/Auto</div>
-      </div>
-      <div class="field">
-        <label><b>Wärmepumpe</b> Heizung + Warmwasser (kWh/Jahr)</label>
-        <input id="wp" type="number" step="100" min="0" value="6000">
-        <div class="hint">v. a. Winter – wenn PV wenig liefert</div>
-      </div>
-      <div class="field">
-        <label><b>Klimaanlage</b> (kWh/Jahr)</label>
-        <input id="klima" type="number" step="50" min="0" value="600">
-        <div class="hint">v. a. Sommer – passt gut zu PV</div>
-      </div>
+      <div class="field"><label><b>Hausstrom</b> (kWh/Jahr)</label>
+        <input id="haus" type="number" step="100" min="0" value="6000"></div>
+      <div class="field"><label><b>Wärmepumpe</b> Heizung+WW (kWh/Jahr)</label>
+        <input id="wp" type="number" step="100" min="0" value="6000"></div>
+      <div class="field"><label><b>Klimaanlage</b> (kWh/Jahr)</label>
+        <input id="klima" type="number" step="50" min="0" value="600"></div>
     </div>
-
-    <div class="adv">
-      <div style="font-size:12px;color:var(--muted);margin:6px 0 10px;font-weight:600">E-Auto</div>
-      <div class="grid">
-        <div class="field">
-          <label>Kilometer pro Jahr</label>
-          <input id="evKm" type="number" step="500" min="0" value="12000">
-        </div>
-        <div class="field">
-          <label>Verbrauch (kWh/100 km)</label>
-          <input id="evKwh100" type="number" step="0.5" min="0" value="18">
-        </div>
-        <div class="field">
-          <label>Anteil zuhause geladen (%)</label>
-          <input id="evHome" type="number" step="5" min="0" max="100" value="80">
-        </div>
-      </div>
-      <div class="hint" id="evInfo">→ E-Auto-Verbrauch zuhause: — kWh/Jahr</div>
+    <div class="subhead">E-Auto</div>
+    <div class="grid">
+      <div class="field"><label>Kilometer pro Jahr</label>
+        <input id="evKm" type="number" step="500" min="0" value="12000"></div>
+      <div class="field"><label>Verbrauch (kWh/100 km)</label>
+        <input id="evKwh100" type="number" step="0.5" min="0" value="18"></div>
+      <div class="field"><label>Anteil zuhause geladen (%)</label>
+        <input id="evHome" type="number" step="5" min="0" max="100" value="80"></div>
+      <div class="field"><label>Wann geladen?</label>
+        <select id="evWhen">
+          <option value="evening" selected>abends / nachts</option>
+          <option value="day">tagsüber (PV-optimiert)</option>
+        </select>
+        <div class="hint">tagsüber = mehr PV-Nutzung</div></div>
     </div>
+    <div class="hint" id="evInfo" style="margin-top:8px">→ E-Auto-Verbrauch zuhause: — kWh/Jahr</div>
   </div>
 
-  <!-- PREISE -->
+  <!-- 4 PREISE -->
   <div class="card">
-    <h2>4 · Preise (Amortisation)</h2>
+    <h2>4 · Strompreise</h2>
     <div class="grid">
-      <div class="field">
-        <label><b>Strompreis</b> (€/kWh)</label>
-        <input id="price" type="number" step="0.01" min="0" value="0.35">
-        <div class="hint">was du sparst pro selbst genutzter kWh</div>
-      </div>
-      <div class="field">
-        <label><b>Einspeise­vergütung</b> (€/kWh)</label>
+      <div class="field"><label><b>Strompreis</b> (€/kWh)</label>
+        <input id="price" type="number" step="0.01" min="0" value="0.35"></div>
+      <div class="field"><label><b>Einspeisevergütung</b> (€/kWh)</label>
         <input id="feedin" type="number" step="0.001" min="0" value="0.079">
-        <div class="hint">Überschuss ins Netz (EEG, Stand 2025)</div>
-      </div>
-      <div class="field">
-        <label>jährl. Strompreis­steigerung (%)</label>
-        <input id="priceRise" type="number" step="0.5" min="0" value="3">
-        <div class="hint">für die 20-Jahre-Rechnung</div>
-      </div>
+        <div class="hint">20 Jahre fest (EEG)</div></div>
+      <div class="field"><label>jährl. Strompreis-Steigerung (%)</label>
+        <input id="priceRise" type="number" step="0.5" min="0" value="3"></div>
     </div>
   </div>
 
-  <!-- ERGEBNIS: KPIs -->
+  <!-- OPTIMIERER -->
   <div class="card">
-    <h2>Ergebnis auf einen Blick</h2>
+    <h2>Optimierer · beste Größe für deinen Verbrauch</h2>
+    <div class="flex">
+      <select id="optTarget" style="max-width:280px">
+        <option value="npv">höchster Gesamtgewinn (€)</option>
+        <option value="payback">schnellste Amortisation</option>
+        <option value="irr">beste Rendite (% p.a.)</option>
+        <option value="autpay">max. Autarkie, die sich noch lohnt</option>
+      </select>
+      <button class="btn" id="optBtn">Berechnen</button>
+    </div>
+    <div class="optbox" id="optBox" hidden>
+      <div class="optres" id="optRes"></div>
+      <button class="btn ghost" id="optApply" style="margin-top:10px">Diese Werte übernehmen</button>
+    </div>
+    <div class="note">Durchsucht kWp × Speicher mit derselben Stundensimulation und wählt die beste Kombination
+      nach deinem Ziel. Anschließend kannst du die Werte in die Felder übernehmen.</div>
+  </div>
+
+  <!-- PV ERGEBNIS -->
+  <div class="card">
+    <h2>Ergebnis PV &amp; Speicher</h2>
     <div class="kpis">
       <div class="kpi hero"><div class="v" id="kAutarkie">–</div><div class="l">Autarkiegrad (Jahr)<br>so viel deckst du selbst</div></div>
-      <div class="kpi"><div class="v" id="kEigen">–</div><div class="l">Eigenverbrauchs­quote<br>so viel deines PV-Stroms nutzt du</div></div>
+      <div class="kpi"><div class="v" id="kEigen">–</div><div class="l">Eigenverbrauchsquote<br>so viel deines PV-Stroms nutzt du</div></div>
       <div class="kpi"><div class="v" id="kFull">–</div><div class="l">Monate voll versorgt<br>Autarkie ≥ 100 %</div></div>
       <div class="kpi"><div class="v" id="kPayback">–</div><div class="l">Amortisation<br>bis die Anlage bezahlt ist</div></div>
-      <div class="kpi"><div class="v" id="kBenefit">–</div><div class="l">Vorteil pro Jahr<br>Ersparnis + Einspeisung</div></div>
-      <div class="kpi"><div class="v" id="kProfit20">–</div><div class="l">Gewinn nach 20 Jahren<br>nach Abzug der Investition</div></div>
+      <div class="kpi"><div class="v" id="kIRR">–</div><div class="l">Rendite p.a. (IRR)<br>echte Verzinsung</div></div>
+      <div class="kpi"><div class="v" id="kNPV">–</div><div class="l">Kapitalwert (NPV)<br>Gewinn heute, abgezinst</div></div>
+      <div class="kpi"><div class="v" id="kBenefit">–</div><div class="l">Vorteil Jahr 1<br>Ersparnis + Einspeisung</div></div>
+      <div class="kpi"><div class="v" id="kProfit">–</div><div class="l">Überschuss über Laufzeit<br>nach allen Kosten</div></div>
     </div>
     <div class="note" id="verdict"></div>
   </div>
@@ -241,7 +266,7 @@
       <span><i style="background:var(--c-pv-netz)"></i>PV Einspeisung</span>
     </div>
     <div class="note">Linker Balken = Verbrauch (gestapelt), rechter Balken = PV-Ertrag (unten selbst genutzt, oben eingespeist).
-      Die Zahl unter jedem Monat ist der <b>Autarkiegrad</b>. Grün = weitgehend selbst versorgt, Rot = viel Netzbezug (typisch im Winter).</div>
+      Zahl unter dem Monat = Autarkiegrad. Grün = weitgehend selbst versorgt, Rot = viel Netzbezug (typisch im Winter).</div>
   </div>
 
   <!-- TABELLE -->
@@ -249,325 +274,469 @@
     <h2>Monatswerte im Detail</h2>
     <div class="tblwrap">
       <table id="tbl">
-        <thead><tr>
-          <th>Monat</th><th>Verbrauch</th><th>PV-Ertrag</th><th>selbst genutzt</th>
-          <th>Netzbezug</th><th>Einspeisung</th><th>Autarkie</th>
-        </tr></thead>
-        <tbody></tbody>
-        <tfoot></tfoot>
+        <thead><tr><th>Monat</th><th>Verbrauch</th><th>PV-Ertrag</th><th>selbst genutzt</th>
+          <th>Netzbezug</th><th>Einspeisung</th><th>Autarkie</th></tr></thead>
+        <tbody></tbody><tfoot></tfoot>
       </table>
     </div>
   </div>
 
-  <!-- INFO -->
+  <!-- E-AUTO -->
   <div class="card">
-    <h2>Wie kann ich mich stärker selbst versorgen?</h2>
+    <h2>E-Auto · lohnt der Umstieg vom Verbrenner?</h2>
+    <div class="kpis" style="margin-bottom:12px">
+      <div class="kpi"><div class="v" id="evSave">–</div><div class="l">Ersparnis/Jahr<br>vs. Verbrenner</div></div>
+      <div class="kpi"><div class="v" id="evExtra">–</div><div class="l">Mehrkosten Anschaffung<br>E-Auto − Verbrenner</div></div>
+      <div class="kpi"><div class="v" id="evPay">–</div><div class="l">Amortisation E-Auto<br>der Aufpreis rechnet sich in</div></div>
+      <div class="kpi"><div class="v" id="evTco">–</div><div class="l">TCO-Vorteil Laufzeit<br>gesamt günstiger als Verbrenner</div></div>
+    </div>
+    <details>
+      <summary>E-Auto- &amp; Verbrenner-Kosten anpassen</summary>
+      <div class="grid" style="margin-top:12px">
+        <div class="field"><label>E-Auto Anschaffung (€)</label>
+          <input id="evPrice" type="number" step="500" min="0" value="42000"></div>
+        <div class="field"><label>Verbrenner Anschaffung (€)</label>
+          <input id="verbPrice" type="number" step="500" min="0" value="34000"></div>
+        <div class="field"><label>Verbrenner Verbrauch (l/100 km)</label>
+          <input id="verbL100" type="number" step="0.5" min="0" value="7"></div>
+        <div class="field"><label>Spritpreis (€/l)</label>
+          <input id="fuelPrice" type="number" step="0.05" min="0" value="1.80"></div>
+        <div class="field"><label>Verbrenner Wartung (€/Jahr)</label>
+          <input id="verbMaint" type="number" step="50" min="0" value="700"></div>
+        <div class="field"><label>Verbrenner Kfz-Steuer (€/Jahr)</label>
+          <input id="verbTax" type="number" step="10" min="0" value="150"></div>
+        <div class="field"><label>öffentl. Ladepreis (€/kWh)</label>
+          <input id="publicPrice" type="number" step="0.05" min="0" value="0.55"></div>
+        <div class="field"><label>E-Auto Wartung (€/Jahr)</label>
+          <input id="evMaint" type="number" step="50" min="0" value="0"></div>
+        <div class="field"><label>E-Auto Kfz-Steuer (€/Jahr)</label>
+          <input id="evTax" type="number" step="10" min="0" value="0">
+          <div class="hint">in DE bis 2035 steuerbefreit</div></div>
+      </div>
+    </details>
+    <div class="note" id="evNote"></div>
+  </div>
+
+  <!-- KLIMA + GESAMT -->
+  <div class="card">
+    <h2>Klimaanlage &amp; Gesamtbild</h2>
+    <div class="grid">
+      <div class="field"><label><b>Klimaanlage Anschaffung</b> (€)</label>
+        <input id="klimaBuy" type="number" step="100" min="0" value="3000"></div>
+    </div>
+    <div class="kpis" style="margin-top:12px">
+      <div class="kpi"><div class="v" id="klRun">–</div><div class="l">Klima Betrieb/Jahr<br>Stromkosten</div></div>
+      <div class="kpi"><div class="v" id="klPv">–</div><div class="l">davon PV-gedeckt<br>meist im Sommer</div></div>
+      <div class="kpi hero"><div class="v" id="gTotal">–</div><div class="l">Gesamt-Anschaffung<br>PV + E-Auto-Aufpreis + Klima</div></div>
+      <div class="kpi"><div class="v" id="gYear">–</div><div class="l">jährl. Gesamt-Vorteil<br>PV + E-Auto − Klima-Betrieb</div></div>
+    </div>
+    <div class="note" id="gNote"></div>
+  </div>
+
+  <!-- EMPFEHLUNG -->
+  <div class="card">
+    <h2>Wie versorge ich mich stärker selbst?</h2>
     <div class="tip" id="advice"></div>
-    <details style="margin-top:14px">
-      <summary>Genutzte offene APIs &amp; Rechenmodell</summary>
+    <details>
+      <summary>Offene APIs &amp; Rechenmodell</summary>
       <div class="apis">
-        <p><b>Ohne Token / kostenlos:</b></p>
-        <p>• <b>Zippopotam.us</b> – wandelt die PLZ in Koordinaten &amp; Ortsname um.<br>
-        • <b>PVGIS</b> (EU-Kommission, JRC) – liefert den echten monatlichen Solarertrag für deinen Standort, Ausrichtung und Neigung.
-        Ist PVGIS im Browser nicht erreichbar (CORS/Netz), rechnet das Tool automatisch mit einem eingebauten Deutschland-Modell weiter.</p>
-        <p><b>Rechenmodell (Schätzung):</b> Der Verbrauch wird realistisch über die Monate verteilt (Wärmepumpe winterlastig, Klima sommerlastig).
-        Die Eigenversorgung ergibt sich aus direkter Nutzung tagsüber + Speicher (eine Zyklus/Tag, ~92 % Wirkungsgrad). Es ist eine belastbare
-        Näherung für die Frage „lohnt sich das?", ersetzt aber keine Detailplanung mit Lastprofil.</p>
+        <p><b>Offene APIs ohne Token:</b> <b>Zippopotam.us</b> (PLZ → Koordinaten &amp; Ort) und <b>PVGIS</b>
+        (EU-Kommission, echter Monatsertrag). Sind sie im Browser nicht erreichbar, wird die PLZ offline
+        einer Region zugeordnet und der Ertrag geschätzt – es gibt immer ein Ergebnis.</p>
+        <p><b>Simulation:</b> Der Jahresverlauf wird in <b>8 760 Stundenschritten</b> gerechnet. PV folgt dem
+        tatsächlichen Sonnenstand (Deklination/Tageslänge nach Breitengrad), der Verbrauch realen Tagesprofilen
+        (Haushalt H0, Wärmepumpe winterlastig, Klima sommerlastig, E-Auto je nach Ladezeit). Der Speicher wird
+        stündlich geladen/entladen (~90 % Wirkungsgrad). Daraus folgen Autarkie und Eigenverbrauch.</p>
+        <p><b>Wirtschaftlichkeit:</b> Kapitalwert (NPV) und interne Rendite (IRR) über die Laufzeit, mit
+        Modul-Degradation, Betriebskosten, Wechselrichter- und Speicher-Tausch, Strompreis-Steigerung und
+        20-Jahre-Einspeisung. E-Auto als TCO-Vergleich zum Verbrenner (Sprit vs. Strom, ohne Kfz-Steuer und
+        Wartung beim E-Auto). Alle Angaben ohne Gewähr.</p>
       </div>
     </details>
   </div>
 
-  <div class="note" style="text-align:center">Alle Angaben ohne Gewähr · Rechnung erfolgt lokal in deinem Browser.</div>
+  <div class="note" style="text-align:center">Rechnung erfolgt lokal in deinem Browser · keine Daten verlassen dein Gerät.</div>
 </div>
 
 <script>
 "use strict";
-const MONTHS = ["Jan","Feb","Mär","Apr","Mai","Jun","Jul","Aug","Sep","Okt","Nov","Dez"];
-const DAYS   = [31,28,31,30,31,30,31,31,30,31,30,31];
+const MONTHS=["Jan","Feb","Mär","Apr","Mai","Jun","Jul","Aug","Sep","Okt","Nov","Dez"];
+const DAYS=[31,28,31,30,31,30,31,31,30,31,30,31];
+const DOFF=(()=>{const o=[0];for(let i=0;i<12;i++)o.push(o[i]+DAYS[i]);return o;})(); // day offset per month
+const YDAYS=365;
 
-// ---- Monatsverteilungen (roh, werden normiert) ----
-const RAW = {
-  pv:   [2.6,4.5,8.0,11.3,13.3,13.6,13.9,12.4,9.4,6.0,3.0,2.0], // Anteil Jahresertrag DE, Süd 35°
-  haus: [9.2,8.6,8.7,8.0,8.0,7.7,7.8,7.8,8.0,8.6,8.8,8.8],
-  wp:   [16.5,14.0,10.5,6.5,3.2,1.8,1.6,1.6,3.0,7.3,12.0,16.0], // Heizung+WW
-  auto: [1,1,1,1,1,1,1,1,1,1,1,1],
+// Monats-Energieverteilungen (Anteil Jahr) – roh, wird normiert
+const RAW={
+  pv:[2.6,4.5,8.0,11.3,13.3,13.6,13.9,12.4,9.4,6.0,3.0,2.0],
+  haus:[9.2,8.6,8.7,8.0,8.0,7.7,7.8,7.8,8.0,8.6,8.8,8.8],
+  wp:[16.5,14.0,10.5,6.5,3.2,1.8,1.6,1.6,3.0,7.3,12.0,16.0],
+  auto:[1,1,1,1,1,1,1,1,1,1,1,1],
   klima:[0,0,0.5,1,3,8,12,11,4,0.5,0,0]
 };
-function norm(a){const s=a.reduce((x,y)=>x+y,0)||1; return a.map(v=>v/s);}
-const DIST = {pv:norm(RAW.pv),haus:norm(RAW.haus),wp:norm(RAW.wp),auto:norm(RAW.auto),klima:norm(RAW.klima)};
+const norm=a=>{const s=a.reduce((x,y)=>x+y,0)||1;return a.map(v=>v/s);};
+const DIST={pv:norm(RAW.pv),haus:norm(RAW.haus),wp:norm(RAW.wp),auto:norm(RAW.auto),klima:norm(RAW.klima)};
 
-// ---- Standort-Zustand ----
-let LOC = {lat:48.78, lon:9.18, place:"Stuttgart"};
-let PV_MONTHLY = null;      // spez. Ertrag pro kWp je Monat (kWh) – von PVGIS, sonst null
-let PV_SOURCE = "Modell";   // "PVGIS" | "Modell"
+// Tagesprofile (24 h) – werden normiert
+const SH={
+  haus:norm([20,17,15,14,14,17,28,42,45,43,42,44,48,43,40,41,48,58,64,60,52,45,35,26]),
+  wp:norm([46,46,46,45,45,48,50,50,46,42,40,38,37,37,38,40,43,46,50,50,49,47,46,46]),
+  klima:norm([0,0,0,0,0,0,0,0,2,5,10,18,28,35,38,35,28,20,12,6,3,1,0,0]),
+  evEvening:norm([30,20,10,0,0,0,0,0,0,0,0,0,0,0,0,0,0,10,40,60,60,50,40,35]),
+  evDay:norm([0,0,0,0,0,0,0,5,10,25,45,55,55,45,30,15,5,0,0,0,0,0,0,0])
+};
 
-const $ = id => document.getElementById(id);
-const num = id => parseFloat($(id).value) || 0;
-const fmt = (n,d=0) => n.toLocaleString("de-DE",{minimumFractionDigits:d,maximumFractionDigits:d});
-const eur = n => "€ "+fmt(n,0);
+let LOC={lat:48.78,lon:9.18,place:"Stuttgart"};
+let PV_MONTHLY=null, PV_SOURCE="Modell";
 
-// ---- Ertrag pro kWp: Modell-Fallback ----
+const $=id=>document.getElementById(id);
+const num=id=>parseFloat($(id).value)||0;
+const fmt=(n,d=0)=>(isFinite(n)?n:0).toLocaleString("de-DE",{minimumFractionDigits:d,maximumFractionDigits:d});
+const eur=n=>"€ "+fmt(n,0);
+const pct=n=>fmt(n*100)+" %";
+
+// ---- Ertrag pro kWp ----
 function orientFactor(){
-  const o = $("orient").value, tilt = $("tilt").value;
-  let f = ({"0":1.0,"45":0.96,"90":0.86,"flat":0.90,"ostwest":0.88})[o] ?? 1.0;
-  // Neigung nur beim Nicht-Flachdach fein justieren
-  if(o!=="flat"){ f *= ({"35":1.0,"45":0.99,"20":0.97,"10":0.93})[tilt] ?? 1.0; }
+  const o=$("orient").value,t=$("tilt").value;
+  let f=({"0":1.0,"45":0.96,"90":0.86,"flat":0.90,"ostwest":0.88})[o]??1.0;
+  if(o!=="flat") f*=({"35":1.0,"45":0.99,"20":0.97,"10":0.93})[t]??1.0;
   return f;
 }
-// Jahres-Spezialertrag kWh/kWp nach Breitengrad (Süd, gute Lage)
 function annualSpecific(){
-  const lat = Math.min(55, Math.max(47, LOC.lat));
-  const base = 1130 - (lat-47.5)/7*180;   // Süd ~1130, Nord ~950
-  return base * orientFactor();
+  const lat=Math.min(55,Math.max(47,LOC.lat));
+  return (1130-(lat-47.5)/7*180)*orientFactor();
 }
 function pvPerKwpMonthly(){
-  // PVGIS-Werte berücksichtigen Winkel & Ausrichtung bereits -> direkt nutzen.
-  if(PV_MONTHLY){ return PV_MONTHLY.slice(); }
-  const yr = annualSpecific();             // Modell-Fallback inkl. Ausrichtungsfaktor
+  if(PV_MONTHLY) return PV_MONTHLY.slice();
+  const yr=annualSpecific();
   return DIST.pv.map(f=>f*yr);
 }
+function evEnergyHome(){return Math.max(0,num("evKm")/100*num("evKwh100")*(num("evHome")/100));}
 
-// ---- Verbrauch je Monat ----
-function evAnnual(){
-  const kwh = num("evKm")/100*num("evKwh100")*(num("evHome")/100);
-  return Math.max(0,kwh);
-}
-function monthlyConsumption(){
-  const h=num("haus"), w=num("wp"), k=num("klima"), e=evAnnual();
-  return MONTHS.map((_,m)=>({
-    haus: h*DIST.haus[m], wp: w*DIST.wp[m], auto: e*DIST.auto[m], klima: k*DIST.klima[m],
-    get total(){return this.haus+this.wp+this.auto+this.klima;}
-  }));
-}
-
-// ---- Eigenversorgungs-Modell je Monat ----
-function compute(){
-  const pvSpec = pvPerKwpMonthly();
-  const kwp = num("kwp"), batt = num("battery");
-  const daytimeShare = 0.32;   // Anteil Last, der tagsüber/synchron zur PV liegt
-  const cons = monthlyConsumption();
-  const rows = MONTHS.map((_,m)=>{
-    const P = kwp*pvSpec[m];              // PV-Ertrag Monat
-    const c = cons[m]; const L = c.total; // Verbrauch Monat
-    const d = DAYS[m];
-    const direct = Math.min(P, L*daytimeShare);
-    const surplus = Math.max(0, P-direct);
-    const night = Math.max(0, L-direct);
-    const battUse = Math.min(surplus, night, batt*d)*0.92;
-    let self = Math.min(direct+battUse, L, P);
-    const grid = Math.max(0, L-self);
-    const feed = Math.max(0, P-self);
-    const aut = L>0 ? self/L : 1;
-    const eig = P>0 ? self/P : 0;
-    return {m,P,L,self,grid,feed,aut,eig,c};
-  });
-  return {rows,pvSpec};
+// ---- Sonnen-Tagesform (sin², nach Tageslänge/Breitengrad) ----
+function pvDayShape(n){
+  const lat=LOC.lat*Math.PI/180;
+  const dec=23.45*Math.sin(2*Math.PI*(284+n)/365)*Math.PI/180;
+  let cH=-Math.tan(lat)*Math.tan(dec); cH=Math.max(-1,Math.min(1,cH));
+  const H=Math.acos(cH), dl=2*H*12/Math.PI, sr=12-dl/2, ss=12+dl/2;
+  const w=new Array(24).fill(0); let s=0;
+  for(let h=0;h<24;h++){const t=h+0.5; if(t>sr&&t<ss){const v=Math.sin(Math.PI*(t-sr)/dl); w[h]=v*v; s+=w[h];}}
+  if(s>0)for(let h=0;h<24;h++)w[h]/=s;
+  return w;
 }
 
-// ---- Rendering ----
-function render(){
-  const {rows,pvSpec} = compute();
-  // Summen
-  const sum = k => rows.reduce((a,r)=>a+r[k],0);
-  const P=sum("P"), L=sum("L"), self=sum("self"), grid=sum("grid"), feed=sum("feed");
-  const autY = L>0? self/L : 0, eigY = P>0? self/P : 0;
-  const fullMonths = rows.filter(r=>r.aut>=0.999).length;
-
-  // Wirtschaftlichkeit
-  const price=num("price"), fi=num("feedin"), invest=num("invest"), rise=num("priceRise")/100;
-  const saveGrid = self*price;          // vermiedener Netzbezug
-  const feedRev  = feed*fi;             // Einspeiseerlös
-  const benefit  = saveGrid + feedRev;  // jährlicher Vorteil
-  // Amortisation mit Strompreissteigerung (Einspeisung fix)
-  let payback=null, cum=0;
-  for(let y=1;y<=40;y++){
-    const yr = self*price*Math.pow(1+rise,y-1) + feedRev;
-    cum += yr;
-    if(payback===null && cum>=invest){
-      const prev = cum-yr;
-      payback = (y-1) + (invest-prev)/yr;
-      break;
+// ---- Stündliche Profile bauen ----
+function buildPvUnit(){                         // 8760 Werte für 1 kWp
+  const perM=pvPerKwpMonthly(); const arr=new Float64Array(YDAYS*24);
+  for(let m=0;m<12;m++){
+    const dayE=perM[m]/DAYS[m];
+    for(let d=0;d<DAYS[m];d++){
+      const n=DOFF[m]+d; const w=pvDayShape(n+1); const base=n*24;
+      for(let h=0;h<24;h++) arr[base+h]=dayE*w[h];
     }
   }
-  // 20-Jahre-Gewinn
-  let cum20=0;
-  for(let y=1;y<=20;y++){ cum20 += self*price*Math.pow(1+rise,y-1) + feedRev; }
-  const profit20 = cum20 - invest;
+  return arr;
+}
+function buildLoad(){                            // 8760 Werte Gesamtlast
+  const haus=num("haus"),wp=num("wp"),kl=num("klima"),ev=evEnergyHome();
+  const evShape=$("evWhen").value==="day"?SH.evDay:SH.evEvening;
+  const arr=new Float64Array(YDAYS*24);
+  for(let m=0;m<12;m++){
+    const dh=haus*DIST.haus[m]/DAYS[m], dw=wp*DIST.wp[m]/DAYS[m],
+          dk=kl*DIST.klima[m]/DAYS[m], de=ev*DIST.auto[m]/DAYS[m];
+    for(let d=0;d<DAYS[m];d++){
+      const base=(DOFF[m]+d)*24;
+      for(let h=0;h<24;h++)
+        arr[base+h]=dh*SH.haus[h]+dw*SH.wp[h]+dk*SH.klima[h]+de*evShape[h];
+    }
+  }
+  return arr;
+}
+// Batterie-Dispatch, liefert Monats- und Jahressummen
+function simulate(pvUnit,load,kwp,batt){
+  const etaD=0.90; let soc=0;
+  const mo=Array.from({length:12},()=>({P:0,L:0,self:0,grid:0,feed:0}));
+  for(let m=0;m<12;m++){
+    for(let d=0;d<DAYS[m];d++){
+      const base=(DOFF[m]+d)*24;
+      for(let h=0;h<24;h++){
+        const pv=pvUnit[base+h]*kwp, ld=load[base+h];
+        const direct=Math.min(pv,ld); let sur=pv-direct, def=ld-direct;
+        const charge=Math.min(sur,batt-soc); soc+=charge; const feed=sur-charge;
+        const avail=soc*etaD; const disch=Math.min(def,avail); soc-=disch/etaD; const grid=def-disch;
+        const o=mo[m]; o.P+=pv; o.L+=ld; o.self+=direct+disch; o.grid+=grid; o.feed+=feed;
+      }
+    }
+  }
+  return mo;
+}
 
-  // KPIs
-  const autC = autY>=0.7?"g":autY>=0.45?"a":"r";
-  $("kAutarkie").innerHTML = `<span class="${autC}">${fmt(autY*100)} %</span>`;
-  $("kEigen").innerHTML = `${fmt(eigY*100)} <small>%</small>`;
-  $("kFull").innerHTML = `${fullMonths} <small>/ 12</small>`;
-  $("kPayback").innerHTML = payback? `${fmt(payback,1)} <small>Jahre</small>` : `> 40 <small>J.</small>`;
-  $("kBenefit").innerHTML = `<span style="font-size:19px">${eur(benefit)}</span>`;
-  $("kProfit20").innerHTML = `<span class="${profit20>=0?'g':'r'}" style="font-size:19px">${eur(profit20)}</span>`;
+// ---- Wirtschaftlichkeit ----
+function irrSolve(cf0,cf){
+  const f=r=>cf0+cf.reduce((a,c,i)=>a+c/Math.pow(1+r,i+1),0);
+  let lo=-0.9,hi=1.5,flo=f(lo);
+  if(flo*f(hi)>0) return null;
+  for(let i=0;i<100;i++){const mid=(lo+hi)/2,fm=f(mid); if(Math.abs(fm)<0.5)return mid; if(flo*fm<0)hi=mid; else{lo=mid;flo=fm;}}
+  return (lo+hi)/2;
+}
+function economics(self1,feed1,p){
+  const cf=[]; let cum=0,pbS=null;
+  for(let y=1;y<=p.life;y++){
+    const deg=Math.pow(1-p.degr,y-1);
+    const price=p.price*Math.pow(1+p.rise,y-1);
+    const fit=y<=20?p.feedin:p.postEEG;
+    let cash=self1*deg*price+feed1*deg*fit-p.invest*p.maintPct;
+    if(y===p.invYear)cash-=p.invCost;
+    if(p.batt>0&&y===p.battYear)cash-=p.battCost;
+    cf.push(cash);
+    const prev=cum; cum+=cash;
+    if(pbS===null&&cum>=p.invest)pbS=(y-1)+(p.invest-prev)/cash;
+  }
+  const npv=-p.invest+cf.reduce((a,c,i)=>a+c/Math.pow(1+p.disc,i+1),0);
+  const irr=irrSolve(-p.invest,cf);
+  const profit=cf.reduce((a,c)=>a+c,0)-p.invest;
+  return {npv,irr,pbS,profit,benefit1:cf[0]+p.invest*p.maintPct};
+}
+function econParams(){
+  return {invest:num("invest"),batt:num("battery"),price:num("price"),feedin:num("feedin"),
+    rise:num("priceRise")/100,maintPct:num("maintPct")/100,degr:num("degr")/100,
+    life:Math.max(5,num("life")),disc:num("disc")/100,postEEG:num("postEEG"),
+    invYear:num("invYear"),invCost:num("invCost"),battYear:num("battYear"),battCost:num("battCost")};
+}
 
-  // Verdict
-  const rendite = invest>0 ? (profit20/invest/20*100) : 0;
-  $("verdict").innerHTML =
-    `Über 20 Jahre erwirtschaftet die Anlage rund <b>${eur(cum20)}</b> Vorteil bei <b>${eur(invest)}</b> Investition – `+
-    `das entspricht etwa <b>${fmt(rendite,1)} % Rendite pro Jahr</b>. `+
-    (payback ? `Bezahlt ist sie nach ca. <b>${fmt(payback,1)} Jahren</b>.` : `Sie amortisiert sich in diesem Szenario nicht innerhalb von 40 Jahren.`);
+// ---- Render ----
+let PVUNIT=null, LOAD=null;
+function recompute(){ PVUNIT=buildPvUnit(); LOAD=buildLoad(); }
 
-  const chartMax = Math.max(1, ...rows.map(r=>Math.max(r.P,r.L)));
-  drawChart(rows, chartMax);
+function render(){
+  recompute();
+  const kwp=num("kwp"),batt=num("battery");
+  const mo=simulate(PVUNIT,LOAD,kwp,batt);
+  const cons=monthlyCons();
+  const rows=mo.map((o,m)=>({m,P:o.P,L:o.L,self:o.self,grid:o.grid,feed:o.feed,
+    aut:o.L>0?o.self/o.L:1, c:cons[m]}));
+  const S=k=>rows.reduce((a,r)=>a+r[k],0);
+  const P=S("P"),L=S("L"),self=S("self"),grid=S("grid"),feed=S("feed");
+  const autY=L>0?self/L:0, eigY=P>0?self/P:0, full=rows.filter(r=>r.aut>=0.999).length;
+
+  const p=econParams(); const e=economics(self,feed,p);
+  $("kAutarkie").innerHTML=`<span class="${autY>=0.7?'g':autY>=0.45?'a':'r'}">${pct(autY)}</span>`;
+  $("kEigen").innerHTML=`${fmt(eigY*100)} <small>%</small>`;
+  $("kFull").innerHTML=`${full} <small>/ 12</small>`;
+  $("kPayback").innerHTML=e.pbS?`${fmt(e.pbS,1)} <small>Jahre</small>`:`> ${p.life} <small>J.</small>`;
+  $("kIRR").innerHTML=e.irr!=null?`<span class="${e.irr>=0.04?'g':e.irr>=0?'a':'r'}">${fmt(e.irr*100,1)} %</span>`:`—`;
+  $("kNPV").innerHTML=`<span class="${e.npv>=0?'g':'r'}" style="font-size:19px">${eur(e.npv)}</span>`;
+  $("kBenefit").innerHTML=`<span style="font-size:19px">${eur(e.benefit1)}</span>`;
+  $("kProfit").innerHTML=`<span class="${e.profit>=0?'g':'r'}" style="font-size:19px">${eur(e.profit)}</span>`;
+
+  $("verdict").innerHTML=`Über ${p.life} Jahre bleibt nach allen Kosten ein Überschuss von `+
+    `<b>${eur(e.profit)}</b>. Interne Verzinsung <b>${e.irr!=null?fmt(e.irr*100,1)+' %':'–'}</b> `+
+    `(Vergleich: dein Diskontsatz ${fmt(p.disc*100,1)} %). `+
+    (e.npv>=0?`Der positive Kapitalwert bedeutet: die Anlage schlägt diese Alternativanlage.`
+             :`Negativer Kapitalwert: rein finanziell schlägt hier die Alternativanlage die PV.`);
+
+  drawChart(rows, Math.max(1,...rows.map(r=>Math.max(r.P,r.L))));
   drawTable(rows,{P,L,self,grid,feed,autY});
-  drawAdvice(rows,{autY,eigY,batt:num("battery"),kwp:num("kwp"),self,feed});
 
-  // Pills
-  $("srcPill").textContent = "Ertragsquelle: "+(PV_SOURCE==="PVGIS"?"PVGIS (echt)":"Modell (Schätzung)");
-  $("srcPill").className = "pill "+(PV_SOURCE==="PVGIS"?"ok":"warn");
-  const yrSpec = pvSpec.reduce((a,b)=>a+b,0);
-  $("yieldPill").textContent = `spez. Ertrag: ${fmt(yrSpec)} kWh/kWp·a`;
-  $("evInfo").textContent = `→ E-Auto-Verbrauch zuhause: ${fmt(evAnnual())} kWh/Jahr`;
+  renderEV(self);
+  renderKlima(rows,e);
+  renderAdvice(rows,{autY,eigY,batt,kwp});
+
+  $("srcPill").textContent="Ertragsquelle: "+(PV_SOURCE==="PVGIS"?"PVGIS (echt)":"Modell (Schätzung)");
+  $("srcPill").className="pill "+(PV_SOURCE==="PVGIS"?"ok":"warn");
+  $("yieldPill").textContent=`spez. Ertrag: ${fmt(pvPerKwpMonthly().reduce((a,b)=>a+b,0))} kWh/kWp·a`;
+  $("evInfo").textContent=`→ E-Auto-Verbrauch zuhause: ${fmt(evEnergyHome())} kWh/Jahr`;
+  window.__last={self,feed,e,autY,eigY};
+}
+function monthlyCons(){
+  const h=num("haus"),w=num("wp"),k=num("klima"),e=evEnergyHome();
+  return MONTHS.map((_,m)=>({haus:h*DIST.haus[m],wp:w*DIST.wp[m],auto:e*DIST.auto[m],klima:k*DIST.klima[m]}));
+}
+
+// ---- E-Auto ----
+function renderEV(){
+  const kmTot=num("evKm"), evEnAll=kmTot/100*num("evKwh100");
+  const home=num("evHome")/100;
+  const energyCost=evEnAll*home*num("price")+evEnAll*(1-home)*num("publicPrice")+num("evMaint")+num("evTax");
+  const fuel=kmTot/100*num("verbL100")*num("fuelPrice");
+  const verbCost=fuel+num("verbMaint")+num("verbTax");
+  const save=verbCost-energyCost;
+  const extra=num("evPrice")-num("verbPrice");
+  const pay=save>0?extra/save:null;
+  const life=Math.max(5,num("life"));
+  const tco=save*life-extra;
+  $("evSave").innerHTML=`<span class="${save>=0?'g':'r'}" style="font-size:19px">${eur(save)}</span>`;
+  $("evExtra").innerHTML=`<span style="font-size:19px">${eur(extra)}</span>`;
+  $("evPay").innerHTML=pay!=null&&pay>0?`${fmt(pay,1)} <small>Jahre</small>`:(extra<=0?`sofort`:`—`);
+  $("evTco").innerHTML=`<span class="${tco>=0?'g':'r'}" style="font-size:19px">${eur(tco)}</span>`;
+  $("evNote").innerHTML=`Verbrenner: ${eur(verbCost)}/Jahr (Sprit ${eur(fuel)} + Wartung ${eur(num("verbMaint"))} + Steuer ${eur(num("verbTax"))}). `+
+    `E-Auto: ${eur(energyCost)}/Jahr (Strom, keine Kfz-Steuer, keine Wartung). `+
+    `Der PV-Vorteil beim Laden steckt bereits im PV-Ergebnis oben und ist hier <b>nicht</b> doppelt gezählt.`;
+  window.__ev={save,extra};
+}
+
+// ---- Klima + Gesamt ----
+function renderKlima(rows,e){
+  const kl=num("klima"),price=num("price");
+  const run=kl*price;
+  const sMonths=[4,5,6,7,8]; // Mai–Sep
+  const sumAut=sMonths.reduce((a,m)=>a+rows[m].aut,0)/sMonths.length;
+  const pvCov=run*sumAut;
+  $("klRun").innerHTML=`<span style="font-size:19px">${eur(run)}</span>`;
+  $("klPv").innerHTML=`<span class="g" style="font-size:19px">${eur(pvCov)}</span>`;
+  const gTotal=num("invest")+Math.max(0,window.__ev?window.__ev.extra:0)+num("klimaBuy");
+  const gYear=(e.benefit1)+(window.__ev?window.__ev.save:0)-run;
+  $("gTotal").innerHTML=`<span style="font-size:19px">${eur(gTotal)}</span>`;
+  $("gYear").innerHTML=`<span class="${gYear>=0?'g':'r'}" style="font-size:19px">${eur(gYear)}</span>`;
+  $("gNote").innerHTML=`Die Klimaanlage ist vor allem Komfort: ${eur(run)}/Jahr Strom, davon rund `+
+    `${eur(pvCov)} im Sommer durch PV gedeckt. Zusammengefasst stehen <b>${eur(gTotal)}</b> Anschaffung `+
+    `einem jährlichen Gesamt-Vorteil von <b>${eur(gYear)}</b> gegenüber (PV-Ersparnis + E-Auto-Ersparnis − Klima-Strom). `+
+    `PV und E-Auto sind Rendite-Investitionen, die Klima ist ein Komfort-Aufschlag.`;
 }
 
 // ---- SVG Chart ----
-function drawChart(rows, maxV){
-  const W=900, H=340, padL=42, padB=46, padT=14, padR=8;
-  const plotW=W-padL-padR, plotH=H-padT-padB;
-  const groupW = plotW/12, barW = groupW*0.30, gap = groupW*0.10;
-  const y = v => padT + plotH*(1 - v/maxV);
-  const cat = [["haus","c-haus"],["wp","c-wp"],["auto","c-auto"],["klima","c-klima"]];
-  let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Monatliche Bilanz">`;
-  // Gridlines + Y-Achse
-  const step = niceStep(maxV/4);
-  for(let g=0; g<=maxV+1; g+=step){
-    const yy=y(g);
-    s+=`<line class="gl" x1="${padL}" y1="${yy}" x2="${W-padR}" y2="${yy}"/>`;
-    s+=`<text class="axis" x="${padL-6}" y="${yy+3}" text-anchor="end">${fmt(g)}</text>`;
-  }
+function drawChart(rows,maxV){
+  const W=900,H=340,padL=44,padB=48,padT=14,padR=8;
+  const plotW=W-padL-padR,plotH=H-padT-padB,gw=plotW/12,bw=gw*0.30,gap=gw*0.10;
+  const y=v=>padT+plotH*(1-v/maxV);
+  const cat=[["haus","c-haus"],["wp","c-wp"],["auto","c-auto"],["klima","c-klima"]];
+  let s=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Monatliche Energiebilanz">`;
+  const step=niceStep(maxV/4);
+  for(let g=0;g<=maxV+1;g+=step){const yy=y(g);
+    s+=`<line class="gl" x1="${padL}" y1="${yy}" x2="${W-padR}" y2="${yy}"/>`+
+       `<text class="axis" x="${padL-6}" y="${yy+3}" text-anchor="end">${fmt(g)}</text>`;}
   s+=`<text class="axis" x="${padL-6}" y="${padT-2}" text-anchor="end">kWh</text>`;
-
   rows.forEach((r,m)=>{
-    const gx = padL + m*groupW;
-    const xC = gx + groupW/2 - barW - gap/2;   // Verbrauch links
-    const xP = gx + groupW/2 + gap/2;          // PV rechts
-    // Verbrauch gestapelt
-    let acc=0;
-    cat.forEach(([key,col])=>{
-      const val=r.c[key]; if(val<=0.01){return;}
-      const h=plotH*val/maxV; const yy=y(acc+val);
-      s+=`<rect x="${xC}" y="${yy}" width="${barW}" height="${h}" fill="var(--${col})" rx="1">`+
-         `<title>${MONTHS[m]} · ${labelKey(key)}: ${fmt(val)} kWh</title></rect>`;
-      acc+=val;
-    });
-    // PV gestapelt: selbst genutzt unten, Einspeisung oben
+    const gx=padL+m*gw, xC=gx+gw/2-bw-gap/2, xP=gx+gw/2+gap/2; let acc=0;
+    cat.forEach(([k,c])=>{const v=r.c[k]; if(v<=0.01)return; const h=plotH*v/maxV;
+      s+=`<rect x="${xC}" y="${y(acc+v)}" width="${bw}" height="${h}" fill="var(--${c})" rx="1"><title>${MONTHS[m]} · ${lbl(k)}: ${fmt(v)} kWh</title></rect>`; acc+=v;});
     if(r.P>0.01){
-      const hSelf=plotH*r.self/maxV, hFeed=plotH*r.feed/maxV;
-      s+=`<rect x="${xP}" y="${y(r.self)}" width="${barW}" height="${hSelf}" fill="var(--c-pv-eigen)" rx="1">`+
-         `<title>${MONTHS[m]} · PV selbst genutzt: ${fmt(r.self)} kWh</title></rect>`;
-      s+=`<rect x="${xP}" y="${y(r.P)}" width="${barW}" height="${hFeed}" fill="var(--c-pv-netz)" rx="1">`+
-         `<title>${MONTHS[m]} · PV eingespeist: ${fmt(r.feed)} kWh</title></rect>`;
+      s+=`<rect x="${xP}" y="${y(r.self)}" width="${bw}" height="${plotH*r.self/maxV}" fill="var(--c-pv-eigen)" rx="1"><title>${MONTHS[m]} · PV selbst genutzt: ${fmt(r.self)} kWh</title></rect>`;
+      s+=`<rect x="${xP}" y="${y(r.P)}" width="${bw}" height="${plotH*r.feed/maxV}" fill="var(--c-pv-netz)" rx="1"><title>${MONTHS[m]} · PV eingespeist: ${fmt(r.feed)} kWh</title></rect>`;
     }
-    // Monatslabel + Autarkie
-    s+=`<text class="mlabel" x="${gx+groupW/2}" y="${H-padB+16}">${MONTHS[m]}</text>`;
-    const col = r.aut>=0.9?"var(--ok)":r.aut>=0.5?"var(--mid)":"var(--low)";
-    s+=`<text class="autlab" x="${gx+groupW/2}" y="${H-padB+30}" fill="${col}">${fmt(r.aut*100)}%</text>`;
+    s+=`<text class="mlabel" x="${gx+gw/2}" y="${H-padB+16}">${MONTHS[m]}</text>`;
+    const col=r.aut>=0.9?"var(--ok)":r.aut>=0.5?"var(--mid)":"var(--low)";
+    s+=`<text class="autlab" x="${gx+gw/2}" y="${H-padB+30}" fill="${col}">${fmt(r.aut*100)}%</text>`;
   });
-  s+=`</svg>`;
-  $("chart").innerHTML=s;
+  s+=`</svg>`; $("chart").innerHTML=s;
 }
 function niceStep(x){const p=Math.pow(10,Math.floor(Math.log10(x||1)));const n=x/p;return (n<1.5?1:n<3?2:n<7?5:10)*p;}
-function labelKey(k){return {haus:"Hausstrom",wp:"Wärmepumpe",auto:"E-Auto",klima:"Klima"}[k];}
+function lbl(k){return {haus:"Hausstrom",wp:"Wärmepumpe",auto:"E-Auto",klima:"Klima"}[k];}
 
-// ---- Tabelle ----
-function drawTable(rows,tot){
+function drawTable(rows,t){
   const tb=$("tbl").querySelector("tbody"); tb.innerHTML="";
-  rows.forEach(r=>{
-    const full = r.aut>=0.999;
-    tb.insertAdjacentHTML("beforeend",
-      `<tr class="${full?'full':''}"><td class="m">${MONTHS[r.m]}</td>`+
-      `<td>${fmt(r.L)}</td><td>${fmt(r.P)}</td><td>${fmt(r.self)}</td>`+
-      `<td>${fmt(r.grid)}</td><td>${fmt(r.feed)}</td><td>${fmt(r.aut*100)} %</td></tr>`);
-  });
-  $("tbl").querySelector("tfoot").innerHTML =
-    `<tr><td><b>Jahr</b></td><td><b>${fmt(tot.L)}</b></td><td><b>${fmt(tot.P)}</b></td>`+
-    `<td><b>${fmt(tot.self)}</b></td><td><b>${fmt(tot.grid)}</b></td><td><b>${fmt(tot.feed)}</b></td>`+
-    `<td><b>${fmt(tot.autY*100)} %</b></td></tr>`;
+  rows.forEach(r=>tb.insertAdjacentHTML("beforeend",
+    `<tr class="${r.aut>=0.999?'full':''}"><td class="m">${MONTHS[r.m]}</td><td>${fmt(r.L)}</td>`+
+    `<td>${fmt(r.P)}</td><td>${fmt(r.self)}</td><td>${fmt(r.grid)}</td><td>${fmt(r.feed)}</td><td>${fmt(r.aut*100)} %</td></tr>`));
+  $("tbl").querySelector("tfoot").innerHTML=
+    `<tr><td><b>Jahr</b></td><td><b>${fmt(t.L)}</b></td><td><b>${fmt(t.P)}</b></td><td><b>${fmt(t.self)}</b></td>`+
+    `<td><b>${fmt(t.grid)}</b></td><td><b>${fmt(t.feed)}</b></td><td><b>${fmt(t.autY*100)} %</b></td></tr>`;
 }
 
-// ---- Empfehlungen ----
-function drawAdvice(rows,d){
-  const winter = rows.filter(r=>[10,11,0,1].includes(r.m));
-  const wAut = winter.reduce((a,r)=>a+r.aut,0)/winter.length;
-  let t = [];
-  t.push(`Dein Jahres-Autarkiegrad liegt bei <b>${fmt(d.autY*100)} %</b>. Im Winter (Nov–Feb) sind es im Schnitt nur <b>${fmt(wAut*100)} %</b> – `+
-         `typisch, weil Wärmepumpe &amp; wenig Sonne zusammenfallen. Vollständige Autarkie im Winter ist mit PV allein praktisch nicht erreichbar.`);
-  if(d.eigY<0.55 && d.self>0)
-    t.push(`Deine Eigenverbrauchsquote ist mit <b>${fmt(d.eigY*100)} %</b> eher niedrig – die Anlage ist im Verhältnis zum Verbrauch groß. `+
-           `Ein <b>größerer Speicher</b> oder mehr Verbrauch tagsüber (Auto/WP tagsüber laden) hebt sie an.`);
-  if(d.batt<Math.max(5,d.kwp*0.8))
-    t.push(`Ein Speicher von etwa <b>${fmt(Math.round(d.kwp))}–${fmt(Math.round(d.kwp*1.2))} kWh</b> passt gut zu ${fmt(d.kwp)} kWp und erhöht deine Autarkie spürbar.`);
-  t.push(`Hebel für mehr Selbstversorgung: E-Auto &amp; Warmwasser gezielt <b>mittags</b> laden, Wärmepumpe mit PV-Überschuss steuern (SG-Ready), und die Anlage nicht zu klein wählen.`);
-  $("advice").innerHTML = t.map(x=>`<p style="margin:0 0 10px">• ${x}</p>`).join("");
+function renderAdvice(rows,d){
+  const win=[10,11,0,1].map(m=>rows[m].aut); const wAut=win.reduce((a,b)=>a+b,0)/win.length;
+  const t=[];
+  t.push(`Jahres-Autarkie <b>${pct(d.autY)}</b>, im Winter (Nov–Feb) im Schnitt nur <b>${fmt(wAut*100)} %</b> – `+
+    `typisch, weil Wärmepumpe &amp; wenig Sonne zusammenfallen. Volle Winter-Autarkie ist mit PV allein praktisch nicht erreichbar.`);
+  if(d.eigY<0.5) t.push(`Eigenverbrauch nur <b>${pct(d.eigY)}</b> – die Anlage ist relativ groß. Größerer Speicher oder mehr Tagverbrauch (Auto/WP mittags) hebt ihn.`);
+  if($("evWhen").value==="evening") t.push(`Du lädst das E-Auto abends. Auf <b>„tagsüber (PV-optimiert)"</b> umgestellt steigt deine Autarkie oft deutlich.`);
+  t.push(`Nutze den <b>Optimierer</b> oben, um kWp und Speicher automatisch auf deinen Verbrauch abzustimmen.`);
+  $("advice").innerHTML=t.map(x=>`<p style="margin:0 0 10px">• ${x}</p>`).join("");
 }
 
-// ---- PLZ -> ungefährer Standort OHNE Netz (erste PLZ-Ziffer -> Region) ----
-function plzToLoc(plz){
-  const T = {
-    "0":[51.1,"Sachsen/Thüringen"], "1":[52.4,"Berlin/Brandenburg"], "2":[53.4,"Hamburg/Norden"],
-    "3":[52.0,"Niedersachsen/Nordhessen"], "4":[51.4,"NRW (Ruhrgebiet)"], "5":[50.7,"Köln/Rheinland"],
-    "6":[49.9,"Frankfurt/Südwesten"], "7":[48.6,"Baden-Württemberg"], "8":[48.1,"Bayern/München"],
-    "9":[49.6,"Franken/Nordbayern"]
-  };
-  const e = T[plz[0]] || [51.0,"Deutschland"];
-  return {lat:e[0], lon:10.0, place:e[1]};
+// ---- Optimierer ----
+function comboMetrics(kwp,batt,p){
+  const mo=simulate(PVUNIT,LOAD,kwp,batt);
+  let self=0,feed=0,L=0; for(const o of mo){self+=o.self;feed+=o.feed;L+=o.L;}
+  const invest=Math.round(kwp*1300+batt*650+(batt>0?1000:0)); // grobe Kostenfunktion €
+  const e=economics(self,feed,{...p,invest,batt,battCost:Math.round(batt*550)});
+  return {kwp,batt,invest,aut:L>0?self/L:0,pbS:e.pbS,irr:e.irr,npv:e.npv};
 }
-
-// ---- APIs: PLZ -> Koordinaten -> PVGIS (mit Offline-Fallback) ----
-async function loadLocation(){
-  const plz = $("plz").value.trim();
-  if(!/^\d{4,5}$/.test(plz)){ $("plzInfo").textContent="Bitte gültige PLZ eingeben."; return; }
-  // 1) Sofort offline aus der PLZ schätzen -> es gibt immer ein Ergebnis
-  LOC = plzToLoc(plz);
-  $("plzInfo").innerHTML = `📍 Region <b>${LOC.place}</b> (geschätzt)`;
-  render();
-  // 2) Online verfeinern (echter Ort + PVGIS), falls erreichbar
-  try{
-    const r = await fetch(`https://api.zippopotam.us/de/${plz}`);
-    if(r.ok){
-      const j = await r.json();
-      const p = j.places[0];
-      LOC = {lat:parseFloat(p.latitude), lon:parseFloat(p.longitude), place:p["place name"]};
-      $("plzInfo").innerHTML = `📍 <b>${LOC.place}</b> (${LOC.lat.toFixed(3)}, ${LOC.lon.toFixed(3)})`;
+function runOptimizer(){
+  recompute();
+  const p=econParams(), target=$("optTarget").value;
+  const roof=num("roof"); const maxKwp=roof>0?Math.max(3,Math.min(30,Math.round(roof/6))):25;
+  let best=null;
+  for(let kwp=3;kwp<=maxKwp;kwp++){
+    for(let batt=0;batt<=20;batt++){
+      const c=comboMetrics(kwp,batt,p);
+      let score;
+      if(target==="npv")score=c.npv;
+      else if(target==="payback")score=c.pbS?-c.pbS:-999;
+      else if(target==="irr")score=c.irr!=null?c.irr:-999;
+      else /* autpay: höchste Autarkie mit NPV>0 & Amortisation<Laufzeit */
+        score=(c.npv>0&&c.pbS&&c.pbS<=p.life)?c.aut:-1;
+      if(!best||score>best.score) best={...c,score};
     }
-  }catch(e){ /* offline-Schätzung bleibt bestehen */ }
-  await loadPVGIS();
-  render();
+  }
+  const b=best;
+  // Vergleichstabelle repräsentativer Größen (Trade-off sichtbar machen)
+  const set=[[5,0],[8,5],[10,10],[15,10],[20,15]].filter(x=>x[0]<=maxKwp);
+  if(!set.some(x=>x[0]===b.kwp&&x[1]===b.batt)) set.push([b.kwp,b.batt]);
+  set.sort((a,c)=>a[0]-c[0]||a[1]-c[1]);
+  const rowsHtml=set.map(([k,bt])=>{
+    const c=comboMetrics(k,bt,p); const hi=(k===b.kwp&&bt===b.batt);
+    return `<tr${hi?' class="full"':''}><td>${k} kWp${hi?' ★':''}</td><td>${bt} kWh</td>`+
+      `<td>${fmt(c.aut*100)} %</td><td>${c.pbS?fmt(c.pbS,1):'>'+p.life}</td>`+
+      `<td>${c.irr!=null?fmt(c.irr*100,1)+' %':'–'}</td><td>${eur(c.npv)}</td></tr>`;
+  }).join("");
+  $("optBox").hidden=false;
+  $("optRes").innerHTML=
+    `Empfehlung (★): <b>${b.kwp} kWp</b> + <b>${b.batt} kWh</b> Speicher, grob ~${eur(b.invest)} · `+
+    `Autarkie <b>${pct(b.aut)}</b> · Amortisation <b>${b.pbS?fmt(b.pbS,1)+' J.':'>'+p.life+' J.'}</b>.`+
+    `<div class="tblwrap" style="margin-top:10px"><table><thead><tr><th>Anlage</th><th>Speicher</th>`+
+    `<th>Autarkie</th><th>Amort. (J.)</th><th>Rendite</th><th>Kapitalwert</th></tr></thead><tbody>${rowsHtml}</tbody></table></div>`+
+    `<div class="note">Kleiner = höhere %-Rendite &amp; schnellere Amortisation; größer = mehr Autarkie &amp; absoluter Gewinn. `+
+    `Kosten grob geschätzt (~1.300 €/kWp, ~650 €/kWh). Übernimm die Empfehlung und trage deine echten Angebotspreise oben ein.</div>`;
+  $("optApply").onclick=()=>{ $("kwp").value=b.kwp; $("battery").value=b.batt; $("invest").value=b.invest; render(); window.scrollTo({top:0,behavior:"smooth"}); };
+}
+
+// ---- APIs ----
+function plzToLoc(plz){
+  const T={"0":[51.1,"Sachsen/Thüringen"],"1":[52.4,"Berlin/Brandenburg"],"2":[53.4,"Hamburg/Norden"],
+    "3":[52.0,"Niedersachsen/Nordhessen"],"4":[51.4,"NRW (Ruhrgebiet)"],"5":[50.7,"Köln/Rheinland"],
+    "6":[49.9,"Frankfurt/Südwesten"],"7":[48.6,"Baden-Württemberg"],"8":[48.1,"Bayern/München"],
+    "9":[49.6,"Franken/Nordbayern"]};
+  const e=T[plz[0]]||[51.0,"Deutschland"]; return {lat:e[0],lon:10.0,place:e[1]};
+}
+async function loadLocation(){
+  const plz=$("plz").value.trim();
+  if(!/^\d{4,5}$/.test(plz)){$("plzInfo").textContent="Bitte gültige PLZ eingeben.";return;}
+  LOC=plzToLoc(plz); $("plzInfo").innerHTML=`📍 Region <b>${LOC.place}</b> (geschätzt)`; render();
+  try{
+    const r=await fetch(`https://api.zippopotam.us/de/${plz}`);
+    if(r.ok){const j=await r.json();const p=j.places[0];
+      LOC={lat:parseFloat(p.latitude),lon:parseFloat(p.longitude),place:p["place name"]};
+      $("plzInfo").innerHTML=`📍 <b>${LOC.place}</b> (${LOC.lat.toFixed(3)}, ${LOC.lon.toFixed(3)})`;}
+  }catch(e){}
+  await loadPVGIS(); render();
 }
 async function loadPVGIS(){
-  const aspect = ({"0":0,"45":45,"90":90,"flat":0,"ostwest":0})[$("orient").value] ?? 0;
-  const angle  = $("orient").value==="flat" ? 10 : parseInt($("tilt").value)||35;
-  const url = `https://re.jrc.ec.europa.eu/api/v5_2/PVcalc?lat=${LOC.lat}&lon=${LOC.lon}`+
-              `&peakpower=1&loss=14&angle=${angle}&aspect=${aspect}&mountingplace=building&outputformat=json`;
+  const aspect=({"0":0,"45":45,"90":90,"flat":0,"ostwest":0})[$("orient").value]??0;
+  const angle=$("orient").value==="flat"?10:parseInt($("tilt").value)||35;
+  const url=`https://re.jrc.ec.europa.eu/api/v5_2/PVcalc?lat=${LOC.lat}&lon=${LOC.lon}`+
+            `&peakpower=1&loss=14&angle=${angle}&aspect=${aspect}&mountingplace=building&outputformat=json`;
   try{
-    const r = await fetch(url);
-    if(!r.ok) throw new Error("PVGIS "+r.status);
-    const j = await r.json();
-    const mon = j.outputs.monthly.fixed;
-    if(mon && mon.length===12){
-      PV_MONTHLY = mon.map(x=>x.E_m);   // kWh/Monat je 1 kWp
-      PV_SOURCE = "PVGIS";
-      return;
-    }
-    throw new Error("Format");
-  }catch(e){
-    PV_MONTHLY = null; PV_SOURCE = "Modell";
-  }
+    const r=await fetch(url); if(!r.ok)throw 0; const j=await r.json();
+    const mon=j.outputs.monthly.fixed;
+    if(mon&&mon.length===12){PV_MONTHLY=mon.map(x=>x.E_m); PV_SOURCE="PVGIS"; return;}
+    throw 0;
+  }catch(e){PV_MONTHLY=null; PV_SOURCE="Modell";}
 }
 
 // ---- Events ----
-["kwp","battery","invest","haus","wp","klima","evKm","evKwh100","evHome","price","feedin","priceRise"]
-  .forEach(id=>$(id).addEventListener("input", render));
-["orient","tilt"].forEach(id=>$(id).addEventListener("change", async ()=>{ await loadPVGIS(); render(); }));
-$("plzBtn").addEventListener("click", loadLocation);
-$("plz").addEventListener("keydown", e=>{ if(e.key==="Enter") loadLocation(); });
+const liveIds=["kwp","battery","invest","haus","wp","klima","evKm","evKwh100","evHome","evWhen",
+  "price","feedin","priceRise","maintPct","degr","life","disc","postEEG","invYear","invCost",
+  "battYear","battCost","evPrice","verbPrice","verbL100","fuelPrice","verbMaint","verbTax",
+  "publicPrice","evMaint","evTax","klimaBuy"];
+liveIds.forEach(id=>{const el=$(id); el.addEventListener("input",render); el.addEventListener("change",render);});
+["orient","tilt"].forEach(id=>$(id).addEventListener("change",async()=>{await loadPVGIS();render();}));
+$("plzBtn").addEventListener("click",loadLocation);
+$("plz").addEventListener("keydown",e=>{if(e.key==="Enter")loadLocation();});
+$("optBtn").addEventListener("click",runOptimizer);
 
 // ---- Start ----
-render();               // sofort mit Modell rechnen
-loadLocation();         // dann Standort + PVGIS versuchen
+render();
+loadLocation();
 </script>
 </body>
 </html>
