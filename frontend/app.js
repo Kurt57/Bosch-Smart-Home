@@ -1,15 +1,16 @@
-/* Bosch Home Strom — iPhone web app.
- * Talks to the local bridge (bridge/shc_bridge.py). If no bridge is reachable
- * it falls back to a built-in demo generator so the UI always works. */
+/* Bosch Energie — iPhone web app.
+ * Energy-management view over the local bridge (bridge/shc_bridge.py):
+ * Smart Home (Licht-/Rollladensteuerung II) + Bosch heat pump (HomeCom Easy),
+ * combined. If no bridge is reachable it falls back to a built-in demo. */
 'use strict';
 
-const LS = {
-  base: 'bhe_base',
-  price: 'bhe_price',
-  demo: 'bhe_demo',
-};
+const LS = { base: 'bhe_base', price: 'bhe_price', demo: 'bhe_demo' };
 const WD = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
-const APP_VERSION = '2026-09-11 · Wärmepumpe live';
+const MON = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'];
+const COL = { sh: '#4da3ff', hp: '#ef6c4d', heat: '#f6b93b', away: '#ff6b8a' };
+const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
+  frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
+const APP_VERSION = '2026-09-11 · Energiemanagement';
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -31,11 +32,11 @@ let STATE = {
   base: localStorage.getItem(LS.base) || '',
   price: parseFloat(localStorage.getItem(LS.price) || '0.35'),
   demo: localStorage.getItem(LS.demo) === '1',
-  useDays: 14,
-  data: null,     // analytics for the profile/forecast window (90d)
-  live: null,     // frequently-refreshed analytics (short window)
-  health: null,   // last /api/health payload
-  hp: null,       // last /api/heatpump payload
+  histDays: 14,
+  ov: null,       // /api/overview (combined)
+  hpA: null,      // /api/heatpump/analytics
+  data: null,     // /api/analytics (Smart Home, for profile + shares)
+  health: null,
   cur: '€',
 };
 
@@ -44,23 +45,29 @@ const fmt = (n, d = 0) => (n == null ? '–' :
   Number(n).toLocaleString('de-DE', { minimumFractionDigits: d, maximumFractionDigits: d }));
 const kwh = (n, d = 1) => fmt(n, d) + ' kWh';
 const eur = (n, d = 2) => fmt(n, d) + ' ' + STATE.cur;
-
-function money(n) {
-  if (n == null) return '–';
-  return (n >= 100 ? fmt(n, 0) : fmt(n, 2)) + ' ' + STATE.cur;
-}
+function money(n) { if (n == null) return '–'; return (n >= 100 ? fmt(n, 0) : fmt(n, 2)) + ' ' + STATE.cur; }
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+function shortDay(s) { const d = new Date(s + 'T00:00'); return d.getDate() + '.'; }
+function longDay(s) { const d = new Date(s + 'T00:00'); return WD[(d.getDay() + 6) % 7] + ' ' + d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }); }
+function round(n, d) { const f = 10 ** d; return Math.round(n * f) / f; }
+function mean(a) { return a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0; }
+function dayOfYear(dt) { const s = new Date(dt.getFullYear(), 0, 0); return Math.floor((dt - s) / 86400000); }
 
 /* ---------------------------------------------------------------- fetching */
 async function api(path) {
-  const url = (STATE.base || '') + path;
-  const r = await fetch(url, { cache: 'no-store' });
+  const r = await fetch((STATE.base || '') + path, { cache: 'no-store' });
   if (!r.ok) throw new Error('HTTP ' + r.status);
+  return r.json();
+}
+async function postJSON(path, body) {
+  const r = await fetch((STATE.base || '') + path, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  });
   return r.json();
 }
 
 async function loadAll() {
-  // If the user forced demo, skip the network entirely.
-  if (STATE.demo) return applyData(demoAnalytics(90), demoAnalytics(2, true), 'demo');
+  if (STATE.demo) return applyDemo('demo');
   try {
     const health = await api('/api/health');
     STATE.health = health;
@@ -68,31 +75,32 @@ async function loadAll() {
     if (health.price_per_kwh && !localStorage.getItem(LS.price)) {
       STATE.price = health.price_per_kwh; $('price').value = STATE.price;
     }
-    const [full, live] = await Promise.all([
-      api('/api/analytics?days=90&price=' + STATE.price),
-      api('/api/analytics?days=2&price=' + STATE.price),
+    const p = STATE.price;
+    const [ov, hpA, data] = await Promise.all([
+      api('/api/overview?days=90&price=' + p),
+      api('/api/heatpump/analytics?days=90&price=' + p),
+      api('/api/analytics?days=90&price=' + p),
     ]);
-    applyData(full, live, health.mode || 'live');
+    STATE.ov = ov; STATE.hpA = hpA; STATE.data = data;
+    STATE.cur = data.currency || STATE.cur;
+    $('cur').textContent = STATE.cur;
+    setMode(health.mode || 'live');
     $('diag').textContent = JSON.stringify(health, null, 1);
-    renderSettings();
-    refreshHeatpump();
+    renderAll();
   } catch (e) {
-    // no bridge → demo
     STATE.health = null;
-    setMode('err');
     $('conn-note').innerHTML =
-      'Keine Bridge erreichbar (' + e.message + '). Es werden <b>Demo-Daten</b> gezeigt. ' +
-      'Trage hier die Adresse deiner Bridge ein oder öffne diese Seite direkt von der Bridge.';
-    applyData(demoAnalytics(90), demoAnalytics(2, true), 'demo');
-    renderSettings();
+      'Keine Bridge erreichbar (' + esc(e.message) + '). Es werden <b>Demo-Daten</b> gezeigt. ' +
+      'Trage im Setup die Adresse deiner Bridge ein oder öffne diese Seite direkt von der Bridge.';
+    applyDemo('err');
   }
 }
 
-function applyData(full, live, mode) {
-  STATE.data = full;
-  STATE.live = live;
-  STATE.cur = full.currency || STATE.cur || '€';
-  $('cur').textContent = STATE.cur;
+function applyDemo(mode) {
+  STATE.data = demoAnalytics(90);
+  STATE.hpA = demoHpAnalytics(90);
+  STATE.ov = demoOverview(STATE.data, STATE.hpA);
+  STATE.cur = '€'; $('cur').textContent = STATE.cur;
   setMode(mode);
   renderAll();
 }
@@ -106,82 +114,106 @@ function setMode(m) {
 }
 
 /* -------------------------------------------------------------- SVG charts */
-// generic sizing
-const CW = 520;  // internal viewBox width; scales to container
-function svg(h, inner) {
-  return `<svg viewBox="0 0 ${CW} ${h}" preserveAspectRatio="none" role="img">${inner}</svg>`;
+const CW = 520;
+function svg(h, inner) { return `<svg viewBox="0 0 ${CW} ${h}" preserveAspectRatio="none" role="img">${inner}</svg>`; }
+
+function gridLines(h, top, base, pad, max) {
+  let g = '';
+  for (let i = 0; i <= 2; i++) {
+    const y = top + (base - top) * (i / 2);
+    const val = max * (1 - i / 2);
+    g += `<line class="gl" x1="${pad}" x2="${CW - 4}" y1="${y}" y2="${y}"/>`;
+    g += `<text class="axis" x="0" y="${y + 3}">${val >= 10 ? Math.round(val) : val.toFixed(1)}</text>`;
+  }
+  return g;
 }
 
 function barChart(values, opts = {}) {
-  const h = opts.h || 200, pad = 26, top = 12;
+  const h = opts.h || 200, pad = 26, top = 12, base = h - 22;
   const n = values.length || 1;
   const max = Math.max(0.0001, ...values.map(v => v.v));
-  const bw = (CW - pad * 2) / n;
-  const iw = Math.max(2, bw * 0.62);
+  const bw = (CW - pad * 2) / n, iw = Math.max(2, bw * 0.62);
   let bars = '', labels = '';
   values.forEach((d, i) => {
-    const bh = (d.v / max) * (h - top - 22);
-    const x = pad + i * bw + (bw - iw) / 2;
-    const y = h - 22 - bh;
-    const col = d.color || 'url(#g1)';
-    bars += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${iw.toFixed(1)}" height="${Math.max(0, bh).toFixed(1)}" rx="2.5" fill="${col}"/>`;
-    if (d.label && (n <= 16 || i % Math.ceil(n / 12) === 0)) {
+    const bh = (d.v / max) * (base - top);
+    const x = pad + i * bw + (bw - iw) / 2, y = base - bh;
+    bars += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${iw.toFixed(1)}" height="${Math.max(0, bh).toFixed(1)}" rx="2.5" fill="${d.color || 'url(#g1)'}"/>`;
+    if (d.label && (n <= 16 || i % Math.ceil(n / 12) === 0))
       labels += `<text class="axis" x="${(x + iw / 2).toFixed(1)}" y="${h - 8}" text-anchor="middle">${d.label}</text>`;
-    }
   });
-  // gridlines + y labels
-  let grid = '';
-  for (let g = 0; g <= 2; g++) {
-    const y = top + (h - top - 22) * (g / 2);
-    const val = max * (1 - g / 2);
-    grid += `<line class="gl" x1="${pad}" x2="${CW - 4}" y1="${y}" y2="${y}"/>`;
-    grid += `<text class="axis" x="0" y="${y + 3}">${val >= 10 ? Math.round(val) : val.toFixed(1)}</text>`;
-  }
-  return svg(h, defs() + grid + bars + labels);
+  return svg(h, gridLines(h, top, base, pad, max) + bars + labels);
+}
+
+function stackedBar(rows, series, opts = {}) {
+  const h = opts.h || 210, pad = 26, top = 12, base = h - 22;
+  const n = rows.length || 1;
+  const totals = rows.map(r => series.reduce((a, s) => a + Math.max(0, r.values[s.key] || 0), 0));
+  const max = Math.max(0.0001, ...totals);
+  const bw = (CW - pad * 2) / n, iw = Math.max(2, bw * 0.62);
+  let bars = '', labels = '';
+  rows.forEach((r, i) => {
+    const x = pad + i * bw + (bw - iw) / 2;
+    let y = base;
+    series.forEach(s => {
+      const v = Math.max(0, r.values[s.key] || 0);
+      if (v <= 0) return;
+      const bh = v / max * (base - top);
+      y -= bh;
+      bars += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${iw.toFixed(1)}" height="${bh.toFixed(1)}" fill="${s.color}"/>`;
+    });
+    if (r.label && (n <= 16 || i % Math.ceil(n / 12) === 0))
+      labels += `<text class="axis" x="${(x + iw / 2).toFixed(1)}" y="${h - 8}" text-anchor="middle">${r.label}</text>`;
+  });
+  return svg(h, gridLines(h, top, base, pad, max) + bars + labels);
+}
+
+function groupedBar(rows, series, opts = {}) {
+  const h = opts.h || 200, pad = 26, top = 12, base = h - 22;
+  const n = rows.length || 1;
+  const max = Math.max(0.0001, ...rows.map(r => Math.max(...series.map(s => r.values[s.key] || 0))));
+  const gw = (CW - pad * 2) / n, iw = Math.max(1.5, (gw * 0.7) / series.length);
+  let bars = '', labels = '';
+  rows.forEach((r, i) => {
+    const gx = pad + i * gw + gw * 0.15;
+    series.forEach((s, k) => {
+      const v = Math.max(0, r.values[s.key] || 0);
+      const bh = v / max * (base - top), x = gx + k * iw, y = base - bh;
+      bars += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${iw.toFixed(1)}" height="${Math.max(0, bh).toFixed(1)}" rx="1.5" fill="${s.color}"/>`;
+    });
+    if (r.label && (n <= 16 || i % Math.ceil(n / 12) === 0))
+      labels += `<text class="axis" x="${(gx + series.length * iw / 2).toFixed(1)}" y="${h - 8}" text-anchor="middle">${r.label}</text>`;
+  });
+  return svg(h, gridLines(h, top, base, pad, max) + bars + labels);
 }
 
 function areaChart(values, opts = {}) {
-  const h = opts.h || 200, pad = 26, top = 12;
+  const h = opts.h || 200, pad = 26, top = 12, base = h - 22;
   const n = values.length;
   const max = Math.max(0.0001, ...values.map(v => v.v));
   const X = i => pad + (CW - pad - 6) * (n <= 1 ? 0 : i / (n - 1));
-  const Y = v => top + (h - top - 22) * (1 - v / max);
-  let line = '', area = '';
-  values.forEach((d, i) => {
-    const cmd = i === 0 ? 'M' : 'L';
-    line += `${cmd}${X(i).toFixed(1)} ${Y(d.v).toFixed(1)} `;
-  });
-  area = `M${X(0).toFixed(1)} ${(h - 22)} ` + line.replace('M', 'L') + ` L${X(n - 1).toFixed(1)} ${h - 22} Z`;
-  let grid = '', labels = '';
-  for (let g = 0; g <= 2; g++) {
-    const y = top + (h - top - 22) * (g / 2);
-    const val = max * (1 - g / 2);
-    grid += `<line class="gl" x1="${pad}" x2="${CW - 4}" y1="${y}" y2="${y}"/>`;
-    grid += `<text class="axis" x="0" y="${y + 3}">${val >= 10 ? Math.round(val) : val.toFixed(1)}</text>`;
-  }
+  const Y = v => top + (base - top) * (1 - v / max);
+  let line = '';
+  values.forEach((d, i) => { line += `${i === 0 ? 'M' : 'L'}${X(i).toFixed(1)} ${Y(d.v).toFixed(1)} `; });
+  const area = `M${X(0).toFixed(1)} ${base} ` + line.replace('M', 'L') + ` L${X(n - 1).toFixed(1)} ${base} Z`;
+  let labels = '';
   values.forEach((d, i) => {
     if (d.label && i % Math.ceil(n / 8) === 0)
       labels += `<text class="axis" x="${X(i).toFixed(1)}" y="${h - 8}" text-anchor="middle">${d.label}</text>`;
   });
-  return svg(h,
-    defs() + grid +
-    `<path d="${area}" fill="url(#gArea)" opacity="0.5"/>` +
-    `<path d="${line}" fill="none" stroke="url(#g1)" stroke-width="2.5" stroke-linejoin="round"/>` +
+  return svg(h, gridLines(h, top, base, pad, max) +
+    `<path d="${area}" fill="${opts.fill || 'url(#gArea)'}" opacity="0.55"/>` +
+    `<path d="${line}" fill="none" stroke="${opts.stroke || 'url(#g1)'}" stroke-width="2.5" stroke-linejoin="round"/>` +
     labels);
 }
 
 function heatmap(grid) {
-  // grid: 7 rows (weekday) x 24 cols (hour) of watts
-  const h = 190, left = 30, top = 6, cellH = (h - top - 18) / 7;
-  const cellW = (CW - left - 6) / 24;
+  const h = 190, left = 30, top = 6, cellH = (h - top - 18) / 7, cellW = (CW - left - 6) / 24;
   let max = 0.0001;
   grid.forEach(r => r.forEach(v => { if (v > max) max = v; }));
   let cells = '', ylab = '', xlab = '';
   grid.forEach((row, wd) => {
     row.forEach((v, hh) => {
-      const t = v / max;
-      const col = heatColor(t);
-      cells += `<rect x="${(left + hh * cellW).toFixed(1)}" y="${(top + wd * cellH).toFixed(1)}" width="${cellW + 0.5}" height="${cellH + 0.5}" fill="${col}"/>`;
+      cells += `<rect x="${(left + hh * cellW).toFixed(1)}" y="${(top + wd * cellH).toFixed(1)}" width="${cellW + 0.5}" height="${cellH + 0.5}" fill="${heatColor(v / max)}"/>`;
     });
     ylab += `<text class="axis" x="0" y="${(top + wd * cellH + cellH / 2 + 3).toFixed(1)}">${WD[wd]}</text>`;
   });
@@ -190,216 +222,296 @@ function heatmap(grid) {
   return svg(h, cells + ylab + xlab);
 }
 function heatColor(t) {
-  // dark blue -> cyan -> amber
   t = Math.max(0, Math.min(1, t));
   const stops = [[22, 33, 60], [43, 108, 176], [75, 224, 176], [255, 182, 77]];
-  const seg = t * (stops.length - 1);
-  const i = Math.min(stops.length - 2, Math.floor(seg));
-  const f = seg - i;
+  const seg = t * (stops.length - 1), i = Math.min(stops.length - 2, Math.floor(seg)), f = seg - i;
   const c = stops[i].map((a, k) => Math.round(a + (stops[i + 1][k] - a) * f));
   return `rgb(${c[0]},${c[1]},${c[2]})`;
 }
 
-// Gradients are defined once globally in index.html (a 0x0 svg that stays in
-// the render tree), so per-chart <defs> are not needed.
-function defs() { return ''; }
+function donutChart(segs, opts = {}) {
+  const list = segs.filter(s => s.value > 0);
+  const total = list.reduce((a, s) => a + s.value, 0) || 1;
+  const cx = 100, cy = 100, R = 88, r = 56;
+  const pol = (rad, a) => ({ x: cx + rad * Math.cos(a), y: cy + rad * Math.sin(a) });
+  let paths = '', a0 = -Math.PI / 2;
+  if (list.length === 1) {
+    paths = `<circle cx="${cx}" cy="${cy}" r="${(R + r) / 2}" fill="none" stroke="${list[0].color}" stroke-width="${R - r}"/>`;
+  } else {
+    list.forEach(s => {
+      const a1 = a0 + (s.value / total) * 2 * Math.PI, large = (a1 - a0) > Math.PI ? 1 : 0;
+      const o0 = pol(R, a0), o1 = pol(R, a1), i1 = pol(r, a1), i0 = pol(r, a0);
+      paths += `<path d="M${o0.x.toFixed(1)} ${o0.y.toFixed(1)} A${R} ${R} 0 ${large} 1 ${o1.x.toFixed(1)} ${o1.y.toFixed(1)} L${i1.x.toFixed(1)} ${i1.y.toFixed(1)} A${r} ${r} 0 ${large} 0 ${i0.x.toFixed(1)} ${i0.y.toFixed(1)} Z" fill="${s.color}"/>`;
+      a0 = a1;
+    });
+  }
+  return `<svg viewBox="0 0 200 200" style="display:block;max-width:210px;margin:4px auto">${paths}` +
+    `<text x="100" y="97" text-anchor="middle" class="donut-v">${opts.big || ''}</text>` +
+    `<text x="100" y="119" text-anchor="middle" class="donut-l">${opts.center || ''}</text></svg>`;
+}
+
+function legendHtml(items) {
+  return items.map(it => `<div class="it"><span class="sw" style="background:${it.color}"></span>${esc(it.label)}${it.sub ? `<small>${esc(it.sub)}</small>` : ''}</div>`).join('');
+}
+function statusRow(k, v) { return `<div class="statusrow"><span class="k">${k}</span><span class="v">${v}</span></div>`; }
+function devRow(title, sub, valTop, valBot, pct, col) {
+  return `<div class="devrow"><div class="nm"><b>${esc(title)}</b><small>${sub}</small>` +
+    `<div class="bar"><i style="width:${pct.toFixed(0)}%${col ? `;background:${col}` : ''}"></i></div></div>` +
+    `<div class="val"><b>${valTop}</b>${valBot ? `<small>${valBot}</small>` : ''}</div></div>`;
+}
 
 /* --------------------------------------------------------------- rendering */
 function renderAll() {
-  renderLive();
-  renderUse();
-  renderProfile();
-  renderAway();
-  renderForecast();
+  renderOverview(); renderToday(); renderHistory(); renderHeatpump(); renderProfile(); renderSettings();
 }
 
-function renderLive() {
-  const L = STATE.live.live, S = STATE.data.stats;
-  $('live-total').innerHTML = fmt(L.total_power_w, 0) + '<span> W</span>';
-  const dev = L.devices.filter(d => d.power_w >= 0);
-  const active = dev.filter(d => d.power_w > 1).length;
-  $('live-sub').textContent = `${dev.length} Geräte · ${active} aktiv · aktualisiert ${new Date().toLocaleTimeString('de-DE')}`;
-  $('k-today').innerHTML = kwh(S.avg_daily_kwh, 2);
-  $('k-cost-today').textContent = eur(S.day_avg_cost);
-  $('k-total').innerHTML = kwh(L.total_energy_kwh, 0);
-  $('k-baseline').innerHTML = fmt(STATE.data.baseline_w, 1) + ' W';
+function renderOverview() {
+  const ov = STATE.ov; if (!ov) return;
+  $('ov-today').innerHTML = fmt(ov.today.total_kwh, 1) + '<span> kWh</span>';
+  $('ov-today-cost').textContent = eur(ov.today.cost) + ' · Stand ' + new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+  $('ov-now').textContent = fmt(ov.now.total_w, 0) + ' W';
+  $('ov-now-hp').textContent = ov.now.heatpump_w != null ? fmt(ov.now.heatpump_w, 0) + ' W' : '–';
+  $('ov-month').innerHTML = kwh(ov.estimate.month_kwh, 0);
+  $('ov-month-cost').textContent = money(ov.estimate.month_cost);
 
-  const max = Math.max(1, ...dev.map(d => d.power_w));
-  $('live-devices').innerHTML = dev.map(d => {
-    const L = devLabel(d);
-    return `
-    <div class="devrow">
-      <div class="nm"><b>${esc(L.title)}</b><small>${esc(L.sub)}</small>
-        <div class="bar"><i style="width:${(d.power_w / max * 100).toFixed(0)}%"></i></div></div>
-      <div class="val"><b>${fmt(d.power_w, 1)} W</b><small>${kwh(d.energy_kwh_total, 1)} gesamt</small></div>
-    </div>`; }).join('');
+  const segs = ov.breakdown.filter(b => b.kwh > 0).map(b => ({ label: b.label, value: b.kwh, color: b.color }));
+  $('ov-break-sum').textContent = kwh(ov.today.total_kwh, 1);
+  $('ov-donut').innerHTML = segs.length
+    ? donutChart(segs, { big: fmt(ov.today.total_kwh, 1), center: 'kWh heute' })
+    : '<div class="note">Noch keine Verbrauchsdaten für heute.</div>';
+  $('ov-legend').innerHTML = legendHtml(segs.slice(0, 8).map(s => ({ label: s.label, color: s.color, sub: kwh(s.value, 2) })));
 
-  // 24h line from the short-window daily/hourly — use hourly profile as proxy shape
-  const hp = STATE.data.hourly_profile.map(h => ({ v: h.avg_w, label: h.hour % 6 === 0 ? h.hour + 'h' : '' }));
-  $('chart-24h').innerHTML = areaChart(hp, { h: 170 });
+  const w = ov.combined_daily.slice(-14);
+  $('ov-daily').innerHTML = stackedBar(
+    w.map(d => ({ label: shortDay(d.day), values: { sh: d.smarthome_kwh, hp: d.heatpump_kwh } })),
+    [{ key: 'sh', color: COL.sh }, { key: 'hp', color: COL.hp }], { h: 200 });
+
+  const card = $('ov-hp-card');
+  if (ov.heatpump_connected) {
+    card.hidden = false;
+    $('ov-hp-cop').textContent = ov.heatpump.seasonal_cop ? 'JAZ ' + fmt(ov.heatpump.seasonal_cop, 2) : '';
+    const l = ov.heatpump.live || {};
+    const rows = [
+      statusRow('Strom heute', kwh(ov.today.heatpump_kwh, 2)),
+      l.power_w != null ? statusRow('Leistung jetzt', fmt(l.power_w, 0) + ' W') : '',
+      l.cop_live ? statusRow('Wirkungsgrad jetzt', fmt(l.cop_live, 2)) : '',
+      l.outdoor_c != null ? statusRow('Außentemperatur', fmt(l.outdoor_c, 1) + ' °C') : '',
+    ].join('');
+    $('ov-hp-body').innerHTML = rows;
+  } else { card.hidden = true; }
 }
 
-const MON = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'];
+function renderToday() {
+  const ov = STATE.ov; if (!ov) return;
+  $('t-total').innerHTML = kwh(ov.today.total_kwh, 1);
+  $('t-sh').innerHTML = kwh(ov.today.smarthome_kwh, 2);
+  $('t-hp').innerHTML = kwh(ov.today.heatpump_kwh, 2);
 
-// 12-month view: real days count, missing days filled with the current average
-function renderYearChart(avg) {
-  const realByDay = {};
-  for (const d of STATE.data.daily) realByDay[d.day] = d.kwh;
-  const now = new Date();
-  const months = [];
-  for (let i = 11; i >= 0; i--) {
-    const m = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    const y = m.getFullYear(), mo = m.getMonth();
-    const days = new Date(y, mo + 1, 0).getDate();
-    let sum = 0, realDays = 0;
-    for (let day = 1; day <= days; day++) {
-      const key = `${y}-${String(mo + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-      if (realByDay[key] != null) { sum += realByDay[key]; realDays++; }
-      else sum += avg;
+  const hrs = ov.today_hourly || [];
+  const hasData = hrs.some(h => h.smarthome_kwh > 0 || h.heatpump_kwh > 0);
+  $('t-hourly').innerHTML = hasData ? stackedBar(
+    hrs.map(h => ({ label: h.hour % 3 === 0 ? h.hour + '' : '', values: { sh: h.smarthome_kwh, hp: h.heatpump_kwh } })),
+    [{ key: 'sh', color: COL.sh }, { key: 'hp', color: COL.hp }], { h: 190 })
+    : '<div class="note">Der Stundenverlauf füllt sich im Lauf des Tages.</div>';
+  if (hasData) {
+    const peak = hrs.reduce((a, b) => (b.smarthome_kwh + b.heatpump_kwh) > (a.smarthome_kwh + a.heatpump_kwh) ? b : a);
+    $('t-hourly-note').innerHTML = `Verbrauchsstärkste Stunde bisher: <b>${peak.hour}:00 Uhr</b> ` +
+      `(${kwh(peak.smarthome_kwh + peak.heatpump_kwh, 2)}).`;
+  } else { $('t-hourly-note').textContent = ''; }
+
+  const segs = [
+    { label: 'Smart Home', value: ov.today.smarthome_kwh, color: COL.sh },
+    { label: 'Wärmepumpe', value: ov.today.heatpump_kwh, color: COL.hp },
+  ].filter(s => s.value > 0);
+  $('t-donut').innerHTML = segs.length ? donutChart(segs, { big: eur(ov.today.cost), center: 'heute' })
+    : '<div class="note">Noch keine Daten für heute.</div>';
+  $('t-legend').innerHTML = legendHtml(segs.map(s => ({ label: s.label, color: s.color, sub: kwh(s.value, 2) })));
+
+  const devs = ov.breakdown.filter(b => b.key !== 'heatpump' && b.kwh > 0);
+  const maxD = Math.max(0.0001, ...devs.map(d => d.kwh));
+  $('t-devices').innerHTML = devs.length
+    ? devs.map(d => devRow(d.label, kwh(d.kwh, 3) + ' heute', kwh(d.kwh, 2), '', d.kwh / maxD * 100, COL.sh)).join('')
+    : '<div class="note">Noch keine Gerätedaten für heute.</div>';
+}
+
+function renderHistory() {
+  const ov = STATE.ov, data = STATE.data; if (!ov || !data) return;
+  const days = STATE.histDays;
+  const cd = ov.combined_daily;
+  const shHex = COL.sh, hpHex = COL.hp;
+  $('h-daily-legend').innerHTML = legendHtml([
+    { label: 'Smart Home', color: shHex }, { label: 'Wärmepumpe', color: hpHex }]);
+
+  if (days >= 365) {
+    const avgSh = mean(cd.slice(1, -1).map(d => d.smarthome_kwh)) || mean(cd.map(d => d.smarthome_kwh));
+    const avgHp = mean(cd.slice(1, -1).map(d => d.heatpump_kwh)) || mean(cd.map(d => d.heatpump_kwh));
+    const byDay = {}; cd.forEach(d => byDay[d.day] = d);
+    const now = new Date(), months = [];
+    for (let i = 11; i >= 0; i--) {
+      const m = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const y = m.getFullYear(), mo = m.getMonth(), nd = new Date(y, mo + 1, 0).getDate();
+      let sh = 0, hp = 0, real = 0;
+      for (let dd = 1; dd <= nd; dd++) {
+        const key = `${y}-${String(mo + 1).padStart(2, '0')}-${String(dd).padStart(2, '0')}`;
+        if (byDay[key]) { sh += byDay[key].smarthome_kwh; hp += byDay[key].heatpump_kwh; real++; }
+        else { sh += avgSh; hp += avgHp; }
+      }
+      months.push({ label: MON[mo], values: { sh, hp }, real });
     }
-    months.push({ label: MON[mo], v: sum, realDays });
-  }
-  const vals = months.map(m => ({
-    v: m.v, label: m.label,
-    color: m.realDays > 0 ? 'url(#g1)' : '#ffb64d',
-  }));
-  $('chart-daily').innerHTML = barChart(vals, { h: 210 });
-}
-
-function renderUse() {
-  const year = STATE.useDays >= 365;
-  const C = STATE.data.counter_estimate;
-  const avg = (C && C.avg_daily_kwh) || STATE.data.stats.avg_daily_kwh || 0;
-
-  if (year) {
-    renderYearChart(avg);
-    $('chart-daily-title').innerHTML =
-      'Verbrauch pro Monat · <span class="badge" style="color:#ffb64d;border-color:#6b551f">gelb = geschätzt</span>';
-    $('chart-daily-note').hidden = false;
-    $('chart-daily-note').innerHTML =
-      `Monate ohne Messung sind mit deinem aktuellen Ø <b>${kwh(avg, 2)}/Tag</b> geschätzt. ` +
-      'Sobald echte Tage vorliegen, ersetzen sie die Schätzung automatisch.';
-    $('u-avg').innerHTML = kwh(avg, 2); $('u-avg-l').textContent = 'Ø pro Tag';
-    $('u-max').innerHTML = kwh(avg * 365, 0); $('u-max-l').textContent = 'Jahr (geschätzt)';
+    $('h-daily').innerHTML = stackedBar(months, [{ key: 'sh', color: shHex }, { key: 'hp', color: hpHex }], { h: 210 });
+    $('h-daily-title').innerHTML = 'Strom pro Monat · <span class="badge" style="color:#ffb64d;border-color:#6b551f">grau = geschätzt</span>';
+    $('h-daily-note').hidden = false;
+    $('h-daily-note').innerHTML = `Monate ohne Messung sind mit deinem aktuellen Ø ` +
+      `<b>${kwh(avgSh + avgHp, 2)}/Tag</b> geschätzt und werden durch echte Werte ersetzt.`;
+    $('h-avg').innerHTML = kwh(avgSh + avgHp, 2);
+    $('h-max').innerHTML = kwh((avgSh + avgHp) * 365, 0); $('h-max-l').textContent = 'Jahr (geschätzt)';
   } else {
-    const daily = windowDays(STATE.data.daily, STATE.useDays);
-    const vals = daily.map(d => ({
-      v: d.kwh,
-      color: d.likely_away ? '#ff6b8a' : 'url(#g1)',
-      label: shortDay(d.day),
-    }));
-    $('chart-daily').innerHTML = barChart(vals, { h: 210 });
-    const kwhs = daily.map(d => d.kwh);
-    const a = kwhs.reduce((x, y) => x + y, 0) / (kwhs.length || 1);
-    $('u-avg').innerHTML = kwh(a, 2); $('u-avg-l').textContent = 'Ø pro Tag';
-    $('u-max').innerHTML = kwh(Math.max(...kwhs, 0), 2); $('u-max-l').textContent = 'Höchster Tag';
-    $('chart-daily-title').innerHTML =
-      'Verbrauch pro Tag <span class="badge away-b">rot = wahrsch. abwesend</span>';
-    $('chart-daily-note').hidden = true;
+    const w = cd.slice(-days);
+    $('h-daily').innerHTML = stackedBar(
+      w.map(d => ({ label: shortDay(d.day), values: { sh: d.smarthome_kwh, hp: d.heatpump_kwh } })),
+      [{ key: 'sh', color: shHex }, { key: 'hp', color: hpHex }], { h: 210 });
+    const tot = w.map(d => d.total_kwh);
+    $('h-avg').innerHTML = kwh(mean(tot), 2);
+    $('h-max').innerHTML = kwh(Math.max(0, ...tot), 2); $('h-max-l').textContent = 'Höchster Tag';
+    $('h-daily-title').textContent = 'Strom pro Tag';
+    $('h-daily-note').hidden = true;
   }
 
-  // device share (cumulative kWh)
-  const dev = [...STATE.data.live.devices].sort((a, b) => b.energy_kwh_total - a.energy_kwh_total);
-  const tot = dev.reduce((a, d) => a + d.energy_kwh_total, 0) || 1;
-  $('dev-share').innerHTML = dev.map(d => `
-    <div class="devrow">
-      <div class="nm"><b>${esc(devLabel(d).title)}</b><small>${(d.energy_kwh_total / tot * 100).toFixed(0)} % des Gesamtverbrauchs</small>
-        <div class="bar"><i style="width:${(d.energy_kwh_total / tot * 100).toFixed(0)}%"></i></div></div>
-      <div class="val"><b>${kwh(d.energy_kwh_total, 1)}</b></div>
-    </div>`).join('');
-}
+  // cumulative share over the window: per Smart-Home device + heat pump
+  const winKeys = new Set(cd.slice(-Math.min(days, cd.length)).map(d => d.day));
+  const pdd = data.per_device_day || {};
+  const names = {}; (data.live.devices || []).forEach(d => names[d.id] = devLabel(d).title);
+  const shares = [];
+  Object.keys(pdd).forEach(id => {
+    let s = 0; for (const day in pdd[id]) if (winKeys.has(day)) s += pdd[id][day];
+    if (s > 0) shares.push({ label: names[id] || id, kwh: s, color: COL.sh });
+  });
+  const hpWin = cd.slice(-Math.min(days, cd.length)).reduce((a, d) => a + d.heatpump_kwh, 0);
+  if (hpWin > 0) shares.push({ label: 'Wärmepumpe', kwh: hpWin, color: COL.hp });
+  shares.sort((a, b) => b.kwh - a.kwh);
+  const totShare = shares.reduce((a, s) => a + s.kwh, 0) || 1;
+  $('h-share').innerHTML = shares.length
+    ? shares.map(s => devRow(s.label, (s.kwh / totShare * 100).toFixed(0) + ' % im Zeitraum', kwh(s.kwh, 1), '', s.kwh / totShare * 100, s.color)).join('')
+    : '<div class="note">Noch keine Daten.</div>';
 
-function renderProfile() {
-  const hp = STATE.data.hourly_profile.map(h => ({ v: h.avg_w, label: h.hour % 3 === 0 ? h.hour + '' : '' }));
-  $('chart-hourly').innerHTML = areaChart(hp, { h: 190 });
-  const peak = STATE.data.hourly_profile.reduce((a, b) => b.avg_w > a.avg_w ? b : a);
-  const low = STATE.data.hourly_profile.reduce((a, b) => b.avg_w < a.avg_w ? b : a);
-  $('profile-note').innerHTML =
-    `Höchste Ø-Leistung um <b>${peak.hour}:00 Uhr</b> (${fmt(peak.avg_w, 1)} W), ` +
-    `niedrigste um <b>${low.hour}:00 Uhr</b>. Das zeigt eure typischen Aktivitätszeiten.`;
-
-  const wp = STATE.data.weekday_profile.map(w => ({ v: w.avg_kwh, label: WD[w.weekday] }));
-  $('chart-weekday').innerHTML = barChart(wp, { h: 170 });
-
-  $('chart-heat').innerHTML = STATE.data.heatmap ? heatmap(STATE.data.heatmap)
-    : '<div class="note">Keine Heatmap-Daten.</div>';
-}
-
-function renderAway() {
-  const A = STATE.data.away;
-  $('away-count').innerHTML = fmt(A.count, 0) + '<span> Tage</span>';
-  $('away-sub').textContent =
-    `von ${A.analysed_days} analysierten Tagen · Schwelle ${kwh(A.threshold_kwh, 2)} aktiv/Tag`;
-  const daily = STATE.data.daily;
-  const vals = daily.slice(-30).map(d => ({
-    v: Math.max(0.02, (d.presence ?? 0)),
-    color: d.likely_away ? '#ff6b8a' : 'url(#g1)',
-    label: shortDay(d.day),
+  // away detection (Smart Home)
+  const A = data.away;
+  $('h-away-sum').textContent = `${A.count} Tage`;
+  const pres = data.daily.slice(-30).map(d => ({
+    v: Math.max(0.02, d.presence ?? 0), color: d.likely_away ? COL.away : COL.sh, label: shortDay(d.day),
   }));
-  $('chart-presence').innerHTML = barChart(vals, { h: 190 });
-  const list = daily.filter(d => d.likely_away);
-  $('away-list').innerHTML = list.length
-    ? list.map(d => `<span class="badge away-b" style="margin:3px 4px 3px 0; display:inline-block">${longDay(d.day)}</span>`).join('')
+  $('h-presence').innerHTML = barChart(pres, { h: 180 });
+  const list = data.daily.filter(d => d.likely_away);
+  $('h-away-list').innerHTML = list.length
+    ? list.map(d => `<span class="badge away-b" style="margin:3px 4px 3px 0;display:inline-block">${longDay(d.day)}</span>`).join('')
     : '<div class="note">Keine eindeutig abwesenden Tage erkannt.</div>';
+
+  // combined forecast & insights
+  const S = data.stats, hpS = STATE.hpA.stats;
+  const standbyYear = data.baseline_w * 24 * 365 / 1000;
+  $('h-insights').innerHTML = [
+    ['Hochrechnung / Jahr', `${kwh(ov.estimate.year_kwh, 0)} · ${money(ov.estimate.year_cost)}`],
+    ['davon Wärmepumpe', hpS.year_estimate_kwh ? `${kwh(hpS.year_estimate_kwh, 0)} · ${money(hpS.year_estimate_cost)}` : '–'],
+    ['davon Smart Home', `${kwh(S.year_estimate_kwh, 0)} · ${money(S.year_estimate_cost)}`],
+    ['Grundlast Smart Home / Jahr', `${kwh(standbyYear, 0)} · ${(S.standby_share * 100).toFixed(0)} %`],
+    ['Vermutete Abwesenheit', `${A.count} Tage · ~${money(A.count * S.day_avg_cost)}`],
+  ].map(([k, v]) => statusRow(k, v)).join('');
 }
 
-function renderForecast() {
-  const S = STATE.data.stats;
-  // counter-based "day 1" estimate (from the cumulative meter + start date)
-  const C = STATE.data.counter_estimate;
-  const cc = $('counter-card');
-  if (C) {
-    cc.hidden = false;
-    $('counter-body').innerHTML = [
-      ['Ø pro Tag (seit Installation)', kwh(C.avg_daily_kwh, 2)],
-      ['Jahres-Hochrechnung', `${kwh(C.year_estimate_kwh, 0)} · ${money(C.year_estimate_cost)}`],
-      ['Zählerbasis', `${kwh(C.total_kwh, 1)} über ${fmt(C.since_days, 0)} Tage`],
-    ].map(([k, v]) => `<div class="devrow"><div class="nm"><b>${k}</b></div><div class="val"><small>${v}</small></div></div>`).join('');
+/* ------------------------------------------------------------- heat pump */
+function hpStatusPill(l) {
+  const active = l.modulation != null && l.modulation > 0;
+  const modeTxt = HP_MODE[l.mode] || l.mode || 'Bereitschaft';
+  return active
+    ? `<span style="color:var(--accent2)">● läuft</span> · ${esc(modeTxt)}` + (l.modulation != null ? ` · ${fmt(l.modulation, 0)} %` : '')
+    : `<span style="color:var(--muted)">◦ ${esc(modeTxt)}</span>`;
+}
+
+function renderHeatpump() {
+  const A = STATE.hpA; if (!A) return;
+  const l = A.live || {};
+  const connected = A.connected;
+  const body = $('hp-body');
+  if (!connected && !(A.daily && A.daily.length)) {
+    body.innerHTML = '<div class="note">Noch nicht verbunden. Im <b>Setup</b> unter „Wärmepumpe (HomeCom)" koppeln.</div>';
   } else {
-    cc.hidden = true;
+    const rows = [];
+    if (l.power_w != null) rows.push(['Aktuelle Leistung (elektrisch)', fmt(l.power_w, 0) + ' W']);
+    if (l.heat_w != null) rows.push(['Wärmeleistung', fmt(l.heat_w / 1000, 1) + ' kW']);
+    if (l.cop_live) rows.push(['Wirkungsgrad jetzt (COP)', fmt(l.cop_live, 2)]);
+    if (l.energy_kwh != null) {
+      const sp = [];
+      if (l.compressor_kwh != null) sp.push('Kompressor ' + kwh(l.compressor_kwh, 0));
+      if (l.eheater_kwh != null) sp.push('Heizstab ' + kwh(l.eheater_kwh, 0));
+      rows.push(['Stromverbrauch gesamt', kwh(l.energy_kwh, 0) +
+        (sp.length ? `<br><small style="color:var(--muted)">${sp.join(' · ')}</small>` : '')]);
+    }
+    if (l.heat_kwh != null) rows.push(['Wärme erzeugt gesamt', kwh(l.heat_kwh, 0)]);
+    if (l.cop_lifetime != null) rows.push(['Jahresarbeitszahl (∅ COP)', fmt(l.cop_lifetime, 2)]);
+    if (l.outdoor_c != null) rows.push(['Außentemperatur', fmt(l.outdoor_c, 1) + ' °C']);
+    if (l.supply_c != null && l.return_c != null) rows.push(['Vor-/Rücklauf', fmt(l.supply_c, 1) + ' / ' + fmt(l.return_c, 1) + ' °C']);
+    if (l.starts != null) rows.push(['Starts / Betriebsstunden', fmt(l.starts, 0) + (l.working_h != null ? ' / ' + fmt(l.working_h, 0) + ' h' : '')]);
+    body.innerHTML = `<div class="note" style="margin:-2px 0 10px">${hpStatusPill(l)}</div>` +
+      (rows.length ? rows.map(([k, v]) => statusRow(k, v)).join('')
+        : '<div class="note">Verbunden – warte auf die erste Messung.</div>') +
+      ((connected && (l.power_w == null || l.heat_w == null))
+        ? '<div class="note" style="margin-top:8px">Leistung & COP erscheinen nach der zweiten Messung (Zählerdifferenz).</div>' : '');
   }
 
-  $('f-year').innerHTML = kwh(S.year_estimate_kwh, 0);
-  $('f-year-cost').textContent = money(S.year_estimate_cost);
-  $('f-month').innerHTML = kwh(S.month_estimate_kwh, 1);
-  $('f-month-cost').textContent = money(S.month_estimate_cost);
+  $('hp-today-e').innerHTML = kwh(A.today.elec_kwh, 2);
+  $('hp-today-h').innerHTML = kwh(A.today.heat_kwh, 1);
+  $('hp-scop').innerHTML = A.stats.seasonal_cop != null ? fmt(A.stats.seasonal_cop, 2) : '–';
+  $('hp-cost').innerHTML = money(A.stats.window_cost);
 
-  // cumulative projection across 12 months
-  const perMonth = S.avg_daily_kwh * 30.4;
-  const proj = [];
-  for (let m = 1; m <= 12; m++) proj.push({ v: perMonth * m, label: m + '' });
-  $('chart-forecast').innerHTML = areaChart(proj, { h: 190 });
-  $('forecast-note').innerHTML =
-    `Basis: Ø <b>${kwh(S.avg_daily_kwh, 2)}/Tag</b> aus ${STATE.data.daily.length} gemessenen Tagen, ` +
-    `hochgerechnet auf 365 Tage. Reale Werte schwanken saisonal (mehr Licht im Winter).`;
+  const daily = (A.daily || []).slice(-30);
+  $('hp-daily').innerHTML = daily.length ? groupedBar(
+    daily.map(d => ({ label: shortDay(d.day), values: { e: d.elec_kwh, h: d.heat_kwh } })),
+    [{ key: 'e', color: COL.hp }, { key: 'h', color: COL.heat }], { h: 200 })
+    : '<div class="note">Noch keine Historie – die Bridge baut sie beim Pollen auf.</div>';
 
-  const away = STATE.data.away;
-  const standbyYear = (STATE.data.baseline_w * 24 * 365 / 1000);
-  $('insights').innerHTML = [
-    ['Grundlast (Standby) im Jahr', `${kwh(standbyYear, 0)} · ${money(standbyYear * STATE.price)} — ${(S.standby_share * 100).toFixed(0)} % des Verbrauchs`],
-    ['Sparsamster / teuerster Tag', `${kwh(S.min_daily_kwh, 2)} … ${kwh(S.max_daily_kwh, 2)}`],
-    ['Median pro Tag', kwh(S.median_daily_kwh, 2)],
-    ['Vermutete Abwesenheit', `${away.count} Tage → grob ${money(away.count * S.day_avg_cost)} nicht angefallen`],
-  ].map(([k, v]) => `<div class="devrow"><div class="nm"><b>${k}</b></div><div class="val"><small>${v}</small></div></div>`).join('');
+  const cops = daily.filter(d => d.cop != null);
+  $('hp-cop-chart').innerHTML = cops.length ? areaChart(
+    cops.map(d => ({ v: d.cop, label: shortDay(d.day) })), { h: 180, stroke: COL.heat, fill: 'url(#gHeat)' })
+    : '<div class="note">COP erscheint, sobald Strom- und Wärmezähler Historie haben.</div>';
+  if (cops.length) {
+    const best = cops.reduce((a, b) => b.cop > a.cop ? b : a);
+    $('hp-cop-note').innerHTML = `Ø COP im Zeitraum: <b>${fmt(A.stats.seasonal_cop, 2)}</b>. ` +
+      `Bester Tag: ${fmt(best.cop, 2)} (${longDay(best.day)}). Höher = effizienter.`;
+  } else { $('hp-cop-note').textContent = ''; }
+
+  const m = A.monthly || [];
+  $('hp-monthly').innerHTML = m.length ? groupedBar(
+    m.map(x => ({ label: MON[parseInt(x.month.slice(5), 10) - 1], values: { e: x.elec_kwh, h: x.heat_kwh } })),
+    [{ key: 'e', color: COL.hp }, { key: 'h', color: COL.heat }], { h: 180 })
+    : '<div class="note">Noch keine vollen Monate.</div>';
+
+  const hasHeat = (A.heatmap || []).some(r => r.some(v => v > 0));
+  $('hp-heat').innerHTML = hasHeat ? heatmap(A.heatmap) : '<div class="note">Noch keine Wärmekarte-Daten.</div>';
+}
+
+/* --------------------------------------------------------------- profile */
+function renderProfile() {
+  const data = STATE.data; if (!data) return;
+  const hp = data.hourly_profile.map(h => ({ v: h.avg_w, label: h.hour % 3 === 0 ? h.hour + '' : '' }));
+  $('chart-hourly').innerHTML = areaChart(hp, { h: 190 });
+  const peak = data.hourly_profile.reduce((a, b) => b.avg_w > a.avg_w ? b : a);
+  const low = data.hourly_profile.reduce((a, b) => b.avg_w < a.avg_w ? b : a);
+  $('profile-note').innerHTML = `Höchste Ø-Leistung um <b>${peak.hour}:00 Uhr</b> (${fmt(peak.avg_w, 1)} W), ` +
+    `niedrigste um <b>${low.hour}:00 Uhr</b>. Typische Aktivitätszeiten im Haushalt.`;
+  $('chart-weekday').innerHTML = barChart(data.weekday_profile.map(w => ({ v: w.avg_kwh, label: WD[w.weekday] })), { h: 170 });
+  $('chart-heat').innerHTML = data.heatmap ? heatmap(data.heatmap) : '<div class="note">Keine Heatmap-Daten.</div>';
 }
 
 /* --------------------------------------------------------------- settings */
-function statusRow(k, v) {
-  return `<div class="devrow"><div class="nm"><b>${k}</b></div><div class="val"><small>${v}</small></div></div>`;
-}
-
 function renderSettings() {
   const h = STATE.health;
   const rows = $('status-rows');
   if (!h) {
     rows.innerHTML = statusRow('Bridge', 'nicht erreichbar – Demo-Ansicht');
-    $('pair-note').innerHTML =
-      'Kopplung ist nur möglich, wenn diese Seite direkt <b>von der Bridge</b> geöffnet wird ' +
-      '(nicht in dieser Vorschau).';
+    $('pair-note').innerHTML = 'Kopplung ist nur möglich, wenn diese Seite direkt <b>von der Bridge</b> geöffnet wird.';
     return;
   }
-  const modeTxt = { live: 'Live · Controller verbunden', demo: 'Demo-Daten',
-    idle: 'Noch nicht gekoppelt' }[h.mode] || h.mode;
+  const modeTxt = { live: 'Live · Controller verbunden', demo: 'Demo-Daten', idle: 'Noch nicht gekoppelt' }[h.mode] || h.mode;
   const last = h.last_poll ? new Date(h.last_poll * 1000).toLocaleTimeString('de-DE') : '–';
   rows.innerHTML = [
     ['Modus', modeTxt],
@@ -407,6 +519,7 @@ function renderSettings() {
     ['Messpunkte gespeichert', fmt(h.sample_count || 0, 0)],
     ['Letzte Messung', last],
     ['Zertifikat', h.has_cert ? 'vorhanden ✓' : 'fehlt'],
+    ['Wärmepumpe', h.homecom_connected ? 'verbunden ✓' : 'nicht verbunden'],
     h.last_error ? ['Letzter Fehler', esc(h.last_error)] : null,
   ].filter(Boolean).map(([k, v]) => statusRow(k, v)).join('');
   if (h.shc_ip && !$('shc-ip').value) $('shc-ip').value = h.shc_ip;
@@ -433,79 +546,36 @@ function friendlyModel(m) {
 }
 
 function renderRenameList() {
-  const box = $('rename-list');
-  if (!box) return;
+  const box = $('rename-list'); if (!box) return;
   const devs = (STATE.data && STATE.data.live && STATE.data.live.devices) || [];
   if (!devs.length) { box.innerHTML = '<div class="note">Noch keine Geräte gefunden.</div>'; return; }
   const list = [...devs].sort((a, b) => devLabel(a).title.localeCompare(devLabel(b).title));
   box.innerHTML = list.map(d => {
-    const cap = [friendlyModel(d.model), d.room || null, 'ID ' + shortId(d.id)]
-      .filter(Boolean).join(' · ');
-    return `<div style="margin-bottom:12px">
-      <label>${esc(cap)}</label>
+    const cap = [friendlyModel(d.model), d.room || null, 'ID ' + shortId(d.id)].filter(Boolean).join(' · ');
+    return `<div style="margin-bottom:12px"><label>${esc(cap)}</label>
       <input class="rn" data-id="${esc(d.id)}" value="${esc(d.custom_name || '')}"
-             placeholder="${esc(devLabel(d).title)}" autocomplete="off"
-             autocapitalize="words" spellcheck="false">
-    </div>`;
+             placeholder="${esc(devLabel(d).title)}" autocomplete="off" autocapitalize="words" spellcheck="false"></div>`;
   }).join('');
 }
 
 function applyCustomName(id, name) {
-  for (const arr of [STATE.data && STATE.data.live && STATE.data.live.devices,
-                     STATE.live && STATE.live.live && STATE.live.live.devices]) {
-    if (arr) for (const d of arr) if (d.id === id) d.custom_name = name;
-  }
+  const arr = STATE.data && STATE.data.live && STATE.data.live.devices;
+  if (arr) for (const d of arr) if (d.id === id) d.custom_name = name;
 }
 
-/* ------------------------------------------------------------ heat pump */
-async function refreshHeatpump() {
-  if (STATE.demo) { $('hp-card').hidden = true; return; }
-  try { STATE.hp = await api('/api/heatpump'); renderHeatpump(); } catch (e) { /* keep */ }
+function shortId(id) { const m = String(id || '').match(/([0-9a-f]{6})$/i); return m ? m[1] : String(id || '').slice(-6); }
+function devLabel(d) {
+  const custom = (d.custom_name || '').trim();
+  if (custom) return { title: custom, sub: d.room || d.name || '' };
+  const name = d.name || '';
+  const generic = /rollladensteuerung|micromodule|light[\s_-]?control|shutter[\s_-]?control/i.test(name)
+    || name.toLowerCase() === (d.model || '').toLowerCase();
+  if (generic && d.room) return { title: d.room, sub: name };
+  if (generic) return { title: 'Licht/Rollladen · ' + shortId(d.id), sub: name };
+  return { title: name || d.room || 'Gerät', sub: d.room || d.model || '' };
 }
 
-const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
-  frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-
-function renderHeatpump() {
-  const hp = STATE.hp, card = $('hp-card');
-  if (!card) return;
-  if (!hp || !hp.available) { card.hidden = true; return; }
-  card.hidden = false;
-
-  const active = hp.modulation != null && hp.modulation > 0;
-  const modeTxt = HP_MODE[hp.mode] || hp.mode || 'Bereitschaft';
-  const status = active
-    ? `<span style="color:var(--accent2)">● läuft</span> · ${esc(modeTxt)}` +
-      (hp.modulation != null ? ` · ${fmt(hp.modulation, 0)} %` : '')
-    : `<span style="color:var(--muted)">◦ ${esc(modeTxt)}</span>`;
-
-  const rows = [];
-  if (hp.power_w != null) rows.push(['Aktuelle Leistung (elektrisch)', fmt(hp.power_w, 0) + ' W']);
-  if (hp.heat_w != null) rows.push(['Wärmeleistung', fmt(hp.heat_w / 1000, 1) + ' kW']);
-  if (hp.cop_live != null) rows.push(['Wirkungsgrad jetzt (COP)', fmt(hp.cop_live, 2)]);
-  if (hp.energy_kwh != null) {
-    const split = [];
-    if (hp.compressor_kwh != null) split.push('Kompressor ' + kwh(hp.compressor_kwh, 0));
-    if (hp.eheater_kwh != null) split.push('Heizstab ' + kwh(hp.eheater_kwh, 0));
-    rows.push(['Stromverbrauch gesamt',
-      kwh(hp.energy_kwh, 0) + (split.length ? `<br><small style="color:var(--muted)">${split.join(' · ')}</small>` : '')]);
-  }
-  if (hp.heat_kwh != null) rows.push(['Wärme erzeugt gesamt', kwh(hp.heat_kwh, 0)]);
-  if (hp.cop_lifetime != null) rows.push(['Jahresarbeitszahl (∅ COP)', fmt(hp.cop_lifetime, 2)]);
-  if (hp.outdoor_c != null) rows.push(['Außentemperatur', fmt(hp.outdoor_c, 1) + ' °C']);
-  if (hp.supply_c != null && hp.return_c != null)
-    rows.push(['Vor-/Rücklauf', fmt(hp.supply_c, 1) + ' / ' + fmt(hp.return_c, 1) + ' °C']);
-  if (hp.starts != null) rows.push(['Starts / Betriebsstunden',
-    fmt(hp.starts, 0) + (hp.working_h != null ? ' / ' + fmt(hp.working_h, 0) + ' h' : '')]);
-
-  $('hp-body').innerHTML =
-    `<div class="note" style="margin:-2px 0 8px">${status}</div>` +
-    (rows.length ? rows.map(([k, v]) => statusRow(k, v)).join('')
-      : '<div class="note">Verbunden – warte auf die erste Messung.</div>') +
-    ((hp.power_w == null || hp.heat_w == null)
-      ? '<div class="note" style="margin-top:8px">Aktuelle Leistung & COP erscheinen nach der zweiten Messung (Zählerdifferenz).</div>' : '');
-}
-
+/* ------------------------------------------------------------ interactions */
 async function doHomecomConnect() {
   const note = $('hp-connect-note'), btn = $('hp-connect');
   const code = $('hp-code').value.trim();
@@ -519,14 +589,6 @@ async function doHomecomConnect() {
   btn.disabled = false;
 }
 
-async function postJSON(path, body) {
-  const r = await fetch((STATE.base || '') + path, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  return r.json();
-}
-
 async function doDiscover() {
   const note = $('discover-note');
   note.textContent = 'Suche Controller im Netzwerk … (kann ein paar Sekunden dauern)';
@@ -534,15 +596,11 @@ async function doDiscover() {
     const r = await api('/api/discover');
     if (r.suggested) {
       $('shc-ip').value = r.suggested;
-      note.innerHTML = `Gefunden: <b>${r.candidates.join(', ')}</b> – oben übernommen. ` +
-        'Passt das nicht, IP manuell eintragen.';
+      note.innerHTML = `Gefunden: <b>${esc(r.candidates.join(', '))}</b> – oben übernommen. Passt das nicht, IP manuell eintragen.`;
     } else {
-      note.innerHTML = `Nichts gefunden im Bereich ${esc(r.scanned)}. IP bitte manuell eintragen ` +
-        '(Bosch-App → Einstellungen → System → Controller).';
+      note.innerHTML = `Nichts gefunden im Bereich ${esc(r.scanned)}. IP bitte manuell eintragen.`;
     }
-  } catch (e) {
-    note.textContent = 'Automatische Suche geht nur, wenn die Seite von der Bridge geöffnet ist.';
-  }
+  } catch (e) { note.textContent = 'Automatische Suche geht nur, wenn die Seite von der Bridge geöffnet ist.'; }
 }
 
 async function doPair() {
@@ -562,167 +620,12 @@ async function doPair() {
       STATE.demo = false; localStorage.setItem(LS.demo, '0');
       setTimeout(loadAll, 1400);
     } else {
-      note.innerHTML = '⚠︎ ' + esc(r.error || 'Kopplung fehlgeschlagen.') +
-        (r.detail ? '<br><small>' + esc(r.detail) + '</small>' : '');
+      note.innerHTML = '⚠︎ ' + esc(r.error || 'Kopplung fehlgeschlagen.') + (r.detail ? '<br><small>' + esc(r.detail) + '</small>' : '');
     }
-  } catch (e) {
-    note.textContent = 'Fehler: ' + e.message + ' – ist die Seite von der Bridge geöffnet?';
-  }
+  } catch (e) { note.textContent = 'Fehler: ' + e.message + ' – ist die Seite von der Bridge geöffnet?'; }
   btn.disabled = false;
 }
 
-/* ---------------------------------------------------------------- helpers */
-function windowDays(daily, n) { return daily.slice(-n); }
-function shortDay(s) { const d = new Date(s + 'T00:00'); return d.getDate() + '.'; }
-function longDay(s) { const d = new Date(s + 'T00:00'); return WD[(d.getDay() + 6) % 7] + ' ' + d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }); }
-function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
-
-// Choose a friendly title/subtitle for a device. Bosch often reports the
-// device `name` as the generic product type; in that case the room name is
-// usually what the user actually assigned, so prefer it as the title.
-function shortId(id) {
-  const m = String(id || '').match(/([0-9a-f]{6})$/i);
-  return m ? m[1] : String(id || '').slice(-6);
-}
-function devLabel(d) {
-  const custom = (d.custom_name || '').trim();
-  if (custom) return { title: custom, sub: d.room || d.name || '' };
-  const name = d.name || '';
-  const generic = /rollladensteuerung|micromodule|light[\s_-]?control|shutter[\s_-]?control/i.test(name)
-    || name.toLowerCase() === (d.model || '').toLowerCase();
-  if (generic && d.room) return { title: d.room, sub: name };
-  if (generic) return { title: 'Licht/Rollladen · ' + shortId(d.id), sub: name };
-  return { title: name || d.room || 'Gerät', sub: d.room || d.model || '' };
-}
-
-/* --------------------------------------------------------- demo generator */
-function demoPower(id, dt, away) {
-  const h = dt.getHours() + dt.getMinutes() / 60;
-  const weekend = dt.getDay() === 0 || dt.getDay() === 6;
-  const base = 0.4;
-  const bell = (c, w, p) => p * Math.exp(-((h - c) ** 2) / (2 * w * w));
-  if (away) {
-    if (id.includes('rollladen') && (Math.abs(h - 8) < 0.2 || Math.abs(h - 20) < 0.2)) return base + 55;
-    return base + 0.1;
-  }
-  let v = base;
-  if (id.includes('kueche')) v += bell(7.5, 1, 22) + bell(18.5, 2, 30) + (weekend ? bell(12.5, .8, 15) : 0);
-  else if (id.includes('flur')) v += bell(7, 1.2, 10) + bell(19, 2.5, 14) + bell(1, .3, 6);
-  else if (id.includes('wohnzimmer')) { v += bell(20, 2.8, 45) + bell(9, 1.5, 8); if (Math.abs(h - 7.5) < .2 || Math.abs(h - 21.5) < .2) v += 60; }
-  else if (id.includes('schlafzimmer')) { v += bell(6.7, .8, 12) + bell(22, 1.2, 14); if (Math.abs(h - (weekend ? 9 : 7)) < .2 || Math.abs(h - 22) < .2) v += 58; }
-  v *= 1 + 0.06 * Math.sin(dt.getTime() / 137000);
-  return Math.max(0, v);
-}
-
-function demoAnalytics(days, shortWindow) {
-  const devices = [
-    { id: 'demo-wohnzimmer', name: 'Wohnzimmer Rollladen', room: 'Wohnzimmer', model: 'BSM' },
-    { id: 'demo-kueche', name: 'Küche Licht', room: 'Küche', model: 'BSM' },
-    { id: 'demo-schlafzimmer', name: 'Schlafzimmer Rollladen', room: 'Schlafzimmer', model: 'BSM' },
-    { id: 'demo-flur', name: 'Flur Licht', room: 'Flur', model: 'BSM' },
-  ];
-  const now = new Date();
-  const start = new Date(now.getTime() - days * 86400000);
-  const awayRanges = [[40, 34], [17, 15], [6, 5]].map(([a, b]) =>
-    [new Date(now - a * 86400000), new Date(now - b * 86400000)]);
-  const isAway = t => awayRanges.some(([a, b]) => t >= a && t <= b);
-
-  const dayKwh = {}, dayActive = {}, hourP = {}, hwP = {}, counters = {}, devEnergy = {};
-  const liveNow = {};
-  for (let h = 0; h < 24; h++) hourP[h] = [];
-  devices.forEach(d => { counters[d.id] = 0; devEnergy[d.id] = 0; });
-
-  const step = 15 * 60000;
-  for (let t = start.getTime(); t <= now.getTime(); t += step) {
-    const dt = new Date(t);
-    const away = isAway(dt);
-    const dayKey = dt.toISOString().slice(0, 10);
-    devices.forEach(d => {
-      const p = demoPower(d.id, dt, away);
-      const wh = p * (step / 3600000);
-      counters[d.id] += wh; devEnergy[d.id] += wh;
-      dayKwh[dayKey] = (dayKwh[dayKey] || 0) + wh / 1000;
-      hourP[dt.getHours()].push(p);
-      const key = ((dt.getDay() + 6) % 7) + '_' + dt.getHours();
-      (hwP[key] = hwP[key] || []).push(p);
-      liveNow[d.id] = p;
-    });
-  }
-  // baseline
-  const allP = [];
-  Object.values(hourP).forEach(a => a.forEach(v => allP.push(v)));
-  allP.sort((a, b) => a - b);
-  const baseline = allP[Math.max(0, Math.floor(allP.length * 0.1) - 1)] || 0.4;
-
-  const daysSorted = Object.keys(dayKwh).sort();
-  daysSorted.forEach(day => {
-    // approximate active energy per day
-    dayActive[day] = Math.max(0, dayKwh[day] - baseline * 24 / 1000);
-  });
-  const complete = daysSorted.slice(1, -1);
-  const kwhVals = complete.map(d => dayKwh[d]);
-  const avg = kwhVals.reduce((a, b) => a + b, 0) / (kwhVals.length || 1);
-  const sortedAct = complete.map(d => dayActive[d]).sort((a, b) => a - b);
-  const medAct = sortedAct[Math.floor(sortedAct.length / 2)] || 0;
-  const awayThresh = Math.max(0.02, medAct * 0.25);
-
-  const daily = daysSorted.map(day => {
-    const active = dayActive[day];
-    return {
-      day, kwh: round(dayKwh[day], 3), active_kwh: round(active, 3),
-      presence: round(medAct <= 0 ? 0 : Math.min(1, active / medAct), 2),
-      likely_away: active < awayThresh,
-    };
-  });
-  const awayDays = daily.filter(d => d.likely_away).map(d => d.day);
-
-  const hourly = [];
-  for (let h = 0; h < 24; h++) {
-    const a = hourP[h];
-    hourly.push({ hour: h, avg_w: round(a.reduce((x, y) => x + y, 0) / (a.length || 1), 2) });
-  }
-  const weekdayAgg = {};
-  for (let i = 0; i < 7; i++) weekdayAgg[i] = [];
-  daysSorted.forEach(day => { weekdayAgg[(new Date(day + 'T00:00').getDay() + 6) % 7].push(dayKwh[day]); });
-  const weekday = [];
-  for (let i = 0; i < 7; i++) { const a = weekdayAgg[i]; weekday.push({ weekday: i, avg_kwh: round(a.reduce((x, y) => x + y, 0) / (a.length || 1), 3) }); }
-  const heat = [];
-  for (let wd = 0; wd < 7; wd++) { const row = []; for (let h = 0; h < 24; h++) { const a = hwP[wd + '_' + h] || []; row.push(round(a.reduce((x, y) => x + y, 0) / (a.length || 1), 1)); } heat.push(row); }
-
-  const perDevice = devices.map(d => ({
-    id: d.id, name: d.name, room: d.room, model: d.model,
-    power_w: round(liveNow[d.id] || 0, 2),
-    energy_kwh_total: round(devEnergy[d.id] / 1000, 3),
-  })).sort((a, b) => b.power_w - a.power_w);
-  const totalNow = perDevice.reduce((a, d) => a + d.power_w, 0);
-  const totalKwh = perDevice.reduce((a, d) => a + d.energy_kwh_total, 0);
-
-  const cAvg = totalKwh / Math.max(1, days);
-  return {
-    currency: '€', price_per_kwh: STATE.price, baseline_w: round(baseline, 2), window_days: days,
-    counter_estimate: {
-      since: Math.floor(start.getTime() / 1000), since_days: round(days, 1),
-      total_kwh: round(totalKwh, 3), avg_daily_kwh: round(cAvg, 3),
-      year_estimate_kwh: round(cAvg * 365, 1), year_estimate_cost: round(cAvg * 365 * STATE.price, 2),
-      month_estimate_kwh: round(cAvg * 30.4, 2),
-    },
-    live: { total_power_w: round(totalNow, 2), total_energy_kwh: round(totalKwh, 3), devices: perDevice },
-    daily, hourly_profile: hourly, weekday_profile: weekday, heatmap: heat,
-    stats: {
-      avg_daily_kwh: round(avg, 3),
-      median_daily_kwh: round([...kwhVals].sort((a, b) => a - b)[Math.floor(kwhVals.length / 2)] || 0, 3),
-      min_daily_kwh: round(Math.min(...kwhVals, 0), 3), max_daily_kwh: round(Math.max(...kwhVals, 0), 3),
-      year_estimate_kwh: round(avg * 365, 1), year_estimate_cost: round(avg * 365 * STATE.price, 2),
-      month_estimate_kwh: round(avg * 30.4, 2), month_estimate_cost: round(avg * 30.4 * STATE.price, 2),
-      day_avg_cost: round(avg * STATE.price, 2),
-      standby_share: avg > 0 ? round((baseline * 24 / 1000) / avg, 3) : 0,
-    },
-    away: { count: awayDays.length, days: awayDays, threshold_kwh: round(awayThresh, 3), analysed_days: daily.length },
-  };
-}
-function round(n, d) { const f = 10 ** d; return Math.round(n * f) / f; }
-
-/* ------------------------------------------------------------ interactions */
 function switchView(v) {
   document.querySelectorAll('.view').forEach(s => s.classList.toggle('on', s.id === 'v-' + v));
   document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
@@ -732,13 +635,12 @@ function switchView(v) {
 function init() {
   $('base').value = STATE.base;
   $('price').value = STATE.price;
-  document.querySelectorAll('#nav button').forEach(b =>
-    b.addEventListener('click', () => switchView(b.dataset.v)));
-  $('use-range').addEventListener('click', e => {
+  document.querySelectorAll('#nav button').forEach(b => b.addEventListener('click', () => switchView(b.dataset.v)));
+  $('hist-range').addEventListener('click', e => {
     const b = e.target.closest('button'); if (!b) return;
-    STATE.useDays = +b.dataset.d;
-    document.querySelectorAll('#use-range button').forEach(x => x.classList.toggle('on', x === b));
-    renderUse();
+    STATE.histDays = +b.dataset.d;
+    document.querySelectorAll('#hist-range button').forEach(x => x.classList.toggle('on', x === b));
+    renderHistory();
   });
   $('save-base').addEventListener('click', () => {
     STATE.base = $('base').value.trim().replace(/\/+$/, '');
@@ -763,17 +665,15 @@ function init() {
   });
   const hpc = $('hp-connect'); if (hpc) hpc.addEventListener('click', doHomecomConnect);
   $('rename-list').addEventListener('change', async (e) => {
-    const inp = e.target.closest('input.rn');
-    if (!inp) return;
+    const inp = e.target.closest('input.rn'); if (!inp) return;
     const id = inp.dataset.id, name = inp.value.trim();
     inp.disabled = true;
     try {
       const r = await postJSON('/api/device-name', { id, name });
       if (r && r.ok) {
         applyCustomName(id, name);
-        inp.placeholder = name || devLabel({ id, name: '', model: '', room: '' }).title;
         inp.style.borderColor = '#4be0b0';
-        renderLive(); renderUse();
+        renderOverview(); renderToday(); renderHistory();
       } else { inp.style.borderColor = '#ff6b8a'; }
     } catch (err) { inp.style.borderColor = '#ff6b8a'; }
     inp.disabled = false;
@@ -785,18 +685,213 @@ function init() {
   });
 
   loadAll();
-  // live refresh every 20s (only the short-window analytics)
-  setInterval(refreshLive, 20000);
+  setInterval(refreshLive, 30000);
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 }
 
 async function refreshLive() {
-  if (STATE.demo) { STATE.live = demoAnalytics(2, true); renderLive(); return; }
+  if (STATE.demo) { applyDemo('demo'); return; }
   try {
-    STATE.live = await api('/api/analytics?days=2&price=' + STATE.price);
-    renderLive();
+    const p = STATE.price;
+    const [ov, hpA] = await Promise.all([
+      api('/api/overview?days=90&price=' + p),
+      api('/api/heatpump/analytics?days=90&price=' + p),
+    ]);
+    STATE.ov = ov; STATE.hpA = hpA;
+    renderOverview(); renderToday(); renderHistory(); renderHeatpump();
   } catch (e) { /* keep last */ }
-  refreshHeatpump();
+}
+
+/* --------------------------------------------------------- demo generator */
+function demoPower(id, dt, away) {
+  const h = dt.getHours() + dt.getMinutes() / 60;
+  const weekend = dt.getDay() === 0 || dt.getDay() === 6;
+  const base = 0.4;
+  const bell = (c, w, p) => p * Math.exp(-((h - c) ** 2) / (2 * w * w));
+  if (away) {
+    if (id.includes('rollladen') && (Math.abs(h - 8) < 0.2 || Math.abs(h - 20) < 0.2)) return base + 55;
+    return base + 0.1;
+  }
+  let v = base;
+  if (id.includes('kueche')) v += bell(7.5, 1, 22) + bell(18.5, 2, 30) + (weekend ? bell(12.5, .8, 15) : 0);
+  else if (id.includes('flur')) v += bell(7, 1.2, 10) + bell(19, 2.5, 14) + bell(1, .3, 6);
+  else if (id.includes('wohnzimmer')) { v += bell(20, 2.8, 45) + bell(9, 1.5, 8); if (Math.abs(h - 7.5) < .2 || Math.abs(h - 21.5) < .2) v += 60; }
+  else if (id.includes('schlafzimmer')) { v += bell(6.7, .8, 12) + bell(22, 1.2, 14); if (Math.abs(h - (weekend ? 9 : 7)) < .2 || Math.abs(h - 22) < .2) v += 58; }
+  v *= 1 + 0.06 * Math.sin(dt.getTime() / 137000);
+  return Math.max(0, v);
+}
+
+function demoHpOp(dt) {
+  const doy = dayOfYear(dt), h = dt.getHours() + dt.getMinutes() / 60;
+  const outdoor = round(9 - 12 * Math.cos((doy - 20) / 365 * 2 * Math.PI) + 4 * Math.sin((h - 14) / 24 * 2 * Math.PI), 1);
+  let elec, mode, cop;
+  const dhw = (h >= 6 && h <= 7) || (h >= 18.5 && h <= 19.5);
+  if (dhw) { elec = 1500; mode = 'dhw'; cop = 2.6; }
+  else if (outdoor < 16) { elec = 300 + (16 - outdoor) * 95; cop = Math.max(1.6, Math.min(4.8, 1.9 + 0.11 * outdoor)); mode = 'ch'; }
+  else { elec = 14; mode = 'off'; cop = 0; }
+  const heat = elec * cop;
+  return { elec, heat, outdoor, mode, modulation: mode === 'off' ? 0 : Math.round(Math.min(100, elec / 2600 * 100)) };
+}
+
+const DEMO_DEVICES = [
+  { id: 'demo-wohnzimmer', name: 'Wohnzimmer Rollladen', room: 'Wohnzimmer', model: 'BSM' },
+  { id: 'demo-kueche', name: 'Küche Licht', room: 'Küche', model: 'BSM' },
+  { id: 'demo-schlafzimmer', name: 'Schlafzimmer Rollladen', room: 'Schlafzimmer', model: 'BSM' },
+  { id: 'demo-flur', name: 'Flur Licht', room: 'Flur', model: 'BSM' },
+];
+
+function demoAnalytics(days) {
+  const now = new Date(), start = new Date(now.getTime() - days * 86400000);
+  const awayRanges = [[40, 34], [17, 15], [6, 5]].map(([a, b]) => [new Date(now - a * 86400000), new Date(now - b * 86400000)]);
+  const isAway = t => awayRanges.some(([a, b]) => t >= a && t <= b);
+  const dayKwh = {}, dayActive = {}, hourP = {}, hwP = {}, devEnergy = {}, perDevDay = {}, liveNow = {};
+  for (let h = 0; h < 24; h++) hourP[h] = [];
+  DEMO_DEVICES.forEach(d => { devEnergy[d.id] = 0; perDevDay[d.id] = {}; });
+  const step = 15 * 60000;
+  for (let t = start.getTime(); t <= now.getTime(); t += step) {
+    const dt = new Date(t), away = isAway(dt), dayKey = localKey(dt);
+    DEMO_DEVICES.forEach(d => {
+      const p = demoPower(d.id, dt, away), wh = p * (step / 3600000);
+      devEnergy[d.id] += wh;
+      dayKwh[dayKey] = (dayKwh[dayKey] || 0) + wh / 1000;
+      perDevDay[d.id][dayKey] = (perDevDay[d.id][dayKey] || 0) + wh / 1000;
+      hourP[dt.getHours()].push(p);
+      const key = ((dt.getDay() + 6) % 7) + '_' + dt.getHours();
+      (hwP[key] = hwP[key] || []).push(p);
+      liveNow[d.id] = p;
+    });
+  }
+  const allP = []; Object.values(hourP).forEach(a => a.forEach(v => allP.push(v))); allP.sort((a, b) => a - b);
+  const baseline = allP[Math.max(0, Math.floor(allP.length * 0.1) - 1)] || 0.4;
+  const daysSorted = Object.keys(dayKwh).sort();
+  daysSorted.forEach(day => { dayActive[day] = Math.max(0, dayKwh[day] - baseline * 24 / 1000); });
+  const complete = daysSorted.slice(1, -1), kwhVals = complete.map(d => dayKwh[d]);
+  const avg = mean(kwhVals);
+  const sortedAct = complete.map(d => dayActive[d]).sort((a, b) => a - b);
+  const medAct = sortedAct[Math.floor(sortedAct.length / 2)] || 0, awayThresh = Math.max(0.02, medAct * 0.25);
+  const daily = daysSorted.map(day => ({
+    day, kwh: round(dayKwh[day], 3), active_kwh: round(dayActive[day], 3),
+    presence: round(medAct <= 0 ? 0 : Math.min(1, dayActive[day] / medAct), 2),
+    likely_away: dayActive[day] < awayThresh,
+  }));
+  const hourly = []; for (let h = 0; h < 24; h++) hourly.push({ hour: h, avg_w: round(mean(hourP[h]), 2) });
+  const wAgg = {}; for (let i = 0; i < 7; i++) wAgg[i] = [];
+  daysSorted.forEach(day => wAgg[(new Date(day + 'T00:00').getDay() + 6) % 7].push(dayKwh[day]));
+  const weekday = []; for (let i = 0; i < 7; i++) weekday.push({ weekday: i, avg_kwh: round(mean(wAgg[i]), 3) });
+  const heat = [];
+  for (let wd = 0; wd < 7; wd++) { const row = []; for (let h = 0; h < 24; h++) row.push(round(mean(hwP[wd + '_' + h] || []), 1)); heat.push(row); }
+  const perDevice = DEMO_DEVICES.map(d => ({
+    id: d.id, name: d.name, room: d.room, model: d.model, custom_name: '',
+    power_w: round(liveNow[d.id] || 0, 2), energy_kwh_total: round(devEnergy[d.id] / 1000, 3),
+  })).sort((a, b) => b.power_w - a.power_w);
+  return {
+    currency: '€', price_per_kwh: STATE.price, baseline_w: round(baseline, 2), window_days: days,
+    live: { total_power_w: round(perDevice.reduce((a, d) => a + d.power_w, 0), 2),
+      total_energy_kwh: round(perDevice.reduce((a, d) => a + d.energy_kwh_total, 0), 3), devices: perDevice },
+    daily, hourly_profile: hourly, weekday_profile: weekday, heatmap: heat, per_device_day: perDevDay,
+    stats: {
+      avg_daily_kwh: round(avg, 3),
+      median_daily_kwh: round([...kwhVals].sort((a, b) => a - b)[Math.floor(kwhVals.length / 2)] || 0, 3),
+      min_daily_kwh: round(Math.min(...kwhVals, 0), 3), max_daily_kwh: round(Math.max(...kwhVals, 0), 3),
+      year_estimate_kwh: round(avg * 365, 1), year_estimate_cost: round(avg * 365 * STATE.price, 2),
+      month_estimate_kwh: round(avg * 30.4, 2), month_estimate_cost: round(avg * 30.4 * STATE.price, 2),
+      day_avg_cost: round(avg * STATE.price, 2),
+      standby_share: avg > 0 ? round((baseline * 24 / 1000) / avg, 3) : 0,
+    },
+    away: { count: daily.filter(d => d.likely_away).length, days: daily.filter(d => d.likely_away).map(d => d.day),
+      threshold_kwh: round(awayThresh, 3), analysed_days: daily.length },
+  };
+}
+function localKey(dt) { return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`; }
+
+function demoHpAnalytics(days) {
+  const now = new Date(), start = new Date(now.getTime() - days * 86400000), step = 15 * 60000;
+  const elecDay = {}, heatDay = {}, hourP = {}, hwP = {}, outH = {};
+  for (let h = 0; h < 24; h++) { hourP[h] = []; outH[h] = []; }
+  let lastOp = null;
+  for (let t = start.getTime(); t <= now.getTime(); t += step) {
+    const dt = new Date(t), op = demoHpOp(dt), key = localKey(dt), dtH = step / 3600000;
+    elecDay[key] = (elecDay[key] || 0) + op.elec / 1000 * dtH;
+    heatDay[key] = (heatDay[key] || 0) + op.heat / 1000 * dtH;
+    hourP[dt.getHours()].push(op.elec);
+    outH[dt.getHours()].push(op.outdoor);
+    const wk = ((dt.getDay() + 6) % 7) + '_' + dt.getHours();
+    (hwP[wk] = hwP[wk] || []).push(op.elec);
+    lastOp = op;
+  }
+  const daysSorted = Object.keys(elecDay).sort();
+  const daily = daysSorted.map(d => {
+    const e = round(elecDay[d], 3), h = round(heatDay[d] || 0, 3);
+    return { day: d, elec_kwh: e, heat_kwh: h, cop: e > 0 ? round(h / e, 2) : null, cost: round(e * STATE.price, 2) };
+  });
+  const hourly = []; for (let h = 0; h < 24; h++) hourly.push({ hour: h, avg_w: round(mean(hourP[h]), 1), avg_outdoor: outH[h].length ? round(mean(outH[h]), 1) : null });
+  const heat = [];
+  for (let wd = 0; wd < 7; wd++) { const row = []; for (let h = 0; h < 24; h++) row.push(round(mean(hwP[wd + '_' + h] || []), 1)); heat.push(row); }
+  const monE = {}, monH = {};
+  daysSorted.forEach(d => { const m = d.slice(0, 7); monE[m] = (monE[m] || 0) + elecDay[d]; monH[m] = (monH[m] || 0) + (heatDay[d] || 0); });
+  const monthly = Object.keys(monE).sort().map(m => ({ month: m, elec_kwh: round(monE[m], 1), heat_kwh: round(monH[m] || 0, 1), cop: monE[m] > 0 ? round((monH[m] || 0) / monE[m], 2) : null }));
+  const today = localKey(now), te = round(elecDay[today] || 0, 3), th = round(heatDay[today] || 0, 3);
+  const complete = daily.slice(1, -1), avgE = mean(complete.map(d => d.elec_kwh)) || mean(daily.map(d => d.elec_kwh));
+  const totE = Object.values(elecDay).reduce((a, b) => a + b, 0), totH = Object.values(heatDay).reduce((a, b) => a + b, 0);
+  const eLife = round(totE, 1), hLife = round(totH, 1);
+  const cop = lastOp && lastOp.elec > 0 ? round(lastOp.heat / lastOp.elec, 2) : null;
+  return {
+    generated_at: Math.floor(Date.now() / 1000), window_days: days, connected: true,
+    live: { power_w: round(lastOp.elec, 0), heat_w: round(lastOp.heat, 0), cop_live: cop,
+      cop_lifetime: eLife > 0 ? round(hLife / eLife, 2) : null, modulation: lastOp.modulation, mode: lastOp.mode,
+      outdoor_c: lastOp.outdoor, supply_c: round(28 + lastOp.heat / 6000 * 12, 1), return_c: round(28 + lastOp.heat / 6000 * 12 - lastOp.heat / 6000 * 5, 1),
+      energy_kwh: eLife, heat_kwh: hLife, compressor_kwh: round(eLife * 0.87, 1), eheater_kwh: round(eLife * 0.13, 1),
+      starts: 655, working_h: 4333, last_poll: Math.floor(Date.now() / 1000) },
+    today: { elec_kwh: te, heat_kwh: th, cost: round(te * STATE.price, 2), cop: te > 0 ? round(th / te, 2) : null },
+    daily, monthly, hourly_profile: hourly, heatmap: heat,
+    stats: {
+      avg_daily_elec_kwh: round(avgE, 3), window_elec_kwh: round(totE, 1), window_heat_kwh: round(totH, 1),
+      window_cost: round(totE * STATE.price, 2), seasonal_cop: totE > 0 ? round(totH / totE, 2) : null,
+      year_estimate_kwh: round(avgE * 365, 1), year_estimate_cost: round(avgE * 365 * STATE.price, 2),
+    },
+  };
+}
+
+function demoOverview(sh, hp) {
+  const now = new Date(), today = localKey(now);
+  const shDaily = {}; sh.daily.forEach(d => shDaily[d.day] = d);
+  const hpDaily = {}; hp.daily.forEach(d => hpDaily[d.day] = d);
+  const shToday = round((shDaily[today] || {}).kwh || 0, 3), hpToday = hp.today.elec_kwh;
+  const totalToday = round(shToday + hpToday, 3);
+  const allDays = [...new Set([...Object.keys(shDaily), ...Object.keys(hpDaily)])].sort();
+  const combined = allDays.map(d => ({
+    day: d, smarthome_kwh: round((shDaily[d] || {}).kwh || 0, 3), heatpump_kwh: round((hpDaily[d] || {}).elec_kwh || 0, 3),
+    total_kwh: round(((shDaily[d] || {}).kwh || 0) + ((hpDaily[d] || {}).elec_kwh || 0), 3),
+  }));
+  // today hourly (Smart Home from device power, heat pump from op)
+  const mid = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const shH = new Array(24).fill(0), hpH = new Array(24).fill(0), step = 15 * 60000;
+  for (let t = mid.getTime(); t <= now.getTime(); t += step) {
+    const dt = new Date(t), dtH = step / 3600000;
+    DEMO_DEVICES.forEach(d => { shH[dt.getHours()] += demoPower(d.id, dt, false) / 1000 * dtH; });
+    hpH[dt.getHours()] += demoHpOp(dt).elec / 1000 * dtH;
+  }
+  const todayHourly = []; for (let h = 0; h < 24; h++) todayHourly.push({ hour: h, smarthome_kwh: round(shH[h], 3), heatpump_kwh: round(hpH[h], 3) });
+  // breakdown today
+  const breakdown = [{ key: 'heatpump', label: 'Wärmepumpe', kwh: hpToday, color: COL.hp }];
+  (sh.per_device_day ? Object.keys(sh.per_device_day) : []).forEach(id => {
+    const v = round((sh.per_device_day[id][today] || 0), 3);
+    const dev = sh.live.devices.find(x => x.id === id);
+    if (v > 0) breakdown.push({ key: id, label: dev ? devLabel(dev).title : id, kwh: v, color: COL.sh });
+  });
+  breakdown.sort((a, b) => b.kwh - a.kwh);
+  const shNow = sh.live.total_power_w, hpNow = hp.live.power_w;
+  const monthKwh = round((sh.stats.avg_daily_kwh + hp.stats.avg_daily_elec_kwh) * 30.4, 1);
+  const yearKwh = round((sh.stats.avg_daily_kwh + hp.stats.avg_daily_elec_kwh) * 365, 1);
+  return {
+    generated_at: Math.floor(Date.now() / 1000), window_days: sh.window_days, price_per_kwh: STATE.price,
+    heatpump_connected: true,
+    now: { total_w: round(shNow + hpNow, 1), smarthome_w: round(shNow, 1), heatpump_w: round(hpNow, 1) },
+    today: { total_kwh: totalToday, smarthome_kwh: shToday, heatpump_kwh: hpToday, cost: round(totalToday * STATE.price, 2) },
+    estimate: { month_kwh: monthKwh, month_cost: round(monthKwh * STATE.price, 2), year_kwh: yearKwh, year_cost: round(yearKwh * STATE.price, 2) },
+    combined_daily: combined, today_hourly: todayHourly, breakdown,
+    heatpump: { today: hp.today, live: hp.live, seasonal_cop: hp.stats.seasonal_cop },
+  };
 }
 
 document.addEventListener('DOMContentLoaded', init);

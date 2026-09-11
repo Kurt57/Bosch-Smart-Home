@@ -4,12 +4,17 @@ Die Bosch **Compress 6800i AW** (und verwandte 5800i/6800i) gehört **nicht** zu
 Smart Home Controller, sondern zur Bosch-Heizungswelt. Die App liest sie über
 **HomeCom Easy** (Bosch-Cloud) aus – zusätzlich zu den Licht-/Rollladenmodulen.
 
-Angezeigt werden (soweit deine Anlage sie liefert):
+Angezeigt werden (soweit deine Anlage sie liefert), im eigenen **Wärmepumpe**-Tab
+und kombiniert in **Übersicht/Heute/Verlauf**:
 
-* **Aktuelle elektrische Leistung** (W) – aus dem Stromzähler der WP abgeleitet
-* **Stromverbrauch gesamt** (kWh)
-* **Wärmeleistung** (kW) und **Modulation** (%)
-* **Außentemperatur** und ein **geschätzter COP** (Wärme ÷ Strom)
+* **Aktuelle elektrische & thermische Leistung** (W/kW) – aus den kumulativen
+  Zählern je Poll abgeleitet
+* **Stromverbrauch gesamt** (kWh), aufgeteilt in **Kompressor** und **Heizstab**
+* **Wärme erzeugt gesamt** (kWh) und **COP jetzt** sowie **Jahresarbeitszahl**
+* **Modulation** (%), **Betriebsmodus** (Warmwasser/Heizung/Bereitschaft),
+  **Außentemperatur**, **Vor-/Rücklauf**, **Starts/Betriebsstunden**
+* **Historie** (Strom & Wärme pro Tag/Monat, COP-Verlauf, Wärmekarte) baut die
+  Bridge selbst aus den gepollten Zählern auf – die Cloud liefert dafür keine API.
 
 > Hinweis: HomeCom ist eine **Cloud**-Anbindung. Die Zugangsdaten (Login-Token)
 > werden nur **lokal** in der Bridge gespeichert (in `config.json`, per
@@ -86,8 +91,12 @@ weiter. Safari (besonders am iPhone) kann diese nicht öffnen und zeigt nur
   `https://singlekey-id.com/auth/connect/token`. Die Bridge speichert den
   **Refresh-Token** und erneuert den Access-Token selbstständig.
 * Daten: `https://pointt-api.bosch-thermotechnology.com/pointt-api/api/v1/gateways/{id}/resource/...`
-  (u. a. `heatSources/electricityTotalConsumption`, `heatSources/hs1/actualPower`,
-  `heatSources/hs1/powerPercentage`).
+  – die **CS6800i AW** liefert die Energie über
+  `heatSources/emon/totalConsumption` (Werte `compressor`, `eheater`,
+  `outputProduced`), dazu `actualModulation`, `actualSupplyTemperature`,
+  `numberOfStarts`, `workingTime/totalSystem`, `system/sensors/temperatures/outdoor_t1`.
+  (Ältere Anlagen nutzen ggf. `hs1/actualPower` o. ä. – der `/api/homecom/probe`-
+  Endpunkt zeigt, was deine Anlage kennt.)
 * Umgesetzt in `bridge/homecom.py` – **ohne Zusatzpakete** (nur Standardbibliothek).
   Grundlage der Endpunkte: das Community-Projekt
   [`serbanb11/homecom_alt`](https://github.com/serbanb11/homecom_alt).

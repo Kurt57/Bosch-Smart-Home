@@ -5,18 +5,19 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Strom">
+<meta name="apple-mobile-web-app-title" content="Energie">
 <meta name="theme-color" content="#0b1220">
 <meta name="mobile-web-app-capable" content="yes">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon.svg">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
-<title>Bosch Home Strom</title>
+<title>Bosch Energie</title>
 <style>
   :root{
     --bg:#0b1220; --bg2:#111a2e; --card:#16213c; --card2:#1c2a49;
     --ink:#eaf0ff; --muted:#93a2c4; --line:#26355c;
     --accent:#3ba9ff; --accent2:#4be0b0; --warn:#ffb64d; --away:#ff6b8a;
+    --sh:#4da3ff; --hp:#ef6c4d; --heat:#f6b93b;
     --grad1:#3ba9ff; --grad2:#7c5cff;
     --safe-t:env(safe-area-inset-top); --safe-b:env(safe-area-inset-bottom);
   }
@@ -24,7 +25,7 @@
   html,body{margin:0; background:var(--bg); color:var(--ink);
     font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,sans-serif;
     -webkit-font-smoothing:antialiased}
-  body{padding-bottom:calc(72px + var(--safe-b))}
+  body{padding-bottom:calc(74px + var(--safe-b))}
   a{color:var(--accent)}
   .wrap{max-width:640px; margin:0 auto; padding:0 14px}
   header{position:sticky; top:0; z-index:20;
@@ -44,19 +45,24 @@
     padding:16px; margin:12px 0; box-shadow:0 6px 24px rgba(0,0,0,.25)}
   .card h2{font-size:13px; margin:0 0 12px; color:var(--muted); font-weight:600;
     text-transform:uppercase; letter-spacing:.06em}
+  .card h2 .r{float:right; text-transform:none; letter-spacing:0; font-weight:600}
   .grid2{display:grid; grid-template-columns:1fr 1fr; gap:12px}
+  .grid3{display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px}
   .kpi{background:var(--card); border:1px solid var(--line); border-radius:16px; padding:14px}
-  .kpi .v{font-size:24px; font-weight:750; letter-spacing:-.03em; line-height:1}
+  .kpi .v{font-size:23px; font-weight:750; letter-spacing:-.03em; line-height:1.05}
   .kpi .l{color:var(--muted); font-size:12px; margin-top:6px}
-  .kpi .u{font-size:13px; color:var(--muted); font-weight:600}
+  .kpi.sm .v{font-size:18px}
 
   .hero{background:radial-gradient(120% 120% at 20% 0%,#1b2b52 0%,var(--card) 60%);
     text-align:center; padding:22px 16px}
-  .hero .now{font-size:56px; font-weight:800; letter-spacing:-.04em; line-height:1;
+  .hero .now{font-size:52px; font-weight:800; letter-spacing:-.04em; line-height:1;
     background:linear-gradient(90deg,var(--grad1),var(--grad2));
     -webkit-background-clip:text; background-clip:text; color:transparent}
-  .hero .now span{font-size:22px; -webkit-text-fill-color:var(--muted); color:var(--muted)}
+  .hero .now span{font-size:20px; -webkit-text-fill-color:var(--muted); color:var(--muted)}
   .hero .cap{color:var(--muted); font-size:13px; margin-top:8px}
+  .hero .split{display:flex; justify-content:center; gap:18px; margin-top:12px; flex-wrap:wrap}
+  .hero .split div{font-size:13px; color:var(--muted)}
+  .hero .split b{display:block; font-size:17px; color:var(--ink); font-weight:700; margin-top:2px}
   .dot{display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--accent2);
     margin-right:6px; animation:pulse 2s infinite}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
@@ -76,12 +82,23 @@
   svg{display:block; width:100%; height:auto; overflow:visible}
   .axis{fill:var(--muted); font-size:10px}
   .gl{stroke:var(--line); stroke-width:1}
+  .donut-v{fill:var(--ink); font-size:26px; font-weight:800}
+  .donut-l{fill:var(--muted); font-size:11px}
+
+  .legend{display:flex; flex-wrap:wrap; gap:8px 16px; margin-top:12px}
+  .legend .it{display:flex; align-items:center; gap:7px; font-size:13px}
+  .legend .sw{width:11px; height:11px; border-radius:3px; flex:none}
+  .legend small{color:var(--muted); margin-left:4px}
 
   .seg{display:flex; gap:6px; background:var(--card2); padding:4px; border-radius:12px;
     margin:0 0 12px}
   .seg button{flex:1; border:none; background:transparent; color:var(--muted);
     padding:8px 6px; border-radius:9px; font-size:13px; font-weight:600}
   .seg button.on{background:var(--accent); color:#04121f}
+
+  .statusrow{display:flex; align-items:baseline; gap:10px; font-size:14px; margin:5px 0}
+  .statusrow .k{color:var(--muted); flex:1; min-width:44%}
+  .statusrow .v{font-weight:650; text-align:right}
 
   input,select{width:100%; padding:12px; border-radius:12px; border:1px solid var(--line);
     background:var(--bg2); color:var(--ink); font-size:16px; margin-top:6px}
@@ -96,16 +113,15 @@
   .away-b{color:var(--away); border-color:#6b1f33}
 
   nav{position:fixed; left:0; right:0; bottom:0; z-index:30;
-    padding:6px 8px calc(6px + var(--safe-b)); background:rgba(14,22,40,.92);
+    padding:6px 4px calc(6px + var(--safe-b)); background:rgba(14,22,40,.92);
     backdrop-filter:blur(12px); border-top:1px solid var(--line);
     display:flex; justify-content:space-around; max-width:640px; margin:0 auto}
   nav button{background:none; border:none; color:var(--muted); font-size:10px;
-    display:flex; flex-direction:column; align-items:center; gap:3px; padding:6px 4px; flex:1}
+    display:flex; flex-direction:column; align-items:center; gap:3px; padding:6px 2px; flex:1}
   nav button.on{color:var(--accent)}
   nav button svg{width:22px; height:22px}
   .view{display:none} .view.on{display:block; animation:fade .25s}
   @keyframes fade{from{opacity:0; transform:translateY(6px)}to{opacity:1}}
-  .tip{fill:var(--ink); font-size:11px; font-weight:700}
 </style>
 </head>
 <body>
@@ -119,73 +135,163 @@
     <linearGradient id="gArea" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#3ba9ff"/><stop offset="1" stop-color="#3ba9ff" stop-opacity="0"/>
     </linearGradient>
+    <linearGradient id="gHeat" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ef6c4d"/><stop offset="1" stop-color="#ef6c4d" stop-opacity="0"/>
+    </linearGradient>
   </defs>
 </svg>
 <header>
   <div class="wrap row">
     <div>
-      <h1 id="title">Strom · Bosch Smart Home</h1>
-      <div class="sub" id="subtitle">Licht-/Rollladensteuerung II</div>
+      <h1 id="title">Energie · Bosch Smart Home</h1>
+      <div class="sub" id="subtitle">Smart Home + Wärmepumpe</div>
     </div>
     <div class="pill" id="mode">…</div>
   </div>
 </header>
 
 <main class="wrap">
-  <!-- LIVE ---------------------------------------------------------------->
-  <section class="view on" id="v-live">
+  <!-- ÜBERSICHT ----------------------------------------------------------->
+  <section class="view on" id="v-overview">
     <div class="card hero">
-      <div class="cap"><span class="dot"></span>Aktueller Verbrauch (alle Geräte)</div>
-      <div class="now" id="live-total">–<span> W</span></div>
-      <div class="cap" id="live-sub">–</div>
+      <div class="cap"><span class="dot"></span>Heute bisher verbraucht</div>
+      <div class="now" id="ov-today">–<span> kWh</span></div>
+      <div class="cap" id="ov-today-cost">–</div>
+      <div class="split">
+        <div>Gerade jetzt<b id="ov-now">– W</b></div>
+        <div>davon Wärmepumpe<b id="ov-now-hp">– W</b></div>
+      </div>
     </div>
     <div class="grid2">
-      <div class="kpi"><div class="v" id="k-today">–</div><div class="l">Heute geschätzt</div></div>
-      <div class="kpi"><div class="v" id="k-cost-today">–</div><div class="l">Kosten heute</div></div>
-      <div class="kpi"><div class="v" id="k-total">–</div><div class="l">Gesamt gemessen</div></div>
-      <div class="kpi"><div class="v" id="k-baseline">–</div><div class="l">Standby (Grundlast)</div></div>
-    </div>
-    <div class="card" id="hp-card" hidden>
-      <h2>🔥 Wärmepumpe (HomeCom)</h2>
-      <div id="hp-body"></div>
+      <div class="kpi"><div class="v" id="ov-month">–</div><div class="l">Hochrechnung / Monat</div></div>
+      <div class="kpi"><div class="v" id="ov-month-cost">–</div><div class="l">Kosten / Monat</div></div>
     </div>
     <div class="card">
-      <h2>Live-Leistung je Gerät</h2>
-      <div id="live-devices"></div>
+      <h2>Wofür heute? <span class="r" id="ov-break-sum"></span></h2>
+      <div id="ov-donut"></div>
+      <div class="legend" id="ov-legend"></div>
     </div>
     <div class="card">
-      <h2>Letzte 24 Stunden</h2>
-      <div id="chart-24h"></div>
+      <h2>Letzte 14 Tage · Strom gesamt</h2>
+      <div id="ov-daily"></div>
+      <div class="legend">
+        <div class="it"><span class="sw" style="background:var(--sh)"></span>Smart Home</div>
+        <div class="it"><span class="sw" style="background:var(--hp)"></span>Wärmepumpe</div>
+      </div>
+    </div>
+    <div class="card" id="ov-hp-card" hidden>
+      <h2>Wärmepumpe <span class="r" id="ov-hp-cop"></span></h2>
+      <div id="ov-hp-body"></div>
     </div>
   </section>
 
-  <!-- CONSUMPTION --------------------------------------------------------->
-  <section class="view" id="v-use">
-    <div class="seg" id="use-range">
+  <!-- HEUTE --------------------------------------------------------------->
+  <section class="view" id="v-today">
+    <div class="grid3">
+      <div class="kpi sm"><div class="v" id="t-total">–</div><div class="l">Gesamt heute</div></div>
+      <div class="kpi sm"><div class="v" id="t-sh">–</div><div class="l">Smart Home</div></div>
+      <div class="kpi sm"><div class="v" id="t-hp">–</div><div class="l">Wärmepumpe</div></div>
+    </div>
+    <div class="card">
+      <h2>Heute nach Stunde · kWh</h2>
+      <div id="t-hourly"></div>
+      <div class="legend">
+        <div class="it"><span class="sw" style="background:var(--sh)"></span>Smart Home</div>
+        <div class="it"><span class="sw" style="background:var(--hp)"></span>Wärmepumpe</div>
+      </div>
+      <div class="note" id="t-hourly-note" style="margin-top:10px"></div>
+    </div>
+    <div class="card">
+      <h2>Aufteilung heute</h2>
+      <div id="t-donut"></div>
+      <div class="legend" id="t-legend"></div>
+    </div>
+    <div class="card">
+      <h2>Smart-Home-Geräte heute</h2>
+      <div id="t-devices"></div>
+    </div>
+  </section>
+
+  <!-- VERLAUF ------------------------------------------------------------->
+  <section class="view" id="v-history">
+    <div class="seg" id="hist-range">
       <button data-d="14" class="on">14 T</button>
       <button data-d="30">30 T</button>
       <button data-d="90">90 T</button>
       <button data-d="365">1 J</button>
     </div>
     <div class="grid2">
-      <div class="kpi"><div class="v" id="u-avg">–</div><div class="l" id="u-avg-l">Ø pro Tag</div></div>
-      <div class="kpi"><div class="v" id="u-max">–</div><div class="l" id="u-max-l">Höchster Tag</div></div>
+      <div class="kpi"><div class="v" id="h-avg">–</div><div class="l">Ø gesamt / Tag</div></div>
+      <div class="kpi"><div class="v" id="h-max">–</div><div class="l" id="h-max-l">Höchster Tag</div></div>
     </div>
     <div class="card">
-      <h2 id="chart-daily-title">Verbrauch pro Tag <span class="badge away-b">rot = wahrsch. abwesend</span></h2>
-      <div id="chart-daily"></div>
-      <div class="note" id="chart-daily-note" hidden style="margin-top:10px"></div>
+      <h2 id="h-daily-title">Strom pro Tag</h2>
+      <div id="h-daily"></div>
+      <div class="legend" id="h-daily-legend"></div>
+      <div class="note" id="h-daily-note" hidden style="margin-top:10px"></div>
     </div>
     <div class="card">
-      <h2>Anteil je Gerät (kumuliert)</h2>
-      <div id="dev-share"></div>
+      <h2>Anteil je Quelle (kumuliert)</h2>
+      <div id="h-share"></div>
+    </div>
+    <div class="card">
+      <h2>Abwesenheit <span class="r" id="h-away-sum"></span></h2>
+      <div id="h-presence"></div>
+      <div class="note" style="margin-top:10px">
+        Ein Tag gilt als „abwesend", wenn der <b>aktive</b> Smart-Home-Verbrauch (über der
+        Grundlast) deutlich unter dem Median liegt – Licht/Rollladen wurden kaum bedient.
+      </div>
+      <div id="h-away-list" style="margin-top:10px"></div>
+    </div>
+    <div class="card">
+      <h2>Hochrechnung & Einordnung</h2>
+      <div id="h-insights"></div>
     </div>
   </section>
 
-  <!-- PROFILE ------------------------------------------------------------->
+  <!-- WÄRMEPUMPE ---------------------------------------------------------->
+  <section class="view" id="v-heatpump">
+    <div class="card" id="hp-card">
+      <h2>🔥 Wärmepumpe · Live</h2>
+      <div id="hp-body"><div class="note">Noch nicht verbunden – im Setup koppeln.</div></div>
+    </div>
+    <div class="grid2">
+      <div class="kpi sm"><div class="v" id="hp-today-e">–</div><div class="l">Strom heute</div></div>
+      <div class="kpi sm"><div class="v" id="hp-today-h">–</div><div class="l">Wärme heute</div></div>
+      <div class="kpi sm"><div class="v" id="hp-scop">–</div><div class="l" id="hp-scop-l">Arbeitszahl (Zeitraum)</div></div>
+      <div class="kpi sm"><div class="v" id="hp-cost">–</div><div class="l">Stromkosten (Zeitraum)</div></div>
+    </div>
+    <div class="card">
+      <h2>Strom & Wärme pro Tag</h2>
+      <div id="hp-daily"></div>
+      <div class="legend">
+        <div class="it"><span class="sw" style="background:var(--hp)"></span>Strom (kWh)</div>
+        <div class="it"><span class="sw" style="background:var(--heat)"></span>Wärme (kWh)</div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Wirkungsgrad (COP) pro Tag</h2>
+      <div id="hp-cop-chart"></div>
+      <div class="note" id="hp-cop-note" style="margin-top:10px"></div>
+    </div>
+    <div class="card">
+      <h2>Monatsbilanz</h2>
+      <div id="hp-monthly"></div>
+      <div class="legend">
+        <div class="it"><span class="sw" style="background:var(--hp)"></span>Strom</div>
+        <div class="it"><span class="sw" style="background:var(--heat)"></span>Wärme</div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Wärmekarte · Wochentag × Stunde (elektr. W)</h2>
+      <div id="hp-heat"></div>
+    </div>
+  </section>
+
+  <!-- PROFIL -------------------------------------------------------------->
   <section class="view" id="v-profile">
     <div class="card">
-      <h2>Tagesprofil · Ø Leistung je Stunde</h2>
+      <h2>Tagesprofil · Ø Leistung je Stunde (Smart Home)</h2>
       <div id="chart-hourly"></div>
       <div class="note" id="profile-note" style="margin-top:10px"></div>
     </div>
@@ -199,66 +305,18 @@
     </div>
   </section>
 
-  <!-- AWAY ---------------------------------------------------------------->
-  <section class="view" id="v-away">
-    <div class="card hero">
-      <div class="cap">Vermutlich abwesende Tage (im Analysezeitraum)</div>
-      <div class="now" id="away-count">–<span> Tage</span></div>
-      <div class="cap" id="away-sub">–</div>
-    </div>
+  <!-- SETUP --------------------------------------------------------------->
+  <section class="view" id="v-settings">
     <div class="card">
-      <h2>Anwesenheit pro Tag</h2>
-      <div id="chart-presence"></div>
-      <div class="note" style="margin-top:10px">
-        Heuristik: Ein Tag gilt als „abwesend", wenn der <b>aktive</b> Verbrauch
-        (über der Grundlast) deutlich unter dem Median liegt – d.&nbsp;h. Licht/Rollladen
-        wurden kaum bedient. Rein aus diesen Sensoren geschätzt, kein Beweis.
-      </div>
+      <h2>Status</h2>
+      <div id="status-rows"></div>
     </div>
-    <div class="card">
-      <h2>Abwesenheits-Kalender</h2>
-      <div id="away-list"></div>
-    </div>
-  </section>
 
-  <!-- FORECAST ------------------------------------------------------------>
-  <section class="view" id="v-forecast">
     <div class="card">
       <h2>Strompreis</h2>
       <label>Preis pro kWh (<span id="cur">€</span>)</label>
       <input id="price" type="number" step="0.01" inputmode="decimal" value="0.35">
       <div class="note" style="margin-top:8px">Wird lokal gespeichert und für alle Kosten verwendet.</div>
-    </div>
-    <div class="grid2">
-      <div class="kpi"><div class="v" id="f-year">–</div><div class="l">Jahres-Hochrechnung</div></div>
-      <div class="kpi"><div class="v" id="f-year-cost">–</div><div class="l">Kosten / Jahr</div></div>
-      <div class="kpi"><div class="v" id="f-month">–</div><div class="l">Ø pro Monat</div></div>
-      <div class="kpi"><div class="v" id="f-month-cost">–</div><div class="l">Kosten / Monat</div></div>
-    </div>
-    <div class="card" id="counter-card" hidden>
-      <h2>Sofort-Schätzung aus dem Zählerstand</h2>
-      <div id="counter-body"></div>
-      <div class="note" style="margin-top:10px">
-        Aus dem kumulativen Energiezähler der Module (seit deren Installation) –
-        verfügbar ab der ersten Messung, noch bevor eigene Historie da ist.
-      </div>
-    </div>
-    <div class="card">
-      <h2>Hochrechnung übers Jahr</h2>
-      <div id="chart-forecast"></div>
-      <div class="note" id="forecast-note" style="margin-top:10px"></div>
-    </div>
-    <div class="card">
-      <h2>Einordnung</h2>
-      <div id="insights"></div>
-    </div>
-  </section>
-
-  <!-- SETTINGS ------------------------------------------------------------>
-  <section class="view" id="v-settings">
-    <div class="card">
-      <h2>Status</h2>
-      <div id="status-rows"></div>
     </div>
 
     <div class="card" id="pair-card">
@@ -339,8 +397,8 @@
       <h2>Info</h2>
       <div class="note">
         Diese App liest die Leistungs-/Energiedaten der Bosch „Licht-/Rollladensteuerung II"
-        über eine kleine lokale Bridge (Ordner <b>bridge/</b>). Daten bleiben in deinem
-        Heimnetz. Zum Home-Bildschirm hinzufügen: Teilen-Symbol → „Zum Home-Bildschirm".
+        über eine kleine lokale Bridge und – falls verbunden – deine Bosch-Wärmepumpe über
+        HomeCom Easy. Zum Home-Bildschirm hinzufügen: Teilen-Symbol → „Zum Home-Bildschirm".
       </div>
     </div>
     <div class="card">
@@ -351,16 +409,16 @@
 </main>
 
 <nav id="nav">
-  <button data-v="live" class="on">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L4 14h6l-1 8 9-12h-6l1-8z"/></svg>Live</button>
-  <button data-v="use">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>Verbrauch</button>
+  <button data-v="overview" class="on">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>Übersicht</button>
+  <button data-v="today">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Heute</button>
+  <button data-v="history">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>Verlauf</button>
+  <button data-v="heatpump">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2s5 4.5 5 9a5 5 0 0 1-10 0c0-1.6.6-3 1.3-4.2"/></svg>Wärme</button>
   <button data-v="profile">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>Profil</button>
-  <button data-v="away">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21V9l9-6 9 6v12M9 21v-6h6v6"/></svg>Abwesenheit</button>
-  <button data-v="forecast">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 17l6-6 4 4 8-8M21 7v5h-5"/></svg>Prognose</button>
   <button data-v="settings">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></svg>Setup</button>
 </nav>
