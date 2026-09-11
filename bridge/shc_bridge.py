@@ -1122,6 +1122,12 @@ class Handler(BaseHTTPRequestHandler):
                 if not homecom:
                     return self._send_json({"error": "homecom modul fehlt"}, 500)
                 return self._send_json({"url": homecom.authorize_url()})
+            if path == "/api/homecom/probe":
+                if not homecom or not self.cfg.get("homecom_refresh_token"):
+                    return self._send_json({"error": "nicht mit HomeCom verbunden"}, 400)
+                gid = qs.get("gateway", [self.cfg.get("homecom_gateway", "")])[0]
+                client = homecom.HomeComClient(self.cfg["homecom_refresh_token"])
+                return self._send_json({"gateway": gid, "results": client.probe(gid)})
             days = int(qs.get("days", ["60"])[0])
             price = float(qs.get("price", [self.cfg.get("price_per_kwh", 0.35)])[0])
             if path == "/api/analytics" or path == "/api/summary":

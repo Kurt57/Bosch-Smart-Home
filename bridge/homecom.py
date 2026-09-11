@@ -47,13 +47,42 @@ SCOPE = (
 )
 API_BASE = "/pointt-api/api/v1/gateways/"
 
+# candidate resource paths per metric (first that returns a number wins –
+# different heat pumps expose slightly different trees)
 RES = {
-    "thermal_kw": "/resource/heatSources/hs1/actualPower",
-    "modulation": "/resource/heatSources/hs1/powerPercentage",
-    "energy_kwh": "/resource/heatSources/electricityTotalConsumption",
-    "water_total": "/resource/dhwCircuits/waterTotalConsumption",
-    "outdoor_c": "/resource/systemStates/outdoorTemperature",
+    "energy_kwh": ["/resource/heatSources/electricityTotalConsumption",
+                   "/resource/heatSources/emon/totalConsumption"],
+    "thermal_kw": ["/resource/heatSources/hs1/actualPower"],
+    "modulation": ["/resource/heatSources/actualModulation",
+                   "/resource/heatSources/hs1/powerPercentage"],
+    "outdoor_c": ["/resource/system/sensors/temperatures/outdoor_t1"],
+    "supply_c": ["/resource/heatSources/actualSupplyTemperature"],
+    "return_c": ["/resource/heatSources/returnTemperature"],
 }
+
+# paths tried by the diagnostic probe (to discover what THIS gateway exposes)
+PROBE_PATHS = [
+    "/resource/heatSources/electricityTotalConsumption",
+    "/resource/heatSources/emon/totalConsumption",
+    "/resource/heatSources/hs1/actualPower",
+    "/resource/heatSources/hs1/powerPercentage",
+    "/resource/heatSources/actualModulation",
+    "/resource/heatSources/actualSupplyTemperature",
+    "/resource/heatSources/returnTemperature",
+    "/resource/heatSources/actualHeatDemand",
+    "/resource/heatSources/numberOfStarts",
+    "/resource/heatSources/workingTime/totalSystem",
+    "/resource/heatSources/hs1/numberOfStarts",
+    "/resource/heatSources/hs1/operationHours",
+    "/resource/heatSources/info",
+    "/resource/system/sensors/temperatures/outdoor_t1",
+    "/resource/system/info",
+    "/resource/system/healthStatus",
+    "/resource/dhwCircuits/waterTotalConsumption",
+    "/resource/energy/history",
+    "/resource/energy/historyHourly",
+    "/resource/energy/historyEntries",
+]
 
 
 def _challenge() -> str:
@@ -210,10 +239,39 @@ class HomeComClient:
     def read_heatpump(self, gateway_id: str) -> dict:
         """Return the available heat-pump metrics for one gateway."""
         out = {"gateway": gateway_id}
-        for key, path in RES.items():
+        for key, paths in RES.items():
+            val = None
+            for p in paths:
+                try:
+                    payload = self._api_get(f"{API_BASE}{gateway_id}{p}")
+                except HomeComError:
+                    payload = None
+                val = self._num(payload)
+                if val is not None:
+                    break
+            out[key] = val
+        return out
+
+    def raw(self, gateway_id: str, resource_path: str):
+        """Diagnostic: raw GET of one resource path -> (status, text)."""
+        token = self._valid_token()
+        full = f"{API_BASE}{gateway_id}{resource_path}"
+        conn = http.client.HTTPSConnection(API_HOST, 443, timeout=self.timeout, context=self._ctx)
+        try:
+            conn.request("GET", full, headers={
+                "Authorization": f"Bearer {token}", "Accept": "application/json"})
+            r = conn.getresponse()
+            data = r.read()
+            return r.status, data.decode("utf-8", "replace")
+        finally:
+            conn.close()
+
+    def probe(self, gateway_id: str) -> dict:
+        out = {}
+        for p in PROBE_PATHS:
             try:
-                payload = self._api_get(f"{API_BASE}{gateway_id}{path}")
-            except HomeComError:
-                payload = None
-            out[key] = self._num(payload)
+                st, body = self.raw(gateway_id, p)
+                out[p] = {"status": st, "body": body[:700]}
+            except Exception as exc:
+                out[p] = {"error": str(exc)}
         return out
