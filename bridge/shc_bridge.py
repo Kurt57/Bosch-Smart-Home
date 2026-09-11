@@ -319,6 +319,8 @@ class Store:
             for col in ("heat_kwh", "heat_w"):
                 if col not in hpcols:
                     self.conn.execute(f"ALTER TABLE hp_samples ADD COLUMN {col} REAL")
+            if "mode" not in hpcols:
+                self.conn.execute("ALTER TABLE hp_samples ADD COLUMN mode TEXT")
             self.conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_hp ON hp_samples(ts)"
             )
@@ -328,10 +330,10 @@ class Store:
         with self.lock, self.conn:
             self.conn.execute(
                 "INSERT INTO hp_samples(gateway,ts,energy_kwh,power_w,thermal_kw,"
-                "modulation,outdoor_c,heat_kwh,heat_w) VALUES(?,?,?,?,?,?,?,?,?)",
+                "modulation,outdoor_c,heat_kwh,heat_w,mode) VALUES(?,?,?,?,?,?,?,?,?,?)",
                 (row.get("gateway"), row["ts"], row.get("energy_kwh"), row.get("power_w"),
                  row.get("thermal_kw"), row.get("modulation"), row.get("outdoor_c"),
-                 row.get("heat_kwh"), row.get("heat_w")),
+                 row.get("heat_kwh"), row.get("heat_w"), row.get("mode")),
             )
 
     def hp_prev(self, field: str):
@@ -353,11 +355,11 @@ class Store:
 
     def add_hp_samples_bulk(self, rows: list[tuple]):
         """Bulk insert (gateway,ts,energy_kwh,power_w,thermal_kw,modulation,
-        outdoor_c,heat_kwh,heat_w) tuples – used by the demo seeder."""
+        outdoor_c,heat_kwh,heat_w,mode) tuples – used by the demo seeder."""
         with self.lock, self.conn:
             self.conn.executemany(
                 "INSERT INTO hp_samples(gateway,ts,energy_kwh,power_w,thermal_kw,"
-                "modulation,outdoor_c,heat_kwh,heat_w) VALUES(?,?,?,?,?,?,?,?,?)", rows)
+                "modulation,outdoor_c,heat_kwh,heat_w,mode) VALUES(?,?,?,?,?,?,?,?,?,?)", rows)
 
     def hp_samples_since(self, since_ts: int) -> list[dict]:
         with self.lock:
@@ -658,6 +660,49 @@ def _counter_day_kwh(samples: list[dict], field: str) -> dict:
     return out
 
 
+def _hp_mode_buckets(rows: list[dict], only_day: str | None = None) -> dict:
+    """Electrical kWh attributed to the operating mode (Heizung/Warmwasser/Sonstiges)
+    by consecutive counter deltas – the heat pump's own 'wofür'."""
+    b = {"heating": 0.0, "water": 0.0, "other": 0.0}
+    prev = None
+    for s in rows:
+        v = s.get("energy_kwh")
+        if v is None:
+            continue
+        if prev is not None:
+            pv, pt, pm, pp = prev
+            delta = v - pv
+            if 0 < delta < 100 and 0 < (s["ts"] - pt) < 86400 and (only_day is None or _local_day(pt) == only_day):
+                # attribute the interval to the mode that was actually running
+                # (higher power), so an off→on transition counts as the active mode
+                m = pm if (pp or 0) >= (s.get("power_w") or 0) else s.get("mode")
+                key = "heating" if m == "ch" else "water" if m == "dhw" else "other"
+                b[key] += delta
+        prev = (v, s["ts"], s.get("mode"), s.get("power_w"))
+    return {k: round(x, 3) for k, x in b.items()}
+
+
+def _hp_cop_by_temp(rows: list[dict]) -> list[dict]:
+    """Seasonal-performance curve: COP grouped into 5 °C outdoor-temperature bins."""
+    bins: dict[int, list] = {}
+    prev = None
+    for s in rows:
+        e, h, o = s.get("energy_kwh"), s.get("heat_kwh"), s.get("outdoor_c")
+        if e is None or h is None or o is None:
+            prev = None
+            continue
+        if prev is not None:
+            de, dh, dt = e - prev[0], h - prev[1], s["ts"] - prev[2]
+            if 0 < de < 100 and 0 <= dh < 300 and 0 < dt < 86400:
+                key = int(math.floor(prev[3] / 5.0) * 5)
+                bins.setdefault(key, [0.0, 0.0])
+                bins[key][0] += de
+                bins[key][1] += dh
+        prev = (e, h, s["ts"], o)
+    return [{"temp": k, "cop": round(v[1] / v[0], 2), "kwh": round(v[0], 1)}
+            for k, v in sorted(bins.items()) if v[0] > 0.5 and v[1] > 0]
+
+
 def compute_hp_analytics(store: Store, days: int, price: float,
                          live: dict | None = None) -> dict:
     """Heat-pump history & profile, derived from the polled cumulative counters
@@ -721,6 +766,10 @@ def compute_hp_analytics(store: Store, days: int, price: float,
     tot_e = sum(elec_day.values())
     tot_h = sum(heat_day.values())
 
+    mode_today = _hp_mode_buckets(rows, only_day=today)
+    mode_window = _hp_mode_buckets(rows)
+    cop_by_temp = _hp_cop_by_temp(rows)
+
     return {
         "generated_at": now,
         "window_days": days,
@@ -746,6 +795,9 @@ def compute_hp_analytics(store: Store, days: int, price: float,
         "today": {"elec_kwh": today_e, "heat_kwh": today_h,
                   "cost": round(today_e * price, 2),
                   "cop": round(today_h / today_e, 2) if today_e > 0 else None},
+        "mode_today": mode_today,
+        "mode_window": mode_window,
+        "cop_by_temp": cop_by_temp,
         "daily": daily,
         "monthly": monthly,
         "hourly_profile": hourly_profile,
@@ -835,7 +887,19 @@ def compute_overview(store: Store, days: int, price: float,
         return name or d.get("room") or dev_id
 
     breakdown = []
-    if hp_today > 0 or (hp_live and hp_live.get("connected")):
+    mt = hp.get("mode_today", {})
+    if (mt.get("heating", 0) > 0.01 or mt.get("water", 0) > 0.01):
+        # split the heat pump into heating vs hot water ("wofür")
+        if mt.get("heating", 0) > 0.01:
+            breakdown.append({"key": "hp_heating", "label": "WP · Heizung",
+                              "kwh": round(mt["heating"], 3), "color": "#ef6c4d"})
+        if mt.get("water", 0) > 0.01:
+            breakdown.append({"key": "hp_water", "label": "WP · Warmwasser",
+                              "kwh": round(mt["water"], 3), "color": "#f6b93b"})
+        if mt.get("other", 0) > 0.01:
+            breakdown.append({"key": "hp_other", "label": "WP · Sonstiges",
+                              "kwh": round(mt["other"], 3), "color": "#b07a4d"})
+    elif hp_today > 0 or (hp_live and hp_live.get("connected")):
         breakdown.append({"key": "heatpump", "label": "Wärmepumpe",
                           "kwh": hp_today, "color": "#ef6c4d"})
     # per Smart-Home device today
@@ -978,7 +1042,8 @@ def _demo_hp(dt: datetime) -> dict:
 
     dhw = (6.0 <= h <= 7.0) or (18.5 <= h <= 19.5)     # hot-water charge windows
     if dhw:
-        elec, mode, cop = 1500.0, "dhw", 2.6
+        elec, mode = 1500.0, "dhw"
+        cop = max(1.8, min(3.6, 2.0 + 0.07 * outdoor))  # warmer air = better COP
     elif outdoor < 16.0:                                # space heating
         elec = 300.0 + (16.0 - outdoor) * 95.0
         cop = max(1.6, min(4.8, 1.9 + 0.11 * outdoor))
@@ -1040,7 +1105,7 @@ def seed_demo(store: Store, days: int = 90):
         h_kwh += op["heat_w"] / 1000.0 * dt_h
         hp_rows.append((DEMO_HP_GW, int(t.timestamp()), round(e_kwh, 4), op["elec_w"],
                         round(op["heat_w"] / 1000.0, 3), op["modulation"], op["outdoor_c"],
-                        round(h_kwh, 4), op["heat_w"]))
+                        round(h_kwh, 4), op["heat_w"], op["mode"]))
         t += step
     store.add_hp_samples_bulk(hp_rows)
     print(f"[demo] inserted {len(hp_rows)} heat-pump samples.")
@@ -1082,7 +1147,7 @@ class DemoPoller(threading.Thread):
                 "gateway": DEMO_HP_GW, "ts": ts, "energy_kwh": round(e_kwh, 4),
                 "power_w": op["elec_w"], "heat_kwh": round(h_kwh, 4), "heat_w": op["heat_w"],
                 "thermal_kw": op["heat_w"] / 1000.0, "modulation": op["modulation"],
-                "outdoor_c": op["outdoor_c"]})
+                "outdoor_c": op["outdoor_c"], "mode": op["mode"]})
             if self.hp_state is not None:
                 cop = round(op["heat_w"] / op["elec_w"], 2) if op["elec_w"] > 0 else None
                 self.hp_state.clear()
@@ -1153,6 +1218,7 @@ class HeatPumpPoller(threading.Thread):
             "heat_kwh": heat, "heat_w": heat_w,
             "thermal_kw": (heat_w / 1000.0) if heat_w is not None else None,
             "modulation": data.get("modulation"), "outdoor_c": data.get("outdoor_c"),
+            "mode": data.get("mode"),
         })
         # live + lifetime COP
         cop_live = round(heat_w / power_w, 2) if (heat_w and power_w and power_w > 0) else None

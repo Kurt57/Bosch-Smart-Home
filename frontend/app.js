@@ -10,7 +10,7 @@ const MON = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Ok
 const COL = { sh: '#4da3ff', hp: '#ef6c4d', heat: '#f6b93b', away: '#ff6b8a' };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-11 · Energiemanagement';
+const APP_VERSION = '2026-09-11 · Energiemanagement +WP-Wofür';
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -327,7 +327,8 @@ function renderToday() {
     : '<div class="note">Noch keine Daten für heute.</div>';
   $('t-legend').innerHTML = legendHtml(segs.map(s => ({ label: s.label, color: s.color, sub: kwh(s.value, 2) })));
 
-  const devs = ov.breakdown.filter(b => b.key !== 'heatpump' && b.kwh > 0);
+  const HP_KEYS = new Set(['heatpump', 'hp_heating', 'hp_water', 'hp_other']);
+  const devs = ov.breakdown.filter(b => !HP_KEYS.has(b.key) && b.kwh > 0);
   const maxD = Math.max(0.0001, ...devs.map(d => d.kwh));
   $('t-devices').innerHTML = devs.length
     ? devs.map(d => devRow(d.label, kwh(d.kwh, 3) + ' heute', kwh(d.kwh, 2), '', d.kwh / maxD * 100, COL.sh)).join('')
@@ -463,6 +464,21 @@ function renderHeatpump() {
   $('hp-scop').innerHTML = A.stats.seasonal_cop != null ? fmt(A.stats.seasonal_cop, 2) : '–';
   $('hp-cost').innerHTML = money(A.stats.window_cost);
 
+  // "wofür": heating vs hot water (window)
+  const mw = A.mode_window || { heating: 0, water: 0, other: 0 };
+  const mSegs = [
+    { label: 'Heizung', value: mw.heating || 0, color: COL.hp },
+    { label: 'Warmwasser', value: mw.water || 0, color: COL.heat },
+    { label: 'Sonstiges', value: mw.other || 0, color: '#b07a4d' },
+  ].filter(s => s.value > 0.01);
+  const mTot = mSegs.reduce((a, s) => a + s.value, 0);
+  $('hp-mode-sum').textContent = mTot > 0 ? kwh(mTot, 0) : '';
+  $('hp-mode-donut').innerHTML = mSegs.length
+    ? donutChart(mSegs, { big: mTot >= 100 ? fmt(mTot, 0) : fmt(mTot, 1), center: 'kWh Strom' })
+    : '<div class="note">Sobald die Bridge Betriebsdaten gesammelt hat, erscheint hier die Aufteilung Heizung/Warmwasser.</div>';
+  $('hp-mode-legend').innerHTML = legendHtml(mSegs.map(s => ({
+    label: s.label, color: s.color, sub: kwh(s.value, 0) + ' · ' + (s.value / mTot * 100).toFixed(0) + ' %' })));
+
   const daily = (A.daily || []).slice(-30);
   $('hp-daily').innerHTML = daily.length ? groupedBar(
     daily.map(d => ({ label: shortDay(d.day), values: { e: d.elec_kwh, h: d.heat_kwh } })),
@@ -478,6 +494,18 @@ function renderHeatpump() {
     $('hp-cop-note').innerHTML = `Ø COP im Zeitraum: <b>${fmt(A.stats.seasonal_cop, 2)}</b>. ` +
       `Bester Tag: ${fmt(best.cop, 2)} (${longDay(best.day)}). Höher = effizienter.`;
   } else { $('hp-cop-note').textContent = ''; }
+
+  // efficiency vs outdoor temperature
+  const ct = A.cop_by_temp || [];
+  $('hp-coptemp').innerHTML = ct.length
+    ? areaChart(ct.map(d => ({ v: d.cop, label: d.temp + '°' })), { h: 180, stroke: '#4be0b0', fill: 'url(#gArea)' })
+    : '<div class="note">Zu wenig Daten – die Kurve entsteht über mehrere Tage mit unterschiedlichem Wetter.</div>';
+  if (ct.length >= 2) {
+    const warm = ct[ct.length - 1], cold = ct[0];
+    $('hp-coptemp-note').innerHTML = `Bei <b>${warm.temp}&nbsp;°C</b>: COP&nbsp;${fmt(warm.cop, 2)}, ` +
+      `bei <b>${cold.temp}&nbsp;°C</b>: ${fmt(cold.cop, 2)}.` +
+      (warm.cop >= cold.cop ? ' Wärmere Luft = effizienter (typisch für Wärmepumpen).' : '');
+  } else { $('hp-coptemp-note').textContent = ''; }
 
   const m = A.monthly || [];
   $('hp-monthly').innerHTML = m.length ? groupedBar(
@@ -726,7 +754,7 @@ function demoHpOp(dt) {
   const outdoor = round(9 - 12 * Math.cos((doy - 20) / 365 * 2 * Math.PI) + 4 * Math.sin((h - 14) / 24 * 2 * Math.PI), 1);
   let elec, mode, cop;
   const dhw = (h >= 6 && h <= 7) || (h >= 18.5 && h <= 19.5);
-  if (dhw) { elec = 1500; mode = 'dhw'; cop = 2.6; }
+  if (dhw) { elec = 1500; mode = 'dhw'; cop = Math.max(1.8, Math.min(3.6, 2.0 + 0.07 * outdoor)); }
   else if (outdoor < 16) { elec = 300 + (16 - outdoor) * 95; cop = Math.max(1.6, Math.min(4.8, 1.9 + 0.11 * outdoor)); mode = 'ch'; }
   else { elec = 14; mode = 'off'; cop = 0; }
   const heat = elec * cop;
@@ -808,17 +836,26 @@ function demoHpAnalytics(days) {
   const now = new Date(), start = new Date(now.getTime() - days * 86400000), step = 15 * 60000;
   const elecDay = {}, heatDay = {}, hourP = {}, hwP = {}, outH = {};
   for (let h = 0; h < 24; h++) { hourP[h] = []; outH[h] = []; }
+  const modeWin = { heating: 0, water: 0, other: 0 }, modeToday = { heating: 0, water: 0, other: 0 };
+  const tempBins = {}; const today0 = localKey(now);
   let lastOp = null;
   for (let t = start.getTime(); t <= now.getTime(); t += step) {
     const dt = new Date(t), op = demoHpOp(dt), key = localKey(dt), dtH = step / 3600000;
-    elecDay[key] = (elecDay[key] || 0) + op.elec / 1000 * dtH;
-    heatDay[key] = (heatDay[key] || 0) + op.heat / 1000 * dtH;
+    const e = op.elec / 1000 * dtH, hh = op.heat / 1000 * dtH;
+    elecDay[key] = (elecDay[key] || 0) + e;
+    heatDay[key] = (heatDay[key] || 0) + hh;
+    const mk = op.mode === 'ch' ? 'heating' : op.mode === 'dhw' ? 'water' : 'other';
+    modeWin[mk] += e; if (key === today0) modeToday[mk] += e;
+    const tb = Math.floor(op.outdoor / 5) * 5; (tempBins[tb] = tempBins[tb] || [0, 0]); tempBins[tb][0] += e; tempBins[tb][1] += hh;
     hourP[dt.getHours()].push(op.elec);
     outH[dt.getHours()].push(op.outdoor);
     const wk = ((dt.getDay() + 6) % 7) + '_' + dt.getHours();
     (hwP[wk] = hwP[wk] || []).push(op.elec);
     lastOp = op;
   }
+  const copByTemp = Object.keys(tempBins).map(Number).sort((a, b) => a - b)
+    .filter(k => tempBins[k][0] > 0.5 && tempBins[k][1] > 0)
+    .map(k => ({ temp: k, cop: round(tempBins[k][1] / tempBins[k][0], 2), kwh: round(tempBins[k][0], 1) }));
   const daysSorted = Object.keys(elecDay).sort();
   const daily = daysSorted.map(d => {
     const e = round(elecDay[d], 3), h = round(heatDay[d] || 0, 3);
@@ -843,6 +880,9 @@ function demoHpAnalytics(days) {
       energy_kwh: eLife, heat_kwh: hLife, compressor_kwh: round(eLife * 0.87, 1), eheater_kwh: round(eLife * 0.13, 1),
       starts: 655, working_h: 4333, last_poll: Math.floor(Date.now() / 1000) },
     today: { elec_kwh: te, heat_kwh: th, cost: round(te * STATE.price, 2), cop: te > 0 ? round(th / te, 2) : null },
+    mode_today: { heating: round(modeToday.heating, 3), water: round(modeToday.water, 3), other: round(modeToday.other, 3) },
+    mode_window: { heating: round(modeWin.heating, 3), water: round(modeWin.water, 3), other: round(modeWin.other, 3) },
+    cop_by_temp: copByTemp,
     daily, monthly, hourly_profile: hourly, heatmap: heat,
     stats: {
       avg_daily_elec_kwh: round(avgE, 3), window_elec_kwh: round(totE, 1), window_heat_kwh: round(totH, 1),
@@ -872,8 +912,16 @@ function demoOverview(sh, hp) {
     hpH[dt.getHours()] += demoHpOp(dt).elec / 1000 * dtH;
   }
   const todayHourly = []; for (let h = 0; h < 24; h++) todayHourly.push({ hour: h, smarthome_kwh: round(shH[h], 3), heatpump_kwh: round(hpH[h], 3) });
-  // breakdown today
-  const breakdown = [{ key: 'heatpump', label: 'Wärmepumpe', kwh: hpToday, color: COL.hp }];
+  // breakdown today (heat pump split by heating vs hot water)
+  const breakdown = [];
+  const mt = hp.mode_today || { heating: 0, water: 0, other: 0 };
+  if (mt.heating > 0.01 || mt.water > 0.01) {
+    if (mt.heating > 0.01) breakdown.push({ key: 'hp_heating', label: 'WP · Heizung', kwh: round(mt.heating, 3), color: COL.hp });
+    if (mt.water > 0.01) breakdown.push({ key: 'hp_water', label: 'WP · Warmwasser', kwh: round(mt.water, 3), color: COL.heat });
+    if (mt.other > 0.01) breakdown.push({ key: 'hp_other', label: 'WP · Sonstiges', kwh: round(mt.other, 3), color: '#b07a4d' });
+  } else if (hpToday > 0) {
+    breakdown.push({ key: 'heatpump', label: 'Wärmepumpe', kwh: hpToday, color: COL.hp });
+  }
   (sh.per_device_day ? Object.keys(sh.per_device_day) : []).forEach(id => {
     const v = round((sh.per_device_day[id][today] || 0), 3);
     const dev = sh.live.devices.find(x => x.id === id);
