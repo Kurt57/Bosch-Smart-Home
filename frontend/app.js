@@ -5,12 +5,14 @@
 'use strict';
 
 const LS = { base: 'bhe_base', price: 'bhe_price', demo: 'bhe_demo' };
+const PV_LS = { kwp: 'bhe_pv_kwp', orient: 'bhe_pv_orient', batt: 'bhe_pv_batt',
+  feedin: 'bhe_pv_feedin', invest: 'bhe_pv_invest' };
 const WD = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
 const MON = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'];
 const COL = { sh: '#4da3ff', hp: '#ef6c4d', heat: '#f6b93b', away: '#ff6b8a' };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-11 · Energiemanagement +WP-Wofür';
+const APP_VERSION = '2026-09-11 · Energiemanagement + PV-Planer';
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -262,7 +264,7 @@ function devRow(title, sub, valTop, valBot, pct, col) {
 
 /* --------------------------------------------------------------- rendering */
 function renderAll() {
-  renderOverview(); renderToday(); renderHistory(); renderHeatpump(); renderProfile(); renderSettings();
+  renderOverview(); renderToday(); renderHistory(); renderHeatpump(); renderProfile(); renderPv(); renderSettings();
 }
 
 function renderOverview() {
@@ -530,6 +532,142 @@ function renderProfile() {
   $('chart-heat').innerHTML = data.heatmap ? heatmap(data.heatmap) : '<div class="note">Keine Heatmap-Daten.</div>';
 }
 
+/* -------------------------------------------------------------- PV planner */
+// Monthly share of annual PV yield (Germany, typical) and heat-pump heating
+// seasonality – both normalised at use.
+const PV_MONTH = [0.028, 0.048, 0.083, 0.112, 0.128, 0.128, 0.130, 0.114, 0.088, 0.063, 0.037, 0.024];
+const HP_SEASON = [0.150, 0.130, 0.105, 0.070, 0.035, 0.020, 0.015, 0.020, 0.035, 0.075, 0.120, 0.145];
+
+function normFrac(arr) {
+  const s = arr.reduce((a, b) => a + Math.max(0, b), 0);
+  return s > 0 ? arr.map(v => Math.max(0, v) / s) : arr.map(() => 1 / (arr.length || 1));
+}
+function pvHourFractions(m) {
+  // daylight bell around 13:00; wider (longer days) in summer
+  const seasonal = (PV_MONTH[m] - Math.min(...PV_MONTH)) / (Math.max(...PV_MONTH) - Math.min(...PV_MONTH) || 1);
+  const sigma = 2.1 + 1.5 * seasonal;
+  const raw = [];
+  for (let h = 0; h < 24; h++) raw.push(Math.exp(-((h + 0.5 - 13) ** 2) / (2 * sigma * sigma)));
+  return normFrac(raw);
+}
+
+function pvInputs() {
+  return {
+    kwp: Math.max(0, parseFloat($('pv-kwp').value) || 0),
+    spec: parseFloat($('pv-orient').value) || 1000,
+    batt: Math.max(0, parseFloat($('pv-batt').value) || 0),
+    feedin: Math.max(0, (parseFloat($('pv-feedin').value) || 0) / 100), // ct → €
+    invest: parseFloat($('pv-invest').value) || 0,
+  };
+}
+
+function simulatePv(p) {
+  const shShape = normFrac((STATE.data && STATE.data.hourly_profile || []).map(h => h.avg_w));
+  const hpProf = (STATE.hpA && STATE.hpA.hourly_profile) || [];
+  const hpShape = hpProf.length && hpProf.some(h => h.avg_w > 0)
+    ? normFrac(hpProf.map(h => h.avg_w)) : new Array(24).fill(1 / 24);
+  const shDaily = (STATE.data && STATE.data.stats && STATE.data.stats.avg_daily_kwh) || 0;
+  const hpDaily = (STATE.hpA && STATE.hpA.stats && STATE.hpA.stats.avg_daily_elec_kwh) || 0;
+  const hpAnnual = hpDaily * 365;
+  const pvShare = normFrac(PV_MONTH), hpSeas = normFrac(HP_SEASON);
+  let Y = 0, S = 0, F = 0, G = 0, L = 0, repDay = null;
+  const monthly = [];
+  for (let m = 0; m < 12; m++) {
+    const days = new Date(2025, m + 1, 0).getDate();
+    const dayPv = (p.kwp * p.spec * pvShare[m]) / days;
+    const dayHp = hpAnnual * (0.35 * (days / 365) + 0.65 * hpSeas[m]) / days;
+    const pvH = pvHourFractions(m);
+    let battery = 0, mSelf = 0, mFeed = 0, mGrid = 0, mPv = 0, mLoad = 0;
+    let dPv = null, dLoad = null;
+    for (let d = 0; d < days; d++) {
+      const capturePv = [], captureLoad = [];
+      for (let h = 0; h < 24; h++) {
+        const pv = dayPv * pvH[h];
+        const load = shDaily * shShape[h] + dayHp * hpShape[h];
+        const direct = Math.min(pv, load);
+        let self = direct;
+        const surplus = pv - direct, deficit = load - direct;
+        const charge = Math.min(surplus, p.batt - battery); battery += charge;
+        const feed = surplus - charge;
+        const dis = Math.min(deficit, battery); battery -= dis; self += dis;
+        const grid = deficit - dis;
+        mSelf += self; mFeed += feed; mGrid += grid; mPv += pv; mLoad += load;
+        if (m === 6 && d === Math.floor(days / 2)) { capturePv.push(pv); captureLoad.push(load); }
+      }
+      if (capturePv.length) { dPv = capturePv; dLoad = captureLoad; }
+    }
+    Y += mPv; S += mSelf; F += mFeed; G += mGrid; L += mLoad;
+    monthly.push({ m, pv: mPv, load: mLoad, self: mSelf, feed: mFeed, grid: mGrid });
+    if (dPv) repDay = { pv: dPv, load: dLoad };
+  }
+  return {
+    yield_kwh: Y, self_kwh: S, feed_kwh: F, grid_kwh: G, load_kwh: L,
+    self_rate: Y > 0 ? S / Y : 0, autarky: L > 0 ? S / L : 0,
+    savings: S * STATE.price, feed_rev: F * p.feedin, benefit: S * STATE.price + F * p.feedin,
+    monthly, repDay,
+  };
+}
+
+function pvDayChart(pv, load) {
+  const h = 190, pad = 26, top = 12, base = h - 22, n = 24;
+  const max = Math.max(0.0001, ...pv, ...load);
+  const X = i => pad + (CW - pad - 6) * (i / (n - 1));
+  const Y = v => top + (base - top) * (1 - v / max);
+  let selfA = `M${X(0).toFixed(1)} ${base} `, pvL = '', loadL = '';
+  for (let i = 0; i < n; i++) {
+    selfA += `L${X(i).toFixed(1)} ${Y(Math.min(pv[i], load[i])).toFixed(1)} `;
+    pvL += `${i ? 'L' : 'M'}${X(i).toFixed(1)} ${Y(pv[i]).toFixed(1)} `;
+    loadL += `${i ? 'L' : 'M'}${X(i).toFixed(1)} ${Y(load[i]).toFixed(1)} `;
+  }
+  selfA += `L${X(n - 1).toFixed(1)} ${base} Z`;
+  let labels = '';
+  for (let hh = 0; hh < 24; hh += 6) labels += `<text class="axis" x="${X(hh).toFixed(1)}" y="${h - 8}" text-anchor="middle">${hh}</text>`;
+  return svg(h, gridLines(h, top, base, pad, max) +
+    `<path d="${selfA}" fill="#4be0b0" opacity="0.28"/>` +
+    `<path d="${pvL}" fill="none" stroke="${COL.heat}" stroke-width="2.5" stroke-linejoin="round"/>` +
+    `<path d="${loadL}" fill="none" stroke="${COL.sh}" stroke-width="2.5" stroke-linejoin="round"/>` + labels);
+}
+
+function renderPv() {
+  if (!$('pv-yield')) return;
+  const haveData = STATE.data && STATE.data.stats && STATE.data.stats.avg_daily_kwh > 0;
+  if (!haveData) {
+    $('pv-yield').textContent = '–'; $('pv-autarky').textContent = '–';
+    $('pv-self').textContent = '–'; $('pv-benefit').textContent = '–';
+    $('pv-monthly').innerHTML = '<div class="note">Noch keine Verbrauchsdaten – sobald die Bridge misst, wird hier gerechnet.</div>';
+    $('pv-day').innerHTML = ''; $('pv-econ').innerHTML = ''; $('pv-monthly-note').textContent = '';
+    return;
+  }
+  const p = pvInputs(), r = simulatePv(p);
+  $('pv-yield').innerHTML = kwh(r.yield_kwh, 0);
+  $('pv-autarky').innerHTML = fmt(r.autarky * 100, 0) + ' %';
+  $('pv-self').innerHTML = fmt(r.self_rate * 100, 0) + ' %';
+  $('pv-benefit').innerHTML = money(r.benefit);
+
+  $('pv-monthly').innerHTML = groupedBar(
+    r.monthly.map(x => ({ label: MON[x.m], values: { pv: x.pv, load: x.load } })),
+    [{ key: 'pv', color: COL.heat }, { key: 'load', color: COL.sh }], { h: 200 });
+  const cover = r.load_kwh > 0 ? r.yield_kwh / r.load_kwh : 0;
+  $('pv-monthly-note').innerHTML =
+    `Die Anlage erzeugt rechnerisch <b>${kwh(r.yield_kwh, 0)}/Jahr</b> – das entspricht ` +
+    `<b>${fmt(cover * 100, 0)} %</b> deines Jahresverbrauchs (${kwh(r.load_kwh, 0)}). Im Sommer ` +
+    `oft Überschuss (Einspeisung), im Winter Zukauf – dann hilft v. a. Eigenverbrauch tagsüber.`;
+
+  $('pv-day').innerHTML = r.repDay ? pvDayChart(r.repDay.pv, r.repDay.load)
+    : '<div class="note">Kein Tagesprofil verfügbar.</div>';
+
+  const rows = [
+    ['Eigenverbrauch', `${kwh(r.self_kwh, 0)} · spart ${money(r.savings)}`],
+    ['Einspeisung', `${kwh(r.feed_kwh, 0)} · ${money(r.feed_rev)}`],
+    ['Netzbezug (Rest)', `${kwh(r.grid_kwh, 0)} · ${money(r.grid_kwh * STATE.price)}`],
+    ['Vorteil gesamt / Jahr', money(r.benefit)],
+  ];
+  if (p.invest > 0 && r.benefit > 0) {
+    rows.push(['Amortisation', `~${fmt(p.invest / r.benefit, 1)} Jahre bei ${money(p.invest)}`]);
+  }
+  $('pv-econ').innerHTML = rows.map(([k, v]) => statusRow(k, v)).join('');
+}
+
 /* --------------------------------------------------------------- settings */
 function renderSettings() {
   const h = STATE.health;
@@ -692,6 +830,16 @@ function init() {
     catch (e) { $('hp-connect-note').textContent = 'Nur möglich, wenn die Seite von der Bridge geöffnet ist.'; }
   });
   const hpc = $('hp-connect'); if (hpc) hpc.addEventListener('click', doHomecomConnect);
+
+  // PV planner: restore saved inputs, save + recompute on change
+  const pvFields = [['pv-kwp', PV_LS.kwp], ['pv-orient', PV_LS.orient], ['pv-batt', PV_LS.batt],
+    ['pv-feedin', PV_LS.feedin], ['pv-invest', PV_LS.invest]];
+  pvFields.forEach(([id, key]) => {
+    const el = $(id); if (!el) return;
+    const saved = localStorage.getItem(key);
+    if (saved !== null) el.value = saved;
+    el.addEventListener('input', () => { try { localStorage.setItem(key, el.value); } catch (e) {} renderPv(); });
+  });
   $('rename-list').addEventListener('change', async (e) => {
     const inp = e.target.closest('input.rn'); if (!inp) return;
     const id = inp.dataset.id, name = inp.value.trim();
@@ -726,7 +874,7 @@ async function refreshLive() {
       api('/api/heatpump/analytics?days=90&price=' + p),
     ]);
     STATE.ov = ov; STATE.hpA = hpA;
-    renderOverview(); renderToday(); renderHistory(); renderHeatpump();
+    renderOverview(); renderToday(); renderHistory(); renderHeatpump(); renderPv();
   } catch (e) { /* keep last */ }
 }
 

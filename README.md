@@ -6,7 +6,7 @@ die Bosch **„Licht-/Rollladensteuerung II"**-Module **und** deine Bosch-Wärme
 Prognose und aufgeschlüsselt nach **wann, wie viel, wofür**. Läuft komplett in
 deinem Heimnetz; die Wärmepumpe kommt über Bosch HomeCom Easy dazu.
 
-![Ansichten](https://img.shields.io/badge/Ansichten-Übersicht·Heute·Verlauf·Wärmepumpe·Profil-3ba9ff)
+![Ansichten](https://img.shields.io/badge/Ansichten-Übersicht·Heute·Verlauf·Wärmepumpe·Profil·PV-3ba9ff)
 
 ## Was du bekommst
 
@@ -17,6 +17,7 @@ deinem Heimnetz; die Wärmepumpe kommt über Bosch HomeCom Easy dazu.
 | **Verlauf** | kWh **pro Tag** (14/30/90 Tage) bzw. **pro Monat** (1 Jahr, fehlende Monate geschätzt), gestapelt nach Quelle; **Anteil je Quelle**; **Abwesenheit** (wie oft ihr nicht zuhause wart) + Kalender; **Jahres-Hochrechnung** & Einordnung |
 | **Wärmepumpe** | Live-Karte (elektr./therm. Leistung, **COP jetzt**, Zähler-Splits Kompressor/Heizstab, Temperaturen, Starts/Stunden), **Strom & Wärme pro Tag**, **COP-Verlauf**, **Monatsbilanz**, **Wärmekarte** Wochentag × Stunde |
 | **Profil** | Ø-Leistung je **Stunde** (Tagesprofil), Ø-kWh je **Wochentag**, **Wärmekarte** Wochentag × Stunde (Smart Home) |
+| **PV** | **PV-Planer** für eine geplante Anlage: Anlagengröße/Ausrichtung/Batterie eingeben → **Jahresertrag**, **Eigenverbrauch & Autarkie** (aus deinem echten Tagesprofil simuliert), Ersparnis, **PV-Ertrag vs. Verbrauch pro Monat**, typischer Sommertag und **Amortisation** |
 | **Setup** | Strompreis, **Controller automatisch finden**, Kopplung per Formular, Live-Status, **Geräte lokal umbenennen**, **Wärmepumpe (HomeCom) verbinden** |
 
 Der Smart-Home-Teil basiert auf den `PowerMeter`-Daten (Wirkleistung in W,

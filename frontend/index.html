@@ -116,10 +116,12 @@
     padding:6px 4px calc(6px + var(--safe-b)); background:rgba(14,22,40,.92);
     backdrop-filter:blur(12px); border-top:1px solid var(--line);
     display:flex; justify-content:space-around; max-width:640px; margin:0 auto}
-  nav button{background:none; border:none; color:var(--muted); font-size:10px;
-    display:flex; flex-direction:column; align-items:center; gap:3px; padding:6px 2px; flex:1}
+  nav button{background:none; border:none; color:var(--muted); font-size:9.5px;
+    display:flex; flex-direction:column; align-items:center; gap:3px; padding:6px 1px; flex:1;
+    min-width:0}
+  nav button span{max-width:100%; overflow:hidden; text-overflow:ellipsis}
   nav button.on{color:var(--accent)}
-  nav button svg{width:22px; height:22px}
+  nav button svg{width:21px; height:21px}
   .view{display:none} .view.on{display:block; animation:fade .25s}
   @keyframes fade{from{opacity:0; transform:translateY(6px)}to{opacity:1}}
 </style>
@@ -315,6 +317,70 @@
     </div>
   </section>
 
+  <!-- PV-PLANER ----------------------------------------------------------->
+  <section class="view" id="v-pv">
+    <div class="card">
+      <h2>☀️ PV-Anlage planen</h2>
+      <div class="note" style="margin-bottom:12px">
+        Schätzung auf Basis deines <b>gemessenen</b> Verbrauchsprofils
+        (Smart Home + Wärmepumpe). Passe die Werte an – alles wird lokal gespeichert.
+      </div>
+      <div class="grid2">
+        <div><label>Anlagengröße (kWp)</label>
+          <input id="pv-kwp" type="number" step="0.5" min="0" inputmode="decimal" value="10"></div>
+        <div><label>Ausrichtung / Ertrag</label>
+          <select id="pv-orient">
+            <option value="1000">Süd, optimal (~1000 kWh/kWp)</option>
+            <option value="950">Süd-Ost / Süd-West (~950)</option>
+            <option value="880">Ost-West (~880)</option>
+            <option value="800">flach / teilverschattet (~800)</option>
+          </select></div>
+      </div>
+      <div class="grid2" style="margin-top:10px">
+        <div><label>Batteriespeicher (kWh)</label>
+          <input id="pv-batt" type="number" step="0.5" min="0" inputmode="decimal" value="0"></div>
+        <div><label>Einspeisung (ct/kWh)</label>
+          <input id="pv-feedin" type="number" step="0.1" min="0" inputmode="decimal" value="8.0"></div>
+      </div>
+      <label style="margin-top:10px; display:block">Investition (optional, für Amortisation)</label>
+      <input id="pv-invest" type="number" inputmode="numeric" placeholder="z. B. 18000">
+    </div>
+    <div class="grid2">
+      <div class="kpi"><div class="v" id="pv-yield">–</div><div class="l">PV-Ertrag / Jahr</div></div>
+      <div class="kpi"><div class="v" id="pv-autarky">–</div><div class="l">Autarkie (Bedarf gedeckt)</div></div>
+      <div class="kpi"><div class="v" id="pv-self">–</div><div class="l">Eigenverbrauchsquote</div></div>
+      <div class="kpi"><div class="v" id="pv-benefit">–</div><div class="l">Ersparnis / Jahr</div></div>
+    </div>
+    <div class="card">
+      <h2>PV-Ertrag vs. Verbrauch pro Monat</h2>
+      <div id="pv-monthly"></div>
+      <div class="legend">
+        <div class="it"><span class="sw" style="background:var(--heat)"></span>PV-Ertrag</div>
+        <div class="it"><span class="sw" style="background:var(--sh)"></span>Verbrauch</div>
+      </div>
+      <div class="note" id="pv-monthly-note" style="margin-top:10px"></div>
+    </div>
+    <div class="card">
+      <h2>Typischer Sommertag · Erzeugung & Verbrauch</h2>
+      <div id="pv-day"></div>
+      <div class="legend">
+        <div class="it"><span class="sw" style="background:var(--heat)"></span>PV-Erzeugung</div>
+        <div class="it"><span class="sw" style="background:var(--sh)"></span>Verbrauch</div>
+        <div class="it"><span class="sw" style="background:var(--accent2)"></span>Eigenverbrauch</div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Wirtschaftlichkeit</h2>
+      <div id="pv-econ"></div>
+      <div class="note" style="margin-top:10px">
+        Grobe Orientierung ohne Gewähr: reale Erträge hängen von Standort, Dach,
+        Verschattung und Wetter ab. Der Eigenverbrauch ist aus deinem echten
+        Tagesprofil geschätzt – je besser Verbrauch und Sonne zusammenpassen
+        (z. B. Wärmepumpe/Warmwasser tagsüber, Batterie), desto höher.
+      </div>
+    </div>
+  </section>
+
   <!-- SETUP --------------------------------------------------------------->
   <section class="view" id="v-settings">
     <div class="card">
@@ -429,6 +495,8 @@
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2s5 4.5 5 9a5 5 0 0 1-10 0c0-1.6.6-3 1.3-4.2"/></svg>Wärme</button>
   <button data-v="profile">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>Profil</button>
+  <button data-v="pv">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M19 5l-1.5 1.5M6.5 17.5L5 19"/></svg>PV</button>
   <button data-v="settings">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></svg>Setup</button>
 </nav>
