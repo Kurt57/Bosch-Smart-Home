@@ -130,10 +130,20 @@ class HomeComClient:
     # -- auth ------------------------------------------------------------- #
     def exchange_code(self, code: str) -> str:
         """Exchange the one-time login code for tokens; return refresh token."""
-        code = (code or "").strip()
+        raw = (code or "").strip()
+        val = raw
         # tolerate the user pasting the whole redirect URL
-        if "code=" in code:
-            code = code.split("code=", 1)[1].split("&", 1)[0]
+        if "code=" in raw:
+            val = raw.split("code=", 1)[1].split("&", 1)[0]
+        val = val.strip()
+        # reject obviously-wrong pastes (e.g. the SingleKey interstitial URL,
+        # which has no real ?code=… yet)
+        if not val or "://" in val or "authorize" in val or "code_challenge" in val:
+            raise HomeComError(
+                "Kein gültiger Login-Code gefunden. Bitte die FINALE Weiterleitungs-Adresse "
+                "einfügen, die 'com.bosch...://app/login?code=…' enthält (nicht die "
+                "Zwischenseite 'Weiterleitung…').")
+        code = val
         tok = self._post_form(OAUTH_HOST, "/auth/connect/token", {
             "grant_type": "authorization_code",
             "redirect_uri": REDIRECT_URI,

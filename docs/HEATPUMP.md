@@ -43,11 +43,28 @@ Alles passiert im **Setup**-Tab der App, Karte **„🔥 Wärmepumpe (HomeCom)"*
 Bei Erfolg erkennt die Bridge automatisch dein Wärmepumpen-Gateway, beginnt zu
 pollen, und im **Live**-Tab erscheint die Wärmepumpen-Karte.
 
-### Wenn der Browser direkt „weiterspringt" und du die Adresse nicht siehst
-Manche Browser verbergen die Redirect-Adresse. Dann hilft die Community-Erweiterung
-**„SingleKey Code Catcher"** (Firefox-Add-on), die den Code automatisch anzeigt –
-oder du öffnest den Login-Link in einem Desktop-Browser, wo die Adressleiste die
-`code=…`-Adresse behält.
+### Safari zeigt „Adresse ungültig" – wie komme ich an den Code?
+Nach dem Login leitet Bosch auf eine **App-Adresse** `com.bosch.tt.dashtt.pointt://…?code=…`
+weiter. Safari (besonders am iPhone) kann diese nicht öffnen und zeigt nur
+„Adresse ungültig" – **ohne** dir den `code` zu zeigen. Die Zwischenseite
+„Weiterleitung…" enthält den Code **noch nicht**. So bekommst du ihn trotzdem:
+
+**Weg A – Google Chrome am Mac (empfohlen):**
+1. Öffne den **Login-Link in Chrome** (Desktop).
+2. **Vor** dem Anmelden: Entwicklertools öffnen (⌥⌘I) → Tab **Network/Netzwerk**,
+   Häkchen **„Preserve log"** setzen.
+3. Anmelden. Am Ende scheitert das Öffnen der App-Adresse – das ist ok.
+4. Im Netzwerk-Tab die letzte Zeile suchen, die mit
+   **`com.bosch.tt.dashtt.pointt://app/login?code=…`** beginnt (Filter: `code=`).
+   Rechtsklick → **„Copy → Copy link address"**.
+5. Diese Adresse in der App ins Code-Feld einfügen → **Verbinden**.
+
+**Weg B – Firefox mit Add-on:** Die Community-Erweiterung
+**„SingleKey Code Catcher"** (Firefox) zeigt den Code nach dem Login automatisch an.
+
+> Wichtig: Du brauchst die **finale** Adresse mit `…?code=…` (App-Schema
+> `com.bosch…`), **nicht** die Zwischenseite „Weiterleitung…" bzw. die
+> `…/authorize/callback?…`-Adresse – die enthält noch keinen Code.
 
 ---
 

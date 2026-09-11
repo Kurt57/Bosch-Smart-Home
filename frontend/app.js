@@ -9,7 +9,7 @@ const LS = {
   demo: 'bhe_demo',
 };
 const WD = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
-const APP_VERSION = '2026-09-11 · Wärmepumpe';
+const APP_VERSION = '2026-09-11 · Wärmepumpe (Login-Hilfe)';
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.

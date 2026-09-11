@@ -291,9 +291,12 @@
       <div class="note" style="line-height:1.6">
         <b>So verbindest du deine Bosch-Wärmepumpe:</b><br>
         1. Auf „Login-Link öffnen" tippen und mit deiner <b>Bosch SingleKey ID</b> anmelden.<br>
-        2. Nach dem Login zeigt der Browser eine Fehlerseite / leere Seite – das ist normal.
-           Kopiere die <b>komplette Adresse aus der Adressleiste</b> (enthält <code>code=…</code>).<br>
-        3. Hier einfügen und „Verbinden" tippen.
+        2. Nach dem Login scheitert die Weiterleitung auf <code>com.bosch…</code> – das ist
+           normal. Du brauchst die <b>finale</b> Adresse mit <code>?code=…</code>.<br>
+        &nbsp;&nbsp;&nbsp;<b>Safari zeigt sie nicht</b> → am besten <b>Chrome am Mac</b>:
+           Entwicklertools (⌥⌘I) → <b>Network</b>, „Preserve log" an, anmelden, dann die
+           Zeile <code>…login?code=…</code> per Rechtsklick kopieren. Details: <code>docs/HEATPUMP.md</code>.<br>
+        3. Adresse hier einfügen und „Verbinden" tippen.
       </div>
       <button class="btn sec" id="hp-login" style="margin-top:10px">🔗 Login-Link öffnen</button>
       <label style="margin-top:10px; display:block">Code oder Redirect-Adresse einfügen</label>
