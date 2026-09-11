@@ -848,12 +848,28 @@ class Runtime:
         self.poller.start()
 
     # -- heat pump ------------------------------------------------------- #
+    def save_homecom_token(self, refresh_token: str):
+        """Persist a rotated HomeCom refresh token (single-use rotation)."""
+        self.cfg["homecom_refresh_token"] = refresh_token
+        save_config(self.cfg, self.cfg.get("_config_path", DEFAULT_CONFIG))
+
+    def homecom_client(self):
+        """The shared HomeCom client (poller's), so refresh tokens aren't
+        consumed twice. Creates one on demand if the poller isn't running."""
+        if self.hp and getattr(self.hp, "client", None):
+            return self.hp.client
+        if not homecom or not self.cfg.get("homecom_refresh_token"):
+            return None
+        return homecom.HomeComClient(self.cfg["homecom_refresh_token"],
+                                     on_token=self.save_homecom_token)
+
     def start_heatpump(self) -> bool:
         self.stop_heatpump()
         if not homecom or not self.cfg.get("homecom_refresh_token") \
                 or not self.cfg.get("homecom_gateway"):
             return False
-        client = homecom.HomeComClient(self.cfg["homecom_refresh_token"])
+        client = homecom.HomeComClient(self.cfg["homecom_refresh_token"],
+                                       on_token=self.save_homecom_token)
         self.hp = HeatPumpPoller(client, self.cfg["homecom_gateway"], self.store,
                                  self.hp_state, int(self.cfg.get("homecom_interval", 300)))
         self.hp.start()
@@ -1057,7 +1073,7 @@ class Handler(BaseHTTPRequestHandler):
         if not code:
             return self._send_json({"ok": False, "error": "Login-Code fehlt."}, 400)
         cfg = self.cfg
-        client = homecom.HomeComClient()
+        client = homecom.HomeComClient(on_token=self.ctx.save_homecom_token)
         try:
             refresh = client.exchange_code(code)
         except Exception as exc:
@@ -1123,10 +1139,10 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send_json({"error": "homecom modul fehlt"}, 500)
                 return self._send_json({"url": homecom.authorize_url()})
             if path == "/api/homecom/probe":
-                if not homecom or not self.cfg.get("homecom_refresh_token"):
+                client = self.ctx.homecom_client()
+                if not client:
                     return self._send_json({"error": "nicht mit HomeCom verbunden"}, 400)
                 gid = qs.get("gateway", [self.cfg.get("homecom_gateway", "")])[0]
-                client = homecom.HomeComClient(self.cfg["homecom_refresh_token"])
                 return self._send_json({"gateway": gid, "results": client.probe(gid)})
             days = int(qs.get("days", ["60"])[0])
             price = float(qs.get("price", [self.cfg.get("price_per_kwh", 0.35)])[0])

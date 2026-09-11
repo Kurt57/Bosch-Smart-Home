@@ -75,6 +75,7 @@ weiter. Safari (besonders am iPhone) kann diese nicht öffnen und zeigt nur
 | „Login fehlgeschlagen … Code korrekt/kopiert?" | Der Code ist nur wenige Minuten gültig. Login-Link neu öffnen, neu anmelden, Adresse frisch kopieren. |
 | „Keine Wärmepumpe gefunden" | Anmeldung ok, aber HomeCom liefert kein Gateway. Ist die WP in der HomeCom-App online? |
 | „Fehler" im Setup-Status | Letzter Abruf schlug fehl (z. B. Token abgelaufen/Netz). Die Bridge erneuert den Token automatisch; bei dauerhaftem Fehler neu verbinden. |
+| „HomeCom-Anmeldung abgelaufen" / `invalid_grant` | Der Refresh-Token ist verbraucht/ungültig – im Setup einfach **neu verbinden** (neuer Login-Code). Wird ab Werk automatisch rotiert und gespeichert. |
 | „HomeCom-Modul nicht installiert" | Datei `bridge/homecom.py` fehlt – aus dem Repo nachziehen. |
 
 ---

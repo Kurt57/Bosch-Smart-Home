@@ -28,6 +28,7 @@ import hashlib
 import http.client
 import json
 import ssl
+import threading
 import time
 from urllib.parse import urlencode
 
@@ -109,14 +110,26 @@ class HomeComError(RuntimeError):
     pass
 
 
-class HomeComClient:
-    """Talks to SingleKey ID (OAuth) and the HomeCom gateway API."""
+class AuthExpiredError(HomeComError):
+    """The refresh token is no longer valid – a fresh login is required."""
 
-    def __init__(self, refresh_token: str | None = None, timeout: float = 20.0):
+
+class HomeComClient:
+    """Talks to SingleKey ID (OAuth) and the HomeCom gateway API.
+
+    SingleKey ID rotates the refresh token on every refresh (single use), so a
+    new token MUST be persisted. Pass ``on_token`` to be called with each new
+    refresh token; the caller stores it (e.g. in config.json).
+    """
+
+    def __init__(self, refresh_token: str | None = None, on_token=None,
+                 timeout: float = 20.0):
         self.refresh_token = refresh_token
+        self.on_token = on_token
         self.timeout = timeout
         self._access = None
         self._access_exp = 0
+        self._lock = threading.Lock()   # serialise token refreshes
         self._ctx = ssl.create_default_context()  # public hosts -> verify on
 
     # -- low level -------------------------------------------------------- #
@@ -131,6 +144,9 @@ class HomeComClient:
             resp = conn.getresponse()
             data = resp.read()
             if resp.status != 200:
+                if b"invalid_grant" in data:
+                    raise AuthExpiredError(
+                        "HomeCom-Anmeldung abgelaufen – bitte im Setup neu verbinden.")
                 raise HomeComError(f"token endpoint HTTP {resp.status}: {data[:200]!r}")
             return json.loads(data)
         finally:
@@ -185,11 +201,19 @@ class HomeComClient:
         self._access_exp = time.time() + int(tok.get("expires_in", 3600)) - 60
         if not self.refresh_token:
             raise HomeComError("no refresh_token in response")
+        self._persist()
         return self.refresh_token
+
+    def _persist(self):
+        if self.on_token and self.refresh_token:
+            try:
+                self.on_token(self.refresh_token)
+            except Exception:
+                pass
 
     def _refresh(self):
         if not self.refresh_token:
-            raise HomeComError("not logged in (no refresh token)")
+            raise AuthExpiredError("nicht angemeldet (kein Refresh-Token)")
         tok = self._post_form(OAUTH_HOST, "/auth/connect/token", {
             "grant_type": "refresh_token",
             "client_id": CLIENT_ID,
@@ -198,14 +222,16 @@ class HomeComClient:
         self._access = tok.get("access_token")
         self._access_exp = time.time() + int(tok.get("expires_in", 3600)) - 60
         if tok.get("refresh_token"):
-            self.refresh_token = tok["refresh_token"]  # rotate
+            self.refresh_token = tok["refresh_token"]  # rotate -> persist!
+            self._persist()
         if not self._access:
             raise HomeComError("no access_token after refresh")
 
     def _valid_token(self) -> str:
-        if not self._access or time.time() >= self._access_exp:
-            self._refresh()
-        return self._access
+        with self._lock:
+            if not self._access or time.time() >= self._access_exp:
+                self._refresh()
+            return self._access
 
     # -- data ------------------------------------------------------------- #
     def list_gateways(self) -> list[str]:
