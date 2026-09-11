@@ -51,6 +51,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+try:
+    import homecom  # optional Bosch HomeCom Easy (heat pump) client
+except Exception:  # pragma: no cover - keeps the bridge running without it
+    homecom = None
+
 DEFAULT_FRONTEND = os.path.normpath(os.path.join(HERE, "..", "frontend"))
 DEFAULT_DB = os.path.join(HERE, "energy.db")
 DEFAULT_CERT = os.path.join(HERE, "shc-client-cert.pem")
@@ -78,6 +85,10 @@ def load_config(path: str) -> dict:
         # Optional filter: only keep devices whose name/model contains one of
         # these (case-insensitive) substrings. Empty = keep every power meter.
         "device_filter": [],
+        # Optional Bosch HomeCom Easy (heat pump) – filled in via the web UI.
+        "homecom_refresh_token": "",
+        "homecom_gateway": "",
+        "homecom_interval": 300,       # seconds between heat-pump polls
     }
     if os.path.exists(path):
         try:
@@ -299,6 +310,39 @@ class Store:
             self.conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_samples ON samples(device_id, ts)"
             )
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS hp_samples("
+                " gateway TEXT, ts INTEGER, energy_kwh REAL, power_w REAL,"
+                " thermal_kw REAL, modulation REAL, outdoor_c REAL)"
+            )
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_hp ON hp_samples(ts)"
+            )
+
+    # -- heat pump ------------------------------------------------------- #
+    def add_hp_sample(self, row: dict):
+        with self.lock, self.conn:
+            self.conn.execute(
+                "INSERT INTO hp_samples(gateway,ts,energy_kwh,power_w,thermal_kw,"
+                "modulation,outdoor_c) VALUES(?,?,?,?,?,?,?)",
+                (row.get("gateway"), row["ts"], row.get("energy_kwh"), row.get("power_w"),
+                 row.get("thermal_kw"), row.get("modulation"), row.get("outdoor_c")),
+            )
+
+    def hp_latest(self) -> dict | None:
+        with self.lock:
+            cur = self.conn.execute("SELECT * FROM hp_samples ORDER BY ts DESC LIMIT 1")
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+    def hp_prev_energy(self) -> tuple | None:
+        """Most recent (ts, energy_kwh) with a non-null counter, for power calc."""
+        with self.lock:
+            cur = self.conn.execute(
+                "SELECT ts,energy_kwh FROM hp_samples WHERE energy_kwh IS NOT NULL"
+                " ORDER BY ts DESC LIMIT 1")
+            row = cur.fetchone()
+            return (row["ts"], row["energy_kwh"]) if row else None
 
     def upsert_device(self, dev: dict, ts: int, energy_start: int | None = None):
         with self.lock, self.conn:
@@ -719,6 +763,56 @@ class DemoPoller(threading.Thread):
 
 
 # --------------------------------------------------------------------------- #
+# Heat pump (Bosch HomeCom Easy) poller
+# --------------------------------------------------------------------------- #
+class HeatPumpPoller(threading.Thread):
+    def __init__(self, client, gateway, store: Store, state: dict, interval: int = 300):
+        super().__init__(daemon=True)
+        self.client = client
+        self.gateway = gateway
+        self.store = store
+        self.state = state
+        self.interval = max(60, int(interval))
+        self._stop = threading.Event()
+        self.last_error = None
+        self.last_poll = None
+
+    def run(self):
+        while not self._stop.is_set():
+            try:
+                self._poll()
+                self.last_error = None
+                self.state["last_error"] = None
+            except Exception as exc:
+                self.last_error = str(exc)
+                self.state["last_error"] = str(exc)
+                print(f"[heatpump] error: {exc}", file=sys.stderr)
+            self._stop.wait(self.interval)
+
+    def _poll(self):
+        ts = int(time.time())
+        data = self.client.read_heatpump(self.gateway)
+        energy = data.get("energy_kwh")
+        power_w = None
+        if energy is not None:
+            prev = self.store.hp_prev_energy()
+            if prev and prev[1] is not None and energy >= prev[1] and ts > prev[0]:
+                dt_h = (ts - prev[0]) / 3600.0
+                if dt_h > 0:
+                    power_w = round((energy - prev[1]) / dt_h * 1000.0, 1)
+        row = {"gateway": self.gateway, "ts": ts, "energy_kwh": energy, "power_w": power_w,
+               "thermal_kw": data.get("thermal_kw"), "modulation": data.get("modulation"),
+               "outdoor_c": data.get("outdoor_c")}
+        self.store.add_hp_sample(row)
+        self.state.update(row)
+        self.state.update({"ok": True, "last_poll": ts})
+        self.last_poll = ts
+
+    def stop(self):
+        self._stop.set()
+
+
+# --------------------------------------------------------------------------- #
 # Runtime – holds the store/config and the currently running poller so the
 # poller can be (re)started from the web UI (pair / switch demo↔live).
 # --------------------------------------------------------------------------- #
@@ -728,11 +822,14 @@ class Runtime:
         self.cfg = cfg
         self.poller = None
         self.mode = "idle"
+        self.hp = None          # HeatPumpPoller
+        self.hp_state = {}      # latest heat-pump snapshot
 
     def stop(self):
         if self.poller:
             self.poller.stop()
             self.poller = None
+        self.stop_heatpump()
 
     def start_demo(self, days: int = 90):
         self.stop()
@@ -750,10 +847,28 @@ class Runtime:
         self.poller = Poller(client, self.store, self.cfg)
         self.poller.start()
 
+    # -- heat pump ------------------------------------------------------- #
+    def start_heatpump(self) -> bool:
+        self.stop_heatpump()
+        if not homecom or not self.cfg.get("homecom_refresh_token") \
+                or not self.cfg.get("homecom_gateway"):
+            return False
+        client = homecom.HomeComClient(self.cfg["homecom_refresh_token"])
+        self.hp = HeatPumpPoller(client, self.cfg["homecom_gateway"], self.store,
+                                 self.hp_state, int(self.cfg.get("homecom_interval", 300)))
+        self.hp.start()
+        return True
+
+    def stop_heatpump(self):
+        if self.hp:
+            self.hp.stop()
+            self.hp = None
+
 
 def save_config(cfg: dict, path: str):
     keep = ("shc_ip", "system_password", "cert", "key", "db", "poll_interval",
-            "price_per_kwh", "currency", "device_filter")
+            "price_per_kwh", "currency", "device_filter",
+            "homecom_refresh_token", "homecom_gateway", "homecom_interval")
     data = {k: cfg[k] for k in keep if k in cfg and not str(k).startswith("_")}
     try:
         with open(path, "w", encoding="utf-8") as fh:
@@ -827,6 +942,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._post_mode(body)
             if parsed.path == "/api/device-name":
                 return self._post_device_name(body)
+            if parsed.path == "/api/homecom/connect":
+                return self._post_homecom_connect(body)
             return self._send_json({"error": "unknown endpoint"}, 404)
         except Exception as exc:
             return self._send_json({"error": str(exc)}, 500)
@@ -933,6 +1050,40 @@ class Handler(BaseHTTPRequestHandler):
         self.store.set_custom_name(dev_id, body.get("name"))
         return self._send_json({"ok": True})
 
+    def _post_homecom_connect(self, body):
+        if not homecom:
+            return self._send_json({"ok": False, "error": "HomeCom-Modul fehlt (homecom.py)."}, 500)
+        code = str(body.get("code") or "").strip()
+        if not code:
+            return self._send_json({"ok": False, "error": "Login-Code fehlt."}, 400)
+        cfg = self.cfg
+        client = homecom.HomeComClient()
+        try:
+            refresh = client.exchange_code(code)
+        except Exception as exc:
+            return self._send_json(
+                {"ok": False, "error": f"Login fehlgeschlagen: {exc}. "
+                 "Code korrekt/kopiert? Er ist nur wenige Minuten gültig."}, 200)
+        cfg["homecom_refresh_token"] = refresh
+        # auto-detect the heat-pump gateway
+        gateway = str(body.get("gateway") or "").strip()
+        if not gateway:
+            try:
+                gws = client.list_gateways()
+                gateway = gws[0] if gws else ""
+            except Exception as exc:
+                return self._send_json(
+                    {"ok": True, "connected": True, "gateway": "",
+                     "message": f"Angemeldet, aber Gateway-Liste fehlgeschlagen: {exc}"})
+        cfg["homecom_gateway"] = gateway
+        save_config(cfg, cfg.get("_config_path", DEFAULT_CONFIG))
+        started = self.ctx.start_heatpump()
+        return self._send_json({"ok": True, "connected": True, "gateway": gateway,
+                                "started": started,
+                                "message": "HomeCom verbunden." + (
+                                    f" Wärmepumpe: {gateway}" if gateway else
+                                    " Keine Wärmepumpe gefunden.")})
+
     # -- REST API ---------------------------------------------------------- #
     def _api(self, path, qs):
         try:
@@ -954,9 +1105,23 @@ class Handler(BaseHTTPRequestHandler):
                     "shc_ip": self.cfg.get("shc_ip", ""),
                     "has_password": bool(self.cfg.get("system_password")),
                     "has_cert": have_cert,
+                    "homecom_available": homecom is not None,
+                    "homecom_connected": bool(self.cfg.get("homecom_refresh_token")),
+                    "homecom_gateway": self.cfg.get("homecom_gateway", ""),
+                    "homecom_last_error": self.ctx.hp_state.get("last_error"),
+                    "homecom_last_poll": self.ctx.hp_state.get("last_poll"),
                 })
             if path == "/api/devices":
                 return self._send_json({"devices": self.store.devices()})
+            if path == "/api/heatpump":
+                st = dict(self.ctx.hp_state)
+                st["available"] = bool(st) and st.get("energy_kwh") is not None or bool(st.get("last_poll"))
+                st["connected"] = bool(self.cfg.get("homecom_refresh_token"))
+                return self._send_json(st)
+            if path == "/api/homecom/authurl":
+                if not homecom:
+                    return self._send_json({"error": "homecom modul fehlt"}, 500)
+                return self._send_json({"url": homecom.authorize_url()})
             days = int(qs.get("days", ["60"])[0])
             price = float(qs.get("price", [self.cfg.get("price_per_kwh", 0.35)])[0])
             if path == "/api/analytics" or path == "/api/summary":
@@ -1163,6 +1328,10 @@ def cmd_serve(args, cfg):
     else:
         # not configured yet – stay idle so the web UI can pair the controller
         ctx.mode = "idle"
+
+    # optional: start the heat-pump (HomeCom) poller if already connected
+    if ctx.start_heatpump():
+        print(f"  Heat pump:   HomeCom gateway {cfg.get('homecom_gateway')}")
 
     frontend = args.frontend or DEFAULT_FRONTEND
     httpd = make_server(args.host, args.port, ctx, frontend)

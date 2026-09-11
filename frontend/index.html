@@ -145,6 +145,10 @@
       <div class="kpi"><div class="v" id="k-total">–</div><div class="l">Gesamt gemessen</div></div>
       <div class="kpi"><div class="v" id="k-baseline">–</div><div class="l">Standby (Grundlast)</div></div>
     </div>
+    <div class="card" id="hp-card" hidden>
+      <h2>🔥 Wärmepumpe (HomeCom)</h2>
+      <div id="hp-body"></div>
+    </div>
     <div class="card">
       <h2>Live-Leistung je Gerät</h2>
       <div id="live-devices"></div>
@@ -279,6 +283,24 @@
       </div>
       <button class="btn" id="pair-btn">🔗 Jetzt koppeln &amp; live schalten</button>
       <div class="note" id="pair-note" style="margin-top:10px"></div>
+    </div>
+
+    <div class="card" id="homecom-card">
+      <h2>🔥 Wärmepumpe (HomeCom)</h2>
+      <div class="note" id="hp-status" style="margin-bottom:10px"></div>
+      <div class="note" style="line-height:1.6">
+        <b>So verbindest du deine Bosch-Wärmepumpe:</b><br>
+        1. Auf „Login-Link öffnen" tippen und mit deiner <b>Bosch SingleKey ID</b> anmelden.<br>
+        2. Nach dem Login zeigt der Browser eine Fehlerseite / leere Seite – das ist normal.
+           Kopiere die <b>komplette Adresse aus der Adressleiste</b> (enthält <code>code=…</code>).<br>
+        3. Hier einfügen und „Verbinden" tippen.
+      </div>
+      <button class="btn sec" id="hp-login" style="margin-top:10px">🔗 Login-Link öffnen</button>
+      <label style="margin-top:10px; display:block">Code oder Redirect-Adresse einfügen</label>
+      <input id="hp-code" placeholder="com.bosch.tt…?code=…  oder nur der Code"
+             autocomplete="off" autocapitalize="off" spellcheck="false">
+      <button class="btn" id="hp-connect">✅ Verbinden</button>
+      <div class="note" id="hp-connect-note" style="margin-top:10px"></div>
     </div>
 
     <div class="card">

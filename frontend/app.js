@@ -9,7 +9,7 @@ const LS = {
   demo: 'bhe_demo',
 };
 const WD = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
-const APP_VERSION = '2026-09-06 · Jahresansicht';
+const APP_VERSION = '2026-09-11 · Wärmepumpe';
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -35,6 +35,7 @@ let STATE = {
   data: null,     // analytics for the profile/forecast window (90d)
   live: null,     // frequently-refreshed analytics (short window)
   health: null,   // last /api/health payload
+  hp: null,       // last /api/heatpump payload
   cur: '€',
 };
 
@@ -74,6 +75,7 @@ async function loadAll() {
     applyData(full, live, health.mode || 'live');
     $('diag').textContent = JSON.stringify(health, null, 1);
     renderSettings();
+    refreshHeatpump();
   } catch (e) {
     // no bridge → demo
     STATE.health = null;
@@ -411,6 +413,16 @@ function renderSettings() {
   if (h.price_per_kwh) $('shc-price').value = h.price_per_kwh;
   if (h.poll_interval) $('shc-interval').value = h.poll_interval;
   renderRenameList();
+
+  const hs = $('hp-status');
+  if (hs) {
+    hs.innerHTML = !h.homecom_available
+      ? 'HomeCom-Modul nicht installiert (Datei <code>bridge/homecom.py</code> fehlt).'
+      : h.homecom_connected
+        ? 'Verbunden ✓' + (h.homecom_gateway ? ' · Gateway ' + esc(h.homecom_gateway) : '') +
+          (h.homecom_last_error ? ' · <span style="color:#ff6b8a">Fehler: ' + esc(h.homecom_last_error) + '</span>' : '')
+        : 'Noch nicht verbunden.';
+  }
 }
 
 function friendlyModel(m) {
@@ -443,6 +455,45 @@ function applyCustomName(id, name) {
                      STATE.live && STATE.live.live && STATE.live.live.devices]) {
     if (arr) for (const d of arr) if (d.id === id) d.custom_name = name;
   }
+}
+
+/* ------------------------------------------------------------ heat pump */
+async function refreshHeatpump() {
+  if (STATE.demo) { $('hp-card').hidden = true; return; }
+  try { STATE.hp = await api('/api/heatpump'); renderHeatpump(); } catch (e) { /* keep */ }
+}
+
+function renderHeatpump() {
+  const hp = STATE.hp, card = $('hp-card');
+  if (!card) return;
+  if (!hp || !hp.available) { card.hidden = true; return; }
+  card.hidden = false;
+  const rows = [];
+  if (hp.power_w != null) rows.push(['Aktuelle Leistung (elektr.)', fmt(hp.power_w, 0) + ' W']);
+  if (hp.energy_kwh != null) rows.push(['Stromverbrauch gesamt', kwh(hp.energy_kwh, 0)]);
+  if (hp.thermal_kw != null) rows.push(['Wärmeleistung', fmt(hp.thermal_kw, 1) + ' kW']);
+  if (hp.modulation != null) rows.push(['Modulation', fmt(hp.modulation, 0) + ' %']);
+  if (hp.outdoor_c != null) rows.push(['Außentemperatur', fmt(hp.outdoor_c, 1) + ' °C']);
+  if (hp.thermal_kw != null && hp.power_w) {
+    const cop = hp.thermal_kw * 1000 / hp.power_w;
+    if (cop > 0 && cop < 15) rows.push(['COP (geschätzt)', fmt(cop, 1)]);
+  }
+  $('hp-body').innerHTML = rows.length
+    ? rows.map(([k, v]) => statusRow(k, v)).join('')
+    : '<div class="note">Verbunden – warte auf die erste Messung (Abruf alle paar Minuten).</div>';
+}
+
+async function doHomecomConnect() {
+  const note = $('hp-connect-note'), btn = $('hp-connect');
+  const code = $('hp-code').value.trim();
+  if (!code) { note.textContent = 'Bitte den Code bzw. die Redirect-Adresse einfügen.'; return; }
+  btn.disabled = true; note.textContent = 'Verbinde mit HomeCom …';
+  try {
+    const r = await postJSON('/api/homecom/connect', { code });
+    if (r.ok) { note.innerHTML = '✅ ' + esc(r.message || 'Verbunden.'); setTimeout(loadAll, 1500); }
+    else note.innerHTML = '⚠︎ ' + esc(r.error || 'Verbindung fehlgeschlagen.');
+  } catch (e) { note.textContent = 'Fehler: ' + e.message + ' – Seite von der Bridge geöffnet?'; }
+  btn.disabled = false;
 }
 
 async function postJSON(path, body) {
@@ -682,6 +733,12 @@ function init() {
   $('pair-btn').addEventListener('click', doPair);
   const hr = $('hard-refresh'); if (hr) hr.addEventListener('click', hardRefresh);
   const vn = $('version-note'); if (vn) vn.innerHTML = 'App-Stand: <b>' + APP_VERSION + '</b>';
+  const hpl = $('hp-login');
+  if (hpl) hpl.addEventListener('click', async () => {
+    try { const r = await api('/api/homecom/authurl'); if (r.url) window.open(r.url, '_blank'); }
+    catch (e) { $('hp-connect-note').textContent = 'Nur möglich, wenn die Seite von der Bridge geöffnet ist.'; }
+  });
+  const hpc = $('hp-connect'); if (hpc) hpc.addEventListener('click', doHomecomConnect);
   $('rename-list').addEventListener('change', async (e) => {
     const inp = e.target.closest('input.rn');
     if (!inp) return;
@@ -716,6 +773,7 @@ async function refreshLive() {
     STATE.live = await api('/api/analytics?days=2&price=' + STATE.price);
     renderLive();
   } catch (e) { /* keep last */ }
+  refreshHeatpump();
 }
 
 document.addEventListener('DOMContentLoaded', init);
