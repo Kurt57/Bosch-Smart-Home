@@ -9,7 +9,23 @@ const LS = {
   demo: 'bhe_demo',
 };
 const WD = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
+const APP_VERSION = '2026-09-06 · Jahresansicht';
 const $ = (id) => document.getElementById(id);
+
+// Unregister the service worker, drop all caches, and reload fresh code.
+async function hardRefresh() {
+  try {
+    if ('serviceWorker' in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map(r => r.unregister()));
+    }
+    if (window.caches) {
+      const keys = await caches.keys();
+      await Promise.all(keys.map(k => caches.delete(k)));
+    }
+  } catch (e) { /* ignore */ }
+  location.reload();
+}
 
 let STATE = {
   base: localStorage.getItem(LS.base) || '',
@@ -221,18 +237,64 @@ function renderLive() {
   $('chart-24h').innerHTML = areaChart(hp, { h: 170 });
 }
 
-function renderUse() {
-  const daily = windowDays(STATE.data.daily, STATE.useDays);
-  const vals = daily.map(d => ({
-    v: d.kwh,
-    color: d.likely_away ? '#ff6b8a' : 'url(#g1)',
-    label: shortDay(d.day),
+const MON = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'];
+
+// 12-month view: real days count, missing days filled with the current average
+function renderYearChart(avg) {
+  const realByDay = {};
+  for (const d of STATE.data.daily) realByDay[d.day] = d.kwh;
+  const now = new Date();
+  const months = [];
+  for (let i = 11; i >= 0; i--) {
+    const m = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const y = m.getFullYear(), mo = m.getMonth();
+    const days = new Date(y, mo + 1, 0).getDate();
+    let sum = 0, realDays = 0;
+    for (let day = 1; day <= days; day++) {
+      const key = `${y}-${String(mo + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      if (realByDay[key] != null) { sum += realByDay[key]; realDays++; }
+      else sum += avg;
+    }
+    months.push({ label: MON[mo], v: sum, realDays });
+  }
+  const vals = months.map(m => ({
+    v: m.v, label: m.label,
+    color: m.realDays > 0 ? 'url(#g1)' : '#ffb64d',
   }));
   $('chart-daily').innerHTML = barChart(vals, { h: 210 });
-  const kwhs = daily.map(d => d.kwh);
-  const avg = kwhs.reduce((a, b) => a + b, 0) / (kwhs.length || 1);
-  $('u-avg').innerHTML = kwh(avg, 2);
-  $('u-max').innerHTML = kwh(Math.max(...kwhs, 0), 2);
+}
+
+function renderUse() {
+  const year = STATE.useDays >= 365;
+  const C = STATE.data.counter_estimate;
+  const avg = (C && C.avg_daily_kwh) || STATE.data.stats.avg_daily_kwh || 0;
+
+  if (year) {
+    renderYearChart(avg);
+    $('chart-daily-title').innerHTML =
+      'Verbrauch pro Monat · <span class="badge" style="color:#ffb64d;border-color:#6b551f">gelb = geschätzt</span>';
+    $('chart-daily-note').hidden = false;
+    $('chart-daily-note').innerHTML =
+      `Monate ohne Messung sind mit deinem aktuellen Ø <b>${kwh(avg, 2)}/Tag</b> geschätzt. ` +
+      'Sobald echte Tage vorliegen, ersetzen sie die Schätzung automatisch.';
+    $('u-avg').innerHTML = kwh(avg, 2); $('u-avg-l').textContent = 'Ø pro Tag';
+    $('u-max').innerHTML = kwh(avg * 365, 0); $('u-max-l').textContent = 'Jahr (geschätzt)';
+  } else {
+    const daily = windowDays(STATE.data.daily, STATE.useDays);
+    const vals = daily.map(d => ({
+      v: d.kwh,
+      color: d.likely_away ? '#ff6b8a' : 'url(#g1)',
+      label: shortDay(d.day),
+    }));
+    $('chart-daily').innerHTML = barChart(vals, { h: 210 });
+    const kwhs = daily.map(d => d.kwh);
+    const a = kwhs.reduce((x, y) => x + y, 0) / (kwhs.length || 1);
+    $('u-avg').innerHTML = kwh(a, 2); $('u-avg-l').textContent = 'Ø pro Tag';
+    $('u-max').innerHTML = kwh(Math.max(...kwhs, 0), 2); $('u-max-l').textContent = 'Höchster Tag';
+    $('chart-daily-title').innerHTML =
+      'Verbrauch pro Tag <span class="badge away-b">rot = wahrsch. abwesend</span>';
+    $('chart-daily-note').hidden = true;
+  }
 
   // device share (cumulative kWh)
   const dev = [...STATE.data.live.devices].sort((a, b) => b.energy_kwh_total - a.energy_kwh_total);
@@ -618,6 +680,8 @@ function init() {
   });
   $('discover').addEventListener('click', doDiscover);
   $('pair-btn').addEventListener('click', doPair);
+  const hr = $('hard-refresh'); if (hr) hr.addEventListener('click', hardRefresh);
+  const vn = $('version-note'); if (vn) vn.innerHTML = 'App-Stand: <b>' + APP_VERSION + '</b>';
   $('rename-list').addEventListener('change', async (e) => {
     const inp = e.target.closest('input.rn');
     if (!inp) return;

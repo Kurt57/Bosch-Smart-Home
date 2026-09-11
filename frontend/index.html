@@ -161,14 +161,16 @@
       <button data-d="14" class="on">14 T</button>
       <button data-d="30">30 T</button>
       <button data-d="90">90 T</button>
+      <button data-d="365">1 J</button>
     </div>
     <div class="grid2">
-      <div class="kpi"><div class="v" id="u-avg">–</div><div class="l">Ø pro Tag</div></div>
-      <div class="kpi"><div class="v" id="u-max">–</div><div class="l">Höchster Tag</div></div>
+      <div class="kpi"><div class="v" id="u-avg">–</div><div class="l" id="u-avg-l">Ø pro Tag</div></div>
+      <div class="kpi"><div class="v" id="u-max">–</div><div class="l" id="u-max-l">Höchster Tag</div></div>
     </div>
     <div class="card">
-      <h2>Verbrauch pro Tag <span class="badge away-b">rot = wahrsch. abwesend</span></h2>
+      <h2 id="chart-daily-title">Verbrauch pro Tag <span class="badge away-b">rot = wahrsch. abwesend</span></h2>
       <div id="chart-daily"></div>
+      <div class="note" id="chart-daily-note" hidden style="margin-top:10px"></div>
     </div>
     <div class="card">
       <h2>Anteil je Gerät (kumuliert)</h2>
@@ -297,6 +299,15 @@
         des Feldes gespeichert.
       </div>
       <div id="rename-list"></div>
+    </div>
+
+    <div class="card">
+      <h2>App aktualisieren</h2>
+      <div class="note" style="margin-bottom:6px">
+        Falls Änderungen nicht ankommen oder Elemente „hängen": Cache leeren und frisch laden.
+      </div>
+      <button class="btn" id="hard-refresh">🔄 Cache leeren &amp; neu laden</button>
+      <div class="note" id="version-note" style="margin-top:10px"></div>
     </div>
 
     <div class="card">
