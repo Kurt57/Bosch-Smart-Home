@@ -9,7 +9,7 @@ const LS = {
   demo: 'bhe_demo',
 };
 const WD = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
-const APP_VERSION = '2026-09-11 · Wärmepumpe (Login-Hilfe)';
+const APP_VERSION = '2026-09-11 · Wärmepumpe live';
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -463,24 +463,47 @@ async function refreshHeatpump() {
   try { STATE.hp = await api('/api/heatpump'); renderHeatpump(); } catch (e) { /* keep */ }
 }
 
+const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
+  frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
+
 function renderHeatpump() {
   const hp = STATE.hp, card = $('hp-card');
   if (!card) return;
   if (!hp || !hp.available) { card.hidden = true; return; }
   card.hidden = false;
+
+  const active = hp.modulation != null && hp.modulation > 0;
+  const modeTxt = HP_MODE[hp.mode] || hp.mode || 'Bereitschaft';
+  const status = active
+    ? `<span style="color:var(--accent2)">● läuft</span> · ${esc(modeTxt)}` +
+      (hp.modulation != null ? ` · ${fmt(hp.modulation, 0)} %` : '')
+    : `<span style="color:var(--muted)">◦ ${esc(modeTxt)}</span>`;
+
   const rows = [];
-  if (hp.power_w != null) rows.push(['Aktuelle Leistung (elektr.)', fmt(hp.power_w, 0) + ' W']);
-  if (hp.energy_kwh != null) rows.push(['Stromverbrauch gesamt', kwh(hp.energy_kwh, 0)]);
-  if (hp.thermal_kw != null) rows.push(['Wärmeleistung', fmt(hp.thermal_kw, 1) + ' kW']);
-  if (hp.modulation != null) rows.push(['Modulation', fmt(hp.modulation, 0) + ' %']);
-  if (hp.outdoor_c != null) rows.push(['Außentemperatur', fmt(hp.outdoor_c, 1) + ' °C']);
-  if (hp.thermal_kw != null && hp.power_w) {
-    const cop = hp.thermal_kw * 1000 / hp.power_w;
-    if (cop > 0 && cop < 15) rows.push(['COP (geschätzt)', fmt(cop, 1)]);
+  if (hp.power_w != null) rows.push(['Aktuelle Leistung (elektrisch)', fmt(hp.power_w, 0) + ' W']);
+  if (hp.heat_w != null) rows.push(['Wärmeleistung', fmt(hp.heat_w / 1000, 1) + ' kW']);
+  if (hp.cop_live != null) rows.push(['Wirkungsgrad jetzt (COP)', fmt(hp.cop_live, 2)]);
+  if (hp.energy_kwh != null) {
+    const split = [];
+    if (hp.compressor_kwh != null) split.push('Kompressor ' + kwh(hp.compressor_kwh, 0));
+    if (hp.eheater_kwh != null) split.push('Heizstab ' + kwh(hp.eheater_kwh, 0));
+    rows.push(['Stromverbrauch gesamt',
+      kwh(hp.energy_kwh, 0) + (split.length ? `<br><small style="color:var(--muted)">${split.join(' · ')}</small>` : '')]);
   }
-  $('hp-body').innerHTML = rows.length
-    ? rows.map(([k, v]) => statusRow(k, v)).join('')
-    : '<div class="note">Verbunden – warte auf die erste Messung (Abruf alle paar Minuten).</div>';
+  if (hp.heat_kwh != null) rows.push(['Wärme erzeugt gesamt', kwh(hp.heat_kwh, 0)]);
+  if (hp.cop_lifetime != null) rows.push(['Jahresarbeitszahl (∅ COP)', fmt(hp.cop_lifetime, 2)]);
+  if (hp.outdoor_c != null) rows.push(['Außentemperatur', fmt(hp.outdoor_c, 1) + ' °C']);
+  if (hp.supply_c != null && hp.return_c != null)
+    rows.push(['Vor-/Rücklauf', fmt(hp.supply_c, 1) + ' / ' + fmt(hp.return_c, 1) + ' °C']);
+  if (hp.starts != null) rows.push(['Starts / Betriebsstunden',
+    fmt(hp.starts, 0) + (hp.working_h != null ? ' / ' + fmt(hp.working_h, 0) + ' h' : '')]);
+
+  $('hp-body').innerHTML =
+    `<div class="note" style="margin:-2px 0 8px">${status}</div>` +
+    (rows.length ? rows.map(([k, v]) => statusRow(k, v)).join('')
+      : '<div class="note">Verbunden – warte auf die erste Messung.</div>') +
+    ((hp.power_w == null || hp.heat_w == null)
+      ? '<div class="note" style="margin-top:8px">Aktuelle Leistung & COP erscheinen nach der zweiten Messung (Zählerdifferenz).</div>' : '');
 }
 
 async function doHomecomConnect() {

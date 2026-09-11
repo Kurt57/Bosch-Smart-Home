@@ -315,6 +315,10 @@ class Store:
                 " gateway TEXT, ts INTEGER, energy_kwh REAL, power_w REAL,"
                 " thermal_kw REAL, modulation REAL, outdoor_c REAL)"
             )
+            hpcols = [r[1] for r in self.conn.execute("PRAGMA table_info(hp_samples)")]
+            for col in ("heat_kwh", "heat_w"):
+                if col not in hpcols:
+                    self.conn.execute(f"ALTER TABLE hp_samples ADD COLUMN {col} REAL")
             self.conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_hp ON hp_samples(ts)"
             )
@@ -324,10 +328,22 @@ class Store:
         with self.lock, self.conn:
             self.conn.execute(
                 "INSERT INTO hp_samples(gateway,ts,energy_kwh,power_w,thermal_kw,"
-                "modulation,outdoor_c) VALUES(?,?,?,?,?,?,?)",
+                "modulation,outdoor_c,heat_kwh,heat_w) VALUES(?,?,?,?,?,?,?,?,?)",
                 (row.get("gateway"), row["ts"], row.get("energy_kwh"), row.get("power_w"),
-                 row.get("thermal_kw"), row.get("modulation"), row.get("outdoor_c")),
+                 row.get("thermal_kw"), row.get("modulation"), row.get("outdoor_c"),
+                 row.get("heat_kwh"), row.get("heat_w")),
             )
+
+    def hp_prev(self, field: str):
+        """Most recent (ts, <field>) with a non-null value, for power calc."""
+        if field not in ("energy_kwh", "heat_kwh"):
+            return None
+        with self.lock:
+            cur = self.conn.execute(
+                f"SELECT ts,{field} AS v FROM hp_samples WHERE {field} IS NOT NULL"
+                " ORDER BY ts DESC LIMIT 1")
+            row = cur.fetchone()
+            return (row["ts"], row["v"]) if row else None
 
     def hp_latest(self) -> dict | None:
         with self.lock:
@@ -789,23 +805,39 @@ class HeatPumpPoller(threading.Thread):
                 print(f"[heatpump] error: {exc}", file=sys.stderr)
             self._stop.wait(self.interval)
 
+    def _derive_power(self, field, current, ts):
+        """Average power (W) from a cumulative kWh counter delta."""
+        if current is None:
+            return None
+        prev = self.store.hp_prev(field)
+        if prev and prev[1] is not None and current >= prev[1] and ts > prev[0]:
+            dt_h = (ts - prev[0]) / 3600.0
+            if 0 < dt_h < 24:
+                return round((current - prev[1]) / dt_h * 1000.0, 1)
+        return None
+
     def _poll(self):
         ts = int(time.time())
         data = self.client.read_heatpump(self.gateway)
-        energy = data.get("energy_kwh")
-        power_w = None
-        if energy is not None:
-            prev = self.store.hp_prev_energy()
-            if prev and prev[1] is not None and energy >= prev[1] and ts > prev[0]:
-                dt_h = (ts - prev[0]) / 3600.0
-                if dt_h > 0:
-                    power_w = round((energy - prev[1]) / dt_h * 1000.0, 1)
-        row = {"gateway": self.gateway, "ts": ts, "energy_kwh": energy, "power_w": power_w,
-               "thermal_kw": data.get("thermal_kw"), "modulation": data.get("modulation"),
-               "outdoor_c": data.get("outdoor_c")}
-        self.store.add_hp_sample(row)
-        self.state.update(row)
-        self.state.update({"ok": True, "last_poll": ts})
+        elec = data.get("energy_kwh")           # electrical total (kWh)
+        heat = data.get("heat_kwh")             # thermal produced total (kWh)
+        power_w = self._derive_power("energy_kwh", elec, ts)
+        heat_w = self._derive_power("heat_kwh", heat, ts)
+        self.store.add_hp_sample({
+            "gateway": self.gateway, "ts": ts, "energy_kwh": elec, "power_w": power_w,
+            "heat_kwh": heat, "heat_w": heat_w,
+            "thermal_kw": (heat_w / 1000.0) if heat_w is not None else None,
+            "modulation": data.get("modulation"), "outdoor_c": data.get("outdoor_c"),
+        })
+        # live + lifetime COP
+        cop_live = round(heat_w / power_w, 2) if (heat_w and power_w and power_w > 0) else None
+        cop_life = round(heat / elec, 2) if (heat and elec and elec > 0) else None
+        snap = dict(data)
+        snap.update({"gateway": self.gateway, "ts": ts, "power_w": power_w,
+                     "heat_w": heat_w, "cop_live": cop_live, "cop_lifetime": cop_life,
+                     "ok": True, "last_poll": ts})
+        self.state.clear()
+        self.state.update(snap)
         self.last_poll = ts
 
     def stop(self):

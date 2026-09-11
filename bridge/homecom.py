@@ -263,19 +263,58 @@ class HomeComClient:
         return None
 
     def read_heatpump(self, gateway_id: str) -> dict:
-        """Return the available heat-pump metrics for one gateway."""
+        """Return the available heat-pump metrics for one gateway.
+
+        Tailored to the Compress CS6800i AW: cumulative energy comes from the
+        ``emon/totalConsumption`` resource, split into compressor / e-heater
+        (electrical) and outputProduced (thermal). No native history resource,
+        so day/hour history is built by the bridge from these counters.
+        """
+        def get(p):
+            try:
+                return self._api_get(f"{API_BASE}{gateway_id}{p}")
+            except HomeComError:
+                return None
+
         out = {"gateway": gateway_id}
-        for key, paths in RES.items():
-            val = None
-            for p in paths:
-                try:
-                    payload = self._api_get(f"{API_BASE}{gateway_id}{p}")
-                except HomeComError:
-                    payload = None
-                val = self._num(payload)
-                if val is not None:
-                    break
-            out[key] = val
+
+        # cumulative energy counters (kWh)
+        emon = get("/resource/heatSources/emon/totalConsumption")
+        vals = {}
+        if isinstance(emon, dict):
+            for item in emon.get("values", []) or []:
+                if isinstance(item, dict):
+                    for k, v in item.items():
+                        if isinstance(v, (int, float)):
+                            vals[k] = float(v)
+        comp, eh, produced = vals.get("compressor"), vals.get("eheater"), vals.get("outputProduced")
+        electrical = None
+        if comp is not None or eh is not None:
+            electrical = (comp or 0.0) + (eh or 0.0)
+        out["energy_kwh"] = electrical        # electrical total (compressor+eheater)
+        out["heat_kwh"] = produced            # thermal produced total
+        out["compressor_kwh"] = comp
+        out["eheater_kwh"] = eh
+
+        # instantaneous-ish values
+        out["modulation"] = self._num(get("/resource/heatSources/actualModulation"))
+        out["supply_c"] = self._num(get("/resource/heatSources/actualSupplyTemperature"))
+        out["return_c"] = self._num(get("/resource/heatSources/returnTemperature"))
+        out["outdoor_c"] = self._num(get("/resource/system/sensors/temperatures/outdoor_t1"))
+        out["starts"] = self._num(get("/resource/heatSources/numberOfStarts"))
+        wt = self._num(get("/resource/heatSources/workingTime/totalSystem"))
+        out["working_h"] = round(wt / 3600.0) if wt is not None else None
+
+        # current operating mode (arrayData -> e.g. ["dhw"], ["ch"], [] )
+        hd = get("/resource/heatSources/actualHeatDemand")
+        mode = None
+        if isinstance(hd, dict):
+            vv = hd.get("values") if hd.get("values") is not None else hd.get("value")
+            if isinstance(vv, list):
+                mode = str(vv[0]) if vv else "off"
+            elif isinstance(vv, str):
+                mode = vv or "off"
+        out["mode"] = mode or "off"
         return out
 
     def raw(self, gateway_id: str, resource_path: str):
