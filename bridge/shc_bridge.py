@@ -723,9 +723,10 @@ def compute_hp_analytics(store: Store, days: int, price: float,
                       "cop": round(h / e, 2) if e > 0 else None,
                       "cost": round(e * price, 2)})
 
-    # hourly electrical-power profile + 7x24 heatmap (W)
+    # hourly electrical-power profile + 7x24 heatmap (W), plus per-month heatmaps
     hour_power = {h: [] for h in range(24)}
     hw_power: dict[tuple[int, int], list[float]] = {}
+    hw_month: dict[str, dict[tuple[int, int], list[float]]] = {}
     outdoor_hour = {h: [] for h in range(24)}
     for s in rows:
         if s.get("power_w") is None:
@@ -733,6 +734,8 @@ def compute_hp_analytics(store: Store, days: int, price: float,
         dt = datetime.fromtimestamp(s["ts"])
         hour_power[dt.hour].append(s["power_w"])
         hw_power.setdefault((dt.weekday(), dt.hour), []).append(s["power_w"])
+        hw_month.setdefault(dt.strftime("%Y-%m"), {}).setdefault(
+            (dt.weekday(), dt.hour), []).append(s["power_w"])
         if s.get("outdoor_c") is not None:
             outdoor_hour[dt.hour].append(s["outdoor_c"])
     hourly_profile = [{"hour": h,
@@ -740,8 +743,12 @@ def compute_hp_analytics(store: Store, days: int, price: float,
                        "avg_outdoor": round(sum(outdoor_hour[h]) / len(outdoor_hour[h]), 1)
                        if outdoor_hour[h] else None}
                       for h, v in hour_power.items()]
-    heatmap = [[round(sum(hw_power.get((wd, h), [])) / len(hw_power[(wd, h)]), 1)
-                if hw_power.get((wd, h)) else 0.0 for h in range(24)] for wd in range(7)]
+
+    def _grid(hw):
+        return [[round(sum(hw.get((wd, h), [])) / len(hw[(wd, h)]), 1)
+                 if hw.get((wd, h)) else 0.0 for h in range(24)] for wd in range(7)]
+    heatmap = _grid(hw_power)
+    heatmap_monthly = {m: _grid(hw_month[m]) for m in sorted(hw_month)}
 
     # monthly totals (electrical + thermal kWh) – the "monatliche Wärmekarte"
     month_e: dict[str, float] = {}
@@ -760,8 +767,10 @@ def compute_hp_analytics(store: Store, days: int, price: float,
     today_e = round(elec_day.get(today, 0.0), 3)
     today_h = round(heat_day.get(today, 0.0), 3)
 
-    complete = daily[1:-1] if len(daily) > 2 else daily
-    e_vals = [d["elec_kwh"] for d in complete] or [0.0]
+    # robust daily average: trim first/last partial day only when we have enough
+    complete = daily[1:-1] if len(daily) > 3 else daily
+    e_vals = [d["elec_kwh"] for d in complete if d["elec_kwh"] > 0] or \
+        [d["elec_kwh"] for d in daily if d["elec_kwh"] > 0] or [0.0]
     avg_e = sum(e_vals) / len(e_vals)
     tot_e = sum(elec_day.values())
     tot_h = sum(heat_day.values())
@@ -802,6 +811,7 @@ def compute_hp_analytics(store: Store, days: int, price: float,
         "monthly": monthly,
         "hourly_profile": hourly_profile,
         "heatmap": heatmap,
+        "heatmap_monthly": heatmap_monthly,
         "stats": {
             "avg_daily_elec_kwh": round(avg_e, 3),
             "window_elec_kwh": round(tot_e, 1),
@@ -1390,6 +1400,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._post_device_name(body)
             if parsed.path == "/api/homecom/connect":
                 return self._post_homecom_connect(body)
+            if parsed.path == "/api/update":
+                return self._post_update(body)
             return self._send_json({"error": "unknown endpoint"}, 404)
         except Exception as exc:
             return self._send_json({"error": str(exc)}, 500)
@@ -1529,6 +1541,43 @@ class Handler(BaseHTTPRequestHandler):
                                 "message": "HomeCom verbunden." + (
                                     f" Wärmepumpe: {gateway}" if gateway else
                                     " Keine Wärmepumpe gefunden.")})
+
+    def _post_update(self, body):
+        """Pull the latest code (git) and restart the bridge in place.
+
+        For the user's own local bridge on the home network: lets them update
+        from the phone app with one tap. Runs `git pull` in the repo, then
+        re-execs this process a moment later so the response can still flush.
+        """
+        repo = os.path.dirname(HERE)
+        if not os.path.isdir(os.path.join(repo, ".git")):
+            return self._send_json(
+                {"ok": False, "error": "Kein Git-Repository – Update nur bei einer "
+                 "git-Installation möglich. Bitte manuell aktualisieren."}, 200)
+        try:
+            out = subprocess.run(["git", "-C", repo, "pull", "--ff-only"],
+                                 capture_output=True, text=True, timeout=60)
+        except Exception as exc:
+            return self._send_json({"ok": False, "error": f"git pull fehlgeschlagen: {exc}"}, 200)
+        log = (out.stdout or "") + (out.stderr or "")
+        if out.returncode != 0:
+            return self._send_json({"ok": False, "error": "git pull fehlgeschlagen.",
+                                    "output": log.strip()}, 200)
+        changed = "Already up to date" not in log and "Bereits aktuell" not in log
+
+        def _restart():
+            time.sleep(1.2)
+            try:
+                os.execv(sys.executable, [sys.executable] + sys.argv)
+            except Exception as exc:  # pragma: no cover
+                print(f"[update] restart failed: {exc}", file=sys.stderr)
+        if changed:
+            threading.Thread(target=_restart, daemon=True).start()
+        return self._send_json({
+            "ok": True, "changed": changed, "output": log.strip(),
+            "message": ("Aktualisiert – die Bridge startet neu. Bitte in ein paar "
+                        "Sekunden die Seite neu laden." if changed
+                        else "Bereits auf dem neuesten Stand.")})
 
     # -- REST API ---------------------------------------------------------- #
     def _api(self, path, qs):

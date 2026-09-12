@@ -220,7 +220,12 @@
       <button data-d="14" class="on">14 T</button>
       <button data-d="30">30 T</button>
       <button data-d="90">90 T</button>
-      <button data-d="365">1 J</button>
+      <button data-d="year">Jahr</button>
+      <button data-d="custom">Zeitraum</button>
+    </div>
+    <div id="hist-custom" hidden style="display:flex; gap:8px; margin:-4px 0 12px">
+      <div style="flex:1"><label>Von</label><input id="hist-from" type="date"></div>
+      <div style="flex:1"><label>Bis</label><input id="hist-to" type="date"></div>
     </div>
     <div class="grid2">
       <div class="kpi"><div class="v" id="h-avg">–</div><div class="l">Ø gesamt / Tag</div></div>
@@ -295,8 +300,13 @@
       </div>
     </div>
     <div class="card">
-      <h2>Wärmekarte · Wochentag × Stunde (elektr. W)</h2>
+      <h2>Wärmekarte <span class="r"><select id="hp-heat-month" style="width:auto; padding:4px 8px; margin:0; font-size:12px"><option value="">Gesamt</option></select></span></h2>
       <div id="hp-heat"></div>
+      <div class="note" id="hp-heat-note" style="margin-top:8px">Wochentag × Stunde · Ø elektrische Leistung (W). Leere Zellen sind mit dem Stunden-Durchschnitt gefüllt.</div>
+    </div>
+    <div class="card">
+      <h2>Prognose Wärmepumpe</h2>
+      <div id="hp-forecast"></div>
     </div>
   </section>
 
@@ -314,6 +324,10 @@
     <div class="card">
       <h2>Wärmekarte · Wochentag × Stunde (W)</h2>
       <div id="chart-heat"></div>
+    </div>
+    <div class="card">
+      <h2>Einblicke & Muster</h2>
+      <div id="profile-insights"></div>
     </div>
   </section>
 
@@ -461,11 +475,17 @@
     </div>
 
     <div class="card">
-      <h2>App aktualisieren</h2>
+      <h2>Aktualisieren</h2>
       <div class="note" style="margin-bottom:6px">
-        Falls Änderungen nicht ankommen oder Elemente „hängen": Cache leeren und frisch laden.
+        <b>Bridge aktualisieren</b> holt den neuesten Code (git pull) und startet die
+        Bridge neu – so bekommst du neue Funktionen ohne den Mac anzufassen.
       </div>
-      <button class="btn" id="hard-refresh">🔄 Cache leeren &amp; neu laden</button>
+      <button class="btn" id="bridge-update">⬇️ Bridge aktualisieren &amp; neu starten</button>
+      <div class="note" id="bridge-update-note" style="margin:10px 0 14px"></div>
+      <div class="note" style="margin-bottom:6px">
+        Falls die App-Oberfläche „hängt" oder alt aussieht: Cache leeren und frisch laden.
+      </div>
+      <button class="btn sec" id="hard-refresh">🔄 App-Cache leeren &amp; neu laden</button>
       <div class="note" id="version-note" style="margin-top:10px"></div>
     </div>
 

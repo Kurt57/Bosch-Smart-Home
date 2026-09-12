@@ -12,7 +12,7 @@ const MON = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Ok
 const COL = { sh: '#4da3ff', hp: '#ef6c4d', heat: '#f6b93b', away: '#ff6b8a' };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-11 · Energiemanagement + PV-Planer';
+const APP_VERSION = '2026-09-12 · Historie-Fill, Prognosen, Selbst-Update';
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -34,7 +34,7 @@ let STATE = {
   base: localStorage.getItem(LS.base) || '',
   price: parseFloat(localStorage.getItem(LS.price) || '0.35'),
   demo: localStorage.getItem(LS.demo) === '1',
-  histDays: 14,
+  histSel: '14',
   ov: null,       // /api/overview (combined)
   hpA: null,      // /api/heatpump/analytics
   data: null,     // /api/analytics (Smart Home, for profile + shares)
@@ -54,6 +54,88 @@ function longDay(s) { const d = new Date(s + 'T00:00'); return WD[(d.getDay() + 
 function round(n, d) { const f = 10 ** d; return Math.round(n * f) / f; }
 function mean(a) { return a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0; }
 function dayOfYear(dt) { const s = new Date(dt.getFullYear(), 0, 0); return Math.floor((dt - s) / 86400000); }
+const DIM = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+/* ----------------------------------------------------- seasonality & fills */
+// Per-month day factors that average to ~1 over the year, so
+// avg_daily × factor[month] estimates a seasonally realistic day.
+function shDayFactor(m) { return 1 + 0.18 * Math.cos(2 * Math.PI * m / 12); } // lighting: winter↑
+let _hpF = null;
+function hpDayFactor(m) {
+  // heat-pump seasonality, softened: ~45 % is flat (hot water), ~55 % heating.
+  if (!_hpF) { const hs = normFrac(HP_SEASON); _hpF = hs.map((v, i) => 0.45 + 0.55 * v * 365 / DIM[i]); }
+  return _hpF[m];
+}
+// Smart-Home annual daily average, preferring the lifetime meter (robust when thin).
+function shAvgDaily() {
+  const d = STATE.data; if (!d) return 0;
+  if (d.counter_estimate && d.counter_estimate.avg_daily_kwh > 0) return d.counter_estimate.avg_daily_kwh;
+  if (d.stats && d.stats.avg_daily_kwh > 0) return d.stats.avg_daily_kwh;
+  const v = (d.daily || []).map(x => x.kwh).filter(x => x > 0);
+  return v.length ? v.reduce((a, b) => a + b, 0) / v.length : 0;
+}
+// Mean of the measured heat-pump days (a specific season) …
+function hpMeasuredMean() {
+  const a = STATE.hpA; if (!a) return 0;
+  if (a.stats && a.stats.avg_daily_elec_kwh > 0) return a.stats.avg_daily_elec_kwh;
+  const v = (a.daily || []).map(x => x.elec_kwh).filter(x => x > 0);
+  return v.length ? v.reduce((a2, b) => a2 + b, 0) / v.length : 0;
+}
+// … anchored to that season so the ANNUAL daily mean is consistent.
+function measuredMonths() {
+  const ms = new Set();
+  ((STATE.ov && STATE.ov.combined_daily) || []).forEach(d => { if (d.heatpump_kwh > 0) ms.add(+d.day.slice(5, 7) - 1); });
+  return [...ms];
+}
+function hpRefFactor() { const ms = measuredMonths(); return ms.length ? (mean(ms.map(hpDayFactor)) || 1) : 1; }
+function hpAvgDaily() { const ref = hpRefFactor(); const mm = hpMeasuredMean(); return ref > 0 ? mm / ref : mm; }
+// Complete per-day series over [from,to]; real where measured, else a
+// seasonally-scaled average (flagged estimated). Capped to keep it light.
+function filledDaily(from, to) {
+  const shReal = {}, hpReal = {};
+  ((STATE.ov && STATE.ov.combined_daily) || []).forEach(d => {
+    shReal[d.day] = d.smarthome_kwh; hpReal[d.day] = d.heatpump_kwh;
+  });
+  const shA = shAvgDaily(), hpA = hpAvgDaily();
+  const out = [];
+  const t = new Date(from.getFullYear(), from.getMonth(), from.getDate());
+  const end = new Date(to.getFullYear(), to.getMonth(), to.getDate());
+  let guard = 0;
+  while (t <= end && guard++ < 800) {
+    const key = localKey(t), m = t.getMonth();
+    const hasSh = shReal[key] != null, hasHp = hpReal[key] != null;
+    const sh = hasSh ? shReal[key] : shA * shDayFactor(m);
+    const hp = hasHp ? hpReal[key] : hpA * hpDayFactor(m);
+    out.push({ day: key, sh, hp, total: sh + hp, estimated: !(hasSh || hasHp) });
+    t.setDate(t.getDate() + 1);
+  }
+  return out;
+}
+// Aggregate a filled daily series to months (for long spans).
+function aggregateMonths(filled) {
+  const map = {};
+  filled.forEach(d => {
+    const m = d.day.slice(0, 7);
+    (map[m] = map[m] || { sh: 0, hp: 0, est: 0, n: 0 });
+    map[m].sh += d.sh; map[m].hp += d.hp; map[m].n++; if (d.estimated) map[m].est++;
+  });
+  return Object.keys(map).sort().map(m => ({
+    key: m, label: MON[+m.slice(5) - 1], sh: map[m].sh, hp: map[m].hp,
+    total: map[m].sh + map[m].hp, estimated: map[m].est > map[m].n / 2,
+  }));
+}
+// Fill empty (weekday,hour) cells of a 7×24 grid with that hour's column mean,
+// so a sparse heatmap still reads as a complete pattern.
+function fillHeatmap(grid) {
+  if (!grid || !grid.length) return grid;
+  const colMean = [];
+  for (let h = 0; h < 24; h++) {
+    let s = 0, n = 0;
+    for (let wd = 0; wd < 7; wd++) if (grid[wd][h] > 0) { s += grid[wd][h]; n++; }
+    colMean[h] = n ? s / n : 0;
+  }
+  return grid.map(row => row.map((v, h) => v > 0 ? v : colMean[h]));
+}
 
 /* ---------------------------------------------------------------- fetching */
 async function api(path) {
@@ -155,13 +237,14 @@ function stackedBar(rows, series, opts = {}) {
   let bars = '', labels = '';
   rows.forEach((r, i) => {
     const x = pad + i * bw + (bw - iw) / 2;
+    const op = r.estimated ? ' fill-opacity="0.4"' : '';
     let y = base;
     series.forEach(s => {
       const v = Math.max(0, r.values[s.key] || 0);
       if (v <= 0) return;
       const bh = v / max * (base - top);
       y -= bh;
-      bars += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${iw.toFixed(1)}" height="${bh.toFixed(1)}" fill="${s.color}"/>`;
+      bars += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${iw.toFixed(1)}" height="${bh.toFixed(1)}" fill="${s.color}"${op}/>`;
     });
     if (r.label && (n <= 16 || i % Math.ceil(n / 12) === 0))
       labels += `<text class="axis" x="${(x + iw / 2).toFixed(1)}" y="${h - 8}" text-anchor="middle">${r.label}</text>`;
@@ -337,51 +420,61 @@ function renderToday() {
     : '<div class="note">Noch keine Gerätedaten für heute.</div>';
 }
 
+// Resolve the current Verlauf window [from,to] and the display mode.
+function historyWindow() {
+  const sel = STATE.histSel, now = new Date();
+  if (sel === 'year') {
+    return { from: new Date(now.getFullYear(), 0, 1), to: now, mode: 'month', title: 'Strom dieses Jahr pro Monat' };
+  }
+  if (sel === 'custom') {
+    const f = $('hist-from').value, t = $('hist-to').value;
+    let from = f ? new Date(f + 'T00:00') : new Date(now.getTime() - 29 * 86400000);
+    let to = t ? new Date(t + 'T00:00') : now;
+    if (from > to) { const x = from; from = to; to = x; }
+    const span = Math.round((to - from) / 86400000) + 1;
+    return { from, to, mode: span > 62 ? 'month' : 'day', title: 'Strom im Zeitraum' + (span > 62 ? ' pro Monat' : ' pro Tag') };
+  }
+  const d = parseInt(sel, 10) || 14;
+  return { from: new Date(now.getTime() - (d - 1) * 86400000), to: now, mode: 'day', title: 'Strom pro Tag' };
+}
+
 function renderHistory() {
   const ov = STATE.ov, data = STATE.data; if (!ov || !data) return;
-  const days = STATE.histDays;
-  const cd = ov.combined_daily;
   const shHex = COL.sh, hpHex = COL.hp;
+  const win = historyWindow();
+  const filled = filledDaily(win.from, win.to);
+  const anyEst = filled.some(d => d.estimated);
   $('h-daily-legend').innerHTML = legendHtml([
-    { label: 'Smart Home', color: shHex }, { label: 'Wärmepumpe', color: hpHex }]);
+    { label: 'Smart Home', color: shHex }, { label: 'Wärmepumpe', color: hpHex }]
+    .concat(anyEst ? [{ label: 'geschätzt (Ø, saisonal)', color: 'rgba(147,162,196,.5)' }] : []));
 
-  if (days >= 365) {
-    const avgSh = mean(cd.slice(1, -1).map(d => d.smarthome_kwh)) || mean(cd.map(d => d.smarthome_kwh));
-    const avgHp = mean(cd.slice(1, -1).map(d => d.heatpump_kwh)) || mean(cd.map(d => d.heatpump_kwh));
-    const byDay = {}; cd.forEach(d => byDay[d.day] = d);
-    const now = new Date(), months = [];
-    for (let i = 11; i >= 0; i--) {
-      const m = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      const y = m.getFullYear(), mo = m.getMonth(), nd = new Date(y, mo + 1, 0).getDate();
-      let sh = 0, hp = 0, real = 0;
-      for (let dd = 1; dd <= nd; dd++) {
-        const key = `${y}-${String(mo + 1).padStart(2, '0')}-${String(dd).padStart(2, '0')}`;
-        if (byDay[key]) { sh += byDay[key].smarthome_kwh; hp += byDay[key].heatpump_kwh; real++; }
-        else { sh += avgSh; hp += avgHp; }
-      }
-      months.push({ label: MON[mo], values: { sh, hp }, real });
-    }
-    $('h-daily').innerHTML = stackedBar(months, [{ key: 'sh', color: shHex }, { key: 'hp', color: hpHex }], { h: 210 });
-    $('h-daily-title').innerHTML = 'Strom pro Monat · <span class="badge" style="color:#ffb64d;border-color:#6b551f">grau = geschätzt</span>';
-    $('h-daily-note').hidden = false;
-    $('h-daily-note').innerHTML = `Monate ohne Messung sind mit deinem aktuellen Ø ` +
-      `<b>${kwh(avgSh + avgHp, 2)}/Tag</b> geschätzt und werden durch echte Werte ersetzt.`;
-    $('h-avg').innerHTML = kwh(avgSh + avgHp, 2);
-    $('h-max').innerHTML = kwh((avgSh + avgHp) * 365, 0); $('h-max-l').textContent = 'Jahr (geschätzt)';
-  } else {
-    const w = cd.slice(-days);
+  if (win.mode === 'month') {
+    const months = aggregateMonths(filled);
     $('h-daily').innerHTML = stackedBar(
-      w.map(d => ({ label: shortDay(d.day), values: { sh: d.smarthome_kwh, hp: d.heatpump_kwh } })),
+      months.map(m => ({ label: m.label, estimated: m.estimated, values: { sh: m.sh, hp: m.hp } })),
       [{ key: 'sh', color: shHex }, { key: 'hp', color: hpHex }], { h: 210 });
-    const tot = w.map(d => d.total_kwh);
+    const tot = months.map(m => m.total);
+    $('h-avg').innerHTML = kwh(mean(months.map(m => m.total / 30.4)), 2);
+    $('h-max').innerHTML = kwh(Math.max(0, ...tot), 0); $('h-max-l').textContent = 'Stärkster Monat';
+  } else {
+    $('h-daily').innerHTML = stackedBar(
+      filled.map(d => ({ label: shortDay(d.day), estimated: d.estimated, values: { sh: d.sh, hp: d.hp } })),
+      [{ key: 'sh', color: shHex }, { key: 'hp', color: hpHex }], { h: 210 });
+    const tot = filled.map(d => d.total);
     $('h-avg').innerHTML = kwh(mean(tot), 2);
     $('h-max').innerHTML = kwh(Math.max(0, ...tot), 2); $('h-max-l').textContent = 'Höchster Tag';
-    $('h-daily-title').textContent = 'Strom pro Tag';
-    $('h-daily-note').hidden = true;
+  }
+  $('h-daily-title').textContent = win.title;
+  $('h-daily-note').hidden = !anyEst;
+  if (anyEst) {
+    const realN = filled.filter(d => !d.estimated).length;
+    $('h-daily-note').innerHTML = `<b>${realN}</b> von ${filled.length} Tagen sind gemessen; ` +
+      `blasse Balken sind aus deinem bisherigen Verbrauch hochgerechnet und <b>saisonal verteilt</b> ` +
+      `(Wärmepumpe im Winter mehr, im Sommer weniger). Echte Messungen ersetzen die Schätzung automatisch.`;
   }
 
-  // cumulative share over the window: per Smart-Home device + heat pump
-  const winKeys = new Set(cd.slice(-Math.min(days, cd.length)).map(d => d.day));
+  // cumulative share over the (measured) window: per Smart-Home device + heat pump
+  const winKeys = new Set(filled.map(d => d.day));
   const pdd = data.per_device_day || {};
   const names = {}; (data.live.devices || []).forEach(d => names[d.id] = devLabel(d).title);
   const shares = [];
@@ -389,13 +482,14 @@ function renderHistory() {
     let s = 0; for (const day in pdd[id]) if (winKeys.has(day)) s += pdd[id][day];
     if (s > 0) shares.push({ label: names[id] || id, kwh: s, color: COL.sh });
   });
-  const hpWin = cd.slice(-Math.min(days, cd.length)).reduce((a, d) => a + d.heatpump_kwh, 0);
+  const hpByDay = {}; ((ov.combined_daily) || []).forEach(d => hpByDay[d.day] = d.heatpump_kwh);
+  let hpWin = 0; winKeys.forEach(k => { if (hpByDay[k]) hpWin += hpByDay[k]; });
   if (hpWin > 0) shares.push({ label: 'Wärmepumpe', kwh: hpWin, color: COL.hp });
   shares.sort((a, b) => b.kwh - a.kwh);
   const totShare = shares.reduce((a, s) => a + s.kwh, 0) || 1;
   $('h-share').innerHTML = shares.length
-    ? shares.map(s => devRow(s.label, (s.kwh / totShare * 100).toFixed(0) + ' % im Zeitraum', kwh(s.kwh, 1), '', s.kwh / totShare * 100, s.color)).join('')
-    : '<div class="note">Noch keine Daten.</div>';
+    ? shares.map(s => devRow(s.label, (s.kwh / totShare * 100).toFixed(0) + ' % (gemessen)', kwh(s.kwh, 1), '', s.kwh / totShare * 100, s.color)).join('')
+    : '<div class="note">Noch keine gemessenen Daten im Zeitraum.</div>';
 
   // away detection (Smart Home)
   const A = data.away;
@@ -403,21 +497,31 @@ function renderHistory() {
   const pres = data.daily.slice(-30).map(d => ({
     v: Math.max(0.02, d.presence ?? 0), color: d.likely_away ? COL.away : COL.sh, label: shortDay(d.day),
   }));
-  $('h-presence').innerHTML = barChart(pres, { h: 180 });
+  $('h-presence').innerHTML = pres.length ? barChart(pres, { h: 180 })
+    : '<div class="note">Noch keine Tage zur Anwesenheits-Analyse.</div>';
   const list = data.daily.filter(d => d.likely_away);
   $('h-away-list').innerHTML = list.length
     ? list.map(d => `<span class="badge away-b" style="margin:3px 4px 3px 0;display:inline-block">${longDay(d.day)}</span>`).join('')
     : '<div class="note">Keine eindeutig abwesenden Tage erkannt.</div>';
 
-  // combined forecast & insights
-  const S = data.stats, hpS = STATE.hpA.stats;
+  // seasonal forecast & insights
+  const S = data.stats, price = STATE.price;
+  const m = new Date().getMonth();
+  const shYear = shAvgDaily() * 365, hpYear = hpAvgDaily() * 365;
+  const shMonth = shAvgDaily() * shDayFactor(m) * DIM[m];
+  const hpMonth = hpAvgDaily() * hpDayFactor(m) * DIM[m];
+  const winterM = 0, summerM = 6; // Jan vs Jul illustration for the heat pump
   const standbyYear = data.baseline_w * 24 * 365 / 1000;
   $('h-insights').innerHTML = [
-    ['Hochrechnung / Jahr', `${kwh(ov.estimate.year_kwh, 0)} · ${money(ov.estimate.year_cost)}`],
-    ['davon Wärmepumpe', hpS.year_estimate_kwh ? `${kwh(hpS.year_estimate_kwh, 0)} · ${money(hpS.year_estimate_cost)}` : '–'],
-    ['davon Smart Home', `${kwh(S.year_estimate_kwh, 0)} · ${money(S.year_estimate_cost)}`],
+    ['Hochrechnung / Jahr', `${kwh(shYear + hpYear, 0)} · ${money((shYear + hpYear) * price)}`],
+    ['davon Wärmepumpe', hpYear > 0 ? `${kwh(hpYear, 0)} · ${money(hpYear * price)}` : '–'],
+    ['davon Smart Home', `${kwh(shYear, 0)} · ${money(shYear * price)}`],
+    [`Prognose ${MON[m]} (saisonal)`, `${kwh(shMonth + hpMonth, 0)} · ${money((shMonth + hpMonth) * price)}`],
+    ['Wärmepumpe Winter vs. Sommer', hpAvgDaily() > 0
+      ? `${kwh(hpAvgDaily() * hpDayFactor(winterM) * 31, 0)} (Jan) ↔ ${kwh(hpAvgDaily() * hpDayFactor(summerM) * 31, 0)} (Jul)`
+      : '–'],
     ['Grundlast Smart Home / Jahr', `${kwh(standbyYear, 0)} · ${(S.standby_share * 100).toFixed(0)} %`],
-    ['Vermutete Abwesenheit', `${A.count} Tage · ~${money(A.count * S.day_avg_cost)}`],
+    ['Vermutete Abwesenheit', `${A.count} Tage · ~${money(A.count * (S.day_avg_cost || 0))}`],
   ].map(([k, v]) => statusRow(k, v)).join('');
 }
 
@@ -515,21 +619,74 @@ function renderHeatpump() {
     [{ key: 'e', color: COL.hp }, { key: 'h', color: COL.heat }], { h: 180 })
     : '<div class="note">Noch keine vollen Monate.</div>';
 
-  const hasHeat = (A.heatmap || []).some(r => r.some(v => v > 0));
-  $('hp-heat').innerHTML = hasHeat ? heatmap(A.heatmap) : '<div class="note">Noch keine Wärmekarte-Daten.</div>';
+  // heatmap with month selector; empty cells filled with the hour average
+  const hm = A.heatmap_monthly || {};
+  const sel = $('hp-heat-month');
+  if (sel) {
+    const want = sel.value;
+    const opts = ['<option value="">Gesamt</option>'].concat(
+      Object.keys(hm).sort().map(k => {
+        const mi = +k.slice(5) - 1;
+        return `<option value="${k}"${k === want ? ' selected' : ''}>${MON[mi]} ${k.slice(0, 4)}</option>`;
+      }));
+    sel.innerHTML = opts.join('');
+    const grid = want && hm[want] ? hm[want] : A.heatmap;
+    const has = (grid || []).some(r => r.some(v => v > 0));
+    $('hp-heat').innerHTML = has ? heatmap(fillHeatmap(grid)) : '<div class="note">Für diesen Zeitraum noch keine Daten.</div>';
+  }
+
+  // seasonal forecast for the heat pump
+  const hpA = hpAvgDaily(), mo = new Date().getMonth();
+  if (hpA > 0) {
+    const winter = hpA * hpDayFactor(0) * 31, summer = hpA * hpDayFactor(6) * 31;
+    $('hp-forecast').innerHTML = [
+      ['Voraussichtl. Strom / Jahr', `${kwh(hpA * 365, 0)} · ${money(hpA * 365 * STATE.price)}`],
+      [`Prognose ${MON[mo]} (saisonal)`, `${kwh(hpA * hpDayFactor(mo) * DIM[mo], 0)} · ${money(hpA * hpDayFactor(mo) * DIM[mo] * STATE.price)}`],
+      ['Heizsaison (Jan) vs. Sommer (Jul)', `${kwh(winter, 0)} ↔ ${kwh(summer, 0)} pro Monat`],
+      ['Ø Arbeitszahl', A.stats.seasonal_cop != null ? fmt(A.stats.seasonal_cop, 2) : '–'],
+    ].map(([k, v]) => statusRow(k, v)).join('');
+  } else {
+    $('hp-forecast').innerHTML = '<div class="note">Prognose erscheint, sobald die Wärmepumpe ein paar Tage Daten geliefert hat.</div>';
+  }
 }
 
 /* --------------------------------------------------------------- profile */
 function renderProfile() {
   const data = STATE.data; if (!data) return;
-  const hp = data.hourly_profile.map(h => ({ v: h.avg_w, label: h.hour % 3 === 0 ? h.hour + '' : '' }));
-  $('chart-hourly').innerHTML = areaChart(hp, { h: 190 });
-  const peak = data.hourly_profile.reduce((a, b) => b.avg_w > a.avg_w ? b : a);
-  const low = data.hourly_profile.reduce((a, b) => b.avg_w < a.avg_w ? b : a);
+  const prof = data.hourly_profile;
+  $('chart-hourly').innerHTML = areaChart(prof.map(h => ({ v: h.avg_w, label: h.hour % 3 === 0 ? h.hour + '' : '' })), { h: 190 });
+  const peak = prof.reduce((a, b) => b.avg_w > a.avg_w ? b : a);
+  const low = prof.reduce((a, b) => b.avg_w < a.avg_w ? b : a);
   $('profile-note').innerHTML = `Höchste Ø-Leistung um <b>${peak.hour}:00 Uhr</b> (${fmt(peak.avg_w, 1)} W), ` +
     `niedrigste um <b>${low.hour}:00 Uhr</b>. Typische Aktivitätszeiten im Haushalt.`;
   $('chart-weekday').innerHTML = barChart(data.weekday_profile.map(w => ({ v: w.avg_kwh, label: WD[w.weekday] })), { h: 170 });
-  $('chart-heat').innerHTML = data.heatmap ? heatmap(data.heatmap) : '<div class="note">Keine Heatmap-Daten.</div>';
+  $('chart-heat').innerHTML = data.heatmap ? heatmap(fillHeatmap(data.heatmap)) : '<div class="note">Keine Heatmap-Daten.</div>';
+
+  // insights & patterns (guarded against thin data)
+  const sumRange = (a, b) => prof.filter(h => h.hour >= a && h.hour < b).reduce((s, h) => s + h.avg_w, 0);
+  const morning = sumRange(6, 12), afternoon = sumRange(12, 18), evening = sumRange(18, 24), night = sumRange(0, 6);
+  const dayTot = morning + afternoon + evening + night || 1;
+  const share = v => (v / dayTot * 100).toFixed(0) + ' %';
+  const wkAll = data.weekday_profile, wk = wkAll.filter(w => w.avg_kwh > 0);
+  const weekdayVals = wkAll.filter(w => w.weekday < 5 && w.avg_kwh > 0).map(w => w.avg_kwh);
+  const weekendVals = wkAll.filter(w => w.weekday >= 5 && w.avg_kwh > 0).map(w => w.avg_kwh);
+  const m = new Date().getMonth();
+  const season = m <= 1 || m === 11 ? 'Winter' : m <= 4 ? 'Frühling' : m <= 7 ? 'Sommer' : 'Herbst';
+  const rows = [['Tagesphasen', `Morgens ${share(morning)} · Mittags ${share(afternoon)} · Abends ${share(evening)} · Nachts ${share(night)}`]];
+  if (wk.length >= 2) {
+    const busiest = wk.reduce((a, b) => b.avg_kwh > a.avg_kwh ? b : a);
+    const calmest = wk.reduce((a, b) => b.avg_kwh < a.avg_kwh ? b : a);
+    rows.push(['Aktivster / ruhigster Tag', `${WD[busiest.weekday]} (${kwh(busiest.avg_kwh, 2)}) ↔ ${WD[calmest.weekday]} (${kwh(calmest.avg_kwh, 2)})`]);
+  }
+  if (weekdayVals.length && weekendVals.length) {
+    const wa = mean(weekdayVals), we = mean(weekendVals);
+    rows.push(['Werktag vs. Wochenende', `${kwh(wa, 2)} ↔ ${kwh(we, 2)}` + (we > wa ? ' – am Wochenende mehr' : ' – unter der Woche mehr')]);
+  }
+  rows.push(['Verbrauchs-Spitze', `${peak.hour}:00 Uhr – flexible Verbraucher (Waschen, Laden) eher in die günstige Nacht/Mittagszeit legen`]);
+  rows.push(['Jahreszeit', `${season}: ` + (m <= 1 || m >= 10
+    ? 'mehr Licht & Heizung – der Verbrauch liegt jetzt über dem Jahresmittel'
+    : m >= 5 && m <= 7 ? 'wenig Licht, wenig Heizung – meist unter dem Jahresmittel' : 'Übergangszeit, nahe am Mittel')]);
+  $('profile-insights').innerHTML = rows.map(([k, v]) => statusRow(k, v)).join('');
 }
 
 /* -------------------------------------------------------------- PV planner */
@@ -566,8 +723,8 @@ function simulatePv(p) {
   const hpProf = (STATE.hpA && STATE.hpA.hourly_profile) || [];
   const hpShape = hpProf.length && hpProf.some(h => h.avg_w > 0)
     ? normFrac(hpProf.map(h => h.avg_w)) : new Array(24).fill(1 / 24);
-  const shDaily = (STATE.data && STATE.data.stats && STATE.data.stats.avg_daily_kwh) || 0;
-  const hpDaily = (STATE.hpA && STATE.hpA.stats && STATE.hpA.stats.avg_daily_elec_kwh) || 0;
+  const shDaily = shAvgDaily();
+  const hpDaily = hpAvgDaily();
   const hpAnnual = hpDaily * 365;
   const pvShare = normFrac(PV_MONTH), hpSeas = normFrac(HP_SEASON);
   let Y = 0, S = 0, F = 0, G = 0, L = 0, repDay = null;
@@ -755,6 +912,28 @@ async function doHomecomConnect() {
   btn.disabled = false;
 }
 
+async function doBridgeUpdate() {
+  const note = $('bridge-update-note'), btn = $('bridge-update');
+  btn.disabled = true; note.textContent = 'Hole neuesten Code & starte neu …';
+  try {
+    const r = await postJSON('/api/update', {});
+    if (r.ok && r.changed) {
+      note.innerHTML = '✅ ' + esc(r.message);
+      // the bridge re-execs; wait, then hard-reload fresh code
+      setTimeout(hardRefresh, 6000);
+      return; // keep button disabled while restarting
+    } else if (r.ok) {
+      note.innerHTML = 'ℹ️ ' + esc(r.message || 'Bereits aktuell.');
+    } else {
+      note.innerHTML = '⚠︎ ' + esc(r.error || 'Update fehlgeschlagen.') +
+        (r.output ? `<br><small>${esc(r.output)}</small>` : '');
+    }
+  } catch (e) {
+    note.textContent = 'Fehler: ' + e.message + ' – geht nur, wenn die Seite von der Bridge geöffnet ist.';
+  }
+  btn.disabled = false;
+}
+
 async function doDiscover() {
   const note = $('discover-note');
   note.textContent = 'Suche Controller im Netzwerk … (kann ein paar Sekunden dauern)';
@@ -804,10 +983,18 @@ function init() {
   document.querySelectorAll('#nav button').forEach(b => b.addEventListener('click', () => switchView(b.dataset.v)));
   $('hist-range').addEventListener('click', e => {
     const b = e.target.closest('button'); if (!b) return;
-    STATE.histDays = +b.dataset.d;
+    STATE.histSel = b.dataset.d;
     document.querySelectorAll('#hist-range button').forEach(x => x.classList.toggle('on', x === b));
+    const cust = $('hist-custom'); if (cust) cust.hidden = (STATE.histSel !== 'custom');
+    if (STATE.histSel === 'custom') {
+      const now = new Date();
+      if (!$('hist-to').value) $('hist-to').value = localKey(now);
+      if (!$('hist-from').value) $('hist-from').value = localKey(new Date(now.getTime() - 29 * 86400000));
+    }
     renderHistory();
   });
+  ['hist-from', 'hist-to'].forEach(id => { const el = $(id); if (el) el.addEventListener('change', renderHistory); });
+  const hm = $('hp-heat-month'); if (hm) hm.addEventListener('change', renderHeatpump);
   $('save-base').addEventListener('click', () => {
     STATE.base = $('base').value.trim().replace(/\/+$/, '');
     localStorage.setItem(LS.base, STATE.base);
@@ -823,6 +1010,7 @@ function init() {
   $('discover').addEventListener('click', doDiscover);
   $('pair-btn').addEventListener('click', doPair);
   const hr = $('hard-refresh'); if (hr) hr.addEventListener('click', hardRefresh);
+  const bu = $('bridge-update'); if (bu) bu.addEventListener('click', doBridgeUpdate);
   const vn = $('version-note'); if (vn) vn.innerHTML = 'App-Stand: <b>' + APP_VERSION + '</b>';
   const hpl = $('hp-login');
   if (hpl) hpl.addEventListener('click', async () => {
