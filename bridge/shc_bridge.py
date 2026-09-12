@@ -371,6 +371,47 @@ class Store:
         with self.lock:
             return self.conn.execute("SELECT COUNT(*) AS c FROM hp_samples").fetchone()["c"]
 
+    def hp_counter_span(self) -> dict | None:
+        """First and last cumulative counters over the whole observed history –
+        gives a robust daily average even across polling gaps."""
+        with self.lock:
+            first = self.conn.execute(
+                "SELECT ts,energy_kwh,heat_kwh FROM hp_samples WHERE energy_kwh IS NOT NULL"
+                " ORDER BY ts ASC LIMIT 1").fetchone()
+            last = self.conn.execute(
+                "SELECT ts,energy_kwh,heat_kwh FROM hp_samples WHERE energy_kwh IS NOT NULL"
+                " ORDER BY ts DESC LIMIT 1").fetchone()
+        if not first or not last or last["ts"] <= first["ts"]:
+            return None
+        return {"first_ts": first["ts"], "last_ts": last["ts"],
+                "first_e": first["energy_kwh"], "last_e": last["energy_kwh"],
+                "first_h": first["heat_kwh"], "last_h": last["heat_kwh"]}
+
+    def samples_span(self) -> dict | None:
+        """Per-device first/last cumulative energy counters + observed span (s),
+        for a meter-based average when no install date is reported."""
+        with self.lock:
+            rows = self.conn.execute(
+                "SELECT device_id, MIN(ts) AS t0, MAX(ts) AS t1 FROM samples GROUP BY device_id"
+            ).fetchall()
+            if not rows:
+                return None
+            growth = 0.0
+            t0 = min(r["t0"] for r in rows)
+            t1 = max(r["t1"] for r in rows)
+            for r in rows:
+                a = self.conn.execute(
+                    "SELECT energy_wh FROM samples WHERE device_id=? ORDER BY ts ASC LIMIT 1",
+                    (r["device_id"],)).fetchone()
+                b = self.conn.execute(
+                    "SELECT energy_wh FROM samples WHERE device_id=? ORDER BY ts DESC LIMIT 1",
+                    (r["device_id"],)).fetchone()
+                if a and b and b["energy_wh"] >= a["energy_wh"]:
+                    growth += b["energy_wh"] - a["energy_wh"]
+        if t1 <= t0:
+            return None
+        return {"t0": t0, "t1": t1, "growth_wh": growth}
+
     def upsert_device(self, dev: dict, ts: int, energy_start: int | None = None):
         with self.lock, self.conn:
             self.conn.execute(
@@ -590,14 +631,25 @@ def compute_analytics(store: Store, days: int, price: float) -> dict:
         since_days = max(0.5, (now - earliest) / 86400.0)
         c_avg = total_energy_kwh / since_days
         counter = {
-            "since": earliest,
-            "since_days": round(since_days, 1),
-            "total_kwh": round(total_energy_kwh, 3),
-            "avg_daily_kwh": round(c_avg, 3),
+            "since": earliest, "since_days": round(since_days, 1),
+            "total_kwh": round(total_energy_kwh, 3), "avg_daily_kwh": round(c_avg, 3),
             "year_estimate_kwh": round(c_avg * 365, 1),
             "year_estimate_cost": round(c_avg * 365 * price, 2),
-            "month_estimate_kwh": round(c_avg * 30.4, 2),
+            "month_estimate_kwh": round(c_avg * 30.4, 2), "basis": "install",
         }
+    else:
+        # no install date reported → use the meter growth over the observed span
+        span = store.samples_span()
+        if span and span["growth_wh"] > 0:
+            span_days = max(0.5, (span["t1"] - span["t0"]) / 86400.0)
+            c_avg = span["growth_wh"] / 1000.0 / span_days
+            counter = {
+                "since": span["t0"], "since_days": round(span_days, 1),
+                "total_kwh": round(span["growth_wh"] / 1000.0, 3), "avg_daily_kwh": round(c_avg, 3),
+                "year_estimate_kwh": round(c_avg * 365, 1),
+                "year_estimate_cost": round(c_avg * 365 * price, 2),
+                "month_estimate_kwh": round(c_avg * 30.4, 2), "basis": "observed",
+            }
 
     return {
         "generated_at": now,
@@ -779,6 +831,27 @@ def compute_hp_analytics(store: Store, days: int, price: float,
     mode_window = _hp_mode_buckets(rows)
     cop_by_temp = _hp_cop_by_temp(rows)
 
+    # meter-based average over the whole observed history (robust to polling
+    # gaps – the cumulative counter captures energy used while we weren't looking)
+    span = store.hp_counter_span()
+    counter = None
+    if span:
+        span_days = max(0.5, (span["last_ts"] - span["first_ts"]) / 86400.0)
+        e_growth = span["last_e"] - span["first_e"]
+        h_growth = (span["last_h"] - span["first_h"]) \
+            if span["first_h"] is not None and span["last_h"] is not None else None
+        if e_growth >= 0:
+            counter = {
+                "span_days": round(span_days, 1),
+                "elec_growth_kwh": round(e_growth, 1),
+                "heat_growth_kwh": round(h_growth, 1) if h_growth is not None and h_growth >= 0 else None,
+                "avg_daily_elec_kwh": round(e_growth / span_days, 3),
+                "avg_daily_heat_kwh": round(h_growth / span_days, 3)
+                if h_growth is not None and h_growth >= 0 else None,
+                "observed_months": sorted({datetime.fromtimestamp(t).strftime("%Y-%m")
+                                           for t in (span["first_ts"], span["last_ts"])}),
+            }
+
     return {
         "generated_at": now,
         "window_days": days,
@@ -807,6 +880,7 @@ def compute_hp_analytics(store: Store, days: int, price: float,
         "mode_today": mode_today,
         "mode_window": mode_window,
         "cop_by_temp": cop_by_temp,
+        "counter": counter,
         "daily": daily,
         "monthly": monthly,
         "hourly_profile": hourly_profile,

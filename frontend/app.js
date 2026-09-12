@@ -6,13 +6,13 @@
 
 const LS = { base: 'bhe_base', price: 'bhe_price', demo: 'bhe_demo' };
 const PV_LS = { kwp: 'bhe_pv_kwp', orient: 'bhe_pv_orient', batt: 'bhe_pv_batt',
-  feedin: 'bhe_pv_feedin', invest: 'bhe_pv_invest' };
+  feedin: 'bhe_pv_feedin', invest: 'bhe_pv_invest', evkm: 'bhe_pv_evkm', evkwh: 'bhe_pv_evkwh' };
 const WD = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
 const MON = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'];
 const COL = { sh: '#4da3ff', hp: '#ef6c4d', heat: '#f6b93b', away: '#ff6b8a' };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-12 · Historie-Fill, Prognosen, Selbst-Update';
+const APP_VERSION = '2026-09-12 · Zähler-Prognose, PV+E-Auto, Infos';
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -49,6 +49,55 @@ const kwh = (n, d = 1) => fmt(n, d) + ' kWh';
 const eur = (n, d = 2) => fmt(n, d) + ' ' + STATE.cur;
 function money(n) { if (n == null) return '–'; return (n >= 100 ? fmt(n, 0) : fmt(n, 2)) + ' ' + STATE.cur; }
 function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+/* ---------------------------------------------------------- info tooltips */
+const INFO = {
+  wofuer: () => 'Aufteilung des heutigen Stroms nach Quelle. Die Wärmepumpe wird nach ' +
+    '<b>Heizung</b> und <b>Warmwasser</b> getrennt (aus ihrem Betriebsmodus), dazu jedes Smart-Home-Gerät.',
+  'ov-month': () => 'Hochrechnung für den laufenden Monat: dein durchschnittlicher Tagesverbrauch ' +
+    '(Smart Home aus dem Zählerstand, Wärmepumpe aus dem Zählerwachstum) – <b>saisonal</b> für diesen ' +
+    'Monat gewichtet und mit deinem kWh-Preis multipliziert.',
+  fill: () => 'Gemessene Tage werden voll angezeigt. Für Tage <b>ohne</b> Messung (Bridge lief nicht) ' +
+    'wird dein bisheriger Verbrauch <b>saisonal</b> hochgerechnet und blass dargestellt. Echte Messungen ' +
+    'ersetzen die Schätzung automatisch.',
+  forecast: () => 'Jahres-Hochrechnung = Ø-Tagesverbrauch × 365, saisonal verteilt (Wärmepumpe im Winter ' +
+    'mehr). Smart Home aus dem kumulativen Zähler, Wärmepumpe aus dem Zählerwachstum seit Messbeginn.',
+  cop: () => 'COP / Arbeitszahl = erzeugte <b>Wärme ÷ eingesetzter Strom</b>. 3,0 heißt: aus 1 kWh Strom ' +
+    'werden 3 kWh Wärme. Höher = effizienter.',
+  coptemp: () => 'COP je 5-°C-Außentemperatur-Bereich (kumulierte Wärme ÷ Strom). Zeigt, wie die Effizienz ' +
+    'mit dem Wetter schwankt – wärmere Luft ist meist effizienter.',
+  'hp-counter': () => {
+    const c = STATE.hpA && STATE.hpA.counter;
+    if (!c) return 'Prognose der Wärmepumpe aus den gemessenen Betriebsdaten, saisonal aufs Jahr gerechnet. ' +
+      'Für <b>tag-genaue</b> Historie kannst du im Setup eine CSV importieren.';
+    return `Basis: der kumulative Stromzähler wuchs über <b>${fmt(c.span_days, 0)} Tage</b> um ` +
+      `<b>${kwh(c.elec_growth_kwh, 0)}</b> (Ø ${kwh(c.avg_daily_elec_kwh, 1)}/Tag, gemessen im ` +
+      `${(c.observed_months || []).join(', ')}). Das wird <b>saisonal</b> aufs Jahr gerechnet (Winter mehr, ` +
+      `Sommer weniger). Für tag-genaue Historie: CSV-Import im Setup.`;
+  },
+  'pv-sim': () => 'Modellierter Sonnenertrag (nach kWp & Ausrichtung) trifft <b>stündlich</b> auf dein ' +
+    '<b>echtes</b> Lastprofil (Smart Home + Wärmepumpe + optional E-Auto). Eine Batterie speichert Überschuss. ' +
+    'Daraus ergeben sich Eigenverbrauch, Autarkie und Einspeisung.',
+  'pv-quote': () => '<b>Autarkie</b> = Anteil deines Verbrauchs, der durch PV (inkl. Batterie) gedeckt wird. ' +
+    '<b>Eigenverbrauchsquote</b> = Anteil des erzeugten PV-Stroms, den du selbst nutzt statt einzuspeisen.',
+  'pv-suggest': () => 'Vorschlag aus deinem Jahresverbrauch und Tagesprofil: die kWp so, dass der Jahresertrag ' +
+    'etwa deinen Verbrauch deckt; der Speicher grob nach deinem abendlichen Bedarf. Nur ein Startwert – ' +
+    'passe ihn frei an.',
+  'pv-ev': () => 'E-Auto: aus <b>km/Jahr × kWh/100 km</b> wird der Ladebedarf berechnet, auf die Monate ' +
+    'verteilt und – möglichst <b>tagsüber</b> geladen (PV-optimiert) – zum Verbrauch addiert. Das erhöht ' +
+    'sinnvollen Eigenverbrauch. Standard: 18 kWh/100 km.',
+  share: () => 'Anteil je Quelle über die <b>gemessenen</b> Tage im Zeitraum (kumulierte kWh). ' +
+    'Geschätzte Tage zählen hier nicht mit.',
+};
+let _toastT = null;
+function showInfo(key) {
+  const t = $('toast'); if (!t) return;
+  const fn = INFO[key]; if (!fn) return;
+  t.innerHTML = fn() + '<br><small>(tippen zum Schließen)</small>';
+  t.hidden = false;
+  clearTimeout(_toastT); _toastT = setTimeout(() => { t.hidden = true; }, 9000);
+}
+function iBtn(key) { return `<span class="info" data-info="${key}" role="button" aria-label="Info">i</span>`; }
 function shortDay(s) { const d = new Date(s + 'T00:00'); return d.getDate() + '.'; }
 function longDay(s) { const d = new Date(s + 'T00:00'); return WD[(d.getDay() + 6) % 7] + ' ' + d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }); }
 function round(n, d) { const f = 10 ** d; return Math.round(n * f) / f; }
@@ -74,21 +123,38 @@ function shAvgDaily() {
   const v = (d.daily || []).map(x => x.kwh).filter(x => x > 0);
   return v.length ? v.reduce((a, b) => a + b, 0) / v.length : 0;
 }
-// Mean of the measured heat-pump days (a specific season) …
+// Mean daily heat-pump electricity for the measured season. Prefer the
+// meter-growth-over-span figure (robust to polling gaps) over sparse day deltas.
 function hpMeasuredMean() {
   const a = STATE.hpA; if (!a) return 0;
+  if (a.counter && a.counter.avg_daily_elec_kwh > 0) return a.counter.avg_daily_elec_kwh;
   if (a.stats && a.stats.avg_daily_elec_kwh > 0) return a.stats.avg_daily_elec_kwh;
   const v = (a.daily || []).map(x => x.elec_kwh).filter(x => x > 0);
   return v.length ? v.reduce((a2, b) => a2 + b, 0) / v.length : 0;
 }
 // … anchored to that season so the ANNUAL daily mean is consistent.
 function measuredMonths() {
+  const a = STATE.hpA;
+  if (a && a.counter && a.counter.observed_months && a.counter.observed_months.length)
+    return a.counter.observed_months.map(s => +s.slice(5) - 1);
   const ms = new Set();
   ((STATE.ov && STATE.ov.combined_daily) || []).forEach(d => { if (d.heatpump_kwh > 0) ms.add(+d.day.slice(5, 7) - 1); });
   return [...ms];
 }
 function hpRefFactor() { const ms = measuredMonths(); return ms.length ? (mean(ms.map(hpDayFactor)) || 1) : 1; }
 function hpAvgDaily() { const ref = hpRefFactor(); const mm = hpMeasuredMean(); return ref > 0 ? mm / ref : mm; }
+
+// Single source of truth for all forecasts (seasonal, robust averages).
+function annualForecast() {
+  const p = STATE.price, sh = shAvgDaily(), hp = hpAvgDaily();
+  const m = new Date().getMonth();
+  const shMonth = sh * shDayFactor(m) * DIM[m], hpMonth = hp * hpDayFactor(m) * DIM[m];
+  return {
+    shYear: sh * 365, hpYear: hp * 365, year: (sh + hp) * 365, yearCost: (sh + hp) * 365 * p,
+    monthNow: shMonth + hpMonth, monthNowCost: (shMonth + hpMonth) * p,
+    shMonth, hpMonth,
+  };
+}
 // Complete per-day series over [from,to]; real where measured, else a
 // seasonally-scaled average (flagged estimated). Capped to keep it light.
 function filledDaily(from, to) {
@@ -356,8 +422,9 @@ function renderOverview() {
   $('ov-today-cost').textContent = eur(ov.today.cost) + ' · Stand ' + new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
   $('ov-now').textContent = fmt(ov.now.total_w, 0) + ' W';
   $('ov-now-hp').textContent = ov.now.heatpump_w != null ? fmt(ov.now.heatpump_w, 0) + ' W' : '–';
-  $('ov-month').innerHTML = kwh(ov.estimate.month_kwh, 0);
-  $('ov-month-cost').textContent = money(ov.estimate.month_cost);
+  const fc = annualForecast();
+  $('ov-month').innerHTML = kwh(fc.monthNow, 0);
+  $('ov-month-cost').textContent = money(fc.monthNowCost);
 
   const segs = ov.breakdown.filter(b => b.kwh > 0).map(b => ({ label: b.label, value: b.kwh, color: b.color }));
   $('ov-break-sum').textContent = kwh(ov.today.total_kwh, 1);
@@ -366,10 +433,17 @@ function renderOverview() {
     : '<div class="note">Noch keine Verbrauchsdaten für heute.</div>';
   $('ov-legend').innerHTML = legendHtml(segs.slice(0, 8).map(s => ({ label: s.label, color: s.color, sub: kwh(s.value, 2) })));
 
-  const w = ov.combined_daily.slice(-14);
+  const now = new Date();
+  const w = filledDaily(new Date(now.getTime() - 13 * 86400000), now);
   $('ov-daily').innerHTML = stackedBar(
-    w.map(d => ({ label: shortDay(d.day), values: { sh: d.smarthome_kwh, hp: d.heatpump_kwh } })),
+    w.map(d => ({ label: shortDay(d.day), estimated: d.estimated, values: { sh: d.sh, hp: d.hp } })),
     [{ key: 'sh', color: COL.sh }, { key: 'hp', color: COL.hp }], { h: 200 });
+  const estN = w.filter(d => d.estimated).length;
+  const dn = $('ov-daily-note');
+  if (dn) {
+    dn.hidden = estN === 0;
+    if (estN) dn.innerHTML = `Blasse Balken (${estN} Tage) sind geschätzt – die Bridge hatte an diesen Tagen noch keine Messung. Details unter <b>Verlauf</b>.`;
+  }
 
   const card = $('ov-hp-card');
   if (ov.heatpump_connected) {
@@ -520,7 +594,7 @@ function renderHistory() {
     ['Wärmepumpe Winter vs. Sommer', hpAvgDaily() > 0
       ? `${kwh(hpAvgDaily() * hpDayFactor(winterM) * 31, 0)} (Jan) ↔ ${kwh(hpAvgDaily() * hpDayFactor(summerM) * 31, 0)} (Jul)`
       : '–'],
-    ['Grundlast Smart Home / Jahr', `${kwh(standbyYear, 0)} · ${(S.standby_share * 100).toFixed(0)} %`],
+    ['Grundlast Smart Home / Jahr', `${kwh(standbyYear, 1)} · ${(S.standby_share * 100).toFixed(0)} %`],
     ['Vermutete Abwesenheit', `${A.count} Tage · ~${money(A.count * (S.day_avg_cost || 0))}`],
   ].map(([k, v]) => statusRow(k, v)).join('');
 }
@@ -709,14 +783,28 @@ function pvHourFractions(m) {
 }
 
 function pvInputs() {
+  const km = Math.max(0, parseFloat($('pv-ev-km').value) || 0);
+  const per100 = Math.max(0, parseFloat($('pv-ev-kwh').value) || 18);
   return {
     kwp: Math.max(0, parseFloat($('pv-kwp').value) || 0),
     spec: parseFloat($('pv-orient').value) || 1000,
     batt: Math.max(0, parseFloat($('pv-batt').value) || 0),
     feedin: Math.max(0, (parseFloat($('pv-feedin').value) || 0) / 100), // ct → €
     invest: parseFloat($('pv-invest').value) || 0,
+    evAnnual: km * per100 / 100, // kWh/year for the car
   };
 }
+// EV daily charging shape: mostly a broad midday window (PV-optimised), with a
+// smaller evening share (arriving home). Sums to 1 over the day.
+const EV_SHAPE = (() => {
+  const raw = [];
+  for (let h = 0; h < 24; h++) {
+    const mid = Math.exp(-((h + 0.5 - 12.5) ** 2) / (2 * 3.2 * 3.2));   // daytime (solar)
+    const eve = 0.5 * Math.exp(-((h + 0.5 - 19) ** 2) / (2 * 1.8 * 1.8)); // evening arrival
+    raw.push(mid + eve);
+  }
+  return normFrac(raw);
+})();
 
 function simulatePv(p) {
   const shShape = normFrac((STATE.data && STATE.data.hourly_profile || []).map(h => h.avg_w));
@@ -729,10 +817,12 @@ function simulatePv(p) {
   const pvShare = normFrac(PV_MONTH), hpSeas = normFrac(HP_SEASON);
   let Y = 0, S = 0, F = 0, G = 0, L = 0, repDay = null;
   const monthly = [];
+  const evDayBase = p.evAnnual / 365;
   for (let m = 0; m < 12; m++) {
     const days = new Date(2025, m + 1, 0).getDate();
     const dayPv = (p.kwp * p.spec * pvShare[m]) / days;
     const dayHp = hpAnnual * (0.35 * (days / 365) + 0.65 * hpSeas[m]) / days;
+    const dayEv = evDayBase * (1 + 0.12 * Math.cos(2 * Math.PI * m / 12)); // a bit more in winter
     const pvH = pvHourFractions(m);
     let battery = 0, mSelf = 0, mFeed = 0, mGrid = 0, mPv = 0, mLoad = 0;
     let dPv = null, dLoad = null;
@@ -740,7 +830,7 @@ function simulatePv(p) {
       const capturePv = [], captureLoad = [];
       for (let h = 0; h < 24; h++) {
         const pv = dayPv * pvH[h];
-        const load = shDaily * shShape[h] + dayHp * hpShape[h];
+        const load = shDaily * shShape[h] + dayHp * hpShape[h] + dayEv * EV_SHAPE[h];
         const direct = Math.min(pv, load);
         let self = direct;
         const surplus = pv - direct, deficit = load - direct;
@@ -787,7 +877,7 @@ function pvDayChart(pv, load) {
 
 function renderPv() {
   if (!$('pv-yield')) return;
-  const haveData = STATE.data && STATE.data.stats && STATE.data.stats.avg_daily_kwh > 0;
+  const haveData = shAvgDaily() > 0 || hpAvgDaily() > 0;
   if (!haveData) {
     $('pv-yield').textContent = '–'; $('pv-autarky').textContent = '–';
     $('pv-self').textContent = '–'; $('pv-benefit').textContent = '–';
@@ -805,9 +895,10 @@ function renderPv() {
     r.monthly.map(x => ({ label: MON[x.m], values: { pv: x.pv, load: x.load } })),
     [{ key: 'pv', color: COL.heat }, { key: 'load', color: COL.sh }], { h: 200 });
   const cover = r.load_kwh > 0 ? r.yield_kwh / r.load_kwh : 0;
+  const evTxt = p.evAnnual > 0 ? ` inkl. E-Auto (~${kwh(p.evAnnual, 0)}/Jahr)` : '';
   $('pv-monthly-note').innerHTML =
     `Die Anlage erzeugt rechnerisch <b>${kwh(r.yield_kwh, 0)}/Jahr</b> – das entspricht ` +
-    `<b>${fmt(cover * 100, 0)} %</b> deines Jahresverbrauchs (${kwh(r.load_kwh, 0)}). Im Sommer ` +
+    `<b>${fmt(cover * 100, 0)} %</b> deines Jahresverbrauchs (${kwh(r.load_kwh, 0)}${evTxt}). Im Sommer ` +
     `oft Überschuss (Einspeisung), im Winter Zukauf – dann hilft v. a. Eigenverbrauch tagsüber.`;
 
   $('pv-day').innerHTML = r.repDay ? pvDayChart(r.repDay.pv, r.repDay.load)
@@ -912,6 +1003,26 @@ async function doHomecomConnect() {
   btn.disabled = false;
 }
 
+function doPvSuggest() {
+  const note = $('pv-suggest-note');
+  const evAnnual = (Math.max(0, parseFloat($('pv-ev-km').value) || 0) * Math.max(0, parseFloat($('pv-ev-kwh').value) || 18)) / 100;
+  const annualLoad = shAvgDaily() * 365 + hpAvgDaily() * 365 + evAnnual;
+  if (annualLoad <= 0) { note.textContent = 'Noch zu wenig Verbrauchsdaten für einen Vorschlag.'; return; }
+  const spec = parseFloat($('pv-orient').value) || 1000;
+  const dailyLoad = annualLoad / 365;
+  const round5 = v => Math.max(0, Math.round(v * 2) / 2);
+  // size PV so annual yield ≈ annual consumption; battery ≈ half a day's load (capped)
+  const kwp = Math.min(30, Math.max(1, round5(annualLoad / spec)));
+  const batt = Math.min(20, round5(Math.min(dailyLoad * 0.55, kwp * 1.3)));
+  $('pv-kwp').value = kwp; $('pv-batt').value = batt;
+  try { localStorage.setItem(PV_LS.kwp, String(kwp)); localStorage.setItem(PV_LS.batt, String(batt)); } catch (e) {}
+  renderPv();
+  const r = simulatePv(pvInputs());
+  note.innerHTML = `Vorschlag: <b>${fmt(kwp, 1)} kWp</b> + <b>${fmt(batt, 1)} kWh</b> Speicher ` +
+    `(Jahresverbrauch ~${kwh(annualLoad, 0)}). Ergebnis: Autarkie ${fmt(r.autarky * 100, 0)} %, ` +
+    `Eigenverbrauch ${fmt(r.self_rate * 100, 0)} %. Werte sind ein Startpunkt – frei anpassbar.`;
+}
+
 async function doBridgeUpdate() {
   const note = $('bridge-update-note'), btn = $('bridge-update');
   btn.disabled = true; note.textContent = 'Hole neuesten Code & starte neu …';
@@ -981,6 +1092,11 @@ function init() {
   $('base').value = STATE.base;
   $('price').value = STATE.price;
   document.querySelectorAll('#nav button').forEach(b => b.addEventListener('click', () => switchView(b.dataset.v)));
+  document.addEventListener('click', e => {
+    const i = e.target.closest('.info');
+    if (i) { e.stopPropagation(); showInfo(i.dataset.info); return; }
+    const t = $('toast'); if (t && !t.hidden) t.hidden = true;
+  });
   $('hist-range').addEventListener('click', e => {
     const b = e.target.closest('button'); if (!b) return;
     STATE.histSel = b.dataset.d;
@@ -1021,13 +1137,14 @@ function init() {
 
   // PV planner: restore saved inputs, save + recompute on change
   const pvFields = [['pv-kwp', PV_LS.kwp], ['pv-orient', PV_LS.orient], ['pv-batt', PV_LS.batt],
-    ['pv-feedin', PV_LS.feedin], ['pv-invest', PV_LS.invest]];
+    ['pv-feedin', PV_LS.feedin], ['pv-invest', PV_LS.invest], ['pv-ev-km', PV_LS.evkm], ['pv-ev-kwh', PV_LS.evkwh]];
   pvFields.forEach(([id, key]) => {
     const el = $(id); if (!el) return;
     const saved = localStorage.getItem(key);
     if (saved !== null) el.value = saved;
     el.addEventListener('input', () => { try { localStorage.setItem(key, el.value); } catch (e) {} renderPv(); });
   });
+  const pvSug = $('pv-suggest'); if (pvSug) pvSug.addEventListener('click', doPvSuggest);
   $('rename-list').addEventListener('change', async (e) => {
     const inp = e.target.closest('input.rn'); if (!inp) return;
     const id = inp.dataset.id, name = inp.value.trim();

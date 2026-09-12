@@ -124,6 +124,16 @@
   nav button svg{width:21px; height:21px}
   .view{display:none} .view.on{display:block; animation:fade .25s}
   @keyframes fade{from{opacity:0; transform:translateY(6px)}to{opacity:1}}
+  .info{display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px;
+    border-radius:50%; border:1px solid var(--line); background:var(--card2); color:var(--muted);
+    font-size:10px; font-style:italic; font-weight:700; cursor:pointer; vertical-align:middle;
+    margin-left:6px; line-height:1; flex:none}
+  h2 .info{float:right; margin-top:-1px}
+  #toast{position:fixed; left:50%; bottom:calc(84px + var(--safe-b)); transform:translateX(-50%);
+    max-width:560px; width:calc(100% - 28px); z-index:60; background:#0f1830; color:var(--ink);
+    border:1px solid var(--line); border-radius:14px; padding:13px 15px; font-size:13px; line-height:1.5;
+    box-shadow:0 10px 40px rgba(0,0,0,.5)}
+  #toast b{color:var(--ink)} #toast small{color:var(--muted)}
 </style>
 </head>
 <body>
@@ -165,21 +175,22 @@
       </div>
     </div>
     <div class="grid2">
-      <div class="kpi"><div class="v" id="ov-month">–</div><div class="l">Hochrechnung / Monat</div></div>
+      <div class="kpi"><div class="v" id="ov-month">–</div><div class="l">Hochrechnung / Monat <span class="info" data-info="ov-month" role="button" aria-label="Info" style="margin-left:3px">i</span></div></div>
       <div class="kpi"><div class="v" id="ov-month-cost">–</div><div class="l">Kosten / Monat</div></div>
     </div>
     <div class="card">
-      <h2>Wofür heute? <span class="r" id="ov-break-sum"></span></h2>
+      <h2><span class="info" data-info="wofuer" role="button" aria-label="Info">i</span>Wofür heute? <span class="r" id="ov-break-sum"></span></h2>
       <div id="ov-donut"></div>
       <div class="legend" id="ov-legend"></div>
     </div>
     <div class="card">
-      <h2>Letzte 14 Tage · Strom gesamt</h2>
+      <h2><span class="info" data-info="fill" role="button" aria-label="Info">i</span>Letzte 14 Tage · Strom gesamt</h2>
       <div id="ov-daily"></div>
-      <div class="legend">
+      <div class="legend" id="ov-daily-legend">
         <div class="it"><span class="sw" style="background:var(--sh)"></span>Smart Home</div>
         <div class="it"><span class="sw" style="background:var(--hp)"></span>Wärmepumpe</div>
       </div>
+      <div class="note" id="ov-daily-note" style="margin-top:8px" hidden></div>
     </div>
     <div class="card" id="ov-hp-card" hidden>
       <h2>Wärmepumpe <span class="r" id="ov-hp-cop"></span></h2>
@@ -238,7 +249,7 @@
       <div class="note" id="h-daily-note" hidden style="margin-top:10px"></div>
     </div>
     <div class="card">
-      <h2>Anteil je Quelle (kumuliert)</h2>
+      <h2><span class="info" data-info="share" role="button" aria-label="Info">i</span>Anteil je Quelle (kumuliert)</h2>
       <div id="h-share"></div>
     </div>
     <div class="card">
@@ -251,7 +262,7 @@
       <div id="h-away-list" style="margin-top:10px"></div>
     </div>
     <div class="card">
-      <h2>Hochrechnung & Einordnung</h2>
+      <h2><span class="info" data-info="forecast" role="button" aria-label="Info">i</span>Hochrechnung & Einordnung</h2>
       <div id="h-insights"></div>
     </div>
   </section>
@@ -282,12 +293,12 @@
       </div>
     </div>
     <div class="card">
-      <h2>Wirkungsgrad (COP) pro Tag</h2>
+      <h2><span class="info" data-info="cop" role="button" aria-label="Info">i</span>Wirkungsgrad (COP) pro Tag</h2>
       <div id="hp-cop-chart"></div>
       <div class="note" id="hp-cop-note" style="margin-top:10px"></div>
     </div>
     <div class="card">
-      <h2>Effizienz nach Außentemperatur</h2>
+      <h2><span class="info" data-info="coptemp" role="button" aria-label="Info">i</span>Effizienz nach Außentemperatur</h2>
       <div id="hp-coptemp"></div>
       <div class="note" id="hp-coptemp-note" style="margin-top:10px"></div>
     </div>
@@ -305,7 +316,7 @@
       <div class="note" id="hp-heat-note" style="margin-top:8px">Wochentag × Stunde · Ø elektrische Leistung (W). Leere Zellen sind mit dem Stunden-Durchschnitt gefüllt.</div>
     </div>
     <div class="card">
-      <h2>Prognose Wärmepumpe</h2>
+      <h2><span class="info" data-info="hp-counter" role="button" aria-label="Info">i</span>Prognose Wärmepumpe</h2>
       <div id="hp-forecast"></div>
     </div>
   </section>
@@ -334,7 +345,7 @@
   <!-- PV-PLANER ----------------------------------------------------------->
   <section class="view" id="v-pv">
     <div class="card">
-      <h2>☀️ PV-Anlage planen</h2>
+      <h2><span class="info" data-info="pv-sim" role="button" aria-label="Info">i</span>☀️ PV-Anlage planen</h2>
       <div class="note" style="margin-bottom:12px">
         Schätzung auf Basis deines <b>gemessenen</b> Verbrauchsprofils
         (Smart Home + Wärmepumpe). Passe die Werte an – alles wird lokal gespeichert.
@@ -356,12 +367,23 @@
         <div><label>Einspeisung (ct/kWh)</label>
           <input id="pv-feedin" type="number" step="0.1" min="0" inputmode="decimal" value="8.0"></div>
       </div>
+      <div class="grid2" style="margin-top:10px">
+        <div><label>E-Auto: km / Jahr <span class="info" data-info="pv-ev" role="button" aria-label="Info">i</span></label>
+          <input id="pv-ev-km" type="number" min="0" step="500" inputmode="numeric" placeholder="0 = keins"></div>
+        <div><label>E-Auto: kWh / 100 km</label>
+          <input id="pv-ev-kwh" type="number" min="0" step="0.5" inputmode="decimal" value="18"></div>
+      </div>
       <label style="margin-top:10px; display:block">Investition (optional, für Amortisation)</label>
       <input id="pv-invest" type="number" inputmode="numeric" placeholder="z. B. 18000">
+      <button class="btn sec" id="pv-suggest">💡 kWp &amp; Speicher aus meinem Verbrauch vorschlagen</button>
+      <div class="note" id="pv-suggest-note" style="margin-top:8px">
+        <span class="info" data-info="pv-suggest" role="button" aria-label="Info" style="margin-left:0">i</span>
+        Vorschlag aus deinem Jahresverbrauch & Profil.
+      </div>
     </div>
     <div class="grid2">
       <div class="kpi"><div class="v" id="pv-yield">–</div><div class="l">PV-Ertrag / Jahr</div></div>
-      <div class="kpi"><div class="v" id="pv-autarky">–</div><div class="l">Autarkie (Bedarf gedeckt)</div></div>
+      <div class="kpi"><div class="v" id="pv-autarky">–</div><div class="l">Autarkie <span class="info" data-info="pv-quote" role="button" aria-label="Info" style="margin-left:3px">i</span></div></div>
       <div class="kpi"><div class="v" id="pv-self">–</div><div class="l">Eigenverbrauchsquote</div></div>
       <div class="kpi"><div class="v" id="pv-benefit">–</div><div class="l">Ersparnis / Jahr</div></div>
     </div>
@@ -521,6 +543,7 @@
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></svg>Setup</button>
 </nav>
 
+<div id="toast" hidden></div>
 <script src="app.js"></script>
 </body>
 </html>
