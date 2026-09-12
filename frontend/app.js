@@ -12,7 +12,7 @@ const MON = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Ok
 const COL = { sh: '#4da3ff', hp: '#ef6c4d', heat: '#f6b93b', away: '#ff6b8a' };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-12 · Zähler-Prognose, PV+E-Auto, Infos';
+const APP_VERSION = '2026-09-12 · CSV-Import, Speicher-Viz, Button-Fix';
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -67,13 +67,17 @@ const INFO = {
   coptemp: () => 'COP je 5-°C-Außentemperatur-Bereich (kumulierte Wärme ÷ Strom). Zeigt, wie die Effizienz ' +
     'mit dem Wetter schwankt – wärmere Luft ist meist effizienter.',
   'hp-counter': () => {
+    const im = STATE.hpA && STATE.hpA.imported;
+    if (im && im.year_elec_kwh) return `Basis: deine <b>importierte HomeCom-Historie</b> ` +
+      `(${im.months} Monate, ${im.days} Tage). Jahresverbrauch <b>${kwh(im.year_elec_kwh, 0)}</b>, ` +
+      `Jahresarbeitszahl ${fmt(im.seasonal_cop, 2)}. Monatswerte und COP kommen direkt aus der CSV.`;
     const c = STATE.hpA && STATE.hpA.counter;
     if (!c) return 'Prognose der Wärmepumpe aus den gemessenen Betriebsdaten, saisonal aufs Jahr gerechnet. ' +
       'Für <b>tag-genaue</b> Historie kannst du im Setup eine CSV importieren.';
     return `Basis: der kumulative Stromzähler wuchs über <b>${fmt(c.span_days, 0)} Tage</b> um ` +
       `<b>${kwh(c.elec_growth_kwh, 0)}</b> (Ø ${kwh(c.avg_daily_elec_kwh, 1)}/Tag, gemessen im ` +
-      `${(c.observed_months || []).join(', ')}). Das wird <b>saisonal</b> aufs Jahr gerechnet (Winter mehr, ` +
-      `Sommer weniger). Für tag-genaue Historie: CSV-Import im Setup.`;
+      `${(c.observed_months || []).join(', ')}). Das wird <b>saisonal</b> aufs Jahr gerechnet. ` +
+      `Für exakte Historie: CSV-Import im Setup.`;
   },
   'pv-sim': () => 'Modellierter Sonnenertrag (nach kWp & Ausrichtung) trifft <b>stündlich</b> auf dein ' +
     '<b>echtes</b> Lastprofil (Smart Home + Wärmepumpe + optional E-Auto). Eine Batterie speichert Überschuss. ' +
@@ -86,6 +90,10 @@ const INFO = {
   'pv-ev': () => 'E-Auto: aus <b>km/Jahr × kWh/100 km</b> wird der Ladebedarf berechnet, auf die Monate ' +
     'verteilt und – möglichst <b>tagsüber</b> geladen (PV-optimiert) – zum Verbrauch addiert. Das erhöht ' +
     'sinnvollen Eigenverbrauch. Standard: 18 kWh/100 km.',
+  'pv-batt': () => 'Linker Balken = dein PV-Ertrag, aufgeteilt in <b style="color:#4be0b0">direkt genutzt</b>, ' +
+    '<b style="color:#7c5cff">über die Batterie genutzt</b> und <b style="color:#f6b93b">eingespeist</b>. ' +
+    'Der lila Anteil ist genau das, was der <b>Speicher</b> bringt: sonst eingespeister Strom, den du dank ' +
+    'Batterie selbst nutzt. Rechter Balken = dein Verbrauch.',
   share: () => 'Anteil je Quelle über die <b>gemessenen</b> Tage im Zeitraum (kumulierte kWh). ' +
     'Geschätzte Tage zählen hier nicht mit.',
 };
@@ -142,17 +150,66 @@ function measuredMonths() {
   return [...ms];
 }
 function hpRefFactor() { const ms = measuredMonths(); return ms.length ? (mean(ms.map(hpDayFactor)) || 1) : 1; }
-function hpAvgDaily() { const ref = hpRefFactor(); const mm = hpMeasuredMean(); return ref > 0 ? mm / ref : mm; }
+function hpAvgDaily() {
+  const iy = hpYearFromMonthly();
+  if (iy) return iy / 365;
+  const ref = hpRefFactor(); const mm = hpMeasuredMean();
+  return ref > 0 ? mm / ref : mm;
+}
+// Full 12-month heat-pump electricity built from the imported real months
+// (fills the current partial month and any gap so it's a consistent year).
+function hpYearFromMonthly() {
+  if (!hpRealMonthMap()) return null;
+  let s = 0; for (let m = 0; m < 12; m++) s += hpMonthEst(m);
+  return s;
+}
 
-// Single source of truth for all forecasts (seasonal, robust averages).
+// Real per-calendar-month heat-pump electricity from imported history
+// (most recent value per month, excluding the current still-running month).
+function hpRealMonthMap() {
+  const im = STATE.hpA && STATE.hpA.imported;
+  if (!im || !(im.monthly || []).length) return null;
+  const cur = im.latest; // e.g. "2026-09" – partial, exclude
+  const map = {};
+  im.monthly.forEach(r => { if (r.month !== cur && r.elec_kwh > 0) map[+r.month.slice(5) - 1] = r.elec_kwh; });
+  return Object.keys(map).length ? map : null;
+}
+// Full-month heat-pump electricity estimate for calendar month m.
+function hpMonthEst(m) {
+  const im = STATE.hpA && STATE.hpA.imported;
+  const now = new Date();
+  // current calendar month: scale the still-running partial value to a full month
+  if (im && (im.monthly || []).length && m === now.getMonth()) {
+    const key = `${now.getFullYear()}-${String(m + 1).padStart(2, '0')}`;
+    const cur = im.monthly.find(x => x.month === key);
+    if (cur && cur.elec_kwh > 0) return cur.elec_kwh * DIM[m] / Math.max(1, now.getDate());
+  }
+  const rm = hpRealMonthMap();
+  if (rm) {
+    if (rm[m] != null) return rm[m];
+    // nearest available months on each side, interpolate by month distance
+    let below = null, bD = 0, above = null, aD = 0;
+    for (let d = 1; d <= 6; d++) {
+      if (below == null && rm[(m - d + 12) % 12] != null) { below = rm[(m - d + 12) % 12]; bD = d; }
+      if (above == null && rm[(m + d) % 12] != null) { above = rm[(m + d) % 12]; aD = d; }
+    }
+    if (below != null && above != null) return below + (above - below) * (bD / (bD + aD));
+    if (below != null) return below; if (above != null) return above;
+  }
+  return hpAvgDaily() * hpDayFactor(m) * DIM[m];
+}
+
+// Single source of truth for all forecasts (prefers imported real data).
 function annualForecast() {
-  const p = STATE.price, sh = shAvgDaily(), hp = hpAvgDaily();
-  const m = new Date().getMonth();
-  const shMonth = sh * shDayFactor(m) * DIM[m], hpMonth = hp * hpDayFactor(m) * DIM[m];
+  const p = STATE.price, sh = shAvgDaily();
+  const now = new Date(), m = now.getMonth();
+  const shMonth = sh * shDayFactor(m) * DIM[m];
+  const hpMonth = hpMonthEst(m);
+  const hpYear = hpYearFromMonthly() || hpAvgDaily() * 365;
   return {
-    shYear: sh * 365, hpYear: hp * 365, year: (sh + hp) * 365, yearCost: (sh + hp) * 365 * p,
+    shYear: sh * 365, hpYear, year: sh * 365 + hpYear, yearCost: (sh * 365 + hpYear) * p,
     monthNow: shMonth + hpMonth, monthNowCost: (shMonth + hpMonth) * p,
-    shMonth, hpMonth,
+    shMonth, hpMonth, hpImported: !!hpYearFromMonthly(),
   };
 }
 // Complete per-day series over [from,to]; real where measured, else a
@@ -171,7 +228,8 @@ function filledDaily(from, to) {
     const key = localKey(t), m = t.getMonth();
     const hasSh = shReal[key] != null, hasHp = hpReal[key] != null;
     const sh = hasSh ? shReal[key] : shA * shDayFactor(m);
-    const hp = hasHp ? hpReal[key] : hpA * hpDayFactor(m);
+    // prefer real monthly history (spread over the month) over the model
+    const hp = hasHp ? hpReal[key] : hpMonthEst(m) / DIM[m];
     out.push({ day: key, sh, hp, total: sh + hp, estimated: !(hasSh || hasHp) });
     t.setDate(t.getDate() + 1);
   }
@@ -579,21 +637,16 @@ function renderHistory() {
     : '<div class="note">Keine eindeutig abwesenden Tage erkannt.</div>';
 
   // seasonal forecast & insights
-  const S = data.stats, price = STATE.price;
-  const m = new Date().getMonth();
-  const shYear = shAvgDaily() * 365, hpYear = hpAvgDaily() * 365;
-  const shMonth = shAvgDaily() * shDayFactor(m) * DIM[m];
-  const hpMonth = hpAvgDaily() * hpDayFactor(m) * DIM[m];
-  const winterM = 0, summerM = 6; // Jan vs Jul illustration for the heat pump
+  const S = data.stats, price = STATE.price, m = new Date().getMonth();
+  const fc = annualForecast();
   const standbyYear = data.baseline_w * 24 * 365 / 1000;
   $('h-insights').innerHTML = [
-    ['Hochrechnung / Jahr', `${kwh(shYear + hpYear, 0)} · ${money((shYear + hpYear) * price)}`],
-    ['davon Wärmepumpe', hpYear > 0 ? `${kwh(hpYear, 0)} · ${money(hpYear * price)}` : '–'],
-    ['davon Smart Home', `${kwh(shYear, 0)} · ${money(shYear * price)}`],
-    [`Prognose ${MON[m]} (saisonal)`, `${kwh(shMonth + hpMonth, 0)} · ${money((shMonth + hpMonth) * price)}`],
-    ['Wärmepumpe Winter vs. Sommer', hpAvgDaily() > 0
-      ? `${kwh(hpAvgDaily() * hpDayFactor(winterM) * 31, 0)} (Jan) ↔ ${kwh(hpAvgDaily() * hpDayFactor(summerM) * 31, 0)} (Jul)`
-      : '–'],
+    ['Hochrechnung / Jahr', `${kwh(fc.year, 0)} · ${money(fc.yearCost)}`],
+    ['davon Wärmepumpe', fc.hpYear > 0 ? `${kwh(fc.hpYear, 0)} · ${money(fc.hpYear * price)}` + (fc.hpImported ? ' ✓' : '') : '–'],
+    ['davon Smart Home', `${kwh(fc.shYear, 0)} · ${money(fc.shYear * price)}`],
+    [`Prognose ${MON[m]}`, `${kwh(fc.monthNow, 0)} · ${money(fc.monthNowCost)}`],
+    ['Wärmepumpe Winter vs. Sommer', fc.hpYear > 0
+      ? `${kwh(hpMonthEst(0), 0)} (Jan) ↔ ${kwh(hpMonthEst(6), 0)} (Jul)` : '–'],
     ['Grundlast Smart Home / Jahr', `${kwh(standbyYear, 1)} · ${(S.standby_share * 100).toFixed(0)} %`],
     ['Vermutete Abwesenheit', `${A.count} Tage · ~${money(A.count * (S.day_avg_cost || 0))}`],
   ].map(([k, v]) => statusRow(k, v)).join('');
@@ -711,16 +764,22 @@ function renderHeatpump() {
 
   // seasonal forecast for the heat pump
   const hpA = hpAvgDaily(), mo = new Date().getMonth();
-  if (hpA > 0) {
-    const winter = hpA * hpDayFactor(0) * 31, summer = hpA * hpDayFactor(6) * 31;
+  const im = A.imported;
+  const yearE = hpYearFromMonthly() || hpA * 365;
+  const scop = (im && im.seasonal_cop) || A.stats.seasonal_cop;
+  if (yearE > 0) {
+    const basis = im && im.year_elec_kwh
+      ? `aus importierter Historie (${im.months} Monate)`
+      : 'saisonal geschätzt';
     $('hp-forecast').innerHTML = [
-      ['Voraussichtl. Strom / Jahr', `${kwh(hpA * 365, 0)} · ${money(hpA * 365 * STATE.price)}`],
-      [`Prognose ${MON[mo]} (saisonal)`, `${kwh(hpA * hpDayFactor(mo) * DIM[mo], 0)} · ${money(hpA * hpDayFactor(mo) * DIM[mo] * STATE.price)}`],
-      ['Heizsaison (Jan) vs. Sommer (Jul)', `${kwh(winter, 0)} ↔ ${kwh(summer, 0)} pro Monat`],
-      ['Ø Arbeitszahl', A.stats.seasonal_cop != null ? fmt(A.stats.seasonal_cop, 2) : '–'],
+      ['Voraussichtl. Strom / Jahr', `${kwh(yearE, 0)} · ${money(yearE * STATE.price)}`],
+      [`Prognose ${MON[mo]}`, `${kwh(hpMonthEst(mo), 0)} · ${money(hpMonthEst(mo) * STATE.price)}`],
+      ['Heizsaison (Jan) vs. Sommer (Jul)', `${kwh(hpMonthEst(0), 0)} ↔ ${kwh(hpMonthEst(6), 0)} pro Monat`],
+      ['Ø Arbeitszahl (Jahr)', scop != null ? fmt(scop, 2) : '–'],
+      ['Basis', basis],
     ].map(([k, v]) => statusRow(k, v)).join('');
   } else {
-    $('hp-forecast').innerHTML = '<div class="note">Prognose erscheint, sobald die Wärmepumpe ein paar Tage Daten geliefert hat.</div>';
+    $('hp-forecast').innerHTML = '<div class="note">Prognose erscheint, sobald die Wärmepumpe ein paar Tage Daten geliefert hat – oder importiere eine HomeCom-CSV im Setup.</div>';
   }
 }
 
@@ -818,13 +877,15 @@ function simulatePv(p) {
   let Y = 0, S = 0, F = 0, G = 0, L = 0, repDay = null;
   const monthly = [];
   const evDayBase = p.evAnnual / 365;
+  const useReal = !!hpRealMonthMap();
   for (let m = 0; m < 12; m++) {
     const days = new Date(2025, m + 1, 0).getDate();
     const dayPv = (p.kwp * p.spec * pvShare[m]) / days;
-    const dayHp = hpAnnual * (0.35 * (days / 365) + 0.65 * hpSeas[m]) / days;
+    // prefer real monthly heat-pump consumption when a CSV was imported
+    const dayHp = (useReal ? hpMonthEst(m) : hpAnnual * (0.35 * (days / 365) + 0.65 * hpSeas[m])) / days;
     const dayEv = evDayBase * (1 + 0.12 * Math.cos(2 * Math.PI * m / 12)); // a bit more in winter
     const pvH = pvHourFractions(m);
-    let battery = 0, mSelf = 0, mFeed = 0, mGrid = 0, mPv = 0, mLoad = 0;
+    let battery = 0, mDirect = 0, mBatt = 0, mFeed = 0, mGrid = 0, mPv = 0, mLoad = 0;
     let dPv = null, dLoad = null;
     for (let d = 0; d < days; d++) {
       const capturePv = [], captureLoad = [];
@@ -832,19 +893,19 @@ function simulatePv(p) {
         const pv = dayPv * pvH[h];
         const load = shDaily * shShape[h] + dayHp * hpShape[h] + dayEv * EV_SHAPE[h];
         const direct = Math.min(pv, load);
-        let self = direct;
         const surplus = pv - direct, deficit = load - direct;
         const charge = Math.min(surplus, p.batt - battery); battery += charge;
         const feed = surplus - charge;
-        const dis = Math.min(deficit, battery); battery -= dis; self += dis;
+        const dis = Math.min(deficit, battery); battery -= dis;
         const grid = deficit - dis;
-        mSelf += self; mFeed += feed; mGrid += grid; mPv += pv; mLoad += load;
+        mDirect += direct; mBatt += dis; mFeed += feed; mGrid += grid; mPv += pv; mLoad += load;
         if (m === 6 && d === Math.floor(days / 2)) { capturePv.push(pv); captureLoad.push(load); }
       }
       if (capturePv.length) { dPv = capturePv; dLoad = captureLoad; }
     }
+    const mSelf = mDirect + mBatt;
     Y += mPv; S += mSelf; F += mFeed; G += mGrid; L += mLoad;
-    monthly.push({ m, pv: mPv, load: mLoad, self: mSelf, feed: mFeed, grid: mGrid });
+    monthly.push({ m, pv: mPv, load: mLoad, self: mSelf, direct: mDirect, batt: mBatt, feed: mFeed, grid: mGrid });
     if (dPv) repDay = { pv: dPv, load: dLoad };
   }
   return {
@@ -853,6 +914,30 @@ function simulatePv(p) {
     savings: S * STATE.price, feed_rev: F * p.feedin, benefit: S * STATE.price + F * p.feedin,
     monthly, repDay,
   };
+}
+
+// Per month: a stacked PV bar (direct self / battery self / feed-in) next to a
+// consumption bar – shows what the battery shifts from feed-in to self-use.
+const PVC = { direct: '#4be0b0', batt: '#7c5cff', feed: '#f6b93b', load: '#4da3ff' };
+function pvMonthlyChart(months) {
+  const h = 210, pad = 26, top = 12, base = h - 22, n = months.length || 1;
+  const max = Math.max(0.0001, ...months.map(m => Math.max((m.direct + m.batt + m.feed), m.load)));
+  const gw = (CW - pad * 2) / n, bw = Math.max(2, gw * 0.30);
+  let bars = '', labels = '';
+  months.forEach((m, i) => {
+    const gx = pad + i * gw + gw * 0.12;
+    let y = base;
+    [['direct', PVC.direct], ['batt', PVC.batt], ['feed', PVC.feed]].forEach(([k, col]) => {
+      const v = m[k] || 0; if (v <= 0) return;
+      const bh = v / max * (base - top); y -= bh;
+      bars += `<rect x="${gx.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" fill="${col}"/>`;
+    });
+    const lh = (m.load || 0) / max * (base - top);
+    bars += `<rect x="${(gx + bw + 2).toFixed(1)}" y="${(base - lh).toFixed(1)}" width="${bw.toFixed(1)}" height="${lh.toFixed(1)}" rx="1.5" fill="${PVC.load}"/>`;
+    if (m.label && (n <= 16 || i % Math.ceil(n / 12) === 0))
+      labels += `<text class="axis" x="${(gx + bw).toFixed(1)}" y="${h - 8}" text-anchor="middle">${m.label}</text>`;
+  });
+  return svg(h, gridLines(h, top, base, pad, max) + bars + labels);
 }
 
 function pvDayChart(pv, load) {
@@ -891,15 +976,20 @@ function renderPv() {
   $('pv-self').innerHTML = fmt(r.self_rate * 100, 0) + ' %';
   $('pv-benefit').innerHTML = money(r.benefit);
 
-  $('pv-monthly').innerHTML = groupedBar(
-    r.monthly.map(x => ({ label: MON[x.m], values: { pv: x.pv, load: x.load } })),
-    [{ key: 'pv', color: COL.heat }, { key: 'load', color: COL.sh }], { h: 200 });
+  $('pv-monthly').innerHTML = pvMonthlyChart(r.monthly.map(x => ({ label: MON[x.m], ...x })));
+  $('pv-monthly-legend').innerHTML = legendHtml([
+    { label: 'Direkt genutzt', color: PVC.direct }, { label: 'aus Batterie', color: PVC.batt },
+    { label: 'Einspeisung', color: PVC.feed }, { label: 'Verbrauch', color: PVC.load }]);
   const cover = r.load_kwh > 0 ? r.yield_kwh / r.load_kwh : 0;
   const evTxt = p.evAnnual > 0 ? ` inkl. E-Auto (~${kwh(p.evAnnual, 0)}/Jahr)` : '';
+  const battKwh = r.monthly.reduce((a, x) => a + x.batt, 0);
+  const battTxt = p.batt > 0
+    ? ` Der <b style="color:${PVC.batt}">Speicher</b> verschiebt <b>${kwh(battKwh, 0)}/Jahr</b> von Einspeisung zu Eigenverbrauch` +
+      ` (Wert dank Speicher: ~${money(battKwh * (STATE.price - p.feedin))}/Jahr).`
+    : ' Ohne Speicher wird der Mittags-Überschuss eingespeist – plane einen Speicher ein, um mehr selbst zu nutzen (der lila Anteil wächst).';
   $('pv-monthly-note').innerHTML =
-    `Die Anlage erzeugt rechnerisch <b>${kwh(r.yield_kwh, 0)}/Jahr</b> – das entspricht ` +
-    `<b>${fmt(cover * 100, 0)} %</b> deines Jahresverbrauchs (${kwh(r.load_kwh, 0)}${evTxt}). Im Sommer ` +
-    `oft Überschuss (Einspeisung), im Winter Zukauf – dann hilft v. a. Eigenverbrauch tagsüber.`;
+    `Linker Balken = PV-Ertrag (grün direkt genutzt, lila über Batterie, gelb eingespeist), rechter = Verbrauch. ` +
+    `Erzeugung <b>${kwh(r.yield_kwh, 0)}/Jahr</b> ≈ <b>${fmt(cover * 100, 0)} %</b> deines Verbrauchs (${kwh(r.load_kwh, 0)}${evTxt}).` + battTxt;
 
   $('pv-day').innerHTML = r.repDay ? pvDayChart(r.repDay.pv, r.repDay.load)
     : '<div class="note">Kein Tagesprofil verfügbar.</div>';
@@ -934,6 +1024,8 @@ function renderSettings() {
     ['Letzte Messung', last],
     ['Zertifikat', h.has_cert ? 'vorhanden ✓' : 'fehlt'],
     ['Wärmepumpe', h.homecom_connected ? 'verbunden ✓' : 'nicht verbunden'],
+    (h.hp_import && (h.hp_import.days || h.hp_import.months))
+      ? ['WP-Historie (CSV)', `${h.hp_import.days} Tage · ${h.hp_import.months} Monate ✓`] : null,
     h.last_error ? ['Letzter Fehler', esc(h.last_error)] : null,
   ].filter(Boolean).map(([k, v]) => statusRow(k, v)).join('');
   if (h.shc_ip && !$('shc-ip').value) $('shc-ip').value = h.shc_ip;
@@ -1023,6 +1115,77 @@ function doPvSuggest() {
     `Eigenverbrauch ${fmt(r.self_rate * 100, 0)} %. Werte sind ein Startpunkt – frei anpassbar.`;
 }
 
+// Parse a HomeCom "EnergyData" CSV export (German ; / , format, 3 header rows,
+// Tag/Monat/Stunde categories). Robust: identifies columns from the headers.
+function parseHomeComCsv(text) {
+  const lines = text.split(/\r?\n/).filter(l => l.trim().length);
+  const split = l => l.split(';');
+  const norm = s => (s || '').toLowerCase().trim();
+  const hi = lines.findIndex(l => norm(split(l)[0]) === 'kategorie');
+  if (hi < 0) return { error: 'Kopfzeile „Kategorie" nicht gefunden – ist das ein HomeCom-Export?' };
+  const r0 = hi >= 2 ? split(lines[hi - 2]) : [];
+  const r1 = hi >= 1 ? split(lines[hi - 1]) : [];
+  const r2 = split(lines[hi]);
+  const key = i => norm(r0[i]) + '|' + norm(r2[i]) + '|' + norm(r1[i]); // group|source|sub
+  const find = (parts) => {
+    for (let i = 0; i < r2.length; i++) { const k = key(i); if (parts.every(p => k.includes(p))) return i; }
+    return -1;
+  };
+  const idx = {
+    elecWP: find(['verbrauchteenergie', 'wärmepumpe', 'gesamt']),
+    elecEH: find(['verbrauchteenergie', 'elektrischerzuheizer', 'gesamt']),
+    prodWP: find(['produziertewärme', 'wärmepumpe', 'gesamt']),
+    prodUmg: find(['produziertewärme', 'umgebung', 'gesamt']),
+    heatWP: find(['verbrauchteenergie', 'wärmepumpe', 'heizung']),
+    heatEH: find(['verbrauchteenergie', 'elektrischerzuheizer', 'heizung']),
+    waterWP: find(['verbrauchteenergie', 'wärmepumpe', 'warmwasser']),
+    waterEH: find(['verbrauchteenergie', 'elektrischerzuheizer', 'warmwasser']),
+    outdoor: r2.findIndex(c => norm(c).includes('temperatur') && norm(c).includes('aussen') || norm(c).includes('außentemperatur')),
+  };
+  if (idx.elecWP < 0) return { error: 'Spalte „Verbrauchte Energie · Wärmepumpe · Gesamt" nicht gefunden.' };
+  const num = s => { s = (s || '').trim(); if (!s || s === '-') return null; const n = parseFloat(s.replace(/\./g, '').replace(',', '.')); return isNaN(n) ? null : n; };
+  const add = (a, b) => (a == null && b == null) ? null : (a || 0) + (b || 0);
+  const at = (c, i) => i >= 0 ? num(c[i]) : null;
+  const rows = [];
+  for (let li = hi + 1; li < lines.length; li++) {
+    const c = split(lines[li]); const cat = norm(c[0]);
+    const period = cat === 'tag' ? 'day' : cat === 'monat' ? 'month' : null;
+    if (!period) continue;
+    const date = (c[1] || '').trim().slice(0, period === 'month' ? 7 : 10);
+    if (!/^\d{4}-\d{2}/.test(date)) continue;
+    const elec = add(at(c, idx.elecWP), at(c, idx.elecEH));
+    const heat = add(at(c, idx.prodWP), at(c, idx.prodUmg));
+    if (elec == null && heat == null) continue;
+    rows.push({
+      period, date, elec_kwh: elec, heat_kwh: heat,
+      heating_kwh: add(at(c, idx.heatWP), at(c, idx.heatEH)),
+      water_kwh: add(at(c, idx.waterWP), at(c, idx.waterEH)),
+      outdoor_c: at(c, idx.outdoor),
+    });
+  }
+  return { rows };
+}
+
+async function doHpImport(ev) {
+  const note = $('hp-import-note'), inp = ev.target;
+  const file = inp.files && inp.files[0];
+  if (!file) return;
+  note.textContent = 'Lese Datei …';
+  try {
+    const text = await file.text();
+    const res = parseHomeComCsv(text);
+    if (res.error) { note.innerHTML = '⚠︎ ' + esc(res.error); inp.value = ''; return; }
+    if (!res.rows.length) { note.textContent = 'Keine Datenzeilen gefunden.'; inp.value = ''; return; }
+    note.textContent = `Sende ${res.rows.length} Zeilen an die Bridge …`;
+    const r = await postJSON('/api/homecom/import', { rows: res.rows });
+    if (r.ok) {
+      note.innerHTML = '✅ ' + esc(r.message) + ` Gesamt gespeichert: <b>${r.total_days}</b> Tage, <b>${r.total_months}</b> Monate.`;
+      setTimeout(loadAll, 800);
+    } else note.innerHTML = '⚠︎ ' + esc(r.error || 'Import fehlgeschlagen.');
+  } catch (e) { note.textContent = 'Fehler: ' + e.message + ' – Seite von der Bridge geöffnet?'; }
+  inp.value = '';
+}
+
 async function doBridgeUpdate() {
   const note = $('bridge-update-note'), btn = $('bridge-update');
   btn.disabled = true; note.textContent = 'Hole neuesten Code & starte neu …';
@@ -1091,6 +1254,15 @@ function switchView(v) {
 function init() {
   $('base').value = STATE.base;
   $('price').value = STATE.price;
+  // keep the sticky time-range bar aligned right below the header
+  const setHdrH = () => {
+    const h = document.querySelector('header');
+    if (h) document.documentElement.style.setProperty('--hdr-h', h.offsetHeight + 'px');
+  };
+  setHdrH();
+  window.addEventListener('resize', setHdrH);
+  window.addEventListener('orientationchange', () => setTimeout(setHdrH, 200));
+
   document.querySelectorAll('#nav button').forEach(b => b.addEventListener('click', () => switchView(b.dataset.v)));
   document.addEventListener('click', e => {
     const i = e.target.closest('.info');
@@ -1134,6 +1306,7 @@ function init() {
     catch (e) { $('hp-connect-note').textContent = 'Nur möglich, wenn die Seite von der Bridge geöffnet ist.'; }
   });
   const hpc = $('hp-connect'); if (hpc) hpc.addEventListener('click', doHomecomConnect);
+  const hpi = $('hp-import'); if (hpi) hpi.addEventListener('change', doHpImport);
 
   // PV planner: restore saved inputs, save + recompute on change
   const pvFields = [['pv-kwp', PV_LS.kwp], ['pv-orient', PV_LS.orient], ['pv-batt', PV_LS.batt],

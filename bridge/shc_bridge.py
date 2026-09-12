@@ -324,6 +324,14 @@ class Store:
             self.conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_hp ON hp_samples(ts)"
             )
+            # imported heat-pump history (from a HomeCom CSV export): real
+            # per-day and per-month energy, split into heating / hot water.
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS hp_history("
+                " period TEXT, date TEXT, elec_kwh REAL, heat_kwh REAL,"
+                " heating_kwh REAL, water_kwh REAL, outdoor_c REAL,"
+                " PRIMARY KEY(period,date))"
+            )
 
     # -- heat pump ------------------------------------------------------- #
     def add_hp_sample(self, row: dict):
@@ -370,6 +378,29 @@ class Store:
     def hp_count(self) -> int:
         with self.lock:
             return self.conn.execute("SELECT COUNT(*) AS c FROM hp_samples").fetchone()["c"]
+
+    def hp_history(self, period: str) -> list[dict]:
+        with self.lock:
+            cur = self.conn.execute(
+                "SELECT * FROM hp_history WHERE period=? ORDER BY date", (period,))
+            return [dict(r) for r in cur.fetchall()]
+
+    def hp_history_upsert(self, rows: list[tuple]) -> int:
+        """rows: (period,date,elec,heat,heating,water,outdoor). Replace on conflict."""
+        with self.lock, self.conn:
+            self.conn.executemany(
+                "INSERT INTO hp_history(period,date,elec_kwh,heat_kwh,heating_kwh,water_kwh,outdoor_c)"
+                " VALUES(?,?,?,?,?,?,?) ON CONFLICT(period,date) DO UPDATE SET"
+                " elec_kwh=excluded.elec_kwh, heat_kwh=excluded.heat_kwh,"
+                " heating_kwh=excluded.heating_kwh, water_kwh=excluded.water_kwh,"
+                " outdoor_c=excluded.outdoor_c", rows)
+        return len(rows)
+
+    def hp_history_count(self) -> dict:
+        with self.lock:
+            d = self.conn.execute("SELECT COUNT(*) c FROM hp_history WHERE period='day'").fetchone()["c"]
+            m = self.conn.execute("SELECT COUNT(*) c FROM hp_history WHERE period='month'").fetchone()["c"]
+            return {"days": d, "months": m}
 
     def hp_counter_span(self) -> dict | None:
         """First and last cumulative counters over the whole observed history –
@@ -852,6 +883,60 @@ def compute_hp_analytics(store: Store, days: int, price: float,
                                            for t in (span["first_ts"], span["last_ts"])}),
             }
 
+    # --- imported HomeCom-CSV history (real day/month data) ----------------- #
+    since_day = _local_day(since)
+    imp_days = [r for r in store.hp_history("day") if r.get("elec_kwh") is not None]
+    imp_months = [r for r in store.hp_history("month") if r.get("elec_kwh") is not None]
+    imported = None
+    if imp_days:
+        # overlay real days onto the polled daily series (within the window)
+        dd = {d["day"]: d for d in daily}
+        for r in imp_days:
+            if r["date"] >= since_day:
+                e = round(r["elec_kwh"] or 0.0, 3)
+                h = round(r["heat_kwh"] or 0.0, 3)
+                dd[r["date"]] = {"day": r["date"], "elec_kwh": e, "heat_kwh": h,
+                                 "cop": round(h / e, 2) if e > 0 else None,
+                                 "cost": round(e * price, 2)}
+        daily = [dd[k] for k in sorted(dd)]
+        # real 'wofür' from the heating/water split, over the window
+        win = [r for r in imp_days if r["date"] >= since_day]
+        if win and any(r.get("heating_kwh") is not None for r in win):
+            heating = sum(r.get("heating_kwh") or 0.0 for r in win)
+            water = sum(r.get("water_kwh") or 0.0 for r in win)
+            elec_sum = sum(r.get("elec_kwh") or 0.0 for r in win)
+            mode_window = {"heating": round(heating, 3), "water": round(water, 3),
+                           "other": round(max(0.0, elec_sum - heating - water), 3)}
+        trow = next((r for r in imp_days if r["date"] == today), None)
+        if trow and trow.get("heating_kwh") is not None:
+            mode_today = {"heating": round(trow.get("heating_kwh") or 0.0, 3),
+                          "water": round(trow.get("water_kwh") or 0.0, 3),
+                          "other": round(max(0.0, (trow.get("elec_kwh") or 0.0)
+                                             - (trow.get("heating_kwh") or 0.0)
+                                             - (trow.get("water_kwh") or 0.0)), 3)}
+    if imp_months:
+        # prefer the real monthly figures for the monthly chart
+        monthly = [{"month": r["date"], "elec_kwh": round(r["elec_kwh"] or 0.0, 1),
+                    "heat_kwh": round(r["heat_kwh"] or 0.0, 1),
+                    "cop": round((r["heat_kwh"] or 0.0) / (r["elec_kwh"] or 1.0), 2)
+                    if (r["elec_kwh"] or 0.0) > 0 else None} for r in imp_months]
+        last12 = imp_months[-12:]
+        year_e = sum(r["elec_kwh"] or 0.0 for r in last12)
+        year_h = sum(r["heat_kwh"] or 0.0 for r in last12)
+        imported = {
+            "months": len(imp_months), "months_used": len(last12),
+            "days": len(imp_days),
+            "year_elec_kwh": round(year_e, 0), "year_heat_kwh": round(year_h, 0),
+            "seasonal_cop": round(year_h / year_e, 2) if year_e > 0 else None,
+            "latest": imp_months[-1]["date"],
+            "monthly": [{"month": r["date"], "elec_kwh": round(r["elec_kwh"] or 0.0, 1),
+                         "heat_kwh": round(r["heat_kwh"] or 0.0, 1)} for r in imp_months],
+        }
+    elif imp_days:
+        imported = {"months": 0, "months_used": 0, "days": len(imp_days),
+                    "year_elec_kwh": None, "year_heat_kwh": None, "seasonal_cop": None,
+                    "latest": imp_days[-1]["date"], "monthly": []}
+
     return {
         "generated_at": now,
         "window_days": days,
@@ -881,6 +966,7 @@ def compute_hp_analytics(store: Store, days: int, price: float,
         "mode_window": mode_window,
         "cop_by_temp": cop_by_temp,
         "counter": counter,
+        "imported": imported,
         "daily": daily,
         "monthly": monthly,
         "hourly_profile": hourly_profile,
@@ -1474,6 +1560,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._post_device_name(body)
             if parsed.path == "/api/homecom/connect":
                 return self._post_homecom_connect(body)
+            if parsed.path == "/api/homecom/import":
+                return self._post_hp_import(body)
             if parsed.path == "/api/update":
                 return self._post_update(body)
             return self._send_json({"error": "unknown endpoint"}, 404)
@@ -1616,6 +1704,37 @@ class Handler(BaseHTTPRequestHandler):
                                     f" Wärmepumpe: {gateway}" if gateway else
                                     " Keine Wärmepumpe gefunden.")})
 
+    def _post_hp_import(self, body):
+        """Store parsed HomeCom-CSV history (day/month rows with heating/water split)."""
+        def f(v):
+            try:
+                return float(v) if v is not None and v != "" else None
+            except (TypeError, ValueError):
+                return None
+        clean = []
+        for r in (body.get("rows") or []):
+            period = r.get("period")
+            date = str(r.get("date") or "").strip()
+            if period not in ("day", "month") or not date:
+                continue
+            elec = f(r.get("elec_kwh"))
+            heat = f(r.get("heat_kwh"))
+            if elec is None and heat is None:
+                continue
+            clean.append((period, date, elec, heat, f(r.get("heating_kwh")),
+                          f(r.get("water_kwh")), f(r.get("outdoor_c"))))
+        if not clean:
+            return self._send_json({"ok": False, "error": "Keine gültigen Zeilen erkannt."}, 200)
+        self.store.hp_history_upsert(clean)
+        cnt = self.store.hp_history_count()
+        days = sum(1 for c in clean if c[0] == "day")
+        months = sum(1 for c in clean if c[0] == "month")
+        return self._send_json({"ok": True, "imported": len(clean),
+                                "new_days": days, "new_months": months,
+                                "total_days": cnt["days"], "total_months": cnt["months"],
+                                "message": f"{len(clean)} Zeilen importiert "
+                                           f"({days} Tage, {months} Monate)."})
+
     def _post_update(self, body):
         """Pull the latest code (git) and restart the bridge in place.
 
@@ -1679,6 +1798,7 @@ class Handler(BaseHTTPRequestHandler):
                     "homecom_gateway": self.cfg.get("homecom_gateway", ""),
                     "homecom_last_error": self.ctx.hp_state.get("last_error"),
                     "homecom_last_poll": self.ctx.hp_state.get("last_poll"),
+                    "hp_import": self.store.hp_history_count(),
                 })
             if path == "/api/devices":
                 return self._send_json({"devices": self.store.devices()})

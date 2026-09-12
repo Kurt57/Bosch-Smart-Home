@@ -30,8 +30,7 @@
   .wrap{max-width:640px; margin:0 auto; padding:0 14px}
   header{position:sticky; top:0; z-index:20;
     padding:calc(12px + var(--safe-t)) 14px 12px;
-    background:linear-gradient(180deg,var(--bg) 70%,rgba(11,18,32,0));
-    backdrop-filter:blur(8px)}
+    background:var(--bg); border-bottom:1px solid var(--line)}
   header .row{display:flex; align-items:center; justify-content:space-between; gap:10px}
   h1{font-size:19px; margin:0; font-weight:700; letter-spacing:-.02em}
   .sub{color:var(--muted); font-size:12px; margin-top:2px}
@@ -92,6 +91,11 @@
 
   .seg{display:flex; gap:6px; background:var(--card2); padding:4px; border-radius:12px;
     margin:0 0 12px}
+  /* keep the time-range control visible & clickable below the sticky header */
+  #hist-range{position:sticky; top:var(--hdr-h,64px); z-index:21;
+    box-shadow:0 6px 16px rgba(11,18,32,.6)}
+  #hist-custom{display:flex; gap:8px; margin:-4px 0 12px}
+  #hist-custom[hidden]{display:none}
   .seg button{flex:1; border:none; background:transparent; color:var(--muted);
     padding:8px 6px; border-radius:9px; font-size:13px; font-weight:600}
   .seg button.on{background:var(--accent); color:#04121f}
@@ -234,7 +238,7 @@
       <button data-d="year">Jahr</button>
       <button data-d="custom">Zeitraum</button>
     </div>
-    <div id="hist-custom" hidden style="display:flex; gap:8px; margin:-4px 0 12px">
+    <div id="hist-custom" hidden>
       <div style="flex:1"><label>Von</label><input id="hist-from" type="date"></div>
       <div style="flex:1"><label>Bis</label><input id="hist-to" type="date"></div>
     </div>
@@ -388,12 +392,9 @@
       <div class="kpi"><div class="v" id="pv-benefit">–</div><div class="l">Ersparnis / Jahr</div></div>
     </div>
     <div class="card">
-      <h2>PV-Ertrag vs. Verbrauch pro Monat</h2>
+      <h2><span class="info" data-info="pv-batt" role="button" aria-label="Info">i</span>PV-Nutzung pro Monat</h2>
       <div id="pv-monthly"></div>
-      <div class="legend">
-        <div class="it"><span class="sw" style="background:var(--heat)"></span>PV-Ertrag</div>
-        <div class="it"><span class="sw" style="background:var(--sh)"></span>Verbrauch</div>
-      </div>
+      <div class="legend" id="pv-monthly-legend"></div>
       <div class="note" id="pv-monthly-note" style="margin-top:10px"></div>
     </div>
     <div class="card">
@@ -474,6 +475,19 @@
              autocomplete="off" autocapitalize="off" spellcheck="false">
       <button class="btn" id="hp-connect">✅ Verbinden</button>
       <div class="note" id="hp-connect-note" style="margin-top:10px"></div>
+    </div>
+
+    <div class="card" id="hp-import-card">
+      <h2>📁 Wärmepumpen-Historie (CSV)</h2>
+      <div class="note" style="line-height:1.6; margin-bottom:10px">
+        Für <b>tag-genaue Vergangenheit</b>: exportiere in der <b>HomeCom Easy</b>-App/Website
+        deine Energiedaten als <b>CSV</b> (enthält Tag- und Monatswerte) und lade sie hier hoch.
+        Damit füllen sich <b>Verlauf, COP, Wärmekarte, Monatsbilanz und Prognose</b> mit echten
+        Daten – inkl. Aufteilung Heizung/Warmwasser. Die Datei bleibt <b>lokal</b> auf der Bridge.
+      </div>
+      <input type="file" id="hp-import" accept=".csv,text/csv"
+             style="padding:10px; background:var(--bg2); border:1px dashed var(--line)">
+      <div class="note" id="hp-import-note" style="margin-top:10px"></div>
     </div>
 
     <div class="card">

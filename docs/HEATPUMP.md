@@ -73,6 +73,24 @@ weiter. Safari (besonders am iPhone) kann diese nicht öffnen und zeigt nur
 
 ---
 
+## Tag-genaue Historie per CSV-Import
+
+Die Cloud liefert bei diesem Gerät **keine** tag-genaue Verlaufs-API. Für echte
+Vergangenheitsdaten (Verlauf, COP, Wärmekarte, Monatsbilanz, Prognose – inkl.
+Aufteilung **Heizung/Warmwasser**) gibt es einen CSV-Import:
+
+1. In **HomeCom Easy** (App/Website) die **Energiedaten exportieren** (CSV).
+   Die Datei enthält Stunden-, **Tag-** und **Monatswerte** (`EnergyData_*.csv`).
+2. In der App: **Setup → „📁 Wärmepumpen-Historie (CSV)"** → Datei auswählen.
+3. Die Bridge liest die deutschen Spalten (`;`-getrennt, Komma-Dezimal) selbst
+   aus – elektrischer Verbrauch (Wärmepumpe + Elektro-Zuheizer), erzeugte Wärme
+   (inkl. Umgebungswärme) und die Aufteilung Heizung/Warmwasser – und speichert
+   sie **lokal** (`hp_history` in `energy.db`, nicht im Repo). Erneuter Import
+   aktualisiert vorhandene Tage/Monate.
+
+Danach zeigen alle Ansichten echte Werte; die Jahresprognose basiert auf den
+importierten Monaten statt auf einer Hochrechnung.
+
 ## Häufige Meldungen
 
 | Meldung | Bedeutung |
