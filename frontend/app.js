@@ -4,7 +4,7 @@
  * combined. If no bridge is reachable it falls back to a built-in demo. */
 'use strict';
 
-const LS = { base: 'bhe_base', price: 'bhe_price', demo: 'bhe_demo' };
+const LS = { base: 'bhe_base', price: 'bhe_price', demo: 'bhe_demo', house: 'bhe_house_kwh' };
 const PV_LS = { kwp: 'bhe_pv_kwp', orient: 'bhe_pv_orient', batt: 'bhe_pv_batt',
   feedin: 'bhe_pv_feedin', invest: 'bhe_pv_invest', evkm: 'bhe_pv_evkm', evkwh: 'bhe_pv_evkwh', ac: 'bhe_pv_ac' };
 const WD = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
@@ -12,7 +12,7 @@ const MON = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Ok
 const COL = { sh: '#4da3ff', hp: '#ef6c4d', heat: '#f6b93b', away: '#ff6b8a' };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-12 · Klima, kWp-Wirtschaftlichkeit, COP-Uhrzeit, Tooltips'
+const APP_VERSION = '2026-09-12 · Netto-0€-Kurve, Geräte-Verhalten, Haushaltsstrom'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -87,9 +87,10 @@ const INFO = {
     'Daraus ergeben sich Eigenverbrauch, Autarkie und Einspeisung.',
   'pv-quote': () => '<b>Autarkie</b> = Anteil deines Verbrauchs, der durch PV (inkl. Batterie) gedeckt wird. ' +
     '<b>Eigenverbrauchsquote</b> = Anteil des erzeugten PV-Stroms, den du selbst nutzt statt einzuspeisen.',
-  'pv-econ': () => 'Für jede Anlagengröße (kWp, X-Achse) wird der jährliche € -Vorteil (Y-Achse) durchgerechnet. ' +
-    'Die gestrichelte Linie ist deine aktuelle Wahl. Die Kurve <b>flacht ab</b>, weil größere Anlagen einen ' +
-    'immer größeren Teil nur einspeisen. So findest du eine sinnvolle Größe für <b>deinen</b> Verbrauch.',
+  'pv-econ': () => 'Für jede Anlagengröße (kWp, X) werden die <b>Netto-Stromkosten/Jahr</b> (Y) durchgerechnet: ' +
+    'Netzbezug × Preis − Einspeisung × Vergütung. Unter der <b>0-€-Linie</b> verdienst du netto. Marker: ' +
+    '<span style="color:#4da3ff">Wahl</span> = deine Größe, <span style="color:#f6b93b">Deckung</span> = Ertrag = ' +
+    'Verbrauch, <span style="color:#4be0b0">0 €</span> = ab hier deckt die Einspeisung den Netzbezug.',
   cophour: () => 'COP je Uhrzeit (erzeugte Wärme ÷ Strom, gemittelt über die importierten Stunden). ' +
     'Zeigt, wann die Wärmepumpe am effizientesten läuft – meist mittags/nachmittags (wärmer). ' +
     'Warmwasser/Heizen dann einplanen spart Strom.',
@@ -111,6 +112,9 @@ const INFO = {
     '<b style="color:#e26fb0">E-Auto</b>).',
   share: () => 'Anteil je Quelle über die <b>gemessenen</b> Tage im Zeitraum (kumulierte kWh). ' +
     'Geschätzte Tage zählen hier nicht mit.',
+  behavior: () => 'Aus den <b>Namen</b> deiner Geräte und den Uhrzeiten, zu denen sie am meisten Strom ziehen, ' +
+    'liest die App typische Routinen ab (Kochen, Schlafen, Bad …) und leitet konkrete Spar-Ideen ab. ' +
+    'Basis: Ø über die gemessenen Tage.',
 };
 let _toastT = null;
 function showInfo(key) {
@@ -138,14 +142,18 @@ function hpDayFactor(m) {
   if (!_hpF) { const hs = normFrac(HP_SEASON); _hpF = hs.map((v, i) => 0.45 + 0.55 * v * 365 / DIM[i]); }
   return _hpF[m];
 }
-// Smart-Home annual daily average, preferring the lifetime meter (robust when thin).
+// Smart-Home / household annual daily average. A manual whole-house figure
+// (from the electricity bill) wins, since the modules only see part of it.
 function shAvgDaily() {
+  const house = parseFloat(localStorage.getItem(LS.house) || '0');
+  if (house > 0) return house / 365;
   const d = STATE.data; if (!d) return 0;
   if (d.counter_estimate && d.counter_estimate.avg_daily_kwh > 0) return d.counter_estimate.avg_daily_kwh;
   if (d.stats && d.stats.avg_daily_kwh > 0) return d.stats.avg_daily_kwh;
   const v = (d.daily || []).map(x => x.kwh).filter(x => x > 0);
   return v.length ? v.reduce((a, b) => a + b, 0) / v.length : 0;
 }
+function houseManual() { return parseFloat(localStorage.getItem(LS.house) || '0') || 0; }
 // Mean daily heat-pump electricity for the measured season. Prefer the
 // meter-growth-over-span figure (robust to polling gaps) over sparse day deltas.
 function hpMeasuredMean() {
@@ -975,6 +983,70 @@ function renderProfile() {
     ? 'mehr Licht & Heizung – der Verbrauch liegt jetzt über dem Jahresmittel'
     : m >= 5 && m <= 7 ? 'wenig Licht, wenig Heizung – meist unter dem Jahresmittel' : 'Übergangszeit, nahe am Mittel')]);
   $('profile-insights').innerHTML = rows.map(([k, v]) => statusRow(k, v)).join('');
+  renderBehavior();
+}
+
+function behaviorInterp(nm) {
+  const has = w => nm.includes(w);
+  if (has('schlaf')) return 'Zubettgeh-/Aufstehzeit';
+  if (has('küche') || has('kueche') || has('koch')) return 'Kochzeiten';
+  if (has('wohn')) return 'Feierabend/Abend';
+  if (has('bad') || has('dusch')) return 'Bad-Routine (morgens/abends)';
+  if (has('flur') || has('eingang') || has('diele')) return 'Kommen & Gehen';
+  if (has('kinder')) return 'Kinderzimmer-Zeiten';
+  if (has('büro') || has('buero') || has('arbeit')) return 'Arbeitszeiten';
+  if (has('ess')) return 'Essenszeiten';
+  return '';
+}
+
+function renderBehavior() {
+  const data = STATE.data, box = $('profile-behavior'); if (!box || !data) return;
+  const price = STATE.price, prof = data.hourly_profile;
+  const pdh = data.per_device_hour || {};
+  const devs = data.live.devices || [];
+  const rows = [];
+  // read behaviour from named devices + their busiest hours
+  [...devs].sort((a, b) => (Math.max(...(pdh[b.id] || [0]))) - (Math.max(...(pdh[a.id] || [0])))).forEach(d => {
+    const arr = pdh[d.id]; if (!arr || !arr.length) return;
+    const mx = Math.max(...arr), base = Math.min(...arr);
+    if (mx <= 0.5 || mx - base < 0.3) return;
+    const th = base + (mx - base) * 0.6, peaks = [];
+    for (let h = 0; h < 24; h++) if (arr[h] >= th && arr[h] >= arr[(h + 23) % 24] && arr[h] >= arr[(h + 1) % 24]) peaks.push(h);
+    if (!peaks.length) peaks.push(arr.indexOf(mx));
+    const title = devLabel(d).title;
+    const interp = behaviorInterp((title + ' ' + (d.room || '') + ' ' + (d.name || '')).toLowerCase());
+    rows.push([title, `aktivste Zeit <b>${peaks.slice(0, 2).map(h => h + ':00').join(' & ')}</b>` + (interp ? ` – ${interp}` : '')]);
+  });
+  // quantified, actionable hints
+  const eveHour = [21, 22, 23].reduce((a, h) => prof[h].avg_w > prof[a].avg_w ? h : a, 21);
+  const eveSave = prof[eveHour].avg_w * 365 / 1000 * price;
+  if (eveSave > 0.2) rows.push(['🌙 1 h früher schlafen',
+    `spart grob <b>${money(eveSave)}/Jahr</b> (Licht/Rollladen um ${eveHour}:00 aus). Beim ganzen Haushalt entsprechend mehr.`]);
+  const stand = data.baseline_w * 24 * 365 / 1000 * price;
+  if (stand > 1) rows.push(['🔌 Dauerlast (Standby)',
+    `~<b>${money(stand)}/Jahr</b> laufen rund um die Uhr – abschaltbare Steckdosenleisten prüfen.`]);
+  // heat-pump hot-water shift (needs imported hourly)
+  const cbh = (STATE.hpA && STATE.hpA.imported && STATE.hpA.imported.cop_by_hour) || [];
+  const wpk = cbh.filter(x => x.water_kwh > 0).sort((a, b) => b.water_kwh - a.water_kwh)[0];
+  if (wpk && (wpk.hour < 10 || wpk.hour > 16))
+    rows.push(['🚿 Warmwasser verschieben', `Warmwasser läuft meist um ${wpk.hour}:00. In die <b>Mittagszeit</b> gelegt ` +
+      `ist es effizienter (wärmer) und – mit PV – fast gratis.`]);
+
+  box.innerHTML = rows.length
+    ? rows.map(([k, v]) => `<div class="devrow" style="align-items:flex-start"><div class="nm"><b>${esc(k)}</b>` +
+      `<small style="color:var(--ink); font-size:13px; line-height:1.5; display:block; margin-top:2px">${v}</small></div></div>`).join('')
+    : '<div class="note">Noch zu wenig Daten für Verhaltensmuster – wächst mit jeder Messung.</div>';
+
+  // what is NOT measured + how to add it
+  const src = houseManual() > 0 ? 'dein eingetragener Haushaltswert' : 'nur die gemessenen Module';
+  $('profile-missing').innerHTML =
+    `Gemessen werden nur die <b>Licht-/Rollladen-Stromkreise</b> (${src}, Ø ${kwh(shAvgDaily(), 2)}/Tag). ` +
+    `<b>Nicht</b> dabei: Kühlschrank, Herd/Backofen, Wasch­maschine, Trockner, Geschirrspüler, Router, TV, Ladegeräte … ` +
+    `So bekommst du sie rein:<br>` +
+    `• <b>Stromrechnung</b>: Jahres-kWh im Setup unter „Haushaltsstrom ergänzen" eintragen – schnellste Lösung.<br>` +
+    `• <b>Mess-Steckdosen</b> (z. B. Shelly Plug&nbsp;S) an großen Verbrauchern – zeigt Einzelwerte.<br>` +
+    `• <b>Zähler auslesen</b> am Hauptzähler (z. B. Shelly&nbsp;3EM oder ein Lesekopf/Tibber Pulse) misst den ` +
+    `<b>ganzen</b> Haushalt live – ließe sich später auch direkt anbinden.`;
 }
 
 /* -------------------------------------------------------------- PV planner */
@@ -1125,46 +1197,79 @@ function pvMonthlyChart(months) {
   return svg(h, gridLines(h, top, base, pad, max) + bars + labels + hits);
 }
 
-// Sweep the array size and show the annual € benefit per kWp – to find a
-// sensible size (returns flatten as more PV can only be fed in).
-function pvEconChart(pts, cur) {
-  const h = 190, pad = 32, top = 12, base = h - 22, n = pts.length;
-  const max = Math.max(0.0001, ...pts.map(p => p.benefit));
+// Net annual electricity cost (grid purchase − feed-in revenue) over PV size,
+// with marker lines for the interesting kWp moments.
+function pvEconChart(pts, marks) {
+  const h = 220, pad = 40, top = 16, base = h - 34, n = pts.length;
   const kwps = pts.map(p => p.kwp);
+  const vals = pts.map(p => p.net);
+  let yMax = Math.max(0, ...vals), yMin = Math.min(0, ...vals);
+  if (yMax === yMin) yMax += 1;
   const X = i => pad + (CW - pad - 6) * (n <= 1 ? 0 : i / (n - 1));
-  const Y = v => top + (base - top) * (1 - v / max);
+  const xForK = k => k <= kwps[0] ? X(0) : k >= kwps[n - 1] ? X(n - 1)
+    : (() => { for (let i = 1; i < n; i++) if (k <= kwps[i]) { const t = (k - kwps[i - 1]) / (kwps[i] - kwps[i - 1]); return X(i - 1) + (X(i) - X(i - 1)) * t; } return X(n - 1); })();
+  const Y = v => top + (base - top) * (1 - (v - yMin) / (yMax - yMin));
+  // gridlines (min / 0 / max) with € labels
+  let grid = '';
+  [yMax, 0, yMin].forEach(v => {
+    const y = Y(v);
+    grid += `<line class="gl" x1="${pad}" x2="${CW - 4}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}"${v === 0 ? ' stroke-width="1.5"' : ''}/>`;
+    grid += `<text class="axis" x="0" y="${(y + 3).toFixed(1)}">${Math.round(v)}</text>`;
+  });
   let line = '';
-  pts.forEach((p, i) => { line += `${i ? 'L' : 'M'}${X(i).toFixed(1)} ${Y(p.benefit).toFixed(1)} `; });
-  let fx = X(0);
-  if (cur >= kwps[n - 1]) fx = X(n - 1);
-  else if (cur > kwps[0]) for (let i = 1; i < n; i++) {
-    if (cur <= kwps[i]) { const t = (cur - kwps[i - 1]) / (kwps[i] - kwps[i - 1]); fx = X(i - 1) + (X(i) - X(i - 1)) * t; break; }
-  }
-  let labels = '';
-  for (let i = 0; i < n; i += Math.ceil(n / 6)) labels += `<text class="axis" x="${X(i).toFixed(1)}" y="${h - 8}" text-anchor="middle">${Math.round(kwps[i])}</text>`;
-  return svg(h, gridLines(h, top, base, pad, max) +
-    `<line x1="${fx.toFixed(1)}" x2="${fx.toFixed(1)}" y1="${top}" y2="${base}" stroke="${COL.sh}" stroke-dasharray="3 3"/>` +
-    `<path d="${line}" fill="none" stroke="url(#g1)" stroke-width="2.5" stroke-linejoin="round"/>` + labels +
-    `<text class="axis" x="${Math.min(CW - 30, fx + 2).toFixed(1)}" y="${top + 9}" fill="${COL.sh}">${fmt(cur, 1)} kWp</text>`);
+  pts.forEach((p, i) => { line += `${i ? 'L' : 'M'}${X(i).toFixed(1)} ${Y(p.net).toFixed(1)} `; });
+  let mk = '';
+  (marks || []).forEach(m => {
+    if (m.kwp == null || m.kwp < kwps[0] || m.kwp > kwps[n - 1]) return;
+    const x = xForK(m.kwp);
+    mk += `<line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${top}" y2="${base}" stroke="${m.color}" stroke-dasharray="3 3"/>` +
+      `<text class="axis" x="${x.toFixed(1)}" y="${(top + m.row * 11 + 2).toFixed(1)}" text-anchor="middle" fill="${m.color}" style="font-size:9.5px">${m.label} ${fmt(m.kwp, 1)}</text>`;
+  });
+  let xl = '';
+  for (let i = 0; i < n; i += Math.ceil(n / 6)) xl += `<text class="axis" x="${X(i).toFixed(1)}" y="${h - 20}" text-anchor="middle">${Math.round(kwps[i])}</text>`;
+  xl += `<text class="axis" x="${(CW / 2).toFixed(1)}" y="${h - 5}" text-anchor="middle">Anlagengröße (kWp)</text>`;
+  return svg(h, grid +
+    `<path d="${line}" fill="none" stroke="url(#g1)" stroke-width="2.5" stroke-linejoin="round"/>` + mk + xl);
 }
 function renderPvEcon(p) {
-  const cur = p.kwp || 5;
-  const maxK = Math.max(15, Math.ceil(cur * 1.4));
-  const step = maxK / 16;
+  const cur = p.kwp || 5, price = STATE.price;
+  const load = simulatePv({ ...p, kwp: 0.0001 }).load_kwh;
+  const coverK = load / (p.spec || 1000);
+  const maxK = Math.min(60, Math.max(24, Math.ceil(coverK * 3.5), Math.ceil(cur * 1.5)));
+  const step = maxK / 22;
   const pts = [];
   for (let k = step; k <= maxK + 0.001; k += step) {
     const r = simulatePv({ ...p, kwp: k });
-    pts.push({ kwp: k, benefit: r.benefit, self: r.self_rate });
+    pts.push({ kwp: k, net: r.grid_kwh * price - r.feed_kwh * p.feedin, self: r.self_rate });
   }
-  $('pv-econchart').innerHTML = pvEconChart(pts, cur);
-  // "knee": beyond this size the extra PV mostly just gets fed in
+  // kWp where net cost crosses 0 (Einspeisung deckt Netzbezug)
+  let nullK = null;
+  for (let i = 1; i < pts.length; i++) {
+    if (pts[i - 1].net > 0 && pts[i].net <= 0) {
+      const t = pts[i - 1].net / (pts[i - 1].net - pts[i].net);
+      nullK = pts[i - 1].kwp + (pts[i].kwp - pts[i - 1].kwp) * t; break;
+    }
+  }
+  const marks = [
+    { kwp: cur, label: 'Wahl', color: COL.sh, row: 0 },
+    { kwp: coverK, label: 'Deckung', color: PVC.feed, row: 1 },
+  ];
+  if (nullK) marks.push({ kwp: nullK, label: '0 €', color: PVC.direct, row: 2 });
+  $('pv-econchart').innerHTML = pvEconChart(pts, marks);
   const knee = pts.find(x => x.self < 0.32) || pts[pts.length - 1];
   const curR = simulatePv(p);
+  const curNet = curR.grid_kwh * price - curR.feed_kwh * p.feedin;
   $('pv-econchart-note').innerHTML =
-    `Y-Achse = <b>Vorteil €/Jahr</b>, X-Achse = <b>kWp</b>. Deine Wahl (${fmt(cur, 1)} kWp) bringt ` +
-    `<b>${money(curR.benefit)}/Jahr</b>. Die Kurve flacht ab, weil größere Anlagen mehr einspeisen als selbst ` +
-    `nutzen – ab etwa <b>${fmt(knee.kwp, 0)} kWp</b> lohnt jede weitere kWp v. a. für die Einspeisung. ` +
-    `Mehr Eigenverbrauch holst du eher über <b>Speicher, E-Auto & Warmwasser tagsüber</b> als über pure Größe.`;
+    `Y = <b>Netto-Stromkosten/Jahr</b> (Netzbezug − Einspeise-Erlös), X = <b>kWp</b>. Unter der ` +
+    `<b>0-€-Linie</b> verdienst du netto. Deine Wahl (${fmt(cur, 1)} kWp): <b>${money(curNet)}/Jahr</b> netto ` +
+    `(Vorteil ${money(curR.benefit)}). ` +
+    `<span style="color:${PVC.feed}">Deckung ${fmt(coverK, 1)} kWp</span> = Jahresertrag = Verbrauch; ` +
+    (nullK ? `<span style="color:${PVC.direct}">0 € erst bei ${fmt(nullK, 1)} kWp</span> – so viel Dach hat kaum ` +
+      `jemand, weil die Einspeisung (${fmt(p.feedin * 100, 1)} ct) viel weniger wert ist als der Netzstrom ` +
+      `(${fmt(price * 100, 0)} ct). `
+      : `die 0-€-Marke wird selbst bei ${fmt(maxK, 0)} kWp nicht erreicht – Einspeisung ist zu niedrig. `) +
+    `Fazit: <b>Eigenverbrauch schlägt Größe</b> – Speicher, E-Auto & Warmwasser tagsüber bringen mehr als pure kWp. ` +
+    `Ab ~${fmt(knee.kwp, 0)} kWp fließt fast nur noch Einspeisung.`;
 }
 
 function pvDayChart(pv, load) {
@@ -1548,6 +1653,19 @@ function init() {
   });
   const hpc = $('hp-connect'); if (hpc) hpc.addEventListener('click', doHomecomConnect);
   const hpi = $('hp-import'); if (hpi) hpi.addEventListener('change', doHpImport);
+  const hk = $('house-kwh');
+  if (hk) {
+    const saved = localStorage.getItem(LS.house); if (saved) hk.value = saved;
+    const upd = () => {
+      const v = parseFloat(hk.value) || 0;
+      try { v > 0 ? localStorage.setItem(LS.house, String(v)) : localStorage.removeItem(LS.house); } catch (e) {}
+      $('house-note').innerHTML = v > 0
+        ? `✓ Es wird mit <b>${kwh(v, 0)}/Jahr</b> Haushaltsstrom gerechnet (statt nur der Module).`
+        : 'Leer – es zählen nur die gemessenen Licht-/Rollladenmodule.';
+      renderOverview(); renderHistory(); renderProfile(); renderPv();
+    };
+    hk.addEventListener('input', upd); upd();
+  }
 
   // PV planner: restore saved inputs, save + recompute on change
   const pvFields = [['pv-kwp', PV_LS.kwp], ['pv-orient', PV_LS.orient], ['pv-batt', PV_LS.batt],

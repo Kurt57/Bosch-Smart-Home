@@ -581,6 +581,7 @@ def compute_analytics(store: Store, days: int, price: float) -> dict:
     hw_power: dict[tuple[int, int], list[float]] = {}
     weekday_kwh: dict[int, list[float]] = {i: [] for i in range(7)}
     per_device_day: dict[str, dict[str, float]] = {}
+    dev_hour: dict[str, list[list[float]]] = {}   # id -> 24 lists of power
 
     # baseline (standby) power = low percentile of all power readings
     all_powers = sorted(s["power_w"] for s in all_samples) or [0.0]
@@ -599,11 +600,13 @@ def compute_analytics(store: Store, days: int, price: float) -> dict:
             active_wh = max(0.0, wh - baseline_w * (
                 (rows[-1]["ts"] - rows[0]["ts"]) / 3600.0))
             day_active_kwh[day] = day_active_kwh.get(day, 0.0) + active_wh / 1000.0
-        # hourly / weekday average power profile
+        # hourly / weekday average power profile (overall + per device)
+        dh = dev_hour.setdefault(dev_id, [[] for _ in range(24)])
         for s in samples:
             dt = datetime.fromtimestamp(s["ts"])
             hour_power[dt.hour].append(s["power_w"])
             hw_power.setdefault((dt.weekday(), dt.hour), []).append(s["power_w"])
+            dh[dt.hour].append(s["power_w"])
 
     for day, kwh in day_kwh.items():
         wd = datetime.strptime(day, "%Y-%m-%d").weekday()
@@ -619,6 +622,8 @@ def compute_analytics(store: Store, days: int, price: float) -> dict:
          "avg_w": round(sum(v) / len(v), 2) if v else 0.0}
         for h, v in hour_power.items()
     ]
+    per_device_hour = {dev_id: [round(sum(v) / len(v), 2) if v else 0.0 for v in dh]
+                       for dev_id, dh in dev_hour.items()}
     weekday_profile = [
         {"weekday": i,
          "avg_kwh": round(sum(v) / len(v), 3) if v else 0.0}
@@ -699,6 +704,7 @@ def compute_analytics(store: Store, days: int, price: float) -> dict:
         "weekday_profile": weekday_profile,
         "heatmap": heatmap,
         "per_device_day": per_device_day,
+        "per_device_hour": per_device_hour,
         "stats": {
             "avg_daily_kwh": round(avg_daily, 3),
             "median_daily_kwh": round(median_daily, 3),

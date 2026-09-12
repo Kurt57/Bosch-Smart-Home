@@ -360,6 +360,14 @@
       <h2>Einblicke & Muster</h2>
       <div id="profile-insights"></div>
     </div>
+    <div class="card" id="profile-behavior-card">
+      <h2><span class="info" data-info="behavior" role="button" aria-label="Info">i</span>🔍 Verhalten & Empfehlungen</h2>
+      <div id="profile-behavior"></div>
+    </div>
+    <div class="card">
+      <h2>Nicht gemessener Hausstrom</h2>
+      <div class="note" id="profile-missing" style="line-height:1.6"></div>
+    </div>
   </section>
 
   <!-- PV-PLANER ----------------------------------------------------------->
@@ -515,6 +523,19 @@
       <input type="file" id="hp-import" accept=".csv,text/csv"
              style="padding:10px; background:var(--bg2); border:1px dashed var(--line)">
       <div class="note" id="hp-import-note" style="margin-top:10px"></div>
+    </div>
+
+    <div class="card">
+      <h2>🏠 Haushaltsstrom ergänzen</h2>
+      <div class="note" style="line-height:1.6; margin-bottom:10px">
+        Die Licht-/Rollladenmodule messen nur ihre eigenen Stromkreise – <b>nicht</b> Kühlschrank,
+        Herd, Waschmaschine, Router usw. Trag hier deinen <b>Jahresverbrauch von der Stromrechnung</b>
+        ein (nur Haushalt, <b>ohne</b> Wärmepumpe), dann rechnen Prognose & PV-Planer mit dem echten
+        Wert. Leer lassen = nur die gemessenen Module.
+      </div>
+      <label>Haushalts-Jahresverbrauch ohne Wärmepumpe (kWh)</label>
+      <input id="house-kwh" type="number" min="0" step="100" inputmode="numeric" placeholder="z. B. 2800">
+      <div class="note" id="house-note" style="margin-top:8px"></div>
     </div>
 
     <div class="card">
