@@ -830,7 +830,10 @@ def compute_hp_analytics(store: Store, days: int, price: float,
 
     # fold in imported hourly history (from a HomeCom CSV) – kWh in one hour
     # equals the average power in kW, so × 1000 gives the hour's average watts.
-    for r in store.hp_history("hour"):
+    hour_he = {h: [0.0, 0.0] for h in range(24)}   # per hour-of-day: [elec, heat]
+    hour_water = {h: 0.0 for h in range(24)}
+    imp_hour_rows = store.hp_history("hour")
+    for r in imp_hour_rows:
         e = r.get("elec_kwh")
         if e is None:
             continue
@@ -842,6 +845,11 @@ def compute_hp_analytics(store: Store, days: int, price: float,
         hw_power.setdefault((dt.weekday(), dt.hour), []).append(pw)
         hw_month.setdefault(dt.strftime("%Y-%m"), {}).setdefault(
             (dt.weekday(), dt.hour), []).append(pw)
+        hour_he[dt.hour][0] += e
+        if r.get("heat_kwh") is not None:
+            hour_he[dt.hour][1] += r["heat_kwh"]
+        if r.get("water_kwh") is not None:
+            hour_water[dt.hour] += r["water_kwh"]
 
     def _grid(hw):
         return [[round(sum(hw.get((wd, h), [])) / len(hw[(wd, h)]), 1)
@@ -950,6 +958,12 @@ def compute_hp_analytics(store: Store, days: int, price: float,
             "daily": [{"date": r["date"], "elec_kwh": round(r["elec_kwh"] or 0.0, 2),
                        "cop": round((r["heat_kwh"] or 0.0) / r["elec_kwh"], 2)
                        if (r["elec_kwh"] or 0.0) > 0 else None} for r in imp_days],
+            "hours": len(imp_hour_rows),
+            "cop_by_hour": [{"hour": h,
+                             "cop": round(hour_he[h][1] / hour_he[h][0], 2)
+                             if hour_he[h][0] > 0.05 and hour_he[h][1] > 0.05 else None,
+                             "water_kwh": round(hour_water[h], 2)} for h in range(24)]
+            if any(hour_he[h][0] > 0 for h in range(24)) else [],
         }
     elif imp_days:
         imported = {"months": 0, "months_used": 0, "days": len(imp_days),

@@ -310,6 +310,11 @@
       <div id="hp-coptemp"></div>
       <div class="note" id="hp-coptemp-note" style="margin-top:10px"></div>
     </div>
+    <div class="card" id="hp-cophour-card" hidden>
+      <h2><span class="info" data-info="cophour" role="button" aria-label="Info">i</span>Effizienz nach Uhrzeit (COP)</h2>
+      <div id="hp-cophour"></div>
+      <div class="note" id="hp-cophour-note" style="margin-top:10px"></div>
+    </div>
     <div class="card">
       <h2>Monatsbilanz</h2>
       <div id="hp-monthly"></div>
@@ -344,10 +349,12 @@
     <div class="card">
       <h2>Wochenprofil · Ø kWh je Wochentag</h2>
       <div id="chart-weekday"></div>
+      <div class="note" id="profile-weekday-note" style="margin-top:8px"></div>
     </div>
     <div class="card">
       <h2>Wärmekarte · Wochentag × Stunde (W)</h2>
       <div id="chart-heat"></div>
+      <div class="note" id="profile-heat-note" style="margin-top:8px"></div>
     </div>
     <div class="card">
       <h2>Einblicke & Muster</h2>
@@ -386,6 +393,12 @@
         <div><label>E-Auto: kWh / 100 km</label>
           <input id="pv-ev-kwh" type="number" min="0" step="0.5" inputmode="decimal" value="18"></div>
       </div>
+      <label style="margin-top:10px; display:block">Klimaanlage: kWh / Jahr
+        <span class="info" data-info="pv-ac" role="button" aria-label="Info">i</span></label>
+      <div style="display:flex; gap:8px; align-items:stretch">
+        <input id="pv-ac" type="number" min="0" step="50" inputmode="numeric" placeholder="0 = keine" style="flex:1">
+        <button class="btn sec" id="pv-ac-fill" style="margin-top:6px; width:auto; white-space:nowrap; padding:12px 12px">Ø D einsetzen</button>
+      </div>
       <label style="margin-top:10px; display:block">Investition (optional, für Amortisation)</label>
       <input id="pv-invest" type="number" inputmode="numeric" placeholder="z. B. 18000">
       <button class="btn sec" id="pv-suggest">💡 kWp &amp; Speicher aus meinem Verbrauch vorschlagen</button>
@@ -405,6 +418,11 @@
       <div id="pv-monthly"></div>
       <div class="legend" id="pv-monthly-legend"></div>
       <div class="note" id="pv-monthly-note" style="margin-top:10px"></div>
+    </div>
+    <div class="card">
+      <h2><span class="info" data-info="pv-econ" role="button" aria-label="Info">i</span>Wirtschaftlichkeit nach Anlagengröße</h2>
+      <div id="pv-econchart"></div>
+      <div class="note" id="pv-econchart-note" style="margin-top:10px"></div>
     </div>
     <div class="card">
       <h2>Typischer Sommertag · Erzeugung & Verbrauch</h2>
