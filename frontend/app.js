@@ -12,7 +12,7 @@ const MON = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Ok
 const COL = { sh: '#4da3ff', hp: '#ef6c4d', heat: '#f6b93b', away: '#ff6b8a' };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-12 · CSV-Import, Speicher-Viz, Button-Fix';
+const APP_VERSION = '2026-09-12 · Kalender-Wärmekarte, Verbrauch-Split, Tipps';
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -66,6 +66,9 @@ const INFO = {
     'werden 3 kWh Wärme. Höher = effizienter.',
   coptemp: () => 'COP je 5-°C-Außentemperatur-Bereich (kumulierte Wärme ÷ Strom). Zeigt, wie die Effizienz ' +
     'mit dem Wetter schwankt – wärmere Luft ist meist effizienter.',
+  'hp-cal': () => 'Jede Zelle ist ein Tag, eingefärbt nach Stromverbrauch (heller/röter = mehr). Zeigt die ' +
+    '<b>Heizsaison</b> auf einen Blick. Quelle: importierte Tagesdaten aus der CSV plus laufendes Polling. ' +
+    'Die Wochentag×Stunde-Wärmekarte braucht dagegen <b>Stundendaten</b> (in der CSV nur die letzten Tage).',
   'hp-counter': () => {
     const im = STATE.hpA && STATE.hpA.imported;
     if (im && im.year_elec_kwh) return `Basis: deine <b>importierte HomeCom-Historie</b> ` +
@@ -93,7 +96,9 @@ const INFO = {
   'pv-batt': () => 'Linker Balken = dein PV-Ertrag, aufgeteilt in <b style="color:#4be0b0">direkt genutzt</b>, ' +
     '<b style="color:#7c5cff">über die Batterie genutzt</b> und <b style="color:#f6b93b">eingespeist</b>. ' +
     'Der lila Anteil ist genau das, was der <b>Speicher</b> bringt: sonst eingespeister Strom, den du dank ' +
-    'Batterie selbst nutzt. Rechter Balken = dein Verbrauch.',
+    'Batterie selbst nutzt. Rechter Balken = dein <b>Verbrauch nach Quelle</b> ' +
+    '(<b style="color:#4da3ff">Hausstrom</b>, <b style="color:#ef6c4d">Wärmepumpe</b>, ' +
+    '<b style="color:#e26fb0">E-Auto</b>).',
   share: () => 'Anteil je Quelle über die <b>gemessenen</b> Tage im Zeitraum (kumulierte kWh). ' +
     'Geschätzte Tage zählen hier nicht mit.',
 };
@@ -430,6 +435,27 @@ function heatmap(grid) {
     xlab += `<text class="axis" x="${(left + hh * cellW).toFixed(1)}" y="${h - 4}">${hh}</text>`;
   return svg(h, cells + ylab + xlab);
 }
+// Calendar heatmap: one row per month, 31 day-columns, coloured by daily kWh.
+function calendarHeatmap(rows) {
+  const left = 34, top = 6, cellH = 15, gap = 1;
+  const cols = 31, cellW = (CW - left - 6) / cols;
+  const h = top + rows.length * cellH + 16;
+  let max = 0.0001;
+  rows.forEach(r => r.days.forEach(d => { if (d.v != null && d.v > max) max = d.v; }));
+  let cells = '', ylab = '', xlab = '';
+  rows.forEach((r, ri) => {
+    const y = top + ri * cellH;
+    for (let dd = 1; dd <= r.dim; dd++) {
+      const d = r.days[dd - 1];
+      const x = left + (dd - 1) * cellW;
+      const col = (d && d.v != null) ? (d.v > 0 ? heatColor(d.v / max) : 'rgb(28,42,73)') : '#131c31';
+      cells += `<rect x="${x.toFixed(1)}" y="${y}" width="${(cellW - gap).toFixed(1)}" height="${cellH - gap}" rx="1.5" fill="${col}"/>`;
+    }
+    ylab += `<text class="axis" x="0" y="${(y + cellH / 2 + 3).toFixed(1)}">${r.label}</text>`;
+  });
+  for (let dd = 1; dd <= 31; dd += 7) xlab += `<text class="axis" x="${(left + (dd - 1) * cellW).toFixed(1)}" y="${h - 3}">${dd}</text>`;
+  return svg(h, cells + ylab + xlab);
+}
 function heatColor(t) {
   t = Math.max(0, Math.min(1, t));
   const stops = [[22, 33, 60], [43, 108, 176], [75, 224, 176], [255, 182, 77]];
@@ -516,6 +542,54 @@ function renderOverview() {
     ].join('');
     $('ov-hp-body').innerHTML = rows;
   } else { card.hidden = true; }
+
+  renderTips();
+}
+
+// Data-driven, actionable tips – only the relevant ones are shown.
+function renderTips() {
+  const box = $('ov-tips'), card = $('ov-tips-card');
+  if (!box) return;
+  const tips = [];
+  const A = STATE.hpA, data = STATE.data, fc = annualForecast(), price = STATE.price;
+  const l = (A && A.live) || {};
+  // 1) electric booster heater (Heizstab) – expensive direct electric heat
+  if (l.energy_kwh > 0 && l.eheater_kwh != null) {
+    const share = l.eheater_kwh / l.energy_kwh;
+    if (share > 0.06) tips.push(['🔥', `Der <b>Elektro-Zuheizer</b> macht ${fmt(share * 100, 0)} % des ` +
+      `WP-Stroms (${kwh(l.eheater_kwh, 0)}). Er heizt 1:1 mit Strom – eine höhere Heizkurve/Warmwasser-` +
+      `Temperatur nur über die Wärmepumpe spart hier. Ziel: möglichst < 5 %.`]);
+  }
+  // 2) seasonal COP
+  const scop = (A && A.imported && A.imported.seasonal_cop) || (A && A.stats && A.stats.seasonal_cop);
+  if (scop) {
+    if (scop < 3) tips.push(['📉', `Jahresarbeitszahl <b>${fmt(scop, 2)}</b> ist eher niedrig. Prüfe ` +
+      `Vorlauftemperatur, Takten und Warmwasser-Zeiten – jede 0,1 mehr COP spart spürbar Strom.`]);
+    else tips.push(['✅', `Jahresarbeitszahl <b>${fmt(scop, 2)}</b> ist ordentlich – aus 1 kWh Strom werden ` +
+      `${fmt(scop, 1)} kWh Wärme.`]);
+  }
+  // 3) heat pump dominates → PV/battery makes most sense
+  if (fc.hpYear > fc.shYear * 2 && fc.hpYear > 1500) tips.push(['☀️', `Die Wärmepumpe ist dein größter ` +
+    `Verbraucher (${kwh(fc.hpYear, 0)}/Jahr). Eine <b>PV-Anlage</b> senkt v. a. die Übergangs-/Sommerkosten – ` +
+    `im Tab <b>PV</b> kannst du kWp & Speicher für deinen Bedarf durchrechnen.`]);
+  // 4) standby / base load
+  if (data && data.stats && data.stats.standby_share > 0.25) tips.push(['🔌', `Die Grundlast macht ` +
+    `${fmt(data.stats.standby_share * 100, 0)} % deines Smart-Home-Verbrauchs aus – Standby-Fresser ` +
+    `(Netzteile, Geräte) lohnen sich zu prüfen.`]);
+  // 5) away savings
+  if (data && data.away && data.away.count >= 3) tips.push(['🏠', `An ${data.away.count} Tagen wart ihr ` +
+    `vermutlich abwesend. Eine Absenkung/Abwesenheits-Automatik an genau diesen Mustern spart zusätzlich.`]);
+  // 6) hot-water share
+  const mw = A && A.mode_window;
+  if (mw && (mw.heating + mw.water) > 0 && mw.water / (mw.heating + mw.water) > 0.6 && mw.water > 3)
+    tips.push(['🚿', `Aktuell geht der meiste WP-Strom ins <b>Warmwasser</b>. Lege die Warmwasser-Bereitung ` +
+      `wenn möglich in die <b>Mittagszeit</b> – mit PV wird sie dann fast kostenlos.`]);
+
+  if (!tips.length) { card.hidden = true; return; }
+  card.hidden = false;
+  box.innerHTML = tips.slice(0, 5).map(([ic, t]) =>
+    `<div class="devrow" style="align-items:flex-start"><div style="font-size:18px;flex:none;width:24px">${ic}</div>` +
+    `<div class="nm"><small style="color:var(--ink);font-size:13px;line-height:1.5">${t}</small></div></div>`).join('');
 }
 
 function renderToday() {
@@ -762,6 +836,37 @@ function renderHeatpump() {
     $('hp-heat').innerHTML = has ? heatmap(fillHeatmap(grid)) : '<div class="note">Für diesen Zeitraum noch keine Daten.</div>';
   }
 
+  const impHrs = (STATE.health && STATE.health.hp_import && STATE.health.hp_import.hours) || 0;
+  if ($('hp-heat-note')) $('hp-heat-note').innerHTML = 'Wochentag × Stunde · Ø elektrische Leistung (W). ' +
+    (impHrs ? `Enthält ${impHrs} importierte Stunden. ` : '') +
+    'Leere Zellen sind mit dem Stunden-Ø gefüllt; ein volles Muster entsteht mit mehr Stundendaten (Polling oder CSV-Export mit größerem Stundenbereich).';
+
+  // calendar heatmap of daily electricity (from imported + polled days)
+  const calDays = {};
+  ((A.imported && A.imported.daily) || []).forEach(d => { if (d.elec_kwh != null) calDays[d.date] = d.elec_kwh; });
+  (A.daily || []).forEach(d => { if (calDays[d.day] == null && d.elec_kwh != null) calDays[d.day] = d.elec_kwh; });
+  const calKeys = Object.keys(calDays).sort();
+  const calCard = $('hp-cal-card');
+  if (calKeys.length >= 5) {
+    calCard.hidden = false;
+    const monthsSet = [...new Set(calKeys.map(k => k.slice(0, 7)))].sort();
+    const rows = monthsSet.map(ym => {
+      const [y, mo] = ym.split('-').map(Number);
+      const dim = new Date(y, mo, 0).getDate();
+      const days = [];
+      for (let dd = 1; dd <= dim; dd++) {
+        const key = `${ym}-${String(dd).padStart(2, '0')}`;
+        days.push({ day: dd, v: calDays[key] != null ? calDays[key] : null });
+      }
+      return { label: MON[mo - 1] + ' ' + String(y).slice(2), dim, days };
+    });
+    $('hp-cal').innerHTML = calendarHeatmap(rows);
+    const vals = calKeys.map(k => calDays[k]).filter(v => v > 0);
+    const peak = calKeys.reduce((a, k) => calDays[k] > calDays[a] ? k : a, calKeys[0]);
+    $('hp-cal-note').innerHTML = `Jede Zelle = ein Tag (heller = mehr Strom). <b>${vals.length}</b> Tage mit Daten; ` +
+      `stärkster Tag: <b>${longDay(peak)}</b> mit ${kwh(calDays[peak], 1)}. Winter dunkelrot, Sommer dunkel/leer.`;
+  } else { calCard.hidden = true; }
+
   // seasonal forecast for the heat pump
   const hpA = hpAvgDaily(), mo = new Date().getMonth();
   const im = A.imported;
@@ -886,12 +991,15 @@ function simulatePv(p) {
     const dayEv = evDayBase * (1 + 0.12 * Math.cos(2 * Math.PI * m / 12)); // a bit more in winter
     const pvH = pvHourFractions(m);
     let battery = 0, mDirect = 0, mBatt = 0, mFeed = 0, mGrid = 0, mPv = 0, mLoad = 0;
+    let mSh = 0, mHp = 0, mEv = 0;
     let dPv = null, dLoad = null;
     for (let d = 0; d < days; d++) {
       const capturePv = [], captureLoad = [];
       for (let h = 0; h < 24; h++) {
         const pv = dayPv * pvH[h];
-        const load = shDaily * shShape[h] + dayHp * hpShape[h] + dayEv * EV_SHAPE[h];
+        const lSh = shDaily * shShape[h], lHp = dayHp * hpShape[h], lEv = dayEv * EV_SHAPE[h];
+        const load = lSh + lHp + lEv;
+        mSh += lSh; mHp += lHp; mEv += lEv;
         const direct = Math.min(pv, load);
         const surplus = pv - direct, deficit = load - direct;
         const charge = Math.min(surplus, p.batt - battery); battery += charge;
@@ -905,7 +1013,8 @@ function simulatePv(p) {
     }
     const mSelf = mDirect + mBatt;
     Y += mPv; S += mSelf; F += mFeed; G += mGrid; L += mLoad;
-    monthly.push({ m, pv: mPv, load: mLoad, self: mSelf, direct: mDirect, batt: mBatt, feed: mFeed, grid: mGrid });
+    monthly.push({ m, pv: mPv, load: mLoad, self: mSelf, direct: mDirect, batt: mBatt, feed: mFeed, grid: mGrid,
+      loadSh: mSh, loadHp: mHp, loadEv: mEv });
     if (dPv) repDay = { pv: dPv, load: dLoad };
   }
   return {
@@ -918,22 +1027,25 @@ function simulatePv(p) {
 
 // Per month: a stacked PV bar (direct self / battery self / feed-in) next to a
 // consumption bar – shows what the battery shifts from feed-in to self-use.
-const PVC = { direct: '#4be0b0', batt: '#7c5cff', feed: '#f6b93b', load: '#4da3ff' };
+const PVC = { direct: '#4be0b0', batt: '#7c5cff', feed: '#f6b93b',
+  sh: '#4da3ff', hp: '#ef6c4d', ev: '#e26fb0' };
 function pvMonthlyChart(months) {
   const h = 210, pad = 26, top = 12, base = h - 22, n = months.length || 1;
   const max = Math.max(0.0001, ...months.map(m => Math.max((m.direct + m.batt + m.feed), m.load)));
   const gw = (CW - pad * 2) / n, bw = Math.max(2, gw * 0.30);
+  const stack = (gx, segs) => {
+    let y = base, out = '';
+    segs.forEach(([v, col]) => {
+      if (!(v > 0)) return; const bh = v / max * (base - top); y -= bh;
+      out += `<rect x="${gx.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" fill="${col}"/>`;
+    });
+    return out;
+  };
   let bars = '', labels = '';
   months.forEach((m, i) => {
     const gx = pad + i * gw + gw * 0.12;
-    let y = base;
-    [['direct', PVC.direct], ['batt', PVC.batt], ['feed', PVC.feed]].forEach(([k, col]) => {
-      const v = m[k] || 0; if (v <= 0) return;
-      const bh = v / max * (base - top); y -= bh;
-      bars += `<rect x="${gx.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" fill="${col}"/>`;
-    });
-    const lh = (m.load || 0) / max * (base - top);
-    bars += `<rect x="${(gx + bw + 2).toFixed(1)}" y="${(base - lh).toFixed(1)}" width="${bw.toFixed(1)}" height="${lh.toFixed(1)}" rx="1.5" fill="${PVC.load}"/>`;
+    bars += stack(gx, [[m.direct, PVC.direct], [m.batt, PVC.batt], [m.feed, PVC.feed]]);       // PV
+    bars += stack(gx + bw + 2, [[m.loadSh, PVC.sh], [m.loadHp, PVC.hp], [m.loadEv, PVC.ev]]);  // Verbrauch
     if (m.label && (n <= 16 || i % Math.ceil(n / 12) === 0))
       labels += `<text class="axis" x="${(gx + bw).toFixed(1)}" y="${h - 8}" text-anchor="middle">${m.label}</text>`;
   });
@@ -977,9 +1089,12 @@ function renderPv() {
   $('pv-benefit').innerHTML = money(r.benefit);
 
   $('pv-monthly').innerHTML = pvMonthlyChart(r.monthly.map(x => ({ label: MON[x.m], ...x })));
-  $('pv-monthly-legend').innerHTML = legendHtml([
-    { label: 'Direkt genutzt', color: PVC.direct }, { label: 'aus Batterie', color: PVC.batt },
-    { label: 'Einspeisung', color: PVC.feed }, { label: 'Verbrauch', color: PVC.load }]);
+  const leg = [
+    { label: 'PV: Direkt', color: PVC.direct }, { label: 'PV: Batterie', color: PVC.batt },
+    { label: 'PV: Einspeisung', color: PVC.feed },
+    { label: 'Hausstrom', color: PVC.sh }, { label: 'Wärmepumpe', color: PVC.hp }];
+  if (p.evAnnual > 0) leg.push({ label: 'E-Auto', color: PVC.ev });
+  $('pv-monthly-legend').innerHTML = legendHtml(leg);
   const cover = r.load_kwh > 0 ? r.yield_kwh / r.load_kwh : 0;
   const evTxt = p.evAnnual > 0 ? ` inkl. E-Auto (~${kwh(p.evAnnual, 0)}/Jahr)` : '';
   const battKwh = r.monthly.reduce((a, x) => a + x.batt, 0);
@@ -988,7 +1103,8 @@ function renderPv() {
       ` (Wert dank Speicher: ~${money(battKwh * (STATE.price - p.feedin))}/Jahr).`
     : ' Ohne Speicher wird der Mittags-Überschuss eingespeist – plane einen Speicher ein, um mehr selbst zu nutzen (der lila Anteil wächst).';
   $('pv-monthly-note').innerHTML =
-    `Linker Balken = PV-Ertrag (grün direkt genutzt, lila über Batterie, gelb eingespeist), rechter = Verbrauch. ` +
+    `Linker Balken = <b>PV-Ertrag</b> (grün direkt, lila über Batterie, gelb eingespeist), rechter = ` +
+    `<b>Verbrauch</b> nach Quelle (blau Hausstrom, orange Wärmepumpe${p.evAnnual > 0 ? ', pink E-Auto' : ''}). ` +
     `Erzeugung <b>${kwh(r.yield_kwh, 0)}/Jahr</b> ≈ <b>${fmt(cover * 100, 0)} %</b> deines Verbrauchs (${kwh(r.load_kwh, 0)}${evTxt}).` + battTxt;
 
   $('pv-day').innerHTML = r.repDay ? pvDayChart(r.repDay.pv, r.repDay.load)
@@ -1149,9 +1265,9 @@ function parseHomeComCsv(text) {
   const rows = [];
   for (let li = hi + 1; li < lines.length; li++) {
     const c = split(lines[li]); const cat = norm(c[0]);
-    const period = cat === 'tag' ? 'day' : cat === 'monat' ? 'month' : null;
+    const period = cat === 'tag' ? 'day' : cat === 'monat' ? 'month' : cat === 'stunde' ? 'hour' : null;
     if (!period) continue;
-    const date = (c[1] || '').trim().slice(0, period === 'month' ? 7 : 10);
+    const date = (c[1] || '').trim().slice(0, period === 'month' ? 7 : period === 'hour' ? 16 : 10);
     if (!/^\d{4}-\d{2}/.test(date)) continue;
     const elec = add(at(c, idx.elecWP), at(c, idx.elecEH));
     const heat = add(at(c, idx.prodWP), at(c, idx.prodUmg));
@@ -1179,7 +1295,8 @@ async function doHpImport(ev) {
     note.textContent = `Sende ${res.rows.length} Zeilen an die Bridge …`;
     const r = await postJSON('/api/homecom/import', { rows: res.rows });
     if (r.ok) {
-      note.innerHTML = '✅ ' + esc(r.message) + ` Gesamt gespeichert: <b>${r.total_days}</b> Tage, <b>${r.total_months}</b> Monate.`;
+      note.innerHTML = '✅ ' + esc(r.message) + ` Gesamt: <b>${r.total_days}</b> Tage, <b>${r.total_months}</b> Monate` +
+        (r.total_hours ? `, <b>${r.total_hours}</b> Stunden` : '') + '.';
       setTimeout(loadAll, 800);
     } else note.innerHTML = '⚠︎ ' + esc(r.error || 'Import fehlgeschlagen.');
   } catch (e) { note.textContent = 'Fehler: ' + e.message + ' – Seite von der Bridge geöffnet?'; }

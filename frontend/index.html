@@ -200,6 +200,10 @@
       <h2>Wärmepumpe <span class="r" id="ov-hp-cop"></span></h2>
       <div id="ov-hp-body"></div>
     </div>
+    <div class="card" id="ov-tips-card" hidden>
+      <h2>💡 Tipps & Einordnung</h2>
+      <div id="ov-tips"></div>
+    </div>
   </section>
 
   <!-- HEUTE --------------------------------------------------------------->
@@ -313,6 +317,11 @@
         <div class="it"><span class="sw" style="background:var(--hp)"></span>Strom</div>
         <div class="it"><span class="sw" style="background:var(--heat)"></span>Wärme</div>
       </div>
+    </div>
+    <div class="card" id="hp-cal-card" hidden>
+      <h2><span class="info" data-info="hp-cal" role="button" aria-label="Info">i</span>Kalender · Stromverbrauch pro Tag</h2>
+      <div id="hp-cal"></div>
+      <div class="note" id="hp-cal-note" style="margin-top:8px"></div>
     </div>
     <div class="card">
       <h2>Wärmekarte <span class="r"><select id="hp-heat-month" style="width:auto; padding:4px 8px; margin:0; font-size:12px"><option value="">Gesamt</option></select></span></h2>

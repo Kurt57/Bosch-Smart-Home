@@ -400,7 +400,8 @@ class Store:
         with self.lock:
             d = self.conn.execute("SELECT COUNT(*) c FROM hp_history WHERE period='day'").fetchone()["c"]
             m = self.conn.execute("SELECT COUNT(*) c FROM hp_history WHERE period='month'").fetchone()["c"]
-            return {"days": d, "months": m}
+            hh = self.conn.execute("SELECT COUNT(*) c FROM hp_history WHERE period='hour'").fetchone()["c"]
+            return {"days": d, "months": m, "hours": hh}
 
     def hp_counter_span(self) -> dict | None:
         """First and last cumulative counters over the whole observed history –
@@ -827,6 +828,21 @@ def compute_hp_analytics(store: Store, days: int, price: float,
                        if outdoor_hour[h] else None}
                       for h, v in hour_power.items()]
 
+    # fold in imported hourly history (from a HomeCom CSV) – kWh in one hour
+    # equals the average power in kW, so × 1000 gives the hour's average watts.
+    for r in store.hp_history("hour"):
+        e = r.get("elec_kwh")
+        if e is None:
+            continue
+        try:
+            dt = datetime.fromisoformat(r["date"])
+        except (ValueError, TypeError):
+            continue
+        pw = e * 1000.0
+        hw_power.setdefault((dt.weekday(), dt.hour), []).append(pw)
+        hw_month.setdefault(dt.strftime("%Y-%m"), {}).setdefault(
+            (dt.weekday(), dt.hour), []).append(pw)
+
     def _grid(hw):
         return [[round(sum(hw.get((wd, h), [])) / len(hw[(wd, h)]), 1)
                  if hw.get((wd, h)) else 0.0 for h in range(24)] for wd in range(7)]
@@ -931,6 +947,9 @@ def compute_hp_analytics(store: Store, days: int, price: float,
             "latest": imp_months[-1]["date"],
             "monthly": [{"month": r["date"], "elec_kwh": round(r["elec_kwh"] or 0.0, 1),
                          "heat_kwh": round(r["heat_kwh"] or 0.0, 1)} for r in imp_months],
+            "daily": [{"date": r["date"], "elec_kwh": round(r["elec_kwh"] or 0.0, 2),
+                       "cop": round((r["heat_kwh"] or 0.0) / r["elec_kwh"], 2)
+                       if (r["elec_kwh"] or 0.0) > 0 else None} for r in imp_days],
         }
     elif imp_days:
         imported = {"months": 0, "months_used": 0, "days": len(imp_days),
@@ -1715,7 +1734,7 @@ class Handler(BaseHTTPRequestHandler):
         for r in (body.get("rows") or []):
             period = r.get("period")
             date = str(r.get("date") or "").strip()
-            if period not in ("day", "month") or not date:
+            if period not in ("day", "month", "hour") or not date:
                 continue
             elec = f(r.get("elec_kwh"))
             heat = f(r.get("heat_kwh"))
@@ -1729,11 +1748,13 @@ class Handler(BaseHTTPRequestHandler):
         cnt = self.store.hp_history_count()
         days = sum(1 for c in clean if c[0] == "day")
         months = sum(1 for c in clean if c[0] == "month")
+        hours = sum(1 for c in clean if c[0] == "hour")
         return self._send_json({"ok": True, "imported": len(clean),
-                                "new_days": days, "new_months": months,
+                                "new_days": days, "new_months": months, "new_hours": hours,
                                 "total_days": cnt["days"], "total_months": cnt["months"],
+                                "total_hours": cnt.get("hours", 0),
                                 "message": f"{len(clean)} Zeilen importiert "
-                                           f"({days} Tage, {months} Monate)."})
+                                           f"({days} Tage, {months} Monate, {hours} Stunden)."})
 
     def _post_update(self, body):
         """Pull the latest code (git) and restart the bridge in place.
