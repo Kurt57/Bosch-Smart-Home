@@ -57,6 +57,10 @@ try:
     import homecom  # optional Bosch HomeCom Easy (heat pump) client
 except Exception:  # pragma: no cover - keeps the bridge running without it
     homecom = None
+try:
+    import electrolux  # optional AEG / Electrolux (washer/dryer) client
+except Exception:  # pragma: no cover - keeps the bridge running without it
+    electrolux = None
 
 DEFAULT_FRONTEND = os.path.normpath(os.path.join(HERE, "..", "frontend"))
 DEFAULT_DB = os.path.join(HERE, "energy.db")
@@ -89,6 +93,11 @@ def load_config(path: str) -> dict:
         "homecom_refresh_token": "",
         "homecom_gateway": "",
         "homecom_interval": 300,       # seconds between heat-pump polls
+        # Optional AEG / Electrolux appliances (washer, dryer) via the official
+        # developer API – filled in via the web UI.
+        "electrolux_api_key": "",
+        "electrolux_refresh_token": "",
+        "electrolux_interval": 300,    # seconds between appliance polls
         # Auto-update: when > 0, the bridge periodically checks the git remote
         # and, if new commits are available, pulls and restarts itself. 0 = off.
         "auto_update_interval": 0,     # minutes between update checks (0 = off)
@@ -440,6 +449,20 @@ class Store:
                 " heating_kwh REAL, water_kwh REAL, outdoor_c REAL,"
                 " PRIMARY KEY(period,date))"
             )
+            # AEG / Electrolux appliances (washer, dryer, …) and their readings
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS aeg_appliances("
+                " id TEXT PRIMARY KEY, name TEXT, type TEXT, brand TEXT,"
+                " model TEXT, last_seen INTEGER)"
+            )
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS aeg_samples("
+                " appliance_id TEXT, ts INTEGER, total_kwh REAL, cycle_kwh REAL,"
+                " state TEXT, program TEXT)"
+            )
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_aeg ON aeg_samples(appliance_id, ts)"
+            )
 
     # -- heat pump ------------------------------------------------------- #
     def add_hp_sample(self, row: dict):
@@ -510,6 +533,65 @@ class Store:
             m = self.conn.execute("SELECT COUNT(*) c FROM hp_history WHERE period='month'").fetchone()["c"]
             hh = self.conn.execute("SELECT COUNT(*) c FROM hp_history WHERE period='hour'").fetchone()["c"]
             return {"days": d, "months": m, "hours": hh}
+
+    # -- AEG / Electrolux appliances ------------------------------------- #
+    def aeg_upsert_appliance(self, a: dict):
+        with self.lock, self.conn:
+            self.conn.execute(
+                "INSERT INTO aeg_appliances(id,name,type,brand,model,last_seen)"
+                " VALUES(?,?,?,?,?,?)"
+                " ON CONFLICT(id) DO UPDATE SET name=excluded.name, type=excluded.type,"
+                " brand=COALESCE(excluded.brand,aeg_appliances.brand),"
+                " model=COALESCE(excluded.model,aeg_appliances.model),"
+                " last_seen=excluded.last_seen",
+                (a["id"], a.get("name"), a.get("type"), a.get("brand"),
+                 a.get("model"), int(time.time())))
+
+    def aeg_add_sample(self, appliance_id: str, ts: int, total_kwh, cycle_kwh,
+                       state, program):
+        with self.lock, self.conn:
+            self.conn.execute(
+                "INSERT INTO aeg_samples(appliance_id,ts,total_kwh,cycle_kwh,state,program)"
+                " VALUES(?,?,?,?,?,?)",
+                (appliance_id, ts, total_kwh, cycle_kwh, state, program))
+
+    def aeg_appliances(self) -> list[dict]:
+        with self.lock:
+            rows = self.conn.execute(
+                "SELECT id,name,type,brand,model,last_seen FROM aeg_appliances"
+                " ORDER BY name").fetchall()
+        return [dict(r) for r in rows]
+
+    def aeg_latest(self, appliance_id: str) -> dict | None:
+        with self.lock:
+            r = self.conn.execute(
+                "SELECT ts,total_kwh,cycle_kwh,state,program FROM aeg_samples"
+                " WHERE appliance_id=? ORDER BY ts DESC LIMIT 1",
+                (appliance_id,)).fetchone()
+        return dict(r) if r else None
+
+    def aeg_total_since(self, appliance_id: str, since_ts: int):
+        """kWh consumed since `since_ts` from the cumulative counter growth
+        (robust to polling gaps): last value minus the first value at/after
+        `since_ts`; falls back to the last value before it as the baseline."""
+        with self.lock:
+            base = self.conn.execute(
+                "SELECT total_kwh FROM aeg_samples WHERE appliance_id=?"
+                " AND total_kwh IS NOT NULL AND ts<=? ORDER BY ts DESC LIMIT 1",
+                (appliance_id, since_ts)).fetchone()
+            if not base:
+                base = self.conn.execute(
+                    "SELECT total_kwh FROM aeg_samples WHERE appliance_id=?"
+                    " AND total_kwh IS NOT NULL AND ts>=? ORDER BY ts ASC LIMIT 1",
+                    (appliance_id, since_ts)).fetchone()
+            last = self.conn.execute(
+                "SELECT total_kwh FROM aeg_samples WHERE appliance_id=?"
+                " AND total_kwh IS NOT NULL ORDER BY ts DESC LIMIT 1",
+                (appliance_id,)).fetchone()
+        if not base or not last or last["total_kwh"] is None or base["total_kwh"] is None:
+            return None
+        d = last["total_kwh"] - base["total_kwh"]
+        return round(d, 3) if d >= 0 else None
 
     def hp_counter_span(self) -> dict | None:
         """First and last cumulative counters over the whole observed history –
@@ -1427,6 +1509,25 @@ def seed_demo(store: Store, days: int = 90):
     store.add_hp_samples_bulk(hp_rows)
     print(f"[demo] inserted {len(hp_rows)} heat-pump samples.")
 
+    # a demo AEG washing machine: a growing lifetime kWh counter plus a few
+    # wash cycles, so the appliance card has something to show in demo mode.
+    store.aeg_upsert_appliance({"id": "demo-washer", "name": "Waschmaschine",
+                                "type": "WM", "brand": "AEG", "model": "LR8E75495"})
+    total = 300.0
+    t = start
+    while t <= now:
+        # a wash on alternate days at 10:00 and 18:00, ~0.9 kWh each
+        running = (t.hour in (10, 18)) and (int(t.timestamp()) // 86400) % 2 == 0
+        cyc = 0.0
+        if running:
+            total += 0.9           # one wash finished this hour
+            cyc = 0.9
+        store.aeg_add_sample("demo-washer", int(t.timestamp()), round(total, 3),
+                             round(cyc, 3), "RUNNING" if running else "OFF",
+                             "Baumwolle 40°" if running else None)
+        t += timedelta(hours=1)
+    print("[demo] inserted demo AEG appliance history.")
+
 
 class DemoPoller(threading.Thread):
     """Keeps demo data 'live' by appending a fresh sample every interval."""
@@ -1553,6 +1654,66 @@ class HeatPumpPoller(threading.Thread):
 
 
 # --------------------------------------------------------------------------- #
+# AEG / Electrolux appliance poller (washer, dryer, … via the developer API)
+# --------------------------------------------------------------------------- #
+class ElectroluxPoller(threading.Thread):
+    def __init__(self, client, store: Store, state: dict, interval: int = 300):
+        super().__init__(daemon=True)
+        self.client = client
+        self.store = store
+        self.state = state
+        self.interval = max(60, int(interval))
+        self._stop = threading.Event()
+        self.last_error = None
+        self.last_poll = None
+
+    def run(self):
+        while not self._stop.is_set():
+            try:
+                self._poll()
+                self.state["last_error"] = None
+            except Exception as exc:
+                self.last_error = str(exc)
+                self.state["last_error"] = str(exc)
+                print(f"[electrolux] error: {exc}", file=sys.stderr)
+            self._stop.wait(self.interval)
+
+    def _poll(self):
+        ts = int(time.time())
+        appliances = self.client.list_appliances()
+        out = []
+        for a in appliances:
+            self.store.aeg_upsert_appliance(a)
+            try:
+                snap = self.client.read_appliance(a["id"], a.get("name"))
+            except Exception as exc:
+                out.append({**a, "error": str(exc)})
+                continue
+            self.store.aeg_add_sample(a["id"], ts, snap.get("total_kwh"),
+                                      snap.get("cycle_kwh"), snap.get("state"),
+                                      snap.get("program"))
+            today0 = int(time.mktime(time.localtime(ts)[:3] + (0, 0, 0, 0, 0, -1)))
+            out.append({
+                **a,
+                "state": snap.get("state"),
+                "connection": snap.get("connection"),
+                "program": snap.get("program"),
+                "time_to_end_min": snap.get("time_to_end_min"),
+                "total_kwh": snap.get("total_kwh"),
+                "cycle_kwh": snap.get("cycle_kwh"),
+                "today_kwh": self.store.aeg_total_since(a["id"], today0),
+                "energy_fields": snap.get("energy_fields"),
+            })
+        self.state.clear()
+        self.state.update({"ok": True, "last_poll": ts, "appliances": out,
+                           "last_error": None})
+        self.last_poll = ts
+
+    def stop(self):
+        self._stop.set()
+
+
+# --------------------------------------------------------------------------- #
 # Runtime – holds the store/config and the currently running poller so the
 # poller can be (re)started from the web UI (pair / switch demo↔live).
 # --------------------------------------------------------------------------- #
@@ -1564,12 +1725,15 @@ class Runtime:
         self.mode = "idle"
         self.hp = None          # HeatPumpPoller
         self.hp_state = {}      # latest heat-pump snapshot
+        self.ael = None         # ElectroluxPoller
+        self.ael_state = {}     # latest AEG/Electrolux snapshot
 
     def stop(self):
         if self.poller:
             self.poller.stop()
             self.poller = None
         self.stop_heatpump()
+        self.stop_electrolux()
 
     def start_demo(self, days: int = 90):
         self.stop()
@@ -1621,11 +1785,49 @@ class Runtime:
             self.hp.stop()
             self.hp = None
 
+    # -- AEG / Electrolux ------------------------------------------------ #
+    def save_electrolux_token(self, refresh_token: str):
+        """Persist a rotated Electrolux refresh token (rotation on refresh)."""
+        self.cfg["electrolux_refresh_token"] = refresh_token
+        save_config(self.cfg, self.cfg.get("_config_path", DEFAULT_CONFIG))
+
+    def electrolux_client(self):
+        """Shared Electrolux client (the poller's, if running) so refresh
+        tokens aren't rotated twice; created on demand otherwise."""
+        if self.ael and getattr(self.ael, "client", None):
+            return self.ael.client
+        if not electrolux or not self.cfg.get("electrolux_api_key") \
+                or not self.cfg.get("electrolux_refresh_token"):
+            return None
+        return electrolux.ElectroluxClient(
+            self.cfg["electrolux_api_key"], self.cfg["electrolux_refresh_token"],
+            on_token=self.save_electrolux_token)
+
+    def start_electrolux(self) -> bool:
+        self.stop_electrolux()
+        if not electrolux or not self.cfg.get("electrolux_api_key") \
+                or not self.cfg.get("electrolux_refresh_token"):
+            return False
+        client = electrolux.ElectroluxClient(
+            self.cfg["electrolux_api_key"], self.cfg["electrolux_refresh_token"],
+            on_token=self.save_electrolux_token)
+        self.ael = ElectroluxPoller(client, self.store, self.ael_state,
+                                    int(self.cfg.get("electrolux_interval", 300)))
+        self.ael.start()
+        return True
+
+    def stop_electrolux(self):
+        if self.ael:
+            self.ael.stop()
+            self.ael = None
+
 
 def save_config(cfg: dict, path: str):
     keep = ("shc_ip", "system_password", "cert", "key", "db", "poll_interval",
             "price_per_kwh", "currency", "device_filter",
-            "homecom_refresh_token", "homecom_gateway", "homecom_interval")
+            "homecom_refresh_token", "homecom_gateway", "homecom_interval",
+            "electrolux_api_key", "electrolux_refresh_token", "electrolux_interval",
+            "auto_update_interval")
     data = {k: cfg[k] for k in keep if k in cfg and not str(k).startswith("_")}
     try:
         with open(path, "w", encoding="utf-8") as fh:
@@ -1664,6 +1866,33 @@ class Handler(BaseHTTPRequestHandler):
         hp = dict(self.ctx.hp_state)
         hp["connected"] = bool(self.cfg.get("homecom_refresh_token")) or self.ctx.mode == "demo"
         return hp
+
+    def _appliances_payload(self) -> dict:
+        """AEG/Electrolux appliances: live snapshot from the poller, enriched
+        with today's kWh, or the last stored reading when the poller is idle."""
+        live = {a["id"]: a for a in (self.ctx.ael_state.get("appliances") or [])}
+        out = []
+        for a in self.store.aeg_appliances():
+            aid = a["id"]
+            row = {"id": aid, "name": a.get("name"), "type": a.get("type"),
+                   "brand": a.get("brand"), "model": a.get("model")}
+            if aid in live:
+                row.update({k: live[aid].get(k) for k in
+                            ("state", "connection", "program", "time_to_end_min",
+                             "total_kwh", "cycle_kwh", "today_kwh", "energy_fields")})
+            else:
+                last = self.store.aeg_latest(aid)
+                today0 = int(time.mktime(time.localtime()[:3] + (0, 0, 0, 0, 0, -1)))
+                if last:
+                    row.update({"state": last.get("state"), "program": last.get("program"),
+                                "total_kwh": last.get("total_kwh"),
+                                "cycle_kwh": last.get("cycle_kwh"),
+                                "today_kwh": self.store.aeg_total_since(aid, today0)})
+            out.append(row)
+        return {"connected": bool(self.cfg.get("electrolux_refresh_token")) or self.ctx.mode == "demo",
+                "last_poll": self.ctx.ael_state.get("last_poll"),
+                "last_error": self.ctx.ael_state.get("last_error"),
+                "appliances": out}
 
     def _send_json(self, obj, status=200):
         body = json.dumps(obj).encode("utf-8")
@@ -1709,6 +1938,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._post_homecom_connect(body)
             if parsed.path == "/api/homecom/import":
                 return self._post_hp_import(body)
+            if parsed.path == "/api/electrolux/connect":
+                return self._post_electrolux_connect(body)
+            if parsed.path == "/api/electrolux/probe":
+                return self._post_electrolux_probe(body)
             if parsed.path == "/api/update":
                 return self._post_update(body)
             return self._send_json({"error": "unknown endpoint"}, 404)
@@ -1890,6 +2123,54 @@ class Handler(BaseHTTPRequestHandler):
                                 "message": f"{len(clean)} Zeilen importiert "
                                            f"({days} Tage, {months} Monate, {hours} Stunden)."})
 
+    def _post_electrolux_connect(self, body):
+        """Save the AEG/Electrolux API key + refresh token, verify them by
+        listing appliances, and start the poller."""
+        if not electrolux:
+            return self._send_json({"ok": False, "error": "Electrolux-Modul fehlt (electrolux.py)."}, 500)
+        api_key = str(body.get("api_key") or self.cfg.get("electrolux_api_key") or "").strip()
+        refresh = str(body.get("refresh_token") or "").strip()
+        access = str(body.get("access_token") or "").strip() or None
+        if not api_key or not refresh:
+            return self._send_json(
+                {"ok": False, "error": "API-Key und Refresh-Token sind erforderlich."}, 400)
+        client = electrolux.ElectroluxClient(api_key, refresh, access_token=access)
+        try:
+            appliances = client.verify()   # forces a token refresh + list
+        except electrolux.ElectroluxAuthError as exc:
+            return self._send_json({"ok": False, "error": str(exc)}, 200)
+        except Exception as exc:
+            return self._send_json(
+                {"ok": False, "error": f"Verbindung fehlgeschlagen: {exc}"}, 200)
+        # persist the possibly-rotated refresh token
+        self.cfg["electrolux_api_key"] = api_key
+        self.cfg["electrolux_refresh_token"] = client.refresh_token or refresh
+        save_config(self.cfg, self.cfg.get("_config_path", DEFAULT_CONFIG))
+        for a in appliances:
+            self.store.aeg_upsert_appliance(a)
+        started = self.ctx.start_electrolux()
+        names = ", ".join(a.get("name", a["id"]) for a in appliances) or "keine"
+        return self._send_json({"ok": True, "connected": True, "started": started,
+                                "appliances": appliances,
+                                "message": f"Verbunden. Geräte: {names}."})
+
+    def _post_electrolux_probe(self, body):
+        """Diagnostic: dump one appliance's full reported state + energy fields,
+        so the exact per-model field names can be inspected."""
+        client = self.ctx.electrolux_client()
+        if not client:
+            return self._send_json({"ok": False, "error": "Nicht verbunden."}, 200)
+        try:
+            aid = str(body.get("id") or "").strip()
+            if not aid:
+                apps = client.list_appliances()
+                if not apps:
+                    return self._send_json({"ok": True, "appliances": [], "probe": None})
+                aid = apps[0]["id"]
+            return self._send_json({"ok": True, "id": aid, "probe": client.probe(aid)})
+        except Exception as exc:
+            return self._send_json({"ok": False, "error": str(exc)}, 200)
+
     def _post_update(self, body):
         """Pull the latest code (git) and restart the bridge in place.
 
@@ -1942,6 +2223,11 @@ class Handler(BaseHTTPRequestHandler):
                     "hp_import": self.store.hp_history_count(),
                     "auto_update_interval": int(self.cfg.get("auto_update_interval", 0) or 0),
                     "is_git_repo": _is_git_repo(),
+                    "electrolux_available": electrolux is not None,
+                    "electrolux_connected": bool(self.cfg.get("electrolux_refresh_token")),
+                    "electrolux_last_error": self.ctx.ael_state.get("last_error"),
+                    "electrolux_last_poll": self.ctx.ael_state.get("last_poll"),
+                    "electrolux_count": len(self.store.aeg_appliances()),
                 })
             if path == "/api/devices":
                 return self._send_json({"devices": self.store.devices()})
@@ -1950,6 +2236,8 @@ class Handler(BaseHTTPRequestHandler):
                 st["available"] = bool(st) and st.get("energy_kwh") is not None or bool(st.get("last_poll"))
                 st["connected"] = bool(self.cfg.get("homecom_refresh_token"))
                 return self._send_json(st)
+            if path == "/api/appliances":
+                return self._send_json(self._appliances_payload())
             if path == "/api/homecom/authurl":
                 if not homecom:
                     return self._send_json({"error": "homecom modul fehlt"}, 500)
@@ -2176,6 +2464,10 @@ def cmd_serve(args, cfg):
     # optional: start the heat-pump (HomeCom) poller if already connected
     if ctx.start_heatpump():
         print(f"  Heat pump:   HomeCom gateway {cfg.get('homecom_gateway')}")
+
+    # optional: start the AEG / Electrolux appliance poller if already connected
+    if ctx.start_electrolux():
+        print("  Appliances:  AEG/Electrolux connected")
 
     # optional: automatic self-update (git pull + restart when new commits land)
     if _ensure_auto_update(cfg):

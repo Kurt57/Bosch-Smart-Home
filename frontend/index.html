@@ -200,6 +200,11 @@
       <h2>Wärmepumpe <span class="r" id="ov-hp-cop"></span></h2>
       <div id="ov-hp-body"></div>
     </div>
+    <div class="card" id="ov-aeg-card" hidden>
+      <h2><span class="info" data-info="aeg" role="button" aria-label="Info">i</span>🧺 Haushaltsgeräte <span class="r" id="ov-aeg-sum"></span></h2>
+      <div id="ov-aeg-body"></div>
+      <div class="note" id="ov-aeg-note" style="margin-top:8px"></div>
+    </div>
     <div class="card" id="ov-tips-card" hidden>
       <h2>💡 Tipps & Einordnung</h2>
       <div id="ov-tips"></div>
@@ -539,6 +544,40 @@
       <input type="file" id="hp-import" accept=".csv,text/csv"
              style="padding:10px; background:var(--bg2); border:1px dashed var(--line)">
       <div class="note" id="hp-import-note" style="margin-top:10px"></div>
+    </div>
+
+    <div class="card" id="aeg-card">
+      <h2><span class="info" data-info="aeg" role="button" aria-label="Info">i</span>🧺 AEG / Electrolux verbinden</h2>
+      <div class="note" id="aeg-status" style="margin-bottom:10px"></div>
+      <div class="note" style="line-height:1.6">
+        <b>Waschmaschine/Trockner mit WLAN</b> (AEG/Electrolux) einbinden – zeigt Stromverbrauch
+        pro Waschgang und gesamt. So bekommst du die Zugangsdaten:<br>
+        1. Auf <b>developer.electrolux.one</b> mit <b>derselben E-Mail wie in der AEG-App</b>
+           registrieren und einloggen.<br>
+        2. Im <b>Dashboard</b> einen <b>API-Key</b> erstellen und einen <b>Access-</b> &amp;
+           <b>Refresh-Token</b> generieren.<br>
+        3. API-Key und Refresh-Token hier einfügen und „Verbinden" tippen. Alles bleibt
+           <b>lokal</b> auf der Bridge.
+      </div>
+      <button class="btn sec" id="aeg-dash" style="margin-top:10px">🔗 Developer-Dashboard öffnen</button>
+      <label style="margin-top:10px; display:block">API-Key</label>
+      <input id="aeg-key" placeholder="API-Key aus dem Dashboard"
+             autocomplete="off" autocapitalize="off" spellcheck="false">
+      <label style="margin-top:10px; display:block">Refresh-Token</label>
+      <input id="aeg-refresh" placeholder="Refresh-Token"
+             autocomplete="off" autocapitalize="off" spellcheck="false">
+      <label style="margin-top:10px; display:block">Access-Token <span style="color:var(--muted)">(optional)</span></label>
+      <input id="aeg-access" placeholder="Access-Token (optional)"
+             autocomplete="off" autocapitalize="off" spellcheck="false">
+      <button class="btn" id="aeg-connect">✅ Verbinden</button>
+      <div class="note" id="aeg-connect-note" style="margin-top:10px"></div>
+      <details style="margin-top:12px">
+        <summary style="cursor:pointer; color:var(--accent); font-size:13px">Diagnose: Rohdaten anzeigen ▾</summary>
+        <div class="note" style="margin:8px 0">Zeigt die tatsächlichen Feldnamen deines Geräts –
+          hilfreich, falls der Energiewert nicht stimmt.</div>
+        <button class="btn sec" id="aeg-probe">🔎 Gerät abfragen</button>
+        <pre id="aeg-probe-out" style="margin-top:10px; overflow:auto; max-height:300px; background:var(--bg2); padding:10px; border-radius:8px; font-size:11px; white-space:pre-wrap"></pre>
+      </details>
     </div>
 
     <div class="card">

@@ -5,5 +5,7 @@
   "price_per_kwh": 0.35,
   "currency": "€",
   "device_filter": [],
-  "auto_update_interval": 0
+  "auto_update_interval": 0,
+  "electrolux_api_key": "",
+  "electrolux_refresh_token": ""
 }

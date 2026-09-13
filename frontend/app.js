@@ -12,7 +12,7 @@ const MON = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Ok
 const COL = { sh: '#4da3ff', hp: '#ef6c4d', heat: '#f6b93b', away: '#ff6b8a' };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-13 · COP pro Monat, Theorie-vs-Praxis, Auto-Update'
+const APP_VERSION = '2026-09-13 · AEG/Electrolux-Geräte, COP pro Monat, Theorie-vs-Praxis'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -115,6 +115,10 @@ const INFO = {
   behavior: () => 'Aus den <b>Namen</b> deiner Geräte und den Uhrzeiten, zu denen sie am meisten Strom ziehen, ' +
     'liest die App typische Routinen ab (Kochen, Schlafen, Bad …) und leitet konkrete Spar-Ideen ab. ' +
     'Basis: Ø über die gemessenen Tage.',
+  aeg: () => 'Deine AEG/Electrolux-Geräte (Waschmaschine, Trockner …) über die offizielle ' +
+    'Electrolux-Cloud. Angezeigt werden Betriebszustand, <b>Strom pro Waschgang</b> und der ' +
+    '<b>Gesamtzähler</b>. „Heute" ist der Zuwachs des Gesamtzählers seit Mitternacht. Verbinden ' +
+    'im Setup mit API-Key + Refresh-Token von developer.electrolux.one.',
   theory: () => 'Vereinfachtes Ingenieurmodell: für jedes Bauteil <b>U × Fläche</b> (Wärmeverlust je Grad), ' +
     'mal <b>Heizgradtage</b> (Deutschland ~3500 Kd/a → kWh) plus Lüftung, minus Sonnen-/interne Gewinne, ' +
     'geteilt durch den <b>COP</b> ergibt den erwarteten Strom. Alle Werte sind editierbare Startschätzungen ' +
@@ -311,12 +315,13 @@ async function loadAll() {
       STATE.price = health.price_per_kwh; $('price').value = STATE.price;
     }
     const p = STATE.price;
-    const [ov, hpA, data] = await Promise.all([
+    const [ov, hpA, data, appl] = await Promise.all([
       api('/api/overview?days=90&price=' + p),
       api('/api/heatpump/analytics?days=90&price=' + p),
       api('/api/analytics?days=90&price=' + p),
+      api('/api/appliances').catch(() => null),
     ]);
-    STATE.ov = ov; STATE.hpA = hpA; STATE.data = data;
+    STATE.ov = ov; STATE.hpA = hpA; STATE.data = data; STATE.appliances = appl;
     STATE.cur = data.currency || STATE.cur;
     $('cur').textContent = STATE.cur;
     setMode(health.mode || 'live');
@@ -335,6 +340,10 @@ function applyDemo(mode) {
   STATE.data = demoAnalytics(90);
   STATE.hpA = demoHpAnalytics(90);
   STATE.ov = demoOverview(STATE.data, STATE.hpA);
+  STATE.appliances = { connected: true, appliances: [
+    { id: 'demo-washer', name: 'Waschmaschine', type: 'WM', brand: 'AEG', model: 'LR8E75495',
+      state: 'OFF', total_kwh: 381.0, today_kwh: 0.9, cycle_kwh: 0.9 },
+  ] };
   STATE.cur = '€'; $('cur').textContent = STATE.cur;
   setMode(mode);
   renderAll();
@@ -511,6 +520,48 @@ function legendHtml(items) {
   return items.map(it => `<div class="it"><span class="sw" style="background:${it.color}"></span>${esc(it.label)}${it.sub ? `<small>${esc(it.sub)}</small>` : ''}</div>`).join('');
 }
 function statusRow(k, v) { return `<div class="statusrow"><span class="k">${k}</span><span class="v">${v}</span></div>`; }
+const AEG_STATE = {
+  RUNNING: ['läuft', '#4be0b0'], RUN: ['läuft', '#4be0b0'], ON: ['läuft', '#4be0b0'],
+  OFF: ['aus', 'var(--muted)'], IDLE: ['bereit', '#4da3ff'], READY: ['bereit', '#4da3ff'],
+  END: ['fertig', '#f6b93b'], PAUSE: ['Pause', '#f6b93b'], PAUSED: ['Pause', '#f6b93b'],
+  DELAYEDSTART: ['Startvorwahl', '#f6b93b'],
+};
+function aegStateLabel(s) {
+  if (!s) return ['–', 'var(--muted)'];
+  const key = String(s).toUpperCase().replace(/[^A-Z]/g, '');
+  return AEG_STATE[key] || [String(s).toLowerCase(), 'var(--muted)'];
+}
+function renderAppliances() {
+  const card = $('ov-aeg-card'); if (!card) return;
+  const list = (STATE.appliances && STATE.appliances.appliances) || [];
+  if (!list.length) { card.hidden = true; return; }
+  card.hidden = false;
+  let todaySum = 0;
+  const rows = list.map(a => {
+    const [lbl, col] = aegStateLabel(a.state);
+    const today = a.today_kwh != null ? a.today_kwh : null;
+    if (today != null) todaySum += today;
+    const sub = [];
+    if (a.state && lbl === 'läuft') {
+      if (a.program) sub.push(esc(String(a.program)));
+      if (a.time_to_end_min) sub.push('noch ' + a.time_to_end_min + ' min');
+    }
+    if (a.total_kwh != null) sub.push('gesamt ' + kwh(a.total_kwh, 0));
+    if (a.cycle_kwh) sub.push('letzter Gang ' + kwh(a.cycle_kwh, 2));
+    const valTop = today != null ? kwh(today, 2) : '–';
+    const valBot = today != null && today > 0 ? money(today * STATE.price) : '';
+    return `<div class="devrow"><div class="nm">` +
+      `<b>${esc(a.name || a.id)} <span style="color:${col};font-weight:600">· ${lbl}</span></b>` +
+      `<small>${sub.join(' · ') || (a.brand ? esc(a.brand) : '')}</small></div>` +
+      `<div class="val"><b>${valTop}</b>${valBot ? `<small>${valBot}</small>` : ''}</div></div>`;
+  }).join('');
+  $('ov-aeg-body').innerHTML = rows;
+  $('ov-aeg-sum').textContent = todaySum > 0 ? kwh(todaySum, 2) + ' heute' : '';
+  const err = STATE.appliances && STATE.appliances.last_error;
+  $('ov-aeg-note').innerHTML = err
+    ? '<span style="color:#ff6b8a">Letzter Fehler: ' + esc(err) + '</span>'
+    : 'Strom pro Waschgang & gesamt aus der AEG/Electrolux-Cloud. „Heute" = Zuwachs des Gesamtzählers seit Mitternacht.';
+}
 function devRow(title, sub, valTop, valBot, pct, col) {
   return `<div class="devrow"><div class="nm"><b>${esc(title)}</b><small>${sub}</small>` +
     `<div class="bar"><i style="width:${pct.toFixed(0)}%${col ? `;background:${col}` : ''}"></i></div></div>` +
@@ -519,7 +570,7 @@ function devRow(title, sub, valTop, valBot, pct, col) {
 
 /* --------------------------------------------------------------- rendering */
 function renderAll() {
-  renderOverview(); renderToday(); renderHistory(); renderHeatpump(); renderProfile(); renderPv(); renderSettings();
+  renderOverview(); renderToday(); renderHistory(); renderHeatpump(); renderProfile(); renderPv(); renderSettings(); renderAppliances();
 }
 
 function renderOverview() {
@@ -1505,6 +1556,16 @@ function renderSettings() {
           (h.homecom_last_error ? ' · <span style="color:#ff6b8a">Fehler: ' + esc(h.homecom_last_error) + '</span>' : '')
         : 'Noch nicht verbunden.';
   }
+
+  const as = $('aeg-status');
+  if (as) {
+    as.innerHTML = h.electrolux_available === false
+      ? 'Electrolux-Modul nicht installiert (Datei <code>bridge/electrolux.py</code> fehlt).'
+      : h.electrolux_connected
+        ? 'Verbunden ✓' + (h.electrolux_count ? ' · ' + h.electrolux_count + ' Gerät(e)' : '') +
+          (h.electrolux_last_error ? ' · <span style="color:#ff6b8a">Fehler: ' + esc(h.electrolux_last_error) + '</span>' : '')
+        : 'Noch nicht verbunden.';
+  }
 }
 
 function friendlyModel(m) {
@@ -1555,6 +1616,34 @@ async function doHomecomConnect() {
     if (r.ok) { note.innerHTML = '✅ ' + esc(r.message || 'Verbunden.'); setTimeout(loadAll, 1500); }
     else note.innerHTML = '⚠︎ ' + esc(r.error || 'Verbindung fehlgeschlagen.');
   } catch (e) { note.textContent = 'Fehler: ' + e.message + ' – Seite von der Bridge geöffnet?'; }
+  btn.disabled = false;
+}
+
+async function doAegConnect() {
+  const note = $('aeg-connect-note'), btn = $('aeg-connect');
+  const api_key = $('aeg-key').value.trim();
+  const refresh_token = $('aeg-refresh').value.trim();
+  const access_token = $('aeg-access').value.trim();
+  if (!api_key || !refresh_token) { note.textContent = 'Bitte API-Key und Refresh-Token einfügen.'; return; }
+  btn.disabled = true; note.textContent = 'Verbinde mit AEG/Electrolux …';
+  try {
+    const r = await postJSON('/api/electrolux/connect', { api_key, refresh_token, access_token });
+    if (r.ok) {
+      note.innerHTML = '✅ ' + esc(r.message || 'Verbunden.');
+      $('aeg-refresh').value = ''; $('aeg-access').value = '';   // don't leave tokens on screen
+      setTimeout(loadAll, 1500);
+    } else note.innerHTML = '⚠︎ ' + esc(r.error || 'Verbindung fehlgeschlagen.');
+  } catch (e) { note.textContent = 'Fehler: ' + e.message + ' – Seite von der Bridge geöffnet?'; }
+  btn.disabled = false;
+}
+
+async function doAegProbe() {
+  const out = $('aeg-probe-out'), btn = $('aeg-probe');
+  btn.disabled = true; out.textContent = 'Frage Gerät ab …';
+  try {
+    const r = await postJSON('/api/electrolux/probe', {});
+    out.textContent = r.ok ? JSON.stringify(r.probe, null, 2) : ('Fehler: ' + (r.error || '?'));
+  } catch (e) { out.textContent = 'Fehler: ' + e.message; }
   btn.disabled = false;
 }
 
@@ -1782,6 +1871,10 @@ function init() {
   });
   const hpc = $('hp-connect'); if (hpc) hpc.addEventListener('click', doHomecomConnect);
   const hpi = $('hp-import'); if (hpi) hpi.addEventListener('change', doHpImport);
+  const aegD = $('aeg-dash');
+  if (aegD) aegD.addEventListener('click', () => window.open('https://developer.electrolux.one/dashboard', '_blank'));
+  const aegC = $('aeg-connect'); if (aegC) aegC.addEventListener('click', doAegConnect);
+  const aegP = $('aeg-probe'); if (aegP) aegP.addEventListener('click', doAegProbe);
   const hk = $('house-kwh');
   if (hk) {
     const saved = localStorage.getItem(LS.house); if (saved) hk.value = saved;
