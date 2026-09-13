@@ -18,7 +18,7 @@ deinem Heimnetz; die Wärmepumpe kommt über Bosch HomeCom Easy dazu.
 | **Wärmepumpe** | Live-Karte (elektr./therm. Leistung, **COP jetzt**, Zähler-Splits Kompressor/Heizstab, Temperaturen, Starts/Stunden), **Strom & Wärme pro Tag**, **COP-Verlauf**, **COP pro Monat**, **Monatsbilanz**, **Wärmekarte** Wochentag × Stunde, **Theorie vs. Praxis** (erwarteter Stromverbrauch aus deinen Gebäudedaten – U·A + Heizgradtage – gegen den gemessenen Verbrauch, mit den größten Sanierungs-Hebeln) |
 | **Profil** | Ø-Leistung je **Stunde** (Tagesprofil), Ø-kWh je **Wochentag**, **Wärmekarte** Wochentag × Stunde (Smart Home) |
 | **PV** | **PV-Planer** für eine geplante Anlage: Anlagengröße/Ausrichtung/Batterie/**E-Auto** eingeben → **Jahresertrag**, **Eigenverbrauch & Autarkie** (aus deinem echten Tagesprofil simuliert), Ersparnis, **PV-Ertrag vs. Verbrauch pro Monat**, typischer Sommertag und **Amortisation**. Knopf **„kWp & Speicher vorschlagen"** dimensioniert aus deinem Verbrauch. |
-| **Setup** | Strompreis, **Controller automatisch finden**, Kopplung per Formular, Live-Status, **Geräte lokal umbenennen**, **Wärmepumpe (HomeCom) verbinden**, **Wärmepumpen-Historie als CSV importieren**, **Bridge aktualisieren** (Self-Update) |
+| **Setup** | Strompreis, **Controller automatisch finden**, Kopplung per Formular, Live-Status, **Geräte lokal umbenennen**, **Wärmepumpe (HomeCom) verbinden**, **Wärmepumpen-Historie als CSV importieren**, **Bridge aktualisieren** (Self-Update, manuell oder **automatisch** im Hintergrund) |
 
 Der Smart-Home-Teil basiert auf den `PowerMeter`-Daten (Wirkleistung in W,
 Energiezähler in Wh) der Bosch-Module; die Wärmepumpe liefert kumulative
@@ -55,6 +55,7 @@ Nach dem Klonen (siehe unten) im Finder einfach doppelklicken:
 
 * **`demo-macos.command`** – startet die Demo.
 * **`start-macos.command`** – startet den Normalbetrieb (Kopplung dann am iPhone im Tab *Setup*).
+* **`auto-update-macos.command`** – startet den Normalbetrieb **und hält die Bridge automatisch aktuell**: prüft alle paar Minuten auf neue Versionen, holt sie (git pull) und startet neu. Praktisch, wenn du Aufgaben nur per iPhone schickst. *Dasselbe geht auch ohne Extra-Skript direkt in der App:* Tab *Setup* → **„Automatisch aktualisieren"**.
 
 Beim allerersten Start fragt macOS evtl. „Eingehende Verbindungen erlauben?" → **Erlauben**.
 Falls Gatekeeper meckert: Rechtsklick auf die Datei → **Öffnen**.

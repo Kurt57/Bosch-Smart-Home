@@ -582,6 +582,22 @@
       </div>
       <button class="btn" id="bridge-update">⬇️ Bridge aktualisieren &amp; neu starten</button>
       <div class="note" id="bridge-update-note" style="margin:10px 0 14px"></div>
+      <div class="note" style="margin:10px 0 6px">
+        <b>Automatisch aktualisieren:</b> die Bridge prüft selbst regelmäßig auf
+        neue Versionen und zieht sie ohne Zutun. Ideal, wenn du Aufgaben per iPhone
+        schickst – die Änderungen sind dann von allein da.
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <select id="auto-update" style="flex:1;min-width:150px">
+          <option value="0">Aus</option>
+          <option value="15">Alle 15 Minuten</option>
+          <option value="30">Alle 30 Minuten</option>
+          <option value="60">Stündlich</option>
+          <option value="360">Alle 6 Stunden</option>
+          <option value="1440">Täglich</option>
+        </select>
+      </div>
+      <div class="note" id="auto-update-note" style="margin:8px 0 14px"></div>
       <div class="note" style="margin-bottom:6px">
         Falls die App-Oberfläche „hängt" oder alt aussieht: Cache leeren und frisch laden.
       </div>

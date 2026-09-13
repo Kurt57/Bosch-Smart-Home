@@ -12,7 +12,7 @@ const MON = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Ok
 const COL = { sh: '#4da3ff', hp: '#ef6c4d', heat: '#f6b93b', away: '#ff6b8a' };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-13 · COP pro Monat, Theorie-vs-Praxis-Heizbedarf'
+const APP_VERSION = '2026-09-13 · COP pro Monat, Theorie-vs-Praxis, Auto-Update'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -1485,6 +1485,15 @@ function renderSettings() {
   if (h.shc_ip && !$('shc-ip').value) $('shc-ip').value = h.shc_ip;
   if (h.price_per_kwh) $('shc-price').value = h.price_per_kwh;
   if (h.poll_interval) $('shc-interval').value = h.poll_interval;
+  const au = $('auto-update'), aun = $('auto-update-note');
+  if (au) {
+    if (document.activeElement !== au) au.value = String(h.auto_update_interval || 0);
+    if (aun) aun.innerHTML = h.is_git_repo === false
+      ? 'Nur bei einer git-Installation möglich (du hast das Repo geklont). Sonst bitte manuell aktualisieren.'
+      : (h.auto_update_interval > 0
+        ? `Aktiv – die Bridge prüft alle <b>${h.auto_update_interval} Min.</b> auf Updates und startet bei Bedarf neu.`
+        : 'Aus – Updates holst du über den Knopf oben.');
+  }
   renderRenameList();
 
   const hs = $('hp-status');
@@ -1755,6 +1764,16 @@ function init() {
   $('pair-btn').addEventListener('click', doPair);
   const hr = $('hard-refresh'); if (hr) hr.addEventListener('click', hardRefresh);
   const bu = $('bridge-update'); if (bu) bu.addEventListener('click', doBridgeUpdate);
+  const au = $('auto-update');
+  if (au) au.addEventListener('change', async () => {
+    const aun = $('auto-update-note'), v = parseInt(au.value, 10) || 0;
+    if (aun) aun.textContent = 'Speichere …';
+    try {
+      const r = await postJSON('/api/config', { auto_update_interval: v });
+      if (r && r.ok) { if (STATE.health) STATE.health.auto_update_interval = v; renderSettings(); }
+      else if (aun) aun.textContent = 'Konnte nicht gespeichert werden.';
+    } catch (e) { if (aun) aun.textContent = 'Nur möglich, wenn die Seite von der Bridge geöffnet ist.'; }
+  });
   const vn = $('version-note'); if (vn) vn.innerHTML = 'App-Stand: <b>' + APP_VERSION + '</b>';
   const hpl = $('hp-login');
   if (hpl) hpl.addEventListener('click', async () => {

@@ -4,5 +4,6 @@
   "poll_interval": 30,
   "price_per_kwh": 0.35,
   "currency": "€",
-  "device_filter": []
+  "device_filter": [],
+  "auto_update_interval": 0
 }

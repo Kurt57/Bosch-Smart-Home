@@ -89,6 +89,9 @@ def load_config(path: str) -> dict:
         "homecom_refresh_token": "",
         "homecom_gateway": "",
         "homecom_interval": 300,       # seconds between heat-pump polls
+        # Auto-update: when > 0, the bridge periodically checks the git remote
+        # and, if new commits are available, pulls and restarts itself. 0 = off.
+        "auto_update_interval": 0,     # minutes between update checks (0 = off)
     }
     if os.path.exists(path):
         try:
@@ -97,6 +100,111 @@ def load_config(path: str) -> dict:
         except (OSError, ValueError) as exc:
             print(f"[config] could not read {path}: {exc}", file=sys.stderr)
     return cfg
+
+
+# --------------------------------------------------------------------------- #
+# Self-update helpers (shared by the manual /api/update tap and the optional
+# automatic update loop). Kept dependency-free: plain `git` via subprocess.
+# --------------------------------------------------------------------------- #
+def _repo_root() -> str:
+    return os.path.dirname(HERE)
+
+
+def _is_git_repo() -> bool:
+    return os.path.isdir(os.path.join(_repo_root(), ".git"))
+
+
+def _git_updates_available() -> bool:
+    """True if the upstream branch has commits we don't have yet.
+
+    Fetches quietly, then counts commits in HEAD..@{u}. Never raises – any
+    problem (offline, no upstream, git missing) is treated as "nothing to do".
+    """
+    repo = _repo_root()
+    if not _is_git_repo():
+        return False
+    try:
+        subprocess.run(["git", "-C", repo, "fetch", "--quiet"],
+                       capture_output=True, text=True, timeout=60)
+        out = subprocess.run(["git", "-C", repo, "rev-list", "--count", "HEAD..@{u}"],
+                             capture_output=True, text=True, timeout=30)
+        if out.returncode != 0:
+            return False
+        return int((out.stdout or "0").strip() or "0") > 0
+    except Exception:
+        return False
+
+
+def _git_pull() -> tuple[bool, bool, str]:
+    """Fast-forward pull. Returns (ok, changed, log)."""
+    repo = _repo_root()
+    try:
+        out = subprocess.run(["git", "-C", repo, "pull", "--ff-only"],
+                             capture_output=True, text=True, timeout=60)
+    except Exception as exc:
+        return False, False, f"git pull fehlgeschlagen: {exc}"
+    log = (out.stdout or "") + (out.stderr or "")
+    if out.returncode != 0:
+        return False, False, log.strip()
+    changed = "Already up to date" not in log and "Bereits aktuell" not in log
+    return True, changed, log.strip()
+
+
+def _schedule_restart(delay: float = 1.2) -> None:
+    """Re-exec this process after a short delay so any in-flight HTTP response
+    can flush first."""
+    def _restart():
+        time.sleep(delay)
+        try:
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+        except Exception as exc:  # pragma: no cover
+            print(f"[update] restart failed: {exc}", file=sys.stderr)
+    threading.Thread(target=_restart, daemon=True).start()
+
+
+_auto_update_thread = None  # module-level guard so only one loop ever runs
+
+
+def _ensure_auto_update(cfg: dict) -> bool:
+    """Start the auto-update loop if the config enables it and it isn't already
+    running. Idempotent – safe to call from startup and from the settings save.
+    Returns True if the loop is (now) active. Note: changing the interval takes
+    full effect after the next restart; toggling on starts it immediately."""
+    global _auto_update_thread
+    try:
+        au = float(cfg.get("auto_update_interval", 0) or 0)
+    except (TypeError, ValueError):
+        au = 0
+    if au <= 0 or not _is_git_repo():
+        return False
+    if _auto_update_thread and _auto_update_thread.is_alive():
+        return True
+    _auto_update_thread = threading.Thread(
+        target=auto_update_loop, args=(au,), daemon=True)
+    _auto_update_thread.start()
+    return True
+
+
+def auto_update_loop(interval_min: float) -> None:
+    """Background loop: every `interval_min` minutes, check the git remote and
+    pull + restart if there are new commits. Runs only when the config enables
+    it. Any error is logged and the loop simply tries again next round."""
+    interval = max(60.0, float(interval_min) * 60.0)  # never faster than 1/min
+    print(f"[auto-update] enabled, checking every {interval/60:.0f} min", file=sys.stderr)
+    while True:
+        time.sleep(interval)
+        try:
+            if not _git_updates_available():
+                continue
+            ok, changed, log = _git_pull()
+            if ok and changed:
+                print(f"[auto-update] pulled update, restarting:\n{log}", file=sys.stderr)
+                _schedule_restart()
+                return  # stop the loop; the new process starts its own
+            elif not ok:
+                print(f"[auto-update] pull failed: {log}", file=sys.stderr)
+        except Exception as exc:  # pragma: no cover
+            print(f"[auto-update] check failed: {exc}", file=sys.stderr)
 
 
 def _parse_start_date(raw) -> int | None:
@@ -1618,6 +1726,12 @@ class Handler(BaseHTTPRequestHandler):
             cfg["poll_interval"] = max(5, int(body["poll_interval"]))
         if isinstance(body.get("device_filter"), list):
             cfg["device_filter"] = body["device_filter"]
+        if body.get("auto_update_interval") is not None:
+            try:
+                cfg["auto_update_interval"] = max(0, int(float(body["auto_update_interval"])))
+            except (TypeError, ValueError):
+                pass
+            _ensure_auto_update(cfg)
         save_config(cfg, cfg.get("_config_path", DEFAULT_CONFIG))
         return self._send_json({"ok": True})
 
@@ -1783,32 +1897,18 @@ class Handler(BaseHTTPRequestHandler):
         from the phone app with one tap. Runs `git pull` in the repo, then
         re-execs this process a moment later so the response can still flush.
         """
-        repo = os.path.dirname(HERE)
-        if not os.path.isdir(os.path.join(repo, ".git")):
+        if not _is_git_repo():
             return self._send_json(
                 {"ok": False, "error": "Kein Git-Repository – Update nur bei einer "
                  "git-Installation möglich. Bitte manuell aktualisieren."}, 200)
-        try:
-            out = subprocess.run(["git", "-C", repo, "pull", "--ff-only"],
-                                 capture_output=True, text=True, timeout=60)
-        except Exception as exc:
-            return self._send_json({"ok": False, "error": f"git pull fehlgeschlagen: {exc}"}, 200)
-        log = (out.stdout or "") + (out.stderr or "")
-        if out.returncode != 0:
+        ok, changed, log = _git_pull()
+        if not ok:
             return self._send_json({"ok": False, "error": "git pull fehlgeschlagen.",
-                                    "output": log.strip()}, 200)
-        changed = "Already up to date" not in log and "Bereits aktuell" not in log
-
-        def _restart():
-            time.sleep(1.2)
-            try:
-                os.execv(sys.executable, [sys.executable] + sys.argv)
-            except Exception as exc:  # pragma: no cover
-                print(f"[update] restart failed: {exc}", file=sys.stderr)
+                                    "output": log}, 200)
         if changed:
-            threading.Thread(target=_restart, daemon=True).start()
+            _schedule_restart()
         return self._send_json({
-            "ok": True, "changed": changed, "output": log.strip(),
+            "ok": True, "changed": changed, "output": log,
             "message": ("Aktualisiert – die Bridge startet neu. Bitte in ein paar "
                         "Sekunden die Seite neu laden." if changed
                         else "Bereits auf dem neuesten Stand.")})
@@ -1840,6 +1940,8 @@ class Handler(BaseHTTPRequestHandler):
                     "homecom_last_error": self.ctx.hp_state.get("last_error"),
                     "homecom_last_poll": self.ctx.hp_state.get("last_poll"),
                     "hp_import": self.store.hp_history_count(),
+                    "auto_update_interval": int(self.cfg.get("auto_update_interval", 0) or 0),
+                    "is_git_repo": _is_git_repo(),
                 })
             if path == "/api/devices":
                 return self._send_json({"devices": self.store.devices()})
@@ -2074,6 +2176,10 @@ def cmd_serve(args, cfg):
     # optional: start the heat-pump (HomeCom) poller if already connected
     if ctx.start_heatpump():
         print(f"  Heat pump:   HomeCom gateway {cfg.get('homecom_gateway')}")
+
+    # optional: automatic self-update (git pull + restart when new commits land)
+    if _ensure_auto_update(cfg):
+        print(f"  Auto-update: on (alle {int(cfg.get('auto_update_interval', 0))} min)")
 
     frontend = args.frontend or DEFAULT_FRONTEND
     httpd = make_server(args.host, args.port, ctx, frontend)
