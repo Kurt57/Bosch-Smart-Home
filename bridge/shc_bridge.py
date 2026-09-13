@@ -51,6 +51,17 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+try:
+    import homecom  # optional Bosch HomeCom Easy (heat pump) client
+except Exception:  # pragma: no cover - keeps the bridge running without it
+    homecom = None
+try:
+    import electrolux  # optional AEG / Electrolux (washer/dryer) client
+except Exception:  # pragma: no cover - keeps the bridge running without it
+    electrolux = None
+
 DEFAULT_FRONTEND = os.path.normpath(os.path.join(HERE, "..", "frontend"))
 DEFAULT_DB = os.path.join(HERE, "energy.db")
 DEFAULT_CERT = os.path.join(HERE, "shc-client-cert.pem")
@@ -78,6 +89,21 @@ def load_config(path: str) -> dict:
         # Optional filter: only keep devices whose name/model contains one of
         # these (case-insensitive) substrings. Empty = keep every power meter.
         "device_filter": [],
+        # Optional Bosch HomeCom Easy (heat pump) – filled in via the web UI.
+        "homecom_refresh_token": "",
+        "homecom_gateway": "",
+        "homecom_interval": 300,       # seconds between heat-pump polls
+        # Optional AEG / Electrolux appliances (washer, dryer) via the official
+        # developer API – filled in via the web UI.
+        "electrolux_api_key": "",
+        "electrolux_refresh_token": "",
+        "electrolux_interval": 300,    # seconds between appliance polls
+        # For models that report no kWh, energy is estimated as wash cycles ×
+        # this per-cycle figure (mixed-usage average; tune to your machine).
+        "electrolux_kwh_per_cycle": 0.8,
+        # Auto-update: when > 0, the bridge periodically checks the git remote
+        # and, if new commits are available, pulls and restarts itself. 0 = off.
+        "auto_update_interval": 0,     # minutes between update checks (0 = off)
     }
     if os.path.exists(path):
         try:
@@ -86,6 +112,111 @@ def load_config(path: str) -> dict:
         except (OSError, ValueError) as exc:
             print(f"[config] could not read {path}: {exc}", file=sys.stderr)
     return cfg
+
+
+# --------------------------------------------------------------------------- #
+# Self-update helpers (shared by the manual /api/update tap and the optional
+# automatic update loop). Kept dependency-free: plain `git` via subprocess.
+# --------------------------------------------------------------------------- #
+def _repo_root() -> str:
+    return os.path.dirname(HERE)
+
+
+def _is_git_repo() -> bool:
+    return os.path.isdir(os.path.join(_repo_root(), ".git"))
+
+
+def _git_updates_available() -> bool:
+    """True if the upstream branch has commits we don't have yet.
+
+    Fetches quietly, then counts commits in HEAD..@{u}. Never raises – any
+    problem (offline, no upstream, git missing) is treated as "nothing to do".
+    """
+    repo = _repo_root()
+    if not _is_git_repo():
+        return False
+    try:
+        subprocess.run(["git", "-C", repo, "fetch", "--quiet"],
+                       capture_output=True, text=True, timeout=60)
+        out = subprocess.run(["git", "-C", repo, "rev-list", "--count", "HEAD..@{u}"],
+                             capture_output=True, text=True, timeout=30)
+        if out.returncode != 0:
+            return False
+        return int((out.stdout or "0").strip() or "0") > 0
+    except Exception:
+        return False
+
+
+def _git_pull() -> tuple[bool, bool, str]:
+    """Fast-forward pull. Returns (ok, changed, log)."""
+    repo = _repo_root()
+    try:
+        out = subprocess.run(["git", "-C", repo, "pull", "--ff-only"],
+                             capture_output=True, text=True, timeout=60)
+    except Exception as exc:
+        return False, False, f"git pull fehlgeschlagen: {exc}"
+    log = (out.stdout or "") + (out.stderr or "")
+    if out.returncode != 0:
+        return False, False, log.strip()
+    changed = "Already up to date" not in log and "Bereits aktuell" not in log
+    return True, changed, log.strip()
+
+
+def _schedule_restart(delay: float = 1.2) -> None:
+    """Re-exec this process after a short delay so any in-flight HTTP response
+    can flush first."""
+    def _restart():
+        time.sleep(delay)
+        try:
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+        except Exception as exc:  # pragma: no cover
+            print(f"[update] restart failed: {exc}", file=sys.stderr)
+    threading.Thread(target=_restart, daemon=True).start()
+
+
+_auto_update_thread = None  # module-level guard so only one loop ever runs
+
+
+def _ensure_auto_update(cfg: dict) -> bool:
+    """Start the auto-update loop if the config enables it and it isn't already
+    running. Idempotent – safe to call from startup and from the settings save.
+    Returns True if the loop is (now) active. Note: changing the interval takes
+    full effect after the next restart; toggling on starts it immediately."""
+    global _auto_update_thread
+    try:
+        au = float(cfg.get("auto_update_interval", 0) or 0)
+    except (TypeError, ValueError):
+        au = 0
+    if au <= 0 or not _is_git_repo():
+        return False
+    if _auto_update_thread and _auto_update_thread.is_alive():
+        return True
+    _auto_update_thread = threading.Thread(
+        target=auto_update_loop, args=(au,), daemon=True)
+    _auto_update_thread.start()
+    return True
+
+
+def auto_update_loop(interval_min: float) -> None:
+    """Background loop: every `interval_min` minutes, check the git remote and
+    pull + restart if there are new commits. Runs only when the config enables
+    it. Any error is logged and the loop simply tries again next round."""
+    interval = max(60.0, float(interval_min) * 60.0)  # never faster than 1/min
+    print(f"[auto-update] enabled, checking every {interval/60:.0f} min", file=sys.stderr)
+    while True:
+        time.sleep(interval)
+        try:
+            if not _git_updates_available():
+                continue
+            ok, changed, log = _git_pull()
+            if ok and changed:
+                print(f"[auto-update] pulled update, restarting:\n{log}", file=sys.stderr)
+                _schedule_restart()
+                return  # stop the loop; the new process starts its own
+            elif not ok:
+                print(f"[auto-update] pull failed: {log}", file=sys.stderr)
+        except Exception as exc:  # pragma: no cover
+            print(f"[auto-update] check failed: {exc}", file=sys.stderr)
 
 
 def _parse_start_date(raw) -> int | None:
@@ -299,6 +430,241 @@ class Store:
             self.conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_samples ON samples(device_id, ts)"
             )
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS hp_samples("
+                " gateway TEXT, ts INTEGER, energy_kwh REAL, power_w REAL,"
+                " thermal_kw REAL, modulation REAL, outdoor_c REAL)"
+            )
+            hpcols = [r[1] for r in self.conn.execute("PRAGMA table_info(hp_samples)")]
+            for col in ("heat_kwh", "heat_w"):
+                if col not in hpcols:
+                    self.conn.execute(f"ALTER TABLE hp_samples ADD COLUMN {col} REAL")
+            if "mode" not in hpcols:
+                self.conn.execute("ALTER TABLE hp_samples ADD COLUMN mode TEXT")
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_hp ON hp_samples(ts)"
+            )
+            # imported heat-pump history (from a HomeCom CSV export): real
+            # per-day and per-month energy, split into heating / hot water.
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS hp_history("
+                " period TEXT, date TEXT, elec_kwh REAL, heat_kwh REAL,"
+                " heating_kwh REAL, water_kwh REAL, outdoor_c REAL,"
+                " PRIMARY KEY(period,date))"
+            )
+            # AEG / Electrolux appliances (washer, dryer, …) and their readings
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS aeg_appliances("
+                " id TEXT PRIMARY KEY, name TEXT, type TEXT, brand TEXT,"
+                " model TEXT, last_seen INTEGER)"
+            )
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS aeg_samples("
+                " appliance_id TEXT, ts INTEGER, total_kwh REAL, cycle_kwh REAL,"
+                " state TEXT, program TEXT, cycles INTEGER, estimated INTEGER)"
+            )
+            aegcols = [r[1] for r in self.conn.execute("PRAGMA table_info(aeg_samples)")]
+            for col, typ in (("cycles", "INTEGER"), ("estimated", "INTEGER")):
+                if col not in aegcols:
+                    self.conn.execute(f"ALTER TABLE aeg_samples ADD COLUMN {col} {typ}")
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_aeg ON aeg_samples(appliance_id, ts)"
+            )
+            # manual whole-house meter readings (total kWh incl. heat pump) –
+            # a ground-truth anchor for calibrating totals and forecasts.
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS meter_readings("
+                " ts INTEGER PRIMARY KEY, kwh REAL, note TEXT)"
+            )
+
+    # -- heat pump ------------------------------------------------------- #
+    def add_hp_sample(self, row: dict):
+        with self.lock, self.conn:
+            self.conn.execute(
+                "INSERT INTO hp_samples(gateway,ts,energy_kwh,power_w,thermal_kw,"
+                "modulation,outdoor_c,heat_kwh,heat_w,mode) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (row.get("gateway"), row["ts"], row.get("energy_kwh"), row.get("power_w"),
+                 row.get("thermal_kw"), row.get("modulation"), row.get("outdoor_c"),
+                 row.get("heat_kwh"), row.get("heat_w"), row.get("mode")),
+            )
+
+    def hp_prev(self, field: str):
+        """Most recent (ts, <field>) with a non-null value, for power calc."""
+        if field not in ("energy_kwh", "heat_kwh"):
+            return None
+        with self.lock:
+            cur = self.conn.execute(
+                f"SELECT ts,{field} AS v FROM hp_samples WHERE {field} IS NOT NULL"
+                " ORDER BY ts DESC LIMIT 1")
+            row = cur.fetchone()
+            return (row["ts"], row["v"]) if row else None
+
+    def hp_latest(self) -> dict | None:
+        with self.lock:
+            cur = self.conn.execute("SELECT * FROM hp_samples ORDER BY ts DESC LIMIT 1")
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+    def add_hp_samples_bulk(self, rows: list[tuple]):
+        """Bulk insert (gateway,ts,energy_kwh,power_w,thermal_kw,modulation,
+        outdoor_c,heat_kwh,heat_w,mode) tuples – used by the demo seeder."""
+        with self.lock, self.conn:
+            self.conn.executemany(
+                "INSERT INTO hp_samples(gateway,ts,energy_kwh,power_w,thermal_kw,"
+                "modulation,outdoor_c,heat_kwh,heat_w,mode) VALUES(?,?,?,?,?,?,?,?,?,?)", rows)
+
+    def hp_samples_since(self, since_ts: int) -> list[dict]:
+        with self.lock:
+            cur = self.conn.execute(
+                "SELECT * FROM hp_samples WHERE ts>=? ORDER BY ts ASC", (since_ts,))
+            return [dict(r) for r in cur.fetchall()]
+
+    def hp_count(self) -> int:
+        with self.lock:
+            return self.conn.execute("SELECT COUNT(*) AS c FROM hp_samples").fetchone()["c"]
+
+    def hp_history(self, period: str) -> list[dict]:
+        with self.lock:
+            cur = self.conn.execute(
+                "SELECT * FROM hp_history WHERE period=? ORDER BY date", (period,))
+            return [dict(r) for r in cur.fetchall()]
+
+    def hp_history_upsert(self, rows: list[tuple]) -> int:
+        """rows: (period,date,elec,heat,heating,water,outdoor). Replace on conflict."""
+        with self.lock, self.conn:
+            self.conn.executemany(
+                "INSERT INTO hp_history(period,date,elec_kwh,heat_kwh,heating_kwh,water_kwh,outdoor_c)"
+                " VALUES(?,?,?,?,?,?,?) ON CONFLICT(period,date) DO UPDATE SET"
+                " elec_kwh=excluded.elec_kwh, heat_kwh=excluded.heat_kwh,"
+                " heating_kwh=excluded.heating_kwh, water_kwh=excluded.water_kwh,"
+                " outdoor_c=excluded.outdoor_c", rows)
+        return len(rows)
+
+    def hp_history_count(self) -> dict:
+        with self.lock:
+            d = self.conn.execute("SELECT COUNT(*) c FROM hp_history WHERE period='day'").fetchone()["c"]
+            m = self.conn.execute("SELECT COUNT(*) c FROM hp_history WHERE period='month'").fetchone()["c"]
+            hh = self.conn.execute("SELECT COUNT(*) c FROM hp_history WHERE period='hour'").fetchone()["c"]
+            return {"days": d, "months": m, "hours": hh}
+
+    # -- AEG / Electrolux appliances ------------------------------------- #
+    def aeg_upsert_appliance(self, a: dict):
+        with self.lock, self.conn:
+            self.conn.execute(
+                "INSERT INTO aeg_appliances(id,name,type,brand,model,last_seen)"
+                " VALUES(?,?,?,?,?,?)"
+                " ON CONFLICT(id) DO UPDATE SET name=excluded.name, type=excluded.type,"
+                " brand=COALESCE(excluded.brand,aeg_appliances.brand),"
+                " model=COALESCE(excluded.model,aeg_appliances.model),"
+                " last_seen=excluded.last_seen",
+                (a["id"], a.get("name"), a.get("type"), a.get("brand"),
+                 a.get("model"), int(time.time())))
+
+    def aeg_add_sample(self, appliance_id: str, ts: int, total_kwh, cycle_kwh,
+                       state, program, cycles=None, estimated=False):
+        with self.lock, self.conn:
+            self.conn.execute(
+                "INSERT INTO aeg_samples(appliance_id,ts,total_kwh,cycle_kwh,state,"
+                "program,cycles,estimated) VALUES(?,?,?,?,?,?,?,?)",
+                (appliance_id, ts, total_kwh, cycle_kwh, state, program,
+                 cycles, 1 if estimated else 0))
+
+    def aeg_appliances(self) -> list[dict]:
+        with self.lock:
+            rows = self.conn.execute(
+                "SELECT id,name,type,brand,model,last_seen FROM aeg_appliances"
+                " ORDER BY name").fetchall()
+        return [dict(r) for r in rows]
+
+    def aeg_latest(self, appliance_id: str) -> dict | None:
+        with self.lock:
+            r = self.conn.execute(
+                "SELECT ts,total_kwh,cycle_kwh,state,program,cycles,estimated"
+                " FROM aeg_samples WHERE appliance_id=? ORDER BY ts DESC LIMIT 1",
+                (appliance_id,)).fetchone()
+        return dict(r) if r else None
+
+    def aeg_total_since(self, appliance_id: str, since_ts: int):
+        """kWh consumed since `since_ts` from the cumulative counter growth
+        (robust to polling gaps): last value minus the first value at/after
+        `since_ts`; falls back to the last value before it as the baseline."""
+        with self.lock:
+            base = self.conn.execute(
+                "SELECT total_kwh FROM aeg_samples WHERE appliance_id=?"
+                " AND total_kwh IS NOT NULL AND ts<=? ORDER BY ts DESC LIMIT 1",
+                (appliance_id, since_ts)).fetchone()
+            if not base:
+                base = self.conn.execute(
+                    "SELECT total_kwh FROM aeg_samples WHERE appliance_id=?"
+                    " AND total_kwh IS NOT NULL AND ts>=? ORDER BY ts ASC LIMIT 1",
+                    (appliance_id, since_ts)).fetchone()
+            last = self.conn.execute(
+                "SELECT total_kwh FROM aeg_samples WHERE appliance_id=?"
+                " AND total_kwh IS NOT NULL ORDER BY ts DESC LIMIT 1",
+                (appliance_id,)).fetchone()
+        if not base or not last or last["total_kwh"] is None or base["total_kwh"] is None:
+            return None
+        d = last["total_kwh"] - base["total_kwh"]
+        return round(d, 3) if d >= 0 else None
+
+    # -- manual whole-house meter readings ------------------------------- #
+    def meter_upsert(self, ts: int, kwh: float, note: str = ""):
+        with self.lock, self.conn:
+            self.conn.execute(
+                "INSERT INTO meter_readings(ts,kwh,note) VALUES(?,?,?)"
+                " ON CONFLICT(ts) DO UPDATE SET kwh=excluded.kwh, note=excluded.note",
+                (int(ts), float(kwh), note or ""))
+
+    def meter_list(self) -> list[dict]:
+        with self.lock:
+            rows = self.conn.execute(
+                "SELECT ts,kwh,note FROM meter_readings ORDER BY ts ASC").fetchall()
+        return [dict(r) for r in rows]
+
+    def meter_delete(self, ts: int):
+        with self.lock, self.conn:
+            self.conn.execute("DELETE FROM meter_readings WHERE ts=?", (int(ts),))
+
+    def hp_counter_span(self) -> dict | None:
+        """First and last cumulative counters over the whole observed history –
+        gives a robust daily average even across polling gaps."""
+        with self.lock:
+            first = self.conn.execute(
+                "SELECT ts,energy_kwh,heat_kwh FROM hp_samples WHERE energy_kwh IS NOT NULL"
+                " ORDER BY ts ASC LIMIT 1").fetchone()
+            last = self.conn.execute(
+                "SELECT ts,energy_kwh,heat_kwh FROM hp_samples WHERE energy_kwh IS NOT NULL"
+                " ORDER BY ts DESC LIMIT 1").fetchone()
+        if not first or not last or last["ts"] <= first["ts"]:
+            return None
+        return {"first_ts": first["ts"], "last_ts": last["ts"],
+                "first_e": first["energy_kwh"], "last_e": last["energy_kwh"],
+                "first_h": first["heat_kwh"], "last_h": last["heat_kwh"]}
+
+    def samples_span(self) -> dict | None:
+        """Per-device first/last cumulative energy counters + observed span (s),
+        for a meter-based average when no install date is reported."""
+        with self.lock:
+            rows = self.conn.execute(
+                "SELECT device_id, MIN(ts) AS t0, MAX(ts) AS t1 FROM samples GROUP BY device_id"
+            ).fetchall()
+            if not rows:
+                return None
+            growth = 0.0
+            t0 = min(r["t0"] for r in rows)
+            t1 = max(r["t1"] for r in rows)
+            for r in rows:
+                a = self.conn.execute(
+                    "SELECT energy_wh FROM samples WHERE device_id=? ORDER BY ts ASC LIMIT 1",
+                    (r["device_id"],)).fetchone()
+                b = self.conn.execute(
+                    "SELECT energy_wh FROM samples WHERE device_id=? ORDER BY ts DESC LIMIT 1",
+                    (r["device_id"],)).fetchone()
+                if a and b and b["energy_wh"] >= a["energy_wh"]:
+                    growth += b["energy_wh"] - a["energy_wh"]
+        if t1 <= t0:
+            return None
+        return {"t0": t0, "t1": t1, "growth_wh": growth}
 
     def upsert_device(self, dev: dict, ts: int, energy_start: int | None = None):
         with self.lock, self.conn:
@@ -437,6 +803,7 @@ def compute_analytics(store: Store, days: int, price: float) -> dict:
     hw_power: dict[tuple[int, int], list[float]] = {}
     weekday_kwh: dict[int, list[float]] = {i: [] for i in range(7)}
     per_device_day: dict[str, dict[str, float]] = {}
+    dev_hour: dict[str, list[list[float]]] = {}   # id -> 24 lists of power
 
     # baseline (standby) power = low percentile of all power readings
     all_powers = sorted(s["power_w"] for s in all_samples) or [0.0]
@@ -455,11 +822,13 @@ def compute_analytics(store: Store, days: int, price: float) -> dict:
             active_wh = max(0.0, wh - baseline_w * (
                 (rows[-1]["ts"] - rows[0]["ts"]) / 3600.0))
             day_active_kwh[day] = day_active_kwh.get(day, 0.0) + active_wh / 1000.0
-        # hourly / weekday average power profile
+        # hourly / weekday average power profile (overall + per device)
+        dh = dev_hour.setdefault(dev_id, [[] for _ in range(24)])
         for s in samples:
             dt = datetime.fromtimestamp(s["ts"])
             hour_power[dt.hour].append(s["power_w"])
             hw_power.setdefault((dt.weekday(), dt.hour), []).append(s["power_w"])
+            dh[dt.hour].append(s["power_w"])
 
     for day, kwh in day_kwh.items():
         wd = datetime.strptime(day, "%Y-%m-%d").weekday()
@@ -475,6 +844,8 @@ def compute_analytics(store: Store, days: int, price: float) -> dict:
          "avg_w": round(sum(v) / len(v), 2) if v else 0.0}
         for h, v in hour_power.items()
     ]
+    per_device_hour = {dev_id: [round(sum(v) / len(v), 2) if v else 0.0 for v in dh]
+                       for dev_id, dh in dev_hour.items()}
     weekday_profile = [
         {"weekday": i,
          "avg_kwh": round(sum(v) / len(v), 3) if v else 0.0}
@@ -519,14 +890,25 @@ def compute_analytics(store: Store, days: int, price: float) -> dict:
         since_days = max(0.5, (now - earliest) / 86400.0)
         c_avg = total_energy_kwh / since_days
         counter = {
-            "since": earliest,
-            "since_days": round(since_days, 1),
-            "total_kwh": round(total_energy_kwh, 3),
-            "avg_daily_kwh": round(c_avg, 3),
+            "since": earliest, "since_days": round(since_days, 1),
+            "total_kwh": round(total_energy_kwh, 3), "avg_daily_kwh": round(c_avg, 3),
             "year_estimate_kwh": round(c_avg * 365, 1),
             "year_estimate_cost": round(c_avg * 365 * price, 2),
-            "month_estimate_kwh": round(c_avg * 30.4, 2),
+            "month_estimate_kwh": round(c_avg * 30.4, 2), "basis": "install",
         }
+    else:
+        # no install date reported → use the meter growth over the observed span
+        span = store.samples_span()
+        if span and span["growth_wh"] > 0:
+            span_days = max(0.5, (span["t1"] - span["t0"]) / 86400.0)
+            c_avg = span["growth_wh"] / 1000.0 / span_days
+            counter = {
+                "since": span["t0"], "since_days": round(span_days, 1),
+                "total_kwh": round(span["growth_wh"] / 1000.0, 3), "avg_daily_kwh": round(c_avg, 3),
+                "year_estimate_kwh": round(c_avg * 365, 1),
+                "year_estimate_cost": round(c_avg * 365 * price, 2),
+                "month_estimate_kwh": round(c_avg * 30.4, 2), "basis": "observed",
+            }
 
     return {
         "generated_at": now,
@@ -544,6 +926,7 @@ def compute_analytics(store: Store, days: int, price: float) -> dict:
         "weekday_profile": weekday_profile,
         "heatmap": heatmap,
         "per_device_day": per_device_day,
+        "per_device_hour": per_device_hour,
         "stats": {
             "avg_daily_kwh": round(avg_daily, 3),
             "median_daily_kwh": round(median_daily, 3),
@@ -563,6 +946,426 @@ def compute_analytics(store: Store, days: int, price: float) -> dict:
             "threshold_kwh": round(away_threshold, 3),
             "analysed_days": len(daily_series),
         },
+    }
+
+
+def _counter_day_kwh(samples: list[dict], field: str) -> dict:
+    """Energy (kWh) per local day from a cumulative kWh counter.
+
+    Attribute each consecutive counter delta to the day of the earlier sample,
+    so energy split across midnight lands on the right day. Guards against
+    counter resets and long offline gaps.
+    """
+    out: dict[str, float] = {}
+    prev = None
+    for s in samples:
+        v = s.get(field)
+        if v is None:
+            continue
+        if prev is not None:
+            pt, pv = prev
+            delta = v - pv
+            dt_h = (s["ts"] - pt) / 3600.0
+            if 0 < delta < 100 and 0 < dt_h < 24:   # sane step, no reset/gap
+                out[_local_day(pt)] = out.get(_local_day(pt), 0.0) + delta
+        prev = (s["ts"], v)
+    return out
+
+
+def _hp_mode_buckets(rows: list[dict], only_day: str | None = None) -> dict:
+    """Electrical kWh attributed to the operating mode (Heizung/Warmwasser/Sonstiges)
+    by consecutive counter deltas – the heat pump's own 'wofür'."""
+    b = {"heating": 0.0, "water": 0.0, "other": 0.0}
+    prev = None
+    for s in rows:
+        v = s.get("energy_kwh")
+        if v is None:
+            continue
+        if prev is not None:
+            pv, pt, pm, pp = prev
+            delta = v - pv
+            if 0 < delta < 100 and 0 < (s["ts"] - pt) < 86400 and (only_day is None or _local_day(pt) == only_day):
+                # attribute the interval to the mode that was actually running
+                # (higher power), so an off→on transition counts as the active mode
+                m = pm if (pp or 0) >= (s.get("power_w") or 0) else s.get("mode")
+                key = "heating" if m == "ch" else "water" if m == "dhw" else "other"
+                b[key] += delta
+        prev = (v, s["ts"], s.get("mode"), s.get("power_w"))
+    return {k: round(x, 3) for k, x in b.items()}
+
+
+def _hp_cop_by_temp(rows: list[dict]) -> list[dict]:
+    """Seasonal-performance curve: COP grouped into 5 °C outdoor-temperature bins."""
+    bins: dict[int, list] = {}
+    prev = None
+    for s in rows:
+        e, h, o = s.get("energy_kwh"), s.get("heat_kwh"), s.get("outdoor_c")
+        if e is None or h is None or o is None:
+            prev = None
+            continue
+        if prev is not None:
+            de, dh, dt = e - prev[0], h - prev[1], s["ts"] - prev[2]
+            if 0 < de < 100 and 0 <= dh < 300 and 0 < dt < 86400:
+                key = int(math.floor(prev[3] / 5.0) * 5)
+                bins.setdefault(key, [0.0, 0.0])
+                bins[key][0] += de
+                bins[key][1] += dh
+        prev = (e, h, s["ts"], o)
+    return [{"temp": k, "cop": round(v[1] / v[0], 2), "kwh": round(v[0], 1)}
+            for k, v in sorted(bins.items()) if v[0] > 0.5 and v[1] > 0]
+
+
+def compute_hp_analytics(store: Store, days: int, price: float,
+                         live: dict | None = None) -> dict:
+    """Heat-pump history & profile, derived from the polled cumulative counters
+    (electrical = compressor+eheater, thermal = produced heat)."""
+    now = int(time.time())
+    since = now - days * 86400
+    rows = store.hp_samples_since(since)
+    live = live or {}
+
+    elec_day = _counter_day_kwh(rows, "energy_kwh")
+    heat_day = _counter_day_kwh(rows, "heat_kwh")
+    all_days = sorted(set(elec_day) | set(heat_day))
+    daily = []
+    for d in all_days:
+        e = round(elec_day.get(d, 0.0), 3)
+        h = round(heat_day.get(d, 0.0), 3)
+        daily.append({"day": d, "elec_kwh": e, "heat_kwh": h,
+                      "cop": round(h / e, 2) if e > 0 else None,
+                      "cost": round(e * price, 2)})
+
+    # hourly electrical-power profile + 7x24 heatmap (W), plus per-month heatmaps
+    hour_power = {h: [] for h in range(24)}
+    hw_power: dict[tuple[int, int], list[float]] = {}
+    hw_month: dict[str, dict[tuple[int, int], list[float]]] = {}
+    outdoor_hour = {h: [] for h in range(24)}
+    for s in rows:
+        if s.get("power_w") is None:
+            continue
+        dt = datetime.fromtimestamp(s["ts"])
+        hour_power[dt.hour].append(s["power_w"])
+        hw_power.setdefault((dt.weekday(), dt.hour), []).append(s["power_w"])
+        hw_month.setdefault(dt.strftime("%Y-%m"), {}).setdefault(
+            (dt.weekday(), dt.hour), []).append(s["power_w"])
+        if s.get("outdoor_c") is not None:
+            outdoor_hour[dt.hour].append(s["outdoor_c"])
+    hourly_profile = [{"hour": h,
+                       "avg_w": round(sum(v) / len(v), 1) if v else 0.0,
+                       "avg_outdoor": round(sum(outdoor_hour[h]) / len(outdoor_hour[h]), 1)
+                       if outdoor_hour[h] else None}
+                      for h, v in hour_power.items()]
+
+    # fold in imported hourly history (from a HomeCom CSV) – kWh in one hour
+    # equals the average power in kW, so × 1000 gives the hour's average watts.
+    hour_he = {h: [0.0, 0.0] for h in range(24)}   # per hour-of-day: [elec, heat]
+    hour_water = {h: 0.0 for h in range(24)}
+    imp_hour_rows = store.hp_history("hour")
+    for r in imp_hour_rows:
+        e = r.get("elec_kwh")
+        if e is None:
+            continue
+        try:
+            dt = datetime.fromisoformat(r["date"])
+        except (ValueError, TypeError):
+            continue
+        pw = e * 1000.0
+        hw_power.setdefault((dt.weekday(), dt.hour), []).append(pw)
+        hw_month.setdefault(dt.strftime("%Y-%m"), {}).setdefault(
+            (dt.weekday(), dt.hour), []).append(pw)
+        hour_he[dt.hour][0] += e
+        if r.get("heat_kwh") is not None:
+            hour_he[dt.hour][1] += r["heat_kwh"]
+        if r.get("water_kwh") is not None:
+            hour_water[dt.hour] += r["water_kwh"]
+
+    def _grid(hw):
+        return [[round(sum(hw.get((wd, h), [])) / len(hw[(wd, h)]), 1)
+                 if hw.get((wd, h)) else 0.0 for h in range(24)] for wd in range(7)]
+    heatmap = _grid(hw_power)
+    heatmap_monthly = {m: _grid(hw_month[m]) for m in sorted(hw_month)}
+
+    # monthly totals (electrical + thermal kWh) – the "monatliche Wärmekarte"
+    month_e: dict[str, float] = {}
+    month_h: dict[str, float] = {}
+    for d in all_days:
+        m = d[:7]
+        month_e[m] = month_e.get(m, 0.0) + elec_day.get(d, 0.0)
+        month_h[m] = month_h.get(m, 0.0) + heat_day.get(d, 0.0)
+    monthly = [{"month": m, "elec_kwh": round(month_e[m], 1),
+                "heat_kwh": round(month_h.get(m, 0.0), 1),
+                "cop": round(month_h.get(m, 0.0) / month_e[m], 2) if month_e[m] > 0 else None}
+               for m in sorted(month_e)]
+
+    # today so far
+    today = _local_day(now)
+    today_e = round(elec_day.get(today, 0.0), 3)
+    today_h = round(heat_day.get(today, 0.0), 3)
+
+    # robust daily average: trim first/last partial day only when we have enough
+    complete = daily[1:-1] if len(daily) > 3 else daily
+    e_vals = [d["elec_kwh"] for d in complete if d["elec_kwh"] > 0] or \
+        [d["elec_kwh"] for d in daily if d["elec_kwh"] > 0] or [0.0]
+    avg_e = sum(e_vals) / len(e_vals)
+    tot_e = sum(elec_day.values())
+    tot_h = sum(heat_day.values())
+
+    mode_today = _hp_mode_buckets(rows, only_day=today)
+    mode_window = _hp_mode_buckets(rows)
+    cop_by_temp = _hp_cop_by_temp(rows)
+
+    # meter-based average over the whole observed history (robust to polling
+    # gaps – the cumulative counter captures energy used while we weren't looking)
+    span = store.hp_counter_span()
+    counter = None
+    if span:
+        span_days = max(0.5, (span["last_ts"] - span["first_ts"]) / 86400.0)
+        e_growth = span["last_e"] - span["first_e"]
+        h_growth = (span["last_h"] - span["first_h"]) \
+            if span["first_h"] is not None and span["last_h"] is not None else None
+        if e_growth >= 0:
+            counter = {
+                "span_days": round(span_days, 1),
+                "elec_growth_kwh": round(e_growth, 1),
+                "heat_growth_kwh": round(h_growth, 1) if h_growth is not None and h_growth >= 0 else None,
+                "avg_daily_elec_kwh": round(e_growth / span_days, 3),
+                "avg_daily_heat_kwh": round(h_growth / span_days, 3)
+                if h_growth is not None and h_growth >= 0 else None,
+                "observed_months": sorted({datetime.fromtimestamp(t).strftime("%Y-%m")
+                                           for t in (span["first_ts"], span["last_ts"])}),
+            }
+
+    # --- imported HomeCom-CSV history (real day/month data) ----------------- #
+    since_day = _local_day(since)
+    imp_days = [r for r in store.hp_history("day") if r.get("elec_kwh") is not None]
+    imp_months = [r for r in store.hp_history("month") if r.get("elec_kwh") is not None]
+    imported = None
+    if imp_days:
+        # overlay real days onto the polled daily series (within the window)
+        dd = {d["day"]: d for d in daily}
+        for r in imp_days:
+            if r["date"] >= since_day:
+                e = round(r["elec_kwh"] or 0.0, 3)
+                h = round(r["heat_kwh"] or 0.0, 3)
+                dd[r["date"]] = {"day": r["date"], "elec_kwh": e, "heat_kwh": h,
+                                 "cop": round(h / e, 2) if e > 0 else None,
+                                 "cost": round(e * price, 2)}
+        daily = [dd[k] for k in sorted(dd)]
+        # real 'wofür' from the heating/water split, over the window
+        win = [r for r in imp_days if r["date"] >= since_day]
+        if win and any(r.get("heating_kwh") is not None for r in win):
+            heating = sum(r.get("heating_kwh") or 0.0 for r in win)
+            water = sum(r.get("water_kwh") or 0.0 for r in win)
+            elec_sum = sum(r.get("elec_kwh") or 0.0 for r in win)
+            mode_window = {"heating": round(heating, 3), "water": round(water, 3),
+                           "other": round(max(0.0, elec_sum - heating - water), 3)}
+        trow = next((r for r in imp_days if r["date"] == today), None)
+        if trow and trow.get("heating_kwh") is not None:
+            mode_today = {"heating": round(trow.get("heating_kwh") or 0.0, 3),
+                          "water": round(trow.get("water_kwh") or 0.0, 3),
+                          "other": round(max(0.0, (trow.get("elec_kwh") or 0.0)
+                                             - (trow.get("heating_kwh") or 0.0)
+                                             - (trow.get("water_kwh") or 0.0)), 3)}
+    if imp_months:
+        # prefer the real monthly figures for the monthly chart
+        monthly = [{"month": r["date"], "elec_kwh": round(r["elec_kwh"] or 0.0, 1),
+                    "heat_kwh": round(r["heat_kwh"] or 0.0, 1),
+                    "cop": round((r["heat_kwh"] or 0.0) / (r["elec_kwh"] or 1.0), 2)
+                    if (r["elec_kwh"] or 0.0) > 0 else None} for r in imp_months]
+        last12 = imp_months[-12:]
+        year_e = sum(r["elec_kwh"] or 0.0 for r in last12)
+        year_h = sum(r["heat_kwh"] or 0.0 for r in last12)
+        imported = {
+            "months": len(imp_months), "months_used": len(last12),
+            "days": len(imp_days),
+            "year_elec_kwh": round(year_e, 0), "year_heat_kwh": round(year_h, 0),
+            "seasonal_cop": round(year_h / year_e, 2) if year_e > 0 else None,
+            "latest": imp_months[-1]["date"],
+            "monthly": [{"month": r["date"], "elec_kwh": round(r["elec_kwh"] or 0.0, 1),
+                         "heat_kwh": round(r["heat_kwh"] or 0.0, 1)} for r in imp_months],
+            "daily": [{"date": r["date"], "elec_kwh": round(r["elec_kwh"] or 0.0, 2),
+                       "cop": round((r["heat_kwh"] or 0.0) / r["elec_kwh"], 2)
+                       if (r["elec_kwh"] or 0.0) > 0 else None} for r in imp_days],
+            "hours": len(imp_hour_rows),
+            "cop_by_hour": [{"hour": h,
+                             "cop": round(hour_he[h][1] / hour_he[h][0], 2)
+                             if hour_he[h][0] > 0.05 and hour_he[h][1] > 0.05 else None,
+                             "water_kwh": round(hour_water[h], 2)} for h in range(24)]
+            if any(hour_he[h][0] > 0 for h in range(24)) else [],
+        }
+    elif imp_days:
+        imported = {"months": 0, "months_used": 0, "days": len(imp_days),
+                    "year_elec_kwh": None, "year_heat_kwh": None, "seasonal_cop": None,
+                    "latest": imp_days[-1]["date"], "monthly": []}
+
+    return {
+        "generated_at": now,
+        "window_days": days,
+        "connected": bool(live.get("connected") or rows),
+        "live": {
+            "power_w": live.get("power_w"),
+            "heat_w": live.get("heat_w"),
+            "cop_live": live.get("cop_live"),
+            "cop_lifetime": live.get("cop_lifetime"),
+            "modulation": live.get("modulation"),
+            "mode": live.get("mode"),
+            "outdoor_c": live.get("outdoor_c"),
+            "supply_c": live.get("supply_c"),
+            "return_c": live.get("return_c"),
+            "energy_kwh": live.get("energy_kwh"),
+            "heat_kwh": live.get("heat_kwh"),
+            "compressor_kwh": live.get("compressor_kwh"),
+            "eheater_kwh": live.get("eheater_kwh"),
+            "starts": live.get("starts"),
+            "working_h": live.get("working_h"),
+            "last_poll": live.get("last_poll"),
+        },
+        "today": {"elec_kwh": today_e, "heat_kwh": today_h,
+                  "cost": round(today_e * price, 2),
+                  "cop": round(today_h / today_e, 2) if today_e > 0 else None},
+        "mode_today": mode_today,
+        "mode_window": mode_window,
+        "cop_by_temp": cop_by_temp,
+        "counter": counter,
+        "imported": imported,
+        "daily": daily,
+        "monthly": monthly,
+        "hourly_profile": hourly_profile,
+        "heatmap": heatmap,
+        "heatmap_monthly": heatmap_monthly,
+        "stats": {
+            "avg_daily_elec_kwh": round(avg_e, 3),
+            "window_elec_kwh": round(tot_e, 1),
+            "window_heat_kwh": round(tot_h, 1),
+            "window_cost": round(tot_e * price, 2),
+            "seasonal_cop": round(tot_h / tot_e, 2) if tot_e > 0 else None,
+            "year_estimate_kwh": round(avg_e * 365, 1),
+            "year_estimate_cost": round(avg_e * 365 * price, 2),
+        },
+    }
+
+
+def compute_overview(store: Store, days: int, price: float,
+                     hp_live: dict | None = None) -> dict:
+    """One combined snapshot for the dashboard: Smart Home + heat pump together,
+    'heute bisher', current draw, cost and a 'wofür' breakdown."""
+    now = int(time.time())
+    today = _local_day(now)
+    sh = compute_analytics(store, days, price)
+    hp = compute_hp_analytics(store, days, price, hp_live)
+
+    # today so far (kWh) per source
+    sh_daily = {d["day"]: d for d in sh["daily"]}
+    sh_today = round(sh_daily.get(today, {}).get("kwh", 0.0), 3)
+    hp_today = hp["today"]["elec_kwh"]
+    total_today = round(sh_today + hp_today, 3)
+
+    # current draw (W)
+    sh_now = sh["live"]["total_power_w"]
+    hp_now = hp_live.get("power_w") if hp_live else None
+    total_now = round(sh_now + (hp_now or 0.0), 1)
+
+    # combined daily series (last `days`), stacked SmartHome vs heat pump
+    hp_daily = {d["day"]: d for d in hp["daily"]}
+    all_days = sorted(set(sh_daily) | set(hp_daily))
+    combined_daily = [{
+        "day": d,
+        "smarthome_kwh": round(sh_daily.get(d, {}).get("kwh", 0.0), 3),
+        "heatpump_kwh": round(hp_daily.get(d, {}).get("elec_kwh", 0.0), 3),
+        "total_kwh": round(sh_daily.get(d, {}).get("kwh", 0.0)
+                           + hp_daily.get(d, {}).get("elec_kwh", 0.0), 3),
+    } for d in all_days]
+
+    # today so far, by hour (kWh) for the "Heute"-timeline, from counter deltas
+    mid = int(datetime.fromtimestamp(now).replace(
+        hour=0, minute=0, second=0, microsecond=0).timestamp())
+    sh_hour = [0.0] * 24
+    by_dev_today: dict[str, list[dict]] = {}
+    for s in store.samples_since(mid):
+        by_dev_today.setdefault(s["device_id"], []).append(s)
+    for rows in by_dev_today.values():
+        prev = None
+        for s in rows:
+            if prev is not None:
+                delta = s["energy_wh"] - prev["energy_wh"]
+                if 0 < delta < 1e6 and (s["ts"] - prev["ts"]) < 21600:
+                    sh_hour[datetime.fromtimestamp(prev["ts"]).hour] += delta / 1000.0
+            prev = s
+    hp_hour = [0.0] * 24
+    prev = None
+    for s in store.hp_samples_since(mid):
+        v = s.get("energy_kwh")
+        if v is None:
+            continue
+        if prev is not None and 0 < (v - prev[1]) < 100 and (s["ts"] - prev[0]) < 21600:
+            hp_hour[datetime.fromtimestamp(prev[0]).hour] += v - prev[1]
+        prev = (s["ts"], v)
+    today_hourly = [{"hour": h, "smarthome_kwh": round(sh_hour[h], 3),
+                     "heatpump_kwh": round(hp_hour[h], 3)} for h in range(24)]
+
+    # "wofür" breakdown for today (kWh); heat pump split by heating vs hot water
+    # is not per-day available, so it is shown as one heat-pump slice.
+    def _label(d: dict) -> str:
+        custom = (d.get("custom_name") or "").strip()
+        if custom:
+            return custom
+        name = d.get("name") or ""
+        generic = bool(re.search(r"rollladensteuerung|micromodule|light[\s_-]?control"
+                                 r"|shutter[\s_-]?control", name, re.I)) \
+            or name.lower() == (d.get("model") or "").lower()
+        if generic and d.get("room"):
+            return d["room"]
+        return name or d.get("room") or dev_id
+
+    breakdown = []
+    mt = hp.get("mode_today", {})
+    if (mt.get("heating", 0) > 0.01 or mt.get("water", 0) > 0.01):
+        # split the heat pump into heating vs hot water ("wofür")
+        if mt.get("heating", 0) > 0.01:
+            breakdown.append({"key": "hp_heating", "label": "WP · Heizung",
+                              "kwh": round(mt["heating"], 3), "color": "#ef6c4d"})
+        if mt.get("water", 0) > 0.01:
+            breakdown.append({"key": "hp_water", "label": "WP · Warmwasser",
+                              "kwh": round(mt["water"], 3), "color": "#f6b93b"})
+        if mt.get("other", 0) > 0.01:
+            breakdown.append({"key": "hp_other", "label": "WP · Sonstiges",
+                              "kwh": round(mt["other"], 3), "color": "#b07a4d"})
+    elif hp_today > 0 or (hp_live and hp_live.get("connected")):
+        breakdown.append({"key": "heatpump", "label": "Wärmepumpe",
+                          "kwh": hp_today, "color": "#ef6c4d"})
+    # per Smart-Home device today
+    pdd = sh.get("per_device_day", {})
+    dev_by_id = {d["id"]: d for d in sh["live"]["devices"]}
+    for dev_id, days_map in pdd.items():
+        v = round(days_map.get(today, 0.0), 3)
+        if v > 0:
+            breakdown.append({"key": dev_id,
+                              "label": _label(dev_by_id.get(dev_id, {"name": dev_id})),
+                              "kwh": v, "color": "#4da3ff"})
+    breakdown.sort(key=lambda x: x["kwh"], reverse=True)
+
+    # combined month estimate
+    sh_avg = sh["stats"]["avg_daily_kwh"]
+    hp_avg = hp["stats"]["avg_daily_elec_kwh"]
+    month_kwh = round((sh_avg + hp_avg) * 30.4, 1)
+    year_kwh = round((sh_avg + hp_avg) * 365, 1)
+
+    return {
+        "generated_at": now,
+        "window_days": days,
+        "price_per_kwh": price,
+        "heatpump_connected": bool(hp_live.get("connected")) if hp_live else False,
+        "now": {"total_w": total_now, "smarthome_w": round(sh_now, 1),
+                "heatpump_w": round(hp_now, 1) if hp_now is not None else None},
+        "today": {"total_kwh": total_today, "smarthome_kwh": sh_today,
+                  "heatpump_kwh": hp_today, "cost": round(total_today * price, 2)},
+        "estimate": {"month_kwh": month_kwh, "month_cost": round(month_kwh * price, 2),
+                     "year_kwh": year_kwh, "year_cost": round(year_kwh * price, 2)},
+        "combined_daily": combined_daily,
+        "today_hourly": today_hourly,
+        "breakdown": breakdown,
+        "heatpump": {"today": hp["today"], "live": hp["live"],
+                     "seasonal_cop": hp["stats"]["seasonal_cop"]},
     }
 
 
@@ -652,6 +1455,41 @@ def _demo_power(dev_id: str, dt: datetime, away: bool) -> float:
     return round(max(0.0, val), 2)
 
 
+DEMO_HP_GW = "demo-hp"
+
+
+def _demo_hp(dt: datetime) -> dict:
+    """Plausible heat-pump operating point for the demo (Compress-style).
+
+    Returns instantaneous electrical/thermal power (W), outdoor temp, modulation
+    and mode. Space heating scales with cold; hot water spikes morning/evening.
+    """
+    doy = dt.timetuple().tm_yday
+    h = dt.hour + dt.minute / 60.0
+    # seasonal outdoor temperature (coldest ~ mid-Jan, warmest ~ mid-Jul)
+    seasonal = 9.0 - 12.0 * math.cos((doy - 20) / 365.0 * 2 * math.pi)
+    daily = 4.0 * math.sin((h - 14) / 24.0 * 2 * math.pi)
+    outdoor = round(seasonal + daily, 1)
+
+    dhw = (6.0 <= h <= 7.0) or (18.5 <= h <= 19.5)     # hot-water charge windows
+    if dhw:
+        elec, mode = 1500.0, "dhw"
+        cop = max(1.8, min(3.6, 2.0 + 0.07 * outdoor))  # warmer air = better COP
+    elif outdoor < 16.0:                                # space heating
+        elec = 300.0 + (16.0 - outdoor) * 95.0
+        cop = max(1.6, min(4.8, 1.9 + 0.11 * outdoor))
+        mode = "ch"
+    else:
+        elec, mode, cop = 14.0, "off", 0.0             # standby only
+    elec *= 1.0 + 0.05 * math.sin(dt.timestamp() / 211.0)
+    heat = elec * cop
+    modulation = round(max(0.0, min(100.0, elec / 2600.0 * 100.0)), 0) if mode != "off" else 0
+    supply = round(28.0 + (heat / 6000.0) * 12.0, 1) if mode != "off" else round(24.0, 1)
+    return {"elec_w": round(max(0.0, elec), 1), "heat_w": round(max(0.0, heat), 1),
+            "outdoor_c": outdoor, "modulation": modulation, "mode": mode,
+            "supply_c": supply, "return_c": round(supply - (heat / 6000.0) * 5.0, 1)}
+
+
 def seed_demo(store: Store, days: int = 90):
     if store.count() > 0:
         return
@@ -687,14 +1525,53 @@ def seed_demo(store: Store, days: int = 90):
     store.add_samples_bulk(rows)
     print(f"[demo] inserted {len(rows)} samples for {len(DEMO_DEVICES)} devices.")
 
+    # heat-pump history (cumulative kWh counters, like the real emon values)
+    hp_rows = []
+    e_kwh = h_kwh = 0.0
+    t = start
+    while t <= now:
+        op = _demo_hp(t)
+        dt_h = step.total_seconds() / 3600.0
+        e_kwh += op["elec_w"] / 1000.0 * dt_h
+        h_kwh += op["heat_w"] / 1000.0 * dt_h
+        hp_rows.append((DEMO_HP_GW, int(t.timestamp()), round(e_kwh, 4), op["elec_w"],
+                        round(op["heat_w"] / 1000.0, 3), op["modulation"], op["outdoor_c"],
+                        round(h_kwh, 4), op["heat_w"], op["mode"]))
+        t += step
+    store.add_hp_samples_bulk(hp_rows)
+    print(f"[demo] inserted {len(hp_rows)} heat-pump samples.")
+
+    # a demo AEG washing machine: a growing lifetime kWh counter plus a few
+    # wash cycles, so the appliance card has something to show in demo mode.
+    store.aeg_upsert_appliance({"id": "demo-washer", "name": "Waschmaschine",
+                                "type": "WM", "brand": "AEG", "model": "LR8E75495"})
+    kpc, cycles = 0.8, 380       # like real AEG: no kWh field, energy from cycles
+    t = start
+    while t <= now:
+        # a wash on alternate days at 10:00 and 18:00
+        running = (t.hour in (10, 18)) and (int(t.timestamp()) // 86400) % 2 == 0
+        if running:
+            cycles += 1
+        store.aeg_add_sample("demo-washer", int(t.timestamp()), round(cycles * kpc, 2),
+                             kpc, "RUNNING" if running else "READY_TO_START",
+                             "COTTON_PR_ECO40-60" if running else None,
+                             cycles, True)
+        t += timedelta(hours=1)
+    print("[demo] inserted demo AEG appliance history.")
+
+    # two demo whole-house meter readings (~17 kWh/day total)
+    store.meter_upsert(int((now - timedelta(days=8)).timestamp()), 2202.0, "")
+    store.meter_upsert(int(now.timestamp()), 2202.0 + 8 * 17.0, "")
+
 
 class DemoPoller(threading.Thread):
     """Keeps demo data 'live' by appending a fresh sample every interval."""
 
-    def __init__(self, store: Store, interval: int = 30):
+    def __init__(self, store: Store, interval: int = 30, hp_state: dict | None = None):
         super().__init__(daemon=True)
         self.store = store
         self.interval = interval
+        self.hp_state = hp_state
         self.last_poll = int(time.time())
         self.last_error = None
         self._stop = threading.Event()
@@ -704,15 +1581,172 @@ class DemoPoller(threading.Thread):
         for d in DEMO_DEVICES:
             latest = self.store.latest(d["id"])
             counters[d["id"]] = latest["energy_wh"] if latest else 0.0
+        hp_latest = self.store.hp_latest() or {}
+        e_kwh = hp_latest.get("energy_kwh") or 0.0
+        h_kwh = hp_latest.get("heat_kwh") or 0.0
         while not self._stop.is_set():
             now = datetime.now()
+            ts = int(now.timestamp())
             for dev in DEMO_DEVICES:
                 p = _demo_power(dev["id"], now, away=False)
                 counters[dev["id"]] += p * (self.interval / 3600.0)
-                self.store.add_sample(dev["id"], int(now.timestamp()), p,
-                                      round(counters[dev["id"]], 3))
-            self.last_poll = int(now.timestamp())
+                self.store.add_sample(dev["id"], ts, p, round(counters[dev["id"]], 3))
+            # heat pump
+            op = _demo_hp(now)
+            dt_h = self.interval / 3600.0
+            e_kwh += op["elec_w"] / 1000.0 * dt_h
+            h_kwh += op["heat_w"] / 1000.0 * dt_h
+            self.store.add_hp_sample({
+                "gateway": DEMO_HP_GW, "ts": ts, "energy_kwh": round(e_kwh, 4),
+                "power_w": op["elec_w"], "heat_kwh": round(h_kwh, 4), "heat_w": op["heat_w"],
+                "thermal_kw": op["heat_w"] / 1000.0, "modulation": op["modulation"],
+                "outdoor_c": op["outdoor_c"], "mode": op["mode"]})
+            if self.hp_state is not None:
+                cop = round(op["heat_w"] / op["elec_w"], 2) if op["elec_w"] > 0 else None
+                self.hp_state.clear()
+                self.hp_state.update({
+                    "gateway": DEMO_HP_GW, "ts": ts, "power_w": op["elec_w"],
+                    "heat_w": op["heat_w"], "cop_live": cop,
+                    "cop_lifetime": round(h_kwh / e_kwh, 2) if e_kwh > 0 else None,
+                    "energy_kwh": round(e_kwh, 1), "heat_kwh": round(h_kwh, 1),
+                    "compressor_kwh": round(e_kwh * 0.87, 1), "eheater_kwh": round(e_kwh * 0.13, 1),
+                    "modulation": op["modulation"], "mode": op["mode"],
+                    "outdoor_c": op["outdoor_c"], "supply_c": op["supply_c"],
+                    "return_c": op["return_c"], "starts": 655, "working_h": 4333,
+                    "ok": True, "last_poll": ts})
+            self.last_poll = ts
             self._stop.wait(self.interval)
+
+    def stop(self):
+        self._stop.set()
+
+
+# --------------------------------------------------------------------------- #
+# Heat pump (Bosch HomeCom Easy) poller
+# --------------------------------------------------------------------------- #
+class HeatPumpPoller(threading.Thread):
+    def __init__(self, client, gateway, store: Store, state: dict, interval: int = 300):
+        super().__init__(daemon=True)
+        self.client = client
+        self.gateway = gateway
+        self.store = store
+        self.state = state
+        self.interval = max(60, int(interval))
+        self._stop = threading.Event()
+        self.last_error = None
+        self.last_poll = None
+
+    def run(self):
+        while not self._stop.is_set():
+            try:
+                self._poll()
+                self.last_error = None
+                self.state["last_error"] = None
+            except Exception as exc:
+                self.last_error = str(exc)
+                self.state["last_error"] = str(exc)
+                print(f"[heatpump] error: {exc}", file=sys.stderr)
+            self._stop.wait(self.interval)
+
+    def _derive_power(self, field, current, ts):
+        """Average power (W) from a cumulative kWh counter delta."""
+        if current is None:
+            return None
+        prev = self.store.hp_prev(field)
+        if prev and prev[1] is not None and current >= prev[1] and ts > prev[0]:
+            dt_h = (ts - prev[0]) / 3600.0
+            if 0 < dt_h < 24:
+                return round((current - prev[1]) / dt_h * 1000.0, 1)
+        return None
+
+    def _poll(self):
+        ts = int(time.time())
+        data = self.client.read_heatpump(self.gateway)
+        elec = data.get("energy_kwh")           # electrical total (kWh)
+        heat = data.get("heat_kwh")             # thermal produced total (kWh)
+        power_w = self._derive_power("energy_kwh", elec, ts)
+        heat_w = self._derive_power("heat_kwh", heat, ts)
+        self.store.add_hp_sample({
+            "gateway": self.gateway, "ts": ts, "energy_kwh": elec, "power_w": power_w,
+            "heat_kwh": heat, "heat_w": heat_w,
+            "thermal_kw": (heat_w / 1000.0) if heat_w is not None else None,
+            "modulation": data.get("modulation"), "outdoor_c": data.get("outdoor_c"),
+            "mode": data.get("mode"),
+        })
+        # live + lifetime COP
+        cop_live = round(heat_w / power_w, 2) if (heat_w and power_w and power_w > 0) else None
+        cop_life = round(heat / elec, 2) if (heat and elec and elec > 0) else None
+        snap = dict(data)
+        snap.update({"gateway": self.gateway, "ts": ts, "power_w": power_w,
+                     "heat_w": heat_w, "cop_live": cop_live, "cop_lifetime": cop_life,
+                     "ok": True, "last_poll": ts})
+        self.state.clear()
+        self.state.update(snap)
+        self.last_poll = ts
+
+    def stop(self):
+        self._stop.set()
+
+
+# --------------------------------------------------------------------------- #
+# AEG / Electrolux appliance poller (washer, dryer, … via the developer API)
+# --------------------------------------------------------------------------- #
+class ElectroluxPoller(threading.Thread):
+    def __init__(self, client, store: Store, state: dict, interval: int = 300):
+        super().__init__(daemon=True)
+        self.client = client
+        self.store = store
+        self.state = state
+        self.interval = max(60, int(interval))
+        self._stop = threading.Event()
+        self.last_error = None
+        self.last_poll = None
+
+    def run(self):
+        while not self._stop.is_set():
+            try:
+                self._poll()
+                self.state["last_error"] = None
+            except Exception as exc:
+                self.last_error = str(exc)
+                self.state["last_error"] = str(exc)
+                print(f"[electrolux] error: {exc}", file=sys.stderr)
+            self._stop.wait(self.interval)
+
+    def _poll(self):
+        ts = int(time.time())
+        appliances = self.client.list_appliances()
+        out = []
+        for a in appliances:
+            self.store.aeg_upsert_appliance(a)
+            try:
+                snap = self.client.read_appliance(a["id"], a.get("name"))
+            except Exception as exc:
+                out.append({**a, "error": str(exc)})
+                continue
+            self.store.aeg_add_sample(a["id"], ts, snap.get("total_kwh"),
+                                      snap.get("cycle_kwh"), snap.get("state"),
+                                      snap.get("program"), snap.get("cycles"),
+                                      snap.get("energy_estimated"))
+            today0 = int(time.mktime(time.localtime(ts)[:3] + (0, 0, 0, 0, 0, -1)))
+            out.append({
+                **a,
+                "state": snap.get("state"),
+                "connection": snap.get("connection"),
+                "program": snap.get("program"),
+                "time_to_end_min": snap.get("time_to_end_min"),
+                "cycles": snap.get("cycles"),
+                "working_time_h": snap.get("working_time_h"),
+                "total_kwh": snap.get("total_kwh"),
+                "cycle_kwh": snap.get("cycle_kwh"),
+                "energy_estimated": snap.get("energy_estimated"),
+                "today_kwh": self.store.aeg_total_since(a["id"], today0),
+                "energy_fields": snap.get("energy_fields"),
+            })
+        self.state.clear()
+        self.state.update({"ok": True, "last_poll": ts, "appliances": out,
+                           "last_error": None})
+        self.last_poll = ts
 
     def stop(self):
         self._stop.set()
@@ -728,18 +1762,25 @@ class Runtime:
         self.cfg = cfg
         self.poller = None
         self.mode = "idle"
+        self.hp = None          # HeatPumpPoller
+        self.hp_state = {}      # latest heat-pump snapshot
+        self.ael = None         # ElectroluxPoller
+        self.ael_state = {}     # latest AEG/Electrolux snapshot
 
     def stop(self):
         if self.poller:
             self.poller.stop()
             self.poller = None
+        self.stop_heatpump()
+        self.stop_electrolux()
 
     def start_demo(self, days: int = 90):
         self.stop()
         seed_demo(self.store, days)
         self.cfg["_demo"] = True
         self.mode = "demo"
-        self.poller = DemoPoller(self.store, int(self.cfg.get("poll_interval", 30)))
+        self.poller = DemoPoller(self.store, int(self.cfg.get("poll_interval", 30)),
+                                 hp_state=self.hp_state)
         self.poller.start()
 
     def start_live(self):
@@ -750,10 +1791,84 @@ class Runtime:
         self.poller = Poller(client, self.store, self.cfg)
         self.poller.start()
 
+    # -- heat pump ------------------------------------------------------- #
+    def save_homecom_token(self, refresh_token: str):
+        """Persist a rotated HomeCom refresh token (single-use rotation)."""
+        self.cfg["homecom_refresh_token"] = refresh_token
+        save_config(self.cfg, self.cfg.get("_config_path", DEFAULT_CONFIG))
+
+    def homecom_client(self):
+        """The shared HomeCom client (poller's), so refresh tokens aren't
+        consumed twice. Creates one on demand if the poller isn't running."""
+        if self.hp and getattr(self.hp, "client", None):
+            return self.hp.client
+        if not homecom or not self.cfg.get("homecom_refresh_token"):
+            return None
+        return homecom.HomeComClient(self.cfg["homecom_refresh_token"],
+                                     on_token=self.save_homecom_token)
+
+    def start_heatpump(self) -> bool:
+        self.stop_heatpump()
+        if not homecom or not self.cfg.get("homecom_refresh_token") \
+                or not self.cfg.get("homecom_gateway"):
+            return False
+        client = homecom.HomeComClient(self.cfg["homecom_refresh_token"],
+                                       on_token=self.save_homecom_token)
+        self.hp = HeatPumpPoller(client, self.cfg["homecom_gateway"], self.store,
+                                 self.hp_state, int(self.cfg.get("homecom_interval", 300)))
+        self.hp.start()
+        return True
+
+    def stop_heatpump(self):
+        if self.hp:
+            self.hp.stop()
+            self.hp = None
+
+    # -- AEG / Electrolux ------------------------------------------------ #
+    def save_electrolux_token(self, refresh_token: str):
+        """Persist a rotated Electrolux refresh token (rotation on refresh)."""
+        self.cfg["electrolux_refresh_token"] = refresh_token
+        save_config(self.cfg, self.cfg.get("_config_path", DEFAULT_CONFIG))
+
+    def electrolux_client(self):
+        """Shared Electrolux client (the poller's, if running) so refresh
+        tokens aren't rotated twice; created on demand otherwise."""
+        if self.ael and getattr(self.ael, "client", None):
+            return self.ael.client
+        if not electrolux or not self.cfg.get("electrolux_api_key") \
+                or not self.cfg.get("electrolux_refresh_token"):
+            return None
+        return electrolux.ElectroluxClient(
+            self.cfg["electrolux_api_key"], self.cfg["electrolux_refresh_token"],
+            on_token=self.save_electrolux_token,
+            kwh_per_cycle=float(self.cfg.get("electrolux_kwh_per_cycle", 0.8) or 0.8))
+
+    def start_electrolux(self) -> bool:
+        self.stop_electrolux()
+        if not electrolux or not self.cfg.get("electrolux_api_key") \
+                or not self.cfg.get("electrolux_refresh_token"):
+            return False
+        client = electrolux.ElectroluxClient(
+            self.cfg["electrolux_api_key"], self.cfg["electrolux_refresh_token"],
+            on_token=self.save_electrolux_token,
+            kwh_per_cycle=float(self.cfg.get("electrolux_kwh_per_cycle", 0.8) or 0.8))
+        self.ael = ElectroluxPoller(client, self.store, self.ael_state,
+                                    int(self.cfg.get("electrolux_interval", 300)))
+        self.ael.start()
+        return True
+
+    def stop_electrolux(self):
+        if self.ael:
+            self.ael.stop()
+            self.ael = None
+
 
 def save_config(cfg: dict, path: str):
     keep = ("shc_ip", "system_password", "cert", "key", "db", "poll_interval",
-            "price_per_kwh", "currency", "device_filter")
+            "price_per_kwh", "currency", "device_filter",
+            "homecom_refresh_token", "homecom_gateway", "homecom_interval",
+            "electrolux_api_key", "electrolux_refresh_token", "electrolux_interval",
+            "electrolux_kwh_per_cycle", "auto_update_interval")
     data = {k: cfg[k] for k in keep if k in cfg and not str(k).startswith("_")}
     try:
         with open(path, "w", encoding="utf-8") as fh:
@@ -786,6 +1901,42 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, fmt, *args):  # quieter logging
         pass
+
+    def _hp_live(self) -> dict:
+        """Live heat-pump snapshot + a 'connected' flag (real token or demo)."""
+        hp = dict(self.ctx.hp_state)
+        hp["connected"] = bool(self.cfg.get("homecom_refresh_token")) or self.ctx.mode == "demo"
+        return hp
+
+    def _appliances_payload(self) -> dict:
+        """AEG/Electrolux appliances: live snapshot from the poller, enriched
+        with today's kWh, or the last stored reading when the poller is idle."""
+        live = {a["id"]: a for a in (self.ctx.ael_state.get("appliances") or [])}
+        out = []
+        for a in self.store.aeg_appliances():
+            aid = a["id"]
+            row = {"id": aid, "name": a.get("name"), "type": a.get("type"),
+                   "brand": a.get("brand"), "model": a.get("model")}
+            if aid in live:
+                row.update({k: live[aid].get(k) for k in
+                            ("state", "connection", "program", "time_to_end_min",
+                             "cycles", "working_time_h", "total_kwh", "cycle_kwh",
+                             "energy_estimated", "today_kwh", "energy_fields")})
+            else:
+                last = self.store.aeg_latest(aid)
+                today0 = int(time.mktime(time.localtime()[:3] + (0, 0, 0, 0, 0, -1)))
+                if last:
+                    row.update({"state": last.get("state"), "program": last.get("program"),
+                                "total_kwh": last.get("total_kwh"),
+                                "cycle_kwh": last.get("cycle_kwh"),
+                                "cycles": last.get("cycles"),
+                                "energy_estimated": bool(last.get("estimated")),
+                                "today_kwh": self.store.aeg_total_since(aid, today0)})
+            out.append(row)
+        return {"connected": bool(self.cfg.get("electrolux_refresh_token")) or self.ctx.mode == "demo",
+                "last_poll": self.ctx.ael_state.get("last_poll"),
+                "last_error": self.ctx.ael_state.get("last_error"),
+                "appliances": out}
 
     def _send_json(self, obj, status=200):
         body = json.dumps(obj).encode("utf-8")
@@ -827,6 +1978,20 @@ class Handler(BaseHTTPRequestHandler):
                 return self._post_mode(body)
             if parsed.path == "/api/device-name":
                 return self._post_device_name(body)
+            if parsed.path == "/api/homecom/connect":
+                return self._post_homecom_connect(body)
+            if parsed.path == "/api/homecom/import":
+                return self._post_hp_import(body)
+            if parsed.path == "/api/electrolux/connect":
+                return self._post_electrolux_connect(body)
+            if parsed.path == "/api/electrolux/probe":
+                return self._post_electrolux_probe(body)
+            if parsed.path == "/api/meter":
+                return self._post_meter(body)
+            if parsed.path == "/api/meter/delete":
+                return self._post_meter_delete(body)
+            if parsed.path == "/api/update":
+                return self._post_update(body)
             return self._send_json({"error": "unknown endpoint"}, 404)
         except Exception as exc:
             return self._send_json({"error": str(exc)}, 500)
@@ -842,6 +2007,18 @@ class Handler(BaseHTTPRequestHandler):
             cfg["poll_interval"] = max(5, int(body["poll_interval"]))
         if isinstance(body.get("device_filter"), list):
             cfg["device_filter"] = body["device_filter"]
+        if body.get("auto_update_interval") is not None:
+            try:
+                cfg["auto_update_interval"] = max(0, int(float(body["auto_update_interval"])))
+            except (TypeError, ValueError):
+                pass
+            _ensure_auto_update(cfg)
+        if body.get("electrolux_kwh_per_cycle") is not None:
+            try:
+                cfg["electrolux_kwh_per_cycle"] = max(0.0, float(body["electrolux_kwh_per_cycle"]))
+                self.ctx.start_electrolux()   # re-arm poller with the new factor
+            except (TypeError, ValueError):
+                pass
         save_config(cfg, cfg.get("_config_path", DEFAULT_CONFIG))
         return self._send_json({"ok": True})
 
@@ -933,6 +2110,164 @@ class Handler(BaseHTTPRequestHandler):
         self.store.set_custom_name(dev_id, body.get("name"))
         return self._send_json({"ok": True})
 
+    def _post_homecom_connect(self, body):
+        if not homecom:
+            return self._send_json({"ok": False, "error": "HomeCom-Modul fehlt (homecom.py)."}, 500)
+        code = str(body.get("code") or "").strip()
+        if not code:
+            return self._send_json({"ok": False, "error": "Login-Code fehlt."}, 400)
+        cfg = self.cfg
+        client = homecom.HomeComClient(on_token=self.ctx.save_homecom_token)
+        try:
+            refresh = client.exchange_code(code)
+        except Exception as exc:
+            return self._send_json(
+                {"ok": False, "error": f"Login fehlgeschlagen: {exc}. "
+                 "Code korrekt/kopiert? Er ist nur wenige Minuten gültig."}, 200)
+        cfg["homecom_refresh_token"] = refresh
+        # auto-detect the heat-pump gateway
+        gateway = str(body.get("gateway") or "").strip()
+        if not gateway:
+            try:
+                gws = client.list_gateways()
+                gateway = gws[0] if gws else ""
+            except Exception as exc:
+                return self._send_json(
+                    {"ok": True, "connected": True, "gateway": "",
+                     "message": f"Angemeldet, aber Gateway-Liste fehlgeschlagen: {exc}"})
+        cfg["homecom_gateway"] = gateway
+        save_config(cfg, cfg.get("_config_path", DEFAULT_CONFIG))
+        started = self.ctx.start_heatpump()
+        return self._send_json({"ok": True, "connected": True, "gateway": gateway,
+                                "started": started,
+                                "message": "HomeCom verbunden." + (
+                                    f" Wärmepumpe: {gateway}" if gateway else
+                                    " Keine Wärmepumpe gefunden.")})
+
+    def _post_hp_import(self, body):
+        """Store parsed HomeCom-CSV history (day/month rows with heating/water split)."""
+        def f(v):
+            try:
+                return float(v) if v is not None and v != "" else None
+            except (TypeError, ValueError):
+                return None
+        clean = []
+        for r in (body.get("rows") or []):
+            period = r.get("period")
+            date = str(r.get("date") or "").strip()
+            if period not in ("day", "month", "hour") or not date:
+                continue
+            elec = f(r.get("elec_kwh"))
+            heat = f(r.get("heat_kwh"))
+            if elec is None and heat is None:
+                continue
+            clean.append((period, date, elec, heat, f(r.get("heating_kwh")),
+                          f(r.get("water_kwh")), f(r.get("outdoor_c"))))
+        if not clean:
+            return self._send_json({"ok": False, "error": "Keine gültigen Zeilen erkannt."}, 200)
+        self.store.hp_history_upsert(clean)
+        cnt = self.store.hp_history_count()
+        days = sum(1 for c in clean if c[0] == "day")
+        months = sum(1 for c in clean if c[0] == "month")
+        hours = sum(1 for c in clean if c[0] == "hour")
+        return self._send_json({"ok": True, "imported": len(clean),
+                                "new_days": days, "new_months": months, "new_hours": hours,
+                                "total_days": cnt["days"], "total_months": cnt["months"],
+                                "total_hours": cnt.get("hours", 0),
+                                "message": f"{len(clean)} Zeilen importiert "
+                                           f"({days} Tage, {months} Monate, {hours} Stunden)."})
+
+    def _post_electrolux_connect(self, body):
+        """Save the AEG/Electrolux API key + refresh token, verify them by
+        listing appliances, and start the poller."""
+        if not electrolux:
+            return self._send_json({"ok": False, "error": "Electrolux-Modul fehlt (electrolux.py)."}, 500)
+        api_key = str(body.get("api_key") or self.cfg.get("electrolux_api_key") or "").strip()
+        refresh = str(body.get("refresh_token") or "").strip()
+        access = str(body.get("access_token") or "").strip() or None
+        if not api_key or not refresh:
+            return self._send_json(
+                {"ok": False, "error": "API-Key und Refresh-Token sind erforderlich."}, 400)
+        client = electrolux.ElectroluxClient(api_key, refresh, access_token=access)
+        try:
+            appliances = client.verify()   # forces a token refresh + list
+        except electrolux.ElectroluxAuthError as exc:
+            return self._send_json({"ok": False, "error": str(exc)}, 200)
+        except Exception as exc:
+            return self._send_json(
+                {"ok": False, "error": f"Verbindung fehlgeschlagen: {exc}"}, 200)
+        # persist the possibly-rotated refresh token
+        self.cfg["electrolux_api_key"] = api_key
+        self.cfg["electrolux_refresh_token"] = client.refresh_token or refresh
+        save_config(self.cfg, self.cfg.get("_config_path", DEFAULT_CONFIG))
+        for a in appliances:
+            self.store.aeg_upsert_appliance(a)
+        started = self.ctx.start_electrolux()
+        names = ", ".join(a.get("name", a["id"]) for a in appliances) or "keine"
+        return self._send_json({"ok": True, "connected": True, "started": started,
+                                "appliances": appliances,
+                                "message": f"Verbunden. Geräte: {names}."})
+
+    def _post_electrolux_probe(self, body):
+        """Diagnostic: dump one appliance's full reported state + energy fields,
+        so the exact per-model field names can be inspected."""
+        client = self.ctx.electrolux_client()
+        if not client:
+            return self._send_json({"ok": False, "error": "Nicht verbunden."}, 200)
+        try:
+            aid = str(body.get("id") or "").strip()
+            if not aid:
+                apps = client.list_appliances()
+                if not apps:
+                    return self._send_json({"ok": True, "appliances": [], "probe": None})
+                aid = apps[0]["id"]
+            return self._send_json({"ok": True, "id": aid, "probe": client.probe(aid)})
+        except Exception as exc:
+            return self._send_json({"ok": False, "error": str(exc)}, 200)
+
+    def _post_meter(self, body):
+        """Add/update a whole-house meter reading (date + total kWh)."""
+        try:
+            ts = int(body.get("ts"))
+            kwh = float(body.get("kwh"))
+        except (TypeError, ValueError):
+            return self._send_json({"ok": False, "error": "Datum und Zählerstand (kWh) sind erforderlich."}, 400)
+        if kwh < 0:
+            return self._send_json({"ok": False, "error": "Zählerstand muss ≥ 0 sein."}, 400)
+        self.store.meter_upsert(ts, kwh, str(body.get("note") or "")[:120])
+        return self._send_json({"ok": True, "readings": self.store.meter_list()})
+
+    def _post_meter_delete(self, body):
+        try:
+            ts = int(body.get("ts"))
+        except (TypeError, ValueError):
+            return self._send_json({"ok": False, "error": "ts fehlt."}, 400)
+        self.store.meter_delete(ts)
+        return self._send_json({"ok": True, "readings": self.store.meter_list()})
+
+    def _post_update(self, body):
+        """Pull the latest code (git) and restart the bridge in place.
+
+        For the user's own local bridge on the home network: lets them update
+        from the phone app with one tap. Runs `git pull` in the repo, then
+        re-execs this process a moment later so the response can still flush.
+        """
+        if not _is_git_repo():
+            return self._send_json(
+                {"ok": False, "error": "Kein Git-Repository – Update nur bei einer "
+                 "git-Installation möglich. Bitte manuell aktualisieren."}, 200)
+        ok, changed, log = _git_pull()
+        if not ok:
+            return self._send_json({"ok": False, "error": "git pull fehlgeschlagen.",
+                                    "output": log}, 200)
+        if changed:
+            _schedule_restart()
+        return self._send_json({
+            "ok": True, "changed": changed, "output": log,
+            "message": ("Aktualisiert – die Bridge startet neu. Bitte in ein paar "
+                        "Sekunden die Seite neu laden." if changed
+                        else "Bereits auf dem neuesten Stand.")})
+
     # -- REST API ---------------------------------------------------------- #
     def _api(self, path, qs):
         try:
@@ -954,13 +2289,52 @@ class Handler(BaseHTTPRequestHandler):
                     "shc_ip": self.cfg.get("shc_ip", ""),
                     "has_password": bool(self.cfg.get("system_password")),
                     "has_cert": have_cert,
+                    "homecom_available": homecom is not None,
+                    "homecom_connected": bool(self.cfg.get("homecom_refresh_token")),
+                    "homecom_gateway": self.cfg.get("homecom_gateway", ""),
+                    "homecom_last_error": self.ctx.hp_state.get("last_error"),
+                    "homecom_last_poll": self.ctx.hp_state.get("last_poll"),
+                    "hp_import": self.store.hp_history_count(),
+                    "auto_update_interval": int(self.cfg.get("auto_update_interval", 0) or 0),
+                    "is_git_repo": _is_git_repo(),
+                    "electrolux_available": electrolux is not None,
+                    "electrolux_connected": bool(self.cfg.get("electrolux_refresh_token")),
+                    "electrolux_last_error": self.ctx.ael_state.get("last_error"),
+                    "electrolux_last_poll": self.ctx.ael_state.get("last_poll"),
+                    "electrolux_count": len(self.store.aeg_appliances()),
+                    "electrolux_kwh_per_cycle": float(self.cfg.get("electrolux_kwh_per_cycle", 0.8) or 0.8),
                 })
             if path == "/api/devices":
                 return self._send_json({"devices": self.store.devices()})
+            if path == "/api/heatpump":
+                st = dict(self.ctx.hp_state)
+                st["available"] = bool(st) and st.get("energy_kwh") is not None or bool(st.get("last_poll"))
+                st["connected"] = bool(self.cfg.get("homecom_refresh_token"))
+                return self._send_json(st)
+            if path == "/api/appliances":
+                return self._send_json(self._appliances_payload())
+            if path == "/api/meter":
+                return self._send_json({"readings": self.store.meter_list()})
+            if path == "/api/homecom/authurl":
+                if not homecom:
+                    return self._send_json({"error": "homecom modul fehlt"}, 500)
+                return self._send_json({"url": homecom.authorize_url()})
+            if path == "/api/homecom/probe":
+                client = self.ctx.homecom_client()
+                if not client:
+                    return self._send_json({"error": "nicht mit HomeCom verbunden"}, 400)
+                gid = qs.get("gateway", [self.cfg.get("homecom_gateway", "")])[0]
+                return self._send_json({"gateway": gid, "results": client.probe(gid)})
             days = int(qs.get("days", ["60"])[0])
             price = float(qs.get("price", [self.cfg.get("price_per_kwh", 0.35)])[0])
             if path == "/api/analytics" or path == "/api/summary":
                 return self._send_json(compute_analytics(self.store, days, price))
+            if path == "/api/overview":
+                return self._send_json(
+                    compute_overview(self.store, days, price, self._hp_live()))
+            if path == "/api/heatpump/analytics":
+                return self._send_json(
+                    compute_hp_analytics(self.store, days, price, self._hp_live()))
             if path == "/api/series":
                 device = qs.get("device", ["all"])[0]
                 since = int(time.time()) - days * 86400
@@ -1163,6 +2537,18 @@ def cmd_serve(args, cfg):
     else:
         # not configured yet – stay idle so the web UI can pair the controller
         ctx.mode = "idle"
+
+    # optional: start the heat-pump (HomeCom) poller if already connected
+    if ctx.start_heatpump():
+        print(f"  Heat pump:   HomeCom gateway {cfg.get('homecom_gateway')}")
+
+    # optional: start the AEG / Electrolux appliance poller if already connected
+    if ctx.start_electrolux():
+        print("  Appliances:  AEG/Electrolux connected")
+
+    # optional: automatic self-update (git pull + restart when new commits land)
+    if _ensure_auto_update(cfg):
+        print(f"  Auto-update: on (alle {int(cfg.get('auto_update_interval', 0))} min)")
 
     frontend = args.frontend or DEFAULT_FRONTEND
     httpd = make_server(args.host, args.port, ctx, frontend)

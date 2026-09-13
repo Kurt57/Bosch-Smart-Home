@@ -1,24 +1,33 @@
-# Bosch Smart Home – Strom-App 🔌📱
+# Bosch Smart Home – Energie-App 🔌🔥📱
 
-Eine schlanke iPhone-Web-App (PWA), die den **Stromverbrauch deiner Bosch
-„Licht-/Rollladensteuerung II"**-Module sichtbar macht – live, historisch und als
-Prognose. Läuft komplett in deinem Heimnetz, ohne Cloud.
+Eine schlanke iPhone-Web-App (PWA), die deinen **Stromverbrauch** sichtbar macht –
+die Bosch **„Licht-/Rollladensteuerung II"**-Module **und** deine Bosch-Wärmepumpe,
+**kombiniert** in einem kleinen Energiemanagement-System: live, historisch, als
+Prognose und aufgeschlüsselt nach **wann, wie viel, wofür**. Läuft komplett in
+deinem Heimnetz; die Wärmepumpe kommt über Bosch HomeCom Easy dazu.
 
-![Ansichten](https://img.shields.io/badge/Ansichten-Live·Verbrauch·Profil·Abwesenheit·Prognose-3ba9ff)
+![Ansichten](https://img.shields.io/badge/Ansichten-Übersicht·Heute·Verlauf·Wärmepumpe·Profil·PV-3ba9ff)
 
 ## Was du bekommst
 
 | Ansicht | Inhalt |
 |---|---|
-| **Live** | Aktuelle Leistung (W) aller Module **kumuliert** und je Gerät, Grundlast/Standby, heute geschätzt + Kosten, Gesamt gemessen (kWh) |
-| **Verbrauch** | kWh **pro Tag** (14/30/90 Tage), abwesende Tage rot markiert, Anteil je Gerät am Gesamtverbrauch |
-| **Profil** | Ø-Leistung je **Stunde** (Tagesprofil), Ø-kWh je **Wochentag**, **Wärmekarte** Wochentag × Stunde |
-| **Abwesenheit** | Heuristische Schätzung, **wie oft ihr nicht zuhause wart**, Anwesenheit pro Tag + Kalender |
-| **Prognose** | **Jahres-Hochrechnung** (kWh + €), Monat/Tag, Standby-Anteil, Einordnung, **Sofort-Schätzung aus dem Zählerstand** (ab Minute 1), konfigurierbarer Strompreis |
-| **Setup** | **Controller automatisch finden**, Kopplung per Formular (kurzer Knopfdruck → live), Live-Status, **Geräte lokal umbenennen** |
+| **Übersicht** | **Heute bisher** (kWh + Kosten), aktuelle Gesamtleistung inkl. Wärmepumpen-Anteil, Monats-Hochrechnung, **Wofür-heute-Donut** (Wärmepumpe + Geräte), letzte 14 Tage **gestapelt** (Smart Home vs. Wärmepumpe), Wärmepumpen-Kurzstatus |
+| **Heute** | Verbrauch **nach Stunde** (Smart Home + Wärmepumpe gestapelt), Aufteilung heute als Donut mit Kosten, Smart-Home-Geräte heute |
+| **Verlauf** | kWh **pro Tag** (14/30/90 Tage) bzw. **pro Monat** (1 Jahr, fehlende Monate geschätzt), gestapelt nach Quelle; **Anteil je Quelle**; **Abwesenheit** (wie oft ihr nicht zuhause wart) + Kalender; **Jahres-Hochrechnung** & Einordnung |
+| **Wärmepumpe** | Live-Karte (elektr./therm. Leistung, **COP jetzt**, Zähler-Splits Kompressor/Heizstab, Temperaturen, Starts/Stunden), **Strom & Wärme pro Tag**, **COP-Verlauf**, **COP pro Monat**, **Monatsbilanz**, **Wärmekarte** Wochentag × Stunde, **Theorie vs. Praxis** (erwarteter Stromverbrauch aus deinen Gebäudedaten – U·A + Heizgradtage – gegen den gemessenen Verbrauch, mit den größten Sanierungs-Hebeln) |
+| **Profil** | Ø-Leistung je **Stunde** (Tagesprofil), Ø-kWh je **Wochentag**, **Wärmekarte** Wochentag × Stunde (Smart Home) |
+| **PV** | **PV-Planer** für eine geplante Anlage: Anlagengröße/Ausrichtung/Batterie/**E-Auto** eingeben → **Jahresertrag**, **Eigenverbrauch & Autarkie** (aus deinem echten Tagesprofil simuliert), Ersparnis, **PV-Ertrag vs. Verbrauch pro Monat**, typischer Sommertag und **Amortisation**. Knopf **„kWp & Speicher vorschlagen"** dimensioniert aus deinem Verbrauch. |
 
-Alles basiert ausschließlich auf den `PowerMeter`-Daten (Wirkleistung in W,
-Energiezähler in Wh) der Bosch-Module – genau wie gewünscht.
+Auf der **Übersicht** erscheinen zusätzlich verbundene **AEG/Electrolux-Haushaltsgeräte**
+(Waschmaschine, Trockner) mit **Zustand, Strom pro Waschgang und Gesamtzähler** – siehe
+**[docs/AEG.md](docs/AEG.md)**.
+| **Setup** | Strompreis, **Controller automatisch finden**, Kopplung per Formular, Live-Status, **Geräte lokal umbenennen**, **Wärmepumpe (HomeCom) verbinden**, **Wärmepumpen-Historie als CSV importieren**, **AEG/Electrolux verbinden**, **Gesamt-Stromzähler** ablesen (kalibriert Prognosen & deckt fehlenden Hausstrom auf), **Bridge aktualisieren** (Self-Update, manuell oder **automatisch** im Hintergrund) |
+
+Der Smart-Home-Teil basiert auf den `PowerMeter`-Daten (Wirkleistung in W,
+Energiezähler in Wh) der Bosch-Module; die Wärmepumpe liefert kumulative
+Energiezähler (Strom = Kompressor + Heizstab, Wärme = erzeugte Energie), aus
+denen die Bridge Leistung, COP und Historie ableitet.
 
 ## Architektur
 
@@ -50,6 +59,7 @@ Nach dem Klonen (siehe unten) im Finder einfach doppelklicken:
 
 * **`demo-macos.command`** – startet die Demo.
 * **`start-macos.command`** – startet den Normalbetrieb (Kopplung dann am iPhone im Tab *Setup*).
+* **`auto-update-macos.command`** – startet den Normalbetrieb **und hält die Bridge automatisch aktuell**: prüft alle paar Minuten auf neue Versionen, holt sie (git pull) und startet neu. Praktisch, wenn du Aufgaben nur per iPhone schickst. *Dasselbe geht auch ohne Extra-Skript direkt in der App:* Tab *Setup* → **„Automatisch aktualisieren"**.
 
 Beim allerersten Start fragt macOS evtl. „Eingehende Verbindungen erlauben?" → **Erlauben**.
 Falls Gatekeeper meckert: Rechtsklick auf die Datei → **Öffnen**.
