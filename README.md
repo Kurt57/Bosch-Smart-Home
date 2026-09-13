@@ -22,7 +22,7 @@ deinem Heimnetz; die Wärmepumpe kommt über Bosch HomeCom Easy dazu.
 Auf der **Übersicht** erscheinen zusätzlich verbundene **AEG/Electrolux-Haushaltsgeräte**
 (Waschmaschine, Trockner) mit **Zustand, Strom pro Waschgang und Gesamtzähler** – siehe
 **[docs/AEG.md](docs/AEG.md)**.
-| **Setup** | Strompreis, **Controller automatisch finden**, Kopplung per Formular, Live-Status, **Geräte lokal umbenennen**, **Wärmepumpe (HomeCom) verbinden**, **Wärmepumpen-Historie als CSV importieren**, **AEG/Electrolux verbinden**, **Bridge aktualisieren** (Self-Update, manuell oder **automatisch** im Hintergrund) |
+| **Setup** | Strompreis, **Controller automatisch finden**, Kopplung per Formular, Live-Status, **Geräte lokal umbenennen**, **Wärmepumpe (HomeCom) verbinden**, **Wärmepumpen-Historie als CSV importieren**, **AEG/Electrolux verbinden**, **Gesamt-Stromzähler** ablesen (kalibriert Prognosen & deckt fehlenden Hausstrom auf), **Bridge aktualisieren** (Self-Update, manuell oder **automatisch** im Hintergrund) |
 
 Der Smart-Home-Teil basiert auf den `PowerMeter`-Daten (Wirkleistung in W,
 Energiezähler in Wh) der Bosch-Module; die Wärmepumpe liefert kumulative

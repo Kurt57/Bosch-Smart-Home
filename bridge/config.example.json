@@ -7,5 +7,6 @@
   "device_filter": [],
   "auto_update_interval": 0,
   "electrolux_api_key": "",
-  "electrolux_refresh_token": ""
+  "electrolux_refresh_token": "",
+  "electrolux_kwh_per_cycle": 0.8
 }

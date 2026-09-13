@@ -12,7 +12,7 @@ const MON = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Ok
 const COL = { sh: '#4da3ff', hp: '#ef6c4d', heat: '#f6b93b', away: '#ff6b8a' };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-13 · AEG/Electrolux-Geräte, COP pro Monat, Theorie-vs-Praxis'
+const APP_VERSION = '2026-09-13 · Zählerstand-Abgleich, AEG-Waschgänge, Haushaltsgeräte'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -115,6 +115,10 @@ const INFO = {
   behavior: () => 'Aus den <b>Namen</b> deiner Geräte und den Uhrzeiten, zu denen sie am meisten Strom ziehen, ' +
     'liest die App typische Routinen ab (Kochen, Schlafen, Bad …) und leitet konkrete Spar-Ideen ab. ' +
     'Basis: Ø über die gemessenen Tage.',
+  meter: () => 'Trag deinen <b>Hauptstromzähler</b>-Stand (Gesamt = Haushalt + Wärmepumpe) ' +
+    'ab und zu ein. Aus zwei Ablesungen ergibt sich dein <b>echter Gesamtverbrauch</b>; die App zieht ' +
+    'die (saisonale) Wärmepumpe ab, deckt so den <b>noch nicht gemessenen Hausstrom</b> auf und ' +
+    '<b>kalibriert alle Prognosen</b> auf deinen realen Wert. Bleibt lokal.',
   aeg: () => 'Deine AEG/Electrolux-Geräte (Waschmaschine, Trockner …) über die offizielle ' +
     'Electrolux-Cloud. Angezeigt werden Betriebszustand, <b>Strom pro Waschgang</b> und der ' +
     '<b>Gesamtzähler</b>. „Heute" ist der Zuwachs des Gesamtzählers seit Mitternacht. Verbinden ' +
@@ -152,16 +156,47 @@ function hpDayFactor(m) {
 }
 // Smart-Home / household annual daily average. A manual whole-house figure
 // (from the electricity bill) wins, since the modules only see part of it.
-function shAvgDaily() {
-  const house = parseFloat(localStorage.getItem(LS.house) || '0');
-  if (house > 0) return house / 365;
+// Raw household daily from the Smart-Home modules only (no overrides).
+function shMeteredDaily() {
   const d = STATE.data; if (!d) return 0;
   if (d.counter_estimate && d.counter_estimate.avg_daily_kwh > 0) return d.counter_estimate.avg_daily_kwh;
   if (d.stats && d.stats.avg_daily_kwh > 0) return d.stats.avg_daily_kwh;
   const v = (d.daily || []).map(x => x.kwh).filter(x => x > 0);
   return v.length ? v.reduce((a, b) => a + b, 0) / v.length : 0;
 }
+// Household daily (everything except the heat pump). Best source first:
+// real whole-house meter readings (total − heat pump), then a manual yearly
+// household figure, then just the measured modules.
+function shAvgDaily() {
+  const md = meterHouseholdDaily();
+  if (md != null && md > 0) return md;
+  const house = houseManual();
+  if (house > 0) return house / 365;
+  return shMeteredDaily();
+}
 function houseManual() { return parseFloat(localStorage.getItem(LS.house) || '0') || 0; }
+// Whole-house meter readings → real total daily average and the months spanned.
+function meterStats() {
+  const r = (STATE.meter || []).filter(x => x && x.kwh != null && x.ts).slice().sort((a, b) => a.ts - b.ts);
+  if (r.length < 2) return null;
+  const first = r[0], last = r[r.length - 1];
+  const spanDays = (last.ts - first.ts) / 86400;
+  if (spanDays <= 0 || last.kwh < first.kwh) return { count: r.length, first, last, spanDays: 0, dailyAvg: null, months: [], readings: r };
+  const months = []; const d1 = new Date(last.ts * 1000);
+  let y = new Date(first.ts * 1000).getFullYear(), m = new Date(first.ts * 1000).getMonth();
+  while (y < d1.getFullYear() || (y === d1.getFullYear() && m <= d1.getMonth())) {
+    months.push(m); m++; if (m > 11) { m = 0; y++; }
+    if (months.length > 24) break;
+  }
+  return { count: r.length, first, last, spanDays, dailyAvg: (last.kwh - first.kwh) / spanDays, months, readings: r };
+}
+// Household daily derived from the meter: real total minus the heat pump's
+// seasonal share over the same months (household baseload is ~constant).
+function meterHouseholdDaily() {
+  const s = meterStats(); if (!s || s.dailyAvg == null) return null;
+  const hpDaily = s.months.length ? mean(s.months.map(m => (hpMonthEst(m) || 0) / DIM[m])) : hpAvgDaily();
+  return Math.max(0, s.dailyAvg - (hpDaily || 0));
+}
 // Mean daily heat-pump electricity for the measured season. Prefer the
 // meter-growth-over-span figure (robust to polling gaps) over sparse day deltas.
 function hpMeasuredMean() {
@@ -315,13 +350,15 @@ async function loadAll() {
       STATE.price = health.price_per_kwh; $('price').value = STATE.price;
     }
     const p = STATE.price;
-    const [ov, hpA, data, appl] = await Promise.all([
+    const [ov, hpA, data, appl, meter] = await Promise.all([
       api('/api/overview?days=90&price=' + p),
       api('/api/heatpump/analytics?days=90&price=' + p),
       api('/api/analytics?days=90&price=' + p),
       api('/api/appliances').catch(() => null),
+      api('/api/meter').catch(() => null),
     ]);
     STATE.ov = ov; STATE.hpA = hpA; STATE.data = data; STATE.appliances = appl;
+    STATE.meter = (meter && meter.readings) || [];
     STATE.cur = data.currency || STATE.cur;
     $('cur').textContent = STATE.cur;
     setMode(health.mode || 'live');
@@ -342,8 +379,12 @@ function applyDemo(mode) {
   STATE.ov = demoOverview(STATE.data, STATE.hpA);
   STATE.appliances = { connected: true, appliances: [
     { id: 'demo-washer', name: 'Waschmaschine', type: 'WM', brand: 'AEG', model: 'LR8E75495',
-      state: 'OFF', total_kwh: 381.0, today_kwh: 0.9, cycle_kwh: 0.9 },
+      state: 'READY_TO_START', cycles: 429, total_kwh: 343.2, today_kwh: 0.8, cycle_kwh: 0.8,
+      energy_estimated: true },
   ] };
+  const nowS = Math.floor(Date.now() / 1000);
+  STATE.meter = [{ ts: nowS - 8 * 86400, kwh: 2202, note: '' },
+                 { ts: nowS, kwh: 2202 + 8 * 17, note: '' }];
   STATE.cur = '€'; $('cur').textContent = STATE.cur;
   setMode(mode);
   renderAll();
@@ -523,32 +564,43 @@ function statusRow(k, v) { return `<div class="statusrow"><span class="k">${k}</
 const AEG_STATE = {
   RUNNING: ['läuft', '#4be0b0'], RUN: ['läuft', '#4be0b0'], ON: ['läuft', '#4be0b0'],
   OFF: ['aus', 'var(--muted)'], IDLE: ['bereit', '#4da3ff'], READY: ['bereit', '#4da3ff'],
-  END: ['fertig', '#f6b93b'], PAUSE: ['Pause', '#f6b93b'], PAUSED: ['Pause', '#f6b93b'],
-  DELAYEDSTART: ['Startvorwahl', '#f6b93b'],
+  READYTOSTART: ['bereit', '#4da3ff'], STANDBY: ['Standby', 'var(--muted)'],
+  END: ['fertig', '#f6b93b'], ENDOFCYCLE: ['fertig', '#f6b93b'], PAUSE: ['Pause', '#f6b93b'],
+  PAUSED: ['Pause', '#f6b93b'], DELAYEDSTART: ['Startvorwahl', '#f6b93b'],
 };
 function aegStateLabel(s) {
   if (!s) return ['–', 'var(--muted)'];
   const key = String(s).toUpperCase().replace(/[^A-Z]/g, '');
-  return AEG_STATE[key] || [String(s).toLowerCase(), 'var(--muted)'];
+  return AEG_STATE[key] || [String(s).toLowerCase().replace(/_/g, ' '), 'var(--muted)'];
+}
+// Prettify an AEG program UID, e.g. "COTTON_PR_ECO40-60" → "Eco40-60".
+function aegProgram(p) {
+  if (!p) return '';
+  let s = String(p).replace(/_PR_/, ' ').replace(/_/g, ' ').trim();
+  const parts = s.split(' ');
+  s = parts[parts.length - 1] || s;                 // keep the meaningful tail
+  return s.charAt(0) + s.slice(1).toLowerCase();
 }
 function renderAppliances() {
   const card = $('ov-aeg-card'); if (!card) return;
   const list = (STATE.appliances && STATE.appliances.appliances) || [];
   if (!list.length) { card.hidden = true; return; }
   card.hidden = false;
-  let todaySum = 0;
+  let todaySum = 0, anyEst = false;
   const rows = list.map(a => {
     const [lbl, col] = aegStateLabel(a.state);
+    const est = !!a.energy_estimated;
+    if (est) anyEst = true;
     const today = a.today_kwh != null ? a.today_kwh : null;
     if (today != null) todaySum += today;
     const sub = [];
-    if (a.state && lbl === 'läuft') {
-      if (a.program) sub.push(esc(String(a.program)));
-      if (a.time_to_end_min) sub.push('noch ' + a.time_to_end_min + ' min');
+    if (lbl === 'läuft') {
+      if (a.program) sub.push(esc(aegProgram(a.program)));
+      if (a.time_to_end_min) sub.push('noch ' + Math.round(a.time_to_end_min / 60 * 10) / 10 + ' h');
     }
-    if (a.total_kwh != null) sub.push('gesamt ' + kwh(a.total_kwh, 0));
-    if (a.cycle_kwh) sub.push('letzter Gang ' + kwh(a.cycle_kwh, 2));
-    const valTop = today != null ? kwh(today, 2) : '–';
+    if (a.cycles != null) sub.push(fmt(a.cycles, 0) + ' Waschgänge');
+    if (a.total_kwh != null) sub.push((est ? '≈ ' : '') + 'gesamt ' + kwh(a.total_kwh, 0));
+    const valTop = today != null ? (est ? '≈ ' : '') + kwh(today, 2) : '–';
     const valBot = today != null && today > 0 ? money(today * STATE.price) : '';
     return `<div class="devrow"><div class="nm">` +
       `<b>${esc(a.name || a.id)} <span style="color:${col};font-weight:600">· ${lbl}</span></b>` +
@@ -556,11 +608,40 @@ function renderAppliances() {
       `<div class="val"><b>${valTop}</b>${valBot ? `<small>${valBot}</small>` : ''}</div></div>`;
   }).join('');
   $('ov-aeg-body').innerHTML = rows;
-  $('ov-aeg-sum').textContent = todaySum > 0 ? kwh(todaySum, 2) + ' heute' : '';
+  $('ov-aeg-sum').textContent = todaySum > 0 ? (anyEst ? '≈ ' : '') + kwh(todaySum, 2) + ' heute' : '';
   const err = STATE.appliances && STATE.appliances.last_error;
   $('ov-aeg-note').innerHTML = err
     ? '<span style="color:#ff6b8a">Letzter Fehler: ' + esc(err) + '</span>'
-    : 'Strom pro Waschgang & gesamt aus der AEG/Electrolux-Cloud. „Heute" = Zuwachs des Gesamtzählers seit Mitternacht.';
+    : (anyEst
+      ? '„≈" = <b>geschätzt</b>: dein Gerät meldet keinen kWh-Wert, daher rechnet die App ' +
+        '<b>Waschgänge × ø kWh/Gang</b> (im Setup anpassbar). „Heute" = neue Waschgänge seit Mitternacht.'
+      : 'Strom pro Waschgang & gesamt aus der AEG/Electrolux-Cloud. „Heute" = Zuwachs des Gesamtzählers seit Mitternacht.');
+}
+function renderMeter() {
+  const list = $('meter-list'), note = $('meter-note'); if (!note) return;
+  const di = $('meter-date'); if (di && !di.value) di.value = new Date().toISOString().slice(0, 10);
+  const rs = (STATE.meter || []).slice().sort((a, b) => b.ts - a.ts);
+  list.innerHTML = rs.length ? rs.map(r =>
+    `<div class="statusrow"><span class="k">${longDay(new Date(r.ts * 1000).toISOString().slice(0, 10))}</span>` +
+    `<span class="v">${kwh(r.kwh, 0)} <button class="linkbtn meter-del" data-ts="${r.ts}" ` +
+    `style="background:none;border:none;color:#ff6b8a;cursor:pointer;font-size:13px">✕</button></span></div>`).join('')
+    : '<div class="note">Noch keine Ablesung. Trag oben deinen aktuellen Zählerstand ein – und in ein paar Tagen den nächsten.</div>';
+  const s = meterStats();
+  if (s && s.dailyAvg != null) {
+    const hpDaily = s.months.length ? mean(s.months.map(m => (hpMonthEst(m) || 0) / DIM[m])) : hpAvgDaily();
+    const household = Math.max(0, s.dailyAvg - hpDaily);
+    const unmetered = Math.max(0, household - shMeteredDaily());
+    note.innerHTML = `Realer Gesamtverbrauch <b>${kwh(s.dailyAvg, 1)}/Tag</b> ` +
+      `(~${kwh(s.dailyAvg * 30, 0)}/Monat, ${money(s.dailyAvg * STATE.price)}/Tag), aus ${s.count} Ablesungen ` +
+      `über ${fmt(s.spanDays, 0)} Tage. Davon Wärmepumpe ~<b>${kwh(hpDaily, 1)}</b>, Haushalt ~<b>${kwh(household, 1)}</b>/Tag. ` +
+      (unmetered > 0.3 ? `Rund <b>${kwh(unmetered, 1)}/Tag</b> Hausstrom messen die Module noch nicht. ` : '') +
+      `<b>Prognosen sind jetzt auf diesen Wert kalibriert.</b>`;
+  } else if (rs.length === 1) {
+    note.innerHTML = 'Erste Ablesung gespeichert ✓ – trag in ein paar Tagen die <b>nächste</b> ein, dann ' +
+      'berechnet die App deinen echten Gesamtverbrauch.';
+  } else {
+    note.textContent = '';
+  }
 }
 function devRow(title, sub, valTop, valBot, pct, col) {
   return `<div class="devrow"><div class="nm"><b>${esc(title)}</b><small>${sub}</small>` +
@@ -570,7 +651,7 @@ function devRow(title, sub, valTop, valBot, pct, col) {
 
 /* --------------------------------------------------------------- rendering */
 function renderAll() {
-  renderOverview(); renderToday(); renderHistory(); renderHeatpump(); renderProfile(); renderPv(); renderSettings(); renderAppliances();
+  renderOverview(); renderToday(); renderHistory(); renderHeatpump(); renderProfile(); renderPv(); renderSettings(); renderAppliances(); renderMeter();
 }
 
 function renderOverview() {
@@ -626,6 +707,18 @@ function renderTips() {
   const tips = [];
   const A = STATE.hpA, data = STATE.data, fc = annualForecast(), price = STATE.price;
   const l = (A && A.live) || {};
+  // 0) whole-house meter calibration: reveal the not-yet-measured household load
+  const ms = meterStats();
+  if (ms && ms.dailyAvg != null) {
+    const hpDaily = ms.months.length ? mean(ms.months.map(m => (hpMonthEst(m) || 0) / DIM[m])) : hpAvgDaily();
+    const household = Math.max(0, ms.dailyAvg - hpDaily);
+    const unmetered = Math.max(0, household - shMeteredDaily());
+    tips.push(['🔢', `Dein <b>Gesamtzähler</b>: real <b>${kwh(ms.dailyAvg, 1)}/Tag</b> ` +
+      `(${money(ms.dailyAvg * price)}/Tag). Davon Wärmepumpe ~${kwh(hpDaily, 1)}, Haushalt ~${kwh(household, 1)}. ` +
+      (unmetered > 0.3 ? `Rund <b>${kwh(unmetered, 1)}/Tag</b> Hausstrom messen die Module noch <b>nicht</b> ` +
+        `(Kühlschrank, Herd, …) – ein Zwischenstecker/Klemmzähler würde das sichtbar machen. ` : '') +
+      `Prognosen sind jetzt auf diesen Wert kalibriert.`]);
+  }
   // 1) electric booster heater (Heizstab) – expensive direct electric heat
   if (l.energy_kwh > 0 && l.eheater_kwh != null) {
     const share = l.eheater_kwh / l.energy_kwh;
@@ -1566,6 +1659,9 @@ function renderSettings() {
           (h.electrolux_last_error ? ' · <span style="color:#ff6b8a">Fehler: ' + esc(h.electrolux_last_error) + '</span>' : '')
         : 'Noch nicht verbunden.';
   }
+  const kpc = $('aeg-kpc');
+  if (kpc && document.activeElement !== kpc && h.electrolux_kwh_per_cycle != null)
+    kpc.value = h.electrolux_kwh_per_cycle;
 }
 
 function friendlyModel(m) {
@@ -1875,6 +1971,17 @@ function init() {
   if (aegD) aegD.addEventListener('click', () => window.open('https://developer.electrolux.one/dashboard', '_blank'));
   const aegC = $('aeg-connect'); if (aegC) aegC.addEventListener('click', doAegConnect);
   const aegP = $('aeg-probe'); if (aegP) aegP.addEventListener('click', doAegProbe);
+  const aegK = $('aeg-kpc');
+  if (aegK) aegK.addEventListener('change', async () => {
+    const n = $('aeg-kpc-note'), v = parseFloat(aegK.value);
+    if (!(v >= 0)) return;
+    n.textContent = 'Speichere …';
+    try {
+      const r = await postJSON('/api/config', { electrolux_kwh_per_cycle: v });
+      if (r && r.ok) { n.innerHTML = `✓ Es wird mit <b>${fmt(v, 2)} kWh/Waschgang</b> geschätzt.`; setTimeout(loadAll, 800); }
+      else n.textContent = 'Konnte nicht gespeichert werden.';
+    } catch (e) { n.textContent = 'Nur möglich, wenn die Seite von der Bridge geöffnet ist.'; }
+  });
   const hk = $('house-kwh');
   if (hk) {
     const saved = localStorage.getItem(LS.house); if (saved) hk.value = saved;
@@ -1888,6 +1995,31 @@ function init() {
     };
     hk.addEventListener('input', upd); upd();
   }
+
+  // whole-house meter readings: add + delete (stored on the bridge)
+  const mAdd = $('meter-add');
+  if (mAdd) mAdd.addEventListener('click', async () => {
+    const note = $('meter-note');
+    const dv = $('meter-date').value, kv = parseFloat($('meter-kwh').value);
+    if (!dv || !isFinite(kv)) { note.textContent = 'Bitte Datum und Zählerstand eingeben.'; return; }
+    const ts = Math.floor(new Date(dv + 'T12:00:00').getTime() / 1000);
+    mAdd.disabled = true;
+    try {
+      const r = await postJSON('/api/meter', { ts, kwh: kv });
+      if (r && r.ok) { STATE.meter = r.readings || []; $('meter-kwh').value = ''; renderAll(); }
+      else note.textContent = (r && r.error) || 'Konnte nicht gespeichert werden.';
+    } catch (e) { note.textContent = 'Nur möglich, wenn die Seite von der Bridge geöffnet ist.'; }
+    mAdd.disabled = false;
+  });
+  const mList = $('meter-list');
+  if (mList) mList.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.meter-del'); if (!btn) return;
+    const ts = parseInt(btn.dataset.ts, 10);
+    try {
+      const r = await postJSON('/api/meter/delete', { ts });
+      if (r && r.ok) { STATE.meter = r.readings || []; renderAll(); }
+    } catch (err) {}
+  });
 
   // PV planner: restore saved inputs, save + recompute on change
   const pvFields = [['pv-kwp', PV_LS.kwp], ['pv-orient', PV_LS.orient], ['pv-batt', PV_LS.batt],

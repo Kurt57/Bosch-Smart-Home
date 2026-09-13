@@ -37,17 +37,27 @@ speichert den neuen automatisch.
 
 ## Was angezeigt wird
 
-* **Zustand:** läuft / aus / bereit / fertig (inkl. Programm & Restzeit, wenn verfügbar).
-* **Heute:** Zuwachs des **Gesamtzählers seit Mitternacht** (× Strompreis = Kosten).
-* **Gesamt:** der kumulative kWh-Zähler des Geräts.
-* **Letzter Waschgang:** kWh des letzten Zyklus, falls das Modell ihn meldet.
+* **Zustand:** läuft / bereit / fertig (inkl. Programm & Restzeit, wenn verfügbar).
+* **Waschgänge:** der kumulative Zykluszähler des Geräts (z. B. 429).
+* **Heute / Gesamt:** Stromverbrauch.
 
-## Diagnose (falls der Energiewert fehlt/komisch ist)
+### Wichtig: viele Modelle melden **kein kWh** 🔎
 
-Die Feldnamen unterscheiden sich je Modell. Im Setup unter der AEG-Karte gibt es
-**„Diagnose: Rohdaten anzeigen"** → **Gerät abfragen**. Das zeigt die tatsächlich
-gemeldeten Felder (inkl. aller gefundenen `energy`-Werte). Die Bridge normalisiert
-Wh/kWh automatisch anhand der Größenordnung des Zählers.
+In der Praxis liefern **viele AEG-Waschmaschinen über die API keinen Energiewert**
+(das `energy_fields`-Objekt in der Diagnose ist dann leer). Sie melden aber einen
+**Waschgang-Zähler** (`totalWashCyclesCount`). Für solche Geräte **schätzt** die App
+die Energie als **Waschgänge × ø kWh/Waschgang** und markiert die Werte mit **„≈"**.
+
+* Der Standardwert ist **0,8 kWh/Waschgang** (gemischte Nutzung, 9-kg-Klasse).
+* Passe ihn im **Setup** unter der AEG-Karte an (Feld **„Ø kWh pro Waschgang"**) –
+  z. B. an den Wert vom Energielabel oder aus einer Messung mit einem Zwischenstecker.
+* Meldet dein Modell **doch** einen echten kWh-Wert, wird dieser bevorzugt (ohne „≈").
+
+## Diagnose (Rohdaten deines Geräts)
+
+Im Setup unter der AEG-Karte: **„Diagnose: Rohdaten anzeigen"** → **Gerät abfragen**.
+Das zeigt die tatsächlich gemeldeten Felder (`reported`) und alle gefundenen
+`energy`-Werte. Ist `energy_fields` leer, greift die Waschgang-Schätzung oben.
 
 ## Konfiguration per Datei (alternativ)
 
@@ -55,9 +65,11 @@ Wh/kWh automatisch anhand der Größenordnung des Zählers.
 {
   "electrolux_api_key": "DEIN-API-KEY",
   "electrolux_refresh_token": "DEIN-REFRESH-TOKEN",
-  "electrolux_interval": 300
+  "electrolux_interval": 300,
+  "electrolux_kwh_per_cycle": 0.8
 }
 ```
 
 `electrolux_interval` sind die Sekunden zwischen den Abfragen (Standard 300).
 Nicht zu häufig abfragen – die API hat ein Tageslimit.
+`electrolux_kwh_per_cycle` ist die Schätzung pro Waschgang für Geräte ohne kWh-Feld.

@@ -59,11 +59,15 @@ class ElectroluxClient:
 
     def __init__(self, api_key: str, refresh_token: str | None = None,
                  access_token: str | None = None, on_token=None,
-                 timeout: float = 20.0):
+                 timeout: float = 20.0, kwh_per_cycle: float = 0.8):
         self.api_key = (api_key or "").strip()
         self.refresh_token = (refresh_token or "").strip() or None
         self.on_token = on_token
         self.timeout = timeout
+        # Many AEG/Electrolux models expose NO energy field via the API – only a
+        # cumulative wash-cycle counter. For those we estimate energy as
+        # cycles × this per-cycle figure (a mixed-usage average; tune per model).
+        self.kwh_per_cycle = float(kwh_per_cycle)
         self._access = (access_token or "").strip() or None
         self._access_exp = time.time() + 300 if self._access else 0
         self._lock = threading.Lock()
@@ -212,38 +216,59 @@ class ElectroluxClient:
                 return low[n.lower()]
         return None
 
+    @staticmethod
+    def _nested(rep: dict, *path):
+        """Fetch a nested value, e.g. _nested(rep, 'userSelections', 'programUID')."""
+        node = rep
+        for p in path:
+            if not isinstance(node, dict):
+                return None
+            node = node.get(p)
+        return node
+
     def read_appliance(self, appliance_id: str, name: str | None = None) -> dict:
-        """Normalised snapshot: running state + cumulative/last-cycle energy."""
+        """Normalised snapshot: running state + energy.
+
+        If the model exposes an energy field we use it; otherwise (very common
+        for AEG washers) we estimate from the cumulative wash-cycle counter and
+        flag it as estimated."""
         state = self.get_state(appliance_id)
         rep = self._reported(state)
         efields = self._energy_fields(rep)
-        # cumulative counter: prefer a "total"/"lifetime" energy field, else the
-        # largest energy value we found (per-cycle values are much smaller).
+        cycles = self._pick(rep, "totalWashCyclesCount", "totalCycleCounter",
+                            "totalCyclesCount", "cycleCounter")
+        cycles = int(cycles) if isinstance(cycles, (int, float)) else None
         total_kwh = cycle_kwh = None
+        estimated = False
         if efields:
             totals = {k: v for k, v in efields.items()
                       if any(w in k.lower() for w in ("total", "life", "cumul"))}
-            if totals:
-                total_kwh = max(totals.values())
-            else:
-                total_kwh = max(efields.values())
-            cycles = {k: v for k, v in efields.items()
-                      if any(w in k.lower() for w in ("cycle", "current", "last", "program"))}
-            if cycles:
-                cycle_kwh = max(cycles.values())
-        app_state = self._pick(rep, "applianceState", "State", "status") \
-            or state.get("status")
+            total_kwh = max(totals.values()) if totals else max(efields.values())
+            cyc = {k: v for k, v in efields.items()
+                   if any(w in k.lower() for w in ("cycle", "current", "last", "program"))}
+            if cyc:
+                cycle_kwh = max(cyc.values())
+        elif cycles is not None:
+            total_kwh = round(cycles * self.kwh_per_cycle, 2)
+            cycle_kwh = round(self.kwh_per_cycle, 2)
+            estimated = True
+        app_state = self._pick(rep, "applianceState", "State", "status") or state.get("status")
+        wt = self._pick(rep, "applianceTotalWorkingTime", "totalWashingTime")
+        prog = self._nested(rep, "userSelections", "programUID") \
+            or self._pick(rep, "programUID", "cyclePhase", "applianceMode")
+        tte = self._pick(rep, "timeToEnd", "remainingTime", "timeToEndSeconds")
         return {
             "id": appliance_id,
             "name": name,
             "connection": state.get("connectionState"),
             "state": str(app_state) if app_state is not None else None,
-            "program": self._pick(rep, "userSelections.programUID", "cyclePhase",
-                                   "programUID", "applianceMode", "cyclePhaseRaw"),
-            "time_to_end_min": (lambda s: round(s / 60) if isinstance(s, (int, float)) and s > 0 else None)(
-                self._pick(rep, "timeToEnd", "remainingTime", "timeToEndSeconds")),
+            "program": str(prog) if prog else None,
+            "time_to_end_min": round(tte / 60) if isinstance(tte, (int, float)) and tte > 0 else None,
+            "cycles": cycles,
+            "working_time_h": round(wt / 3600) if isinstance(wt, (int, float)) and wt > 0 else None,
             "total_kwh": total_kwh,
             "cycle_kwh": cycle_kwh,
+            "energy_estimated": estimated,
             "energy_fields": efields,
         }
 

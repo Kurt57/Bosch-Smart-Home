@@ -98,6 +98,9 @@ def load_config(path: str) -> dict:
         "electrolux_api_key": "",
         "electrolux_refresh_token": "",
         "electrolux_interval": 300,    # seconds between appliance polls
+        # For models that report no kWh, energy is estimated as wash cycles ×
+        # this per-cycle figure (mixed-usage average; tune to your machine).
+        "electrolux_kwh_per_cycle": 0.8,
         # Auto-update: when > 0, the bridge periodically checks the git remote
         # and, if new commits are available, pulls and restarts itself. 0 = off.
         "auto_update_interval": 0,     # minutes between update checks (0 = off)
@@ -458,10 +461,20 @@ class Store:
             self.conn.execute(
                 "CREATE TABLE IF NOT EXISTS aeg_samples("
                 " appliance_id TEXT, ts INTEGER, total_kwh REAL, cycle_kwh REAL,"
-                " state TEXT, program TEXT)"
+                " state TEXT, program TEXT, cycles INTEGER, estimated INTEGER)"
             )
+            aegcols = [r[1] for r in self.conn.execute("PRAGMA table_info(aeg_samples)")]
+            for col, typ in (("cycles", "INTEGER"), ("estimated", "INTEGER")):
+                if col not in aegcols:
+                    self.conn.execute(f"ALTER TABLE aeg_samples ADD COLUMN {col} {typ}")
             self.conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_aeg ON aeg_samples(appliance_id, ts)"
+            )
+            # manual whole-house meter readings (total kWh incl. heat pump) –
+            # a ground-truth anchor for calibrating totals and forecasts.
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS meter_readings("
+                " ts INTEGER PRIMARY KEY, kwh REAL, note TEXT)"
             )
 
     # -- heat pump ------------------------------------------------------- #
@@ -548,12 +561,13 @@ class Store:
                  a.get("model"), int(time.time())))
 
     def aeg_add_sample(self, appliance_id: str, ts: int, total_kwh, cycle_kwh,
-                       state, program):
+                       state, program, cycles=None, estimated=False):
         with self.lock, self.conn:
             self.conn.execute(
-                "INSERT INTO aeg_samples(appliance_id,ts,total_kwh,cycle_kwh,state,program)"
-                " VALUES(?,?,?,?,?,?)",
-                (appliance_id, ts, total_kwh, cycle_kwh, state, program))
+                "INSERT INTO aeg_samples(appliance_id,ts,total_kwh,cycle_kwh,state,"
+                "program,cycles,estimated) VALUES(?,?,?,?,?,?,?,?)",
+                (appliance_id, ts, total_kwh, cycle_kwh, state, program,
+                 cycles, 1 if estimated else 0))
 
     def aeg_appliances(self) -> list[dict]:
         with self.lock:
@@ -565,8 +579,8 @@ class Store:
     def aeg_latest(self, appliance_id: str) -> dict | None:
         with self.lock:
             r = self.conn.execute(
-                "SELECT ts,total_kwh,cycle_kwh,state,program FROM aeg_samples"
-                " WHERE appliance_id=? ORDER BY ts DESC LIMIT 1",
+                "SELECT ts,total_kwh,cycle_kwh,state,program,cycles,estimated"
+                " FROM aeg_samples WHERE appliance_id=? ORDER BY ts DESC LIMIT 1",
                 (appliance_id,)).fetchone()
         return dict(r) if r else None
 
@@ -592,6 +606,24 @@ class Store:
             return None
         d = last["total_kwh"] - base["total_kwh"]
         return round(d, 3) if d >= 0 else None
+
+    # -- manual whole-house meter readings ------------------------------- #
+    def meter_upsert(self, ts: int, kwh: float, note: str = ""):
+        with self.lock, self.conn:
+            self.conn.execute(
+                "INSERT INTO meter_readings(ts,kwh,note) VALUES(?,?,?)"
+                " ON CONFLICT(ts) DO UPDATE SET kwh=excluded.kwh, note=excluded.note",
+                (int(ts), float(kwh), note or ""))
+
+    def meter_list(self) -> list[dict]:
+        with self.lock:
+            rows = self.conn.execute(
+                "SELECT ts,kwh,note FROM meter_readings ORDER BY ts ASC").fetchall()
+        return [dict(r) for r in rows]
+
+    def meter_delete(self, ts: int):
+        with self.lock, self.conn:
+            self.conn.execute("DELETE FROM meter_readings WHERE ts=?", (int(ts),))
 
     def hp_counter_span(self) -> dict | None:
         """First and last cumulative counters over the whole observed history –
@@ -1513,20 +1545,23 @@ def seed_demo(store: Store, days: int = 90):
     # wash cycles, so the appliance card has something to show in demo mode.
     store.aeg_upsert_appliance({"id": "demo-washer", "name": "Waschmaschine",
                                 "type": "WM", "brand": "AEG", "model": "LR8E75495"})
-    total = 300.0
+    kpc, cycles = 0.8, 380       # like real AEG: no kWh field, energy from cycles
     t = start
     while t <= now:
-        # a wash on alternate days at 10:00 and 18:00, ~0.9 kWh each
+        # a wash on alternate days at 10:00 and 18:00
         running = (t.hour in (10, 18)) and (int(t.timestamp()) // 86400) % 2 == 0
-        cyc = 0.0
         if running:
-            total += 0.9           # one wash finished this hour
-            cyc = 0.9
-        store.aeg_add_sample("demo-washer", int(t.timestamp()), round(total, 3),
-                             round(cyc, 3), "RUNNING" if running else "OFF",
-                             "Baumwolle 40°" if running else None)
+            cycles += 1
+        store.aeg_add_sample("demo-washer", int(t.timestamp()), round(cycles * kpc, 2),
+                             kpc, "RUNNING" if running else "READY_TO_START",
+                             "COTTON_PR_ECO40-60" if running else None,
+                             cycles, True)
         t += timedelta(hours=1)
     print("[demo] inserted demo AEG appliance history.")
+
+    # two demo whole-house meter readings (~17 kWh/day total)
+    store.meter_upsert(int((now - timedelta(days=8)).timestamp()), 2202.0, "")
+    store.meter_upsert(int(now.timestamp()), 2202.0 + 8 * 17.0, "")
 
 
 class DemoPoller(threading.Thread):
@@ -1691,7 +1726,8 @@ class ElectroluxPoller(threading.Thread):
                 continue
             self.store.aeg_add_sample(a["id"], ts, snap.get("total_kwh"),
                                       snap.get("cycle_kwh"), snap.get("state"),
-                                      snap.get("program"))
+                                      snap.get("program"), snap.get("cycles"),
+                                      snap.get("energy_estimated"))
             today0 = int(time.mktime(time.localtime(ts)[:3] + (0, 0, 0, 0, 0, -1)))
             out.append({
                 **a,
@@ -1699,8 +1735,11 @@ class ElectroluxPoller(threading.Thread):
                 "connection": snap.get("connection"),
                 "program": snap.get("program"),
                 "time_to_end_min": snap.get("time_to_end_min"),
+                "cycles": snap.get("cycles"),
+                "working_time_h": snap.get("working_time_h"),
                 "total_kwh": snap.get("total_kwh"),
                 "cycle_kwh": snap.get("cycle_kwh"),
+                "energy_estimated": snap.get("energy_estimated"),
                 "today_kwh": self.store.aeg_total_since(a["id"], today0),
                 "energy_fields": snap.get("energy_fields"),
             })
@@ -1801,7 +1840,8 @@ class Runtime:
             return None
         return electrolux.ElectroluxClient(
             self.cfg["electrolux_api_key"], self.cfg["electrolux_refresh_token"],
-            on_token=self.save_electrolux_token)
+            on_token=self.save_electrolux_token,
+            kwh_per_cycle=float(self.cfg.get("electrolux_kwh_per_cycle", 0.8) or 0.8))
 
     def start_electrolux(self) -> bool:
         self.stop_electrolux()
@@ -1810,7 +1850,8 @@ class Runtime:
             return False
         client = electrolux.ElectroluxClient(
             self.cfg["electrolux_api_key"], self.cfg["electrolux_refresh_token"],
-            on_token=self.save_electrolux_token)
+            on_token=self.save_electrolux_token,
+            kwh_per_cycle=float(self.cfg.get("electrolux_kwh_per_cycle", 0.8) or 0.8))
         self.ael = ElectroluxPoller(client, self.store, self.ael_state,
                                     int(self.cfg.get("electrolux_interval", 300)))
         self.ael.start()
@@ -1827,7 +1868,7 @@ def save_config(cfg: dict, path: str):
             "price_per_kwh", "currency", "device_filter",
             "homecom_refresh_token", "homecom_gateway", "homecom_interval",
             "electrolux_api_key", "electrolux_refresh_token", "electrolux_interval",
-            "auto_update_interval")
+            "electrolux_kwh_per_cycle", "auto_update_interval")
     data = {k: cfg[k] for k in keep if k in cfg and not str(k).startswith("_")}
     try:
         with open(path, "w", encoding="utf-8") as fh:
@@ -1879,7 +1920,8 @@ class Handler(BaseHTTPRequestHandler):
             if aid in live:
                 row.update({k: live[aid].get(k) for k in
                             ("state", "connection", "program", "time_to_end_min",
-                             "total_kwh", "cycle_kwh", "today_kwh", "energy_fields")})
+                             "cycles", "working_time_h", "total_kwh", "cycle_kwh",
+                             "energy_estimated", "today_kwh", "energy_fields")})
             else:
                 last = self.store.aeg_latest(aid)
                 today0 = int(time.mktime(time.localtime()[:3] + (0, 0, 0, 0, 0, -1)))
@@ -1887,6 +1929,8 @@ class Handler(BaseHTTPRequestHandler):
                     row.update({"state": last.get("state"), "program": last.get("program"),
                                 "total_kwh": last.get("total_kwh"),
                                 "cycle_kwh": last.get("cycle_kwh"),
+                                "cycles": last.get("cycles"),
+                                "energy_estimated": bool(last.get("estimated")),
                                 "today_kwh": self.store.aeg_total_since(aid, today0)})
             out.append(row)
         return {"connected": bool(self.cfg.get("electrolux_refresh_token")) or self.ctx.mode == "demo",
@@ -1942,6 +1986,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._post_electrolux_connect(body)
             if parsed.path == "/api/electrolux/probe":
                 return self._post_electrolux_probe(body)
+            if parsed.path == "/api/meter":
+                return self._post_meter(body)
+            if parsed.path == "/api/meter/delete":
+                return self._post_meter_delete(body)
             if parsed.path == "/api/update":
                 return self._post_update(body)
             return self._send_json({"error": "unknown endpoint"}, 404)
@@ -1965,6 +2013,12 @@ class Handler(BaseHTTPRequestHandler):
             except (TypeError, ValueError):
                 pass
             _ensure_auto_update(cfg)
+        if body.get("electrolux_kwh_per_cycle") is not None:
+            try:
+                cfg["electrolux_kwh_per_cycle"] = max(0.0, float(body["electrolux_kwh_per_cycle"]))
+                self.ctx.start_electrolux()   # re-arm poller with the new factor
+            except (TypeError, ValueError):
+                pass
         save_config(cfg, cfg.get("_config_path", DEFAULT_CONFIG))
         return self._send_json({"ok": True})
 
@@ -2171,6 +2225,26 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:
             return self._send_json({"ok": False, "error": str(exc)}, 200)
 
+    def _post_meter(self, body):
+        """Add/update a whole-house meter reading (date + total kWh)."""
+        try:
+            ts = int(body.get("ts"))
+            kwh = float(body.get("kwh"))
+        except (TypeError, ValueError):
+            return self._send_json({"ok": False, "error": "Datum und Zählerstand (kWh) sind erforderlich."}, 400)
+        if kwh < 0:
+            return self._send_json({"ok": False, "error": "Zählerstand muss ≥ 0 sein."}, 400)
+        self.store.meter_upsert(ts, kwh, str(body.get("note") or "")[:120])
+        return self._send_json({"ok": True, "readings": self.store.meter_list()})
+
+    def _post_meter_delete(self, body):
+        try:
+            ts = int(body.get("ts"))
+        except (TypeError, ValueError):
+            return self._send_json({"ok": False, "error": "ts fehlt."}, 400)
+        self.store.meter_delete(ts)
+        return self._send_json({"ok": True, "readings": self.store.meter_list()})
+
     def _post_update(self, body):
         """Pull the latest code (git) and restart the bridge in place.
 
@@ -2228,6 +2302,7 @@ class Handler(BaseHTTPRequestHandler):
                     "electrolux_last_error": self.ctx.ael_state.get("last_error"),
                     "electrolux_last_poll": self.ctx.ael_state.get("last_poll"),
                     "electrolux_count": len(self.store.aeg_appliances()),
+                    "electrolux_kwh_per_cycle": float(self.cfg.get("electrolux_kwh_per_cycle", 0.8) or 0.8),
                 })
             if path == "/api/devices":
                 return self._send_json({"devices": self.store.devices()})
@@ -2238,6 +2313,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json(st)
             if path == "/api/appliances":
                 return self._send_json(self._appliances_payload())
+            if path == "/api/meter":
+                return self._send_json({"readings": self.store.meter_list()})
             if path == "/api/homecom/authurl":
                 if not homecom:
                     return self._send_json({"error": "homecom modul fehlt"}, 500)

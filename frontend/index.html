@@ -571,6 +571,9 @@
              autocomplete="off" autocapitalize="off" spellcheck="false">
       <button class="btn" id="aeg-connect">✅ Verbinden</button>
       <div class="note" id="aeg-connect-note" style="margin-top:10px"></div>
+      <label style="margin-top:12px; display:block">Ø kWh pro Waschgang <span style="color:var(--muted)">(nur falls dein Gerät keinen kWh-Wert meldet – dann wird darüber geschätzt)</span></label>
+      <input id="aeg-kpc" type="number" min="0" step="0.05" inputmode="decimal" placeholder="0.8">
+      <div class="note" id="aeg-kpc-note" style="margin-top:6px"></div>
       <details style="margin-top:12px">
         <summary style="cursor:pointer; color:var(--accent); font-size:13px">Diagnose: Rohdaten anzeigen ▾</summary>
         <div class="note" style="margin:8px 0">Zeigt die tatsächlichen Feldnamen deines Geräts –
@@ -591,6 +594,25 @@
       <label>Haushalts-Jahresverbrauch ohne Wärmepumpe (kWh)</label>
       <input id="house-kwh" type="number" min="0" step="100" inputmode="numeric" placeholder="z. B. 2800">
       <div class="note" id="house-note" style="margin-top:8px"></div>
+    </div>
+
+    <div class="card" id="meter-card">
+      <h2><span class="info" data-info="meter" role="button" aria-label="Info">i</span>🔢 Gesamt-Stromzähler</h2>
+      <div class="note" style="line-height:1.6; margin-bottom:10px">
+        Trag ab und zu deinen <b>Zählerstand vom Hauptstromzähler</b> ein (Gesamt = Haushalt
+        <b>+</b> Wärmepumpe). Aus zwei Ablesungen berechnet die App den <b>echten
+        Gesamtverbrauch</b>, deckt den <b>noch nicht gemessenen Hausstrom</b> auf und
+        <b>kalibriert die Prognosen</b>. Je mehr Ablesungen, desto genauer.
+      </div>
+      <div style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap">
+        <div style="flex:1; min-width:130px"><label>Datum</label>
+          <input id="meter-date" type="date"></div>
+        <div style="flex:1; min-width:130px"><label>Zählerstand (kWh)</label>
+          <input id="meter-kwh" type="number" min="0" step="1" inputmode="decimal" placeholder="z. B. 2337"></div>
+        <button class="btn" id="meter-add" style="flex:0 0 auto">Hinzufügen</button>
+      </div>
+      <div class="note" id="meter-note" style="margin-top:10px"></div>
+      <div id="meter-list" style="margin-top:8px"></div>
     </div>
 
     <div class="card">
