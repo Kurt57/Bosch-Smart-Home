@@ -12,7 +12,7 @@ const MON = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Ok
 const COL = { sh: '#4da3ff', hp: '#ef6c4d', heat: '#f6b93b', away: '#ff6b8a' };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-12 · Netto-0€-Kurve, Geräte-Verhalten, Haushaltsstrom'
+const APP_VERSION = '2026-09-13 · COP pro Monat, Theorie-vs-Praxis-Heizbedarf'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -115,6 +115,10 @@ const INFO = {
   behavior: () => 'Aus den <b>Namen</b> deiner Geräte und den Uhrzeiten, zu denen sie am meisten Strom ziehen, ' +
     'liest die App typische Routinen ab (Kochen, Schlafen, Bad …) und leitet konkrete Spar-Ideen ab. ' +
     'Basis: Ø über die gemessenen Tage.',
+  theory: () => 'Vereinfachtes Ingenieurmodell: für jedes Bauteil <b>U × Fläche</b> (Wärmeverlust je Grad), ' +
+    'mal <b>Heizgradtage</b> (Deutschland ~3500 Kd/a → kWh) plus Lüftung, minus Sonnen-/interne Gewinne, ' +
+    'geteilt durch den <b>COP</b> ergibt den erwarteten Strom. Alle Werte sind editierbare Startschätzungen ' +
+    'aus deinen Angaben. „Gemessen" ist deine echte Historie – so vergleichst du <b>Theorie und Praxis</b>.',
 };
 let _toastT = null;
 function showInfo(key) {
@@ -753,6 +757,95 @@ function hpStatusPill(l) {
     : `<span style="color:var(--muted)">◦ ${esc(modeTxt)}</span>`;
 }
 
+/* ---------------------------------------------- building heat-demand model */
+const BUILD_LS = 'bhe_building';
+const BUILD_DEFAULT = {
+  area: 120, height: 2.6, hgt: 3500, n: 0.5, gain: 0.15,
+  cop_heat: 2.6, cop_dhw: 2.7, dhw: 2000,
+  comps: [
+    { k: 'wall', l: 'Außenwände (Bims + 8 cm)', a: 100, u: 0.32, f: 1 },
+    { k: 'win', l: 'Fenster 3-fach (KfW55)', a: 18, u: 0.90, f: 1 },
+    { k: 'door', l: 'Haustür (KfW55)', a: 2.5, u: 1.30, f: 1 },
+    { k: 'flat', l: 'Flachdach ungedämmt', a: 60, u: 1.80, f: 1 },
+    { k: 'pitch', l: 'Satteldach (10 cm)', a: 46, u: 0.38, f: 1 },
+    { k: 'floorI', l: 'Boden gedämmt (30 cm)', a: 80, u: 0.28, f: 0.5 },
+    { k: 'floorU', l: 'Boden über Keller ungedämmt', a: 20, u: 0.80, f: 0.5 },
+  ],
+};
+function buildData() {
+  try { const s = JSON.parse(localStorage.getItem(BUILD_LS)); if (s && s.comps) return s; } catch (e) {}
+  return JSON.parse(JSON.stringify(BUILD_DEFAULT));
+}
+function computeHeat(b) {
+  const factor = b.hgt * 0.024;               // Kd → kWh per (W/K)
+  const items = [];
+  let ua = 0;
+  b.comps.forEach(c => { const u = c.u * c.a * c.f; ua += u; items.push({ l: c.l, q: u * factor, c }); });
+  const qVent = 0.34 * b.n * (b.area * b.height) * factor;
+  items.push({ l: 'Lüftung', q: qVent, c: null });
+  const gross = ua * factor + qVent;
+  const qHeat = gross * (1 - b.gain);          // minus solar/internal gains
+  const eHeat = qHeat / b.cop_heat, eDhw = b.dhw / b.cop_dhw;
+  return { factor, items, gross, qHeat, eHeat, eDhw, eTotal: eHeat + eDhw, qTotal: qHeat + b.dhw };
+}
+function renderHeatDemand() {
+  const card = $('hp-theory-card'); if (!card) return;
+  const b = buildData(), r = computeHeat(b), price = STATE.price;
+  const measured = hpYearFromMonthly() || (STATE.hpA && STATE.hpA.imported && STATE.hpA.imported.year_elec_kwh) || null;
+  // headline comparison
+  const bars = [{ label: 'Theorie', v: r.eTotal, color: 'url(#gHeat)' }];
+  if (measured) bars.push({ label: 'Gemessen', v: measured, color: 'url(#g1)' });
+  let cmp = '';
+  if (measured) {
+    const diff = (measured - r.eTotal) / r.eTotal;
+    cmp = Math.abs(diff) < 0.12 ? `Praxis ≈ Theorie (${diff >= 0 ? '+' : ''}${fmt(diff * 100, 0)} %) – dein Modell passt gut.`
+      : diff < 0 ? `Praxis <b>${fmt(-diff * 100, 0)} % besser</b> als berechnet – effiziente Anlage / mildes Wetter / niedrige Vorlauftemperatur.`
+        : `Praxis <b>${fmt(diff * 100, 0)} % höher</b> als berechnet – höhere Vorlauftemperatur, mehr Warmwasser oder mehr Lüftungsverluste als angenommen.`;
+  }
+  $('hp-theory-result').innerHTML =
+    `<div class="grid2"><div class="kpi sm"><div class="v">${kwh(r.eTotal, 0)}</div><div class="l">Erwarteter Strom (Theorie)</div></div>` +
+    `<div class="kpi sm"><div class="v">${measured ? kwh(measured, 0) : '–'}</div><div class="l">Gemessen (deine Daten)</div></div></div>` +
+    `<div style="margin-top:12px">${barChart(bars, { h: 130 })}</div>` +
+    `<div class="note" style="margin-top:8px">Wärmebedarf gesamt ~<b>${kwh(r.qTotal, 0)}</b> thermisch ` +
+    `(Heizen ${kwh(r.qHeat, 0)} + Warmwasser ${kwh(b.dhw, 0)}), geteilt durch COP. ${cmp}</div>`;
+  // biggest levers
+  const losses = r.items.filter(x => x.c).sort((a, z) => z.q - a.q);
+  const top = losses.slice(0, 4);
+  const totalQ = r.items.reduce((a, x) => a + x.q, 0) || 1;
+  let bd = top.map(x => devRow(x.l, (x.q / totalQ * 100).toFixed(0) + ' % der Verluste', kwh(x.q, 0), '', x.q / totalQ * 100, x.q === top[0].q ? COL.hp : COL.sh)).join('');
+  const flat = b.comps.find(c => c.k === 'flat');
+  if (flat && flat.u > 0.5) {
+    const save = (flat.u - 0.2) * flat.a * flat.f * r.factor * (1 - b.gain) / b.cop_heat;
+    bd += `<div class="note" style="margin-top:8px">💡 <b>Größter Hebel:</b> das ungedämmte Flachdach. Auf U 0,2 ` +
+      `gedämmt spart grob <b>${kwh(save, 0)} Strom/Jahr</b> (~${money(save * price)}) – oft die wirtschaftlichste Maßnahme.`;
+  }
+  $('hp-theory-breakdown').innerHTML = `<div class="note" style="margin-bottom:6px">Wärmeverluste (Theorie, vor Gewinnen):</div>` + bd;
+  // editable inputs — build once; skip on re-render so focus/typing is kept
+  const ti = $('hp-theory-inputs');
+  if (ti && !ti.dataset.built) {
+    const g = (id, l, v, step) => `<div style="flex:1;min-width:120px"><label>${l}</label>` +
+      `<input type="number" data-g="${id}" value="${v}" step="${step}" inputmode="decimal"></div>`;
+    let comps = b.comps.map(c =>
+      `<div style="display:flex;gap:6px;align-items:flex-end;margin:6px 0">` +
+      `<div style="flex:1;font-size:12px;color:var(--muted)">${esc(c.l)}</div>` +
+      `<div style="width:70px"><label style="font-size:10px">m²</label><input type="number" data-ck="${c.k}" data-fld="a" value="${c.a}" step="1" style="margin-top:2px"></div>` +
+      `<div style="width:70px"><label style="font-size:10px">U</label><input type="number" data-ck="${c.k}" data-fld="u" value="${c.u}" step="0.05" style="margin-top:2px"></div>` +
+      `</div>`).join('');
+    ti.innerHTML =
+      `<div style="display:flex;flex-wrap:wrap;gap:8px">` +
+      g('area', 'Beheizte Fläche m²', b.area, 5) + g('height', 'Raumhöhe m', b.height, 0.1) +
+      g('hgt', 'Heizgradtage Kd/a', b.hgt, 100) + g('n', 'Luftwechsel 1/h', b.n, 0.1) +
+      g('dhw', 'Warmwasser kWh th./a', b.dhw, 100) + g('cop_heat', 'COP Heizen', b.cop_heat, 0.1) +
+      g('cop_dhw', 'COP Warmwasser', b.cop_dhw, 0.1) + g('gain', 'Gewinne-Anteil (0–0,3)', b.gain, 0.05) +
+      `</div><div class="note" style="margin-top:10px;color:var(--muted)">Bauteile: Fläche & U-Wert (W/m²K)</div>` + comps;
+    ti.dataset.built = '1';
+  }
+  $('hp-theory-assump').innerHTML =
+    `Vereinfachtes U·A-Modell mit Heizgradtagen (Deutschland ~3500 Kd). Werte sind Startschätzungen aus deinen ` +
+    `Angaben – bitte anpassen. Boden/Keller mit Faktor 0,5 (gegen Erdreich). Gewinne (Sonne/intern) pauschal ` +
+    `abgezogen. Für eine belastbare Heizlast: Energieberater/GEG-Berechnung.`;
+}
+
 function renderHeatpump() {
   const A = STATE.hpA; if (!A) return;
   const l = A.live || {};
@@ -855,6 +948,21 @@ function renderHeatpump() {
     [{ key: 'e', color: COL.hp }, { key: 'h', color: COL.heat }], { h: 180 })
     : '<div class="note">Noch keine vollen Monate.</div>';
 
+  // COP per month (efficiency over the year)
+  const mc = m.filter(x => x.cop != null && x.cop > 0);
+  const mcCard = $('hp-copmonth-card');
+  if (mcCard) {
+    if (mc.length >= 2) {
+      mcCard.hidden = false;
+      $('hp-copmonth').innerHTML = barChart(
+        mc.map(x => ({ v: x.cop, label: MON[parseInt(x.month.slice(5), 10) - 1], color: 'url(#gHeat)' })), { h: 170 });
+      const best = mc.reduce((a, b) => b.cop > a.cop ? b : a), worst = mc.reduce((a, b) => b.cop < a.cop ? b : a);
+      $('hp-copmonth-note').innerHTML = `Bester Monat <b>${MON[+best.month.slice(5) - 1]}</b> (COP ${fmt(best.cop, 2)}), ` +
+        `schwächster <b>${MON[+worst.month.slice(5) - 1]}</b> (${fmt(worst.cop, 2)}). Winter meist niedriger ` +
+        `(kalte Luft, Heizstab), Sommer höher (v. a. Warmwasser bei milden Temperaturen).`;
+    } else { mcCard.hidden = true; }
+  }
+
   // heatmap with month selector; empty cells filled with the hour average
   const hm = A.heatmap_monthly || {};
   const sel = $('hp-heat-month');
@@ -927,6 +1035,8 @@ function renderHeatpump() {
   } else {
     $('hp-forecast').innerHTML = '<div class="note">Prognose erscheint, sobald die Wärmepumpe ein paar Tage Daten geliefert hat – oder importiere eine HomeCom-CSV im Setup.</div>';
   }
+
+  renderHeatDemand();
 }
 
 /* --------------------------------------------------------------- profile */
@@ -1708,6 +1818,22 @@ function init() {
     STATE.price = parseFloat($('price').value) || 0.35;
     localStorage.setItem(LS.price, String(STATE.price));
     loadAll();
+  });
+  const ti = $('hp-theory-inputs');
+  if (ti) ti.addEventListener('input', e => {
+    const el = e.target; if (el.tagName !== 'INPUT') return;
+    const b = buildData(), v = parseFloat(el.value);
+    if (!isFinite(v)) return;
+    if (el.dataset.g) { b[el.dataset.g] = v; }
+    else if (el.dataset.ck) { const c = b.comps.find(x => x.k === el.dataset.ck); if (c) c[el.dataset.fld] = v; }
+    try { localStorage.setItem(BUILD_LS, JSON.stringify(b)); } catch (err) {}
+    renderHeatDemand();
+  });
+  const tr = $('hp-theory-reset');
+  if (tr) tr.addEventListener('click', () => {
+    try { localStorage.removeItem(BUILD_LS); } catch (err) {}
+    if (ti) delete ti.dataset.built;   // force the input grid to rebuild with defaults
+    renderHeatDemand();
   });
 
   loadAll();

@@ -323,6 +323,22 @@
         <div class="it"><span class="sw" style="background:var(--heat)"></span>Wärme</div>
       </div>
     </div>
+    <div class="card" id="hp-copmonth-card" hidden>
+      <h2><span class="info" data-info="cop" role="button" aria-label="Info">i</span>COP pro Monat</h2>
+      <div id="hp-copmonth"></div>
+      <div class="note" id="hp-copmonth-note" style="margin-top:10px"></div>
+    </div>
+    <div class="card" id="hp-theory-card">
+      <h2><span class="info" data-info="theory" role="button" aria-label="Info">i</span>🏗️ Theorie vs. Praxis</h2>
+      <div id="hp-theory-result"></div>
+      <div id="hp-theory-breakdown" style="margin-top:12px"></div>
+      <details style="margin-top:12px">
+        <summary style="cursor:pointer; color:var(--accent); font-size:13px">Gebäudedaten anpassen ▾</summary>
+        <div id="hp-theory-inputs" style="margin-top:12px"></div>
+        <button class="btn sec" id="hp-theory-reset">Auf meine Angaben zurücksetzen</button>
+        <div class="note" id="hp-theory-assump" style="margin-top:10px"></div>
+      </details>
+    </div>
     <div class="card" id="hp-cal-card" hidden>
       <h2><span class="info" data-info="hp-cal" role="button" aria-label="Info">i</span>Kalender · Stromverbrauch pro Tag</h2>
       <div id="hp-cal"></div>

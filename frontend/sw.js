@@ -1,7 +1,7 @@
 /* Service worker: network-first so app updates always reach the browser when
  * online, with a cache fallback so the app still opens offline.
  * API responses are never cached (always fetched fresh from the bridge). */
-const CACHE = 'bhe-v14';
+const CACHE = 'bhe-v15';
 const SHELL = ['./', './index.html', './app.js', './manifest.webmanifest', './icon.svg'];
 
 self.addEventListener('install', (e) => {
