@@ -8,5 +8,9 @@
   "auto_update_interval": 0,
   "electrolux_api_key": "",
   "electrolux_refresh_token": "",
-  "electrolux_kwh_per_cycle": 0.8
+  "electrolux_kwh_per_cycle": 0.8,
+  "spot_enabled": false,
+  "spot_market": "de",
+  "spot_surcharge_ct": 15.0,
+  "spot_vat": 19.0
 }

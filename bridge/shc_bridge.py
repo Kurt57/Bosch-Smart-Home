@@ -61,6 +61,10 @@ try:
     import electrolux  # optional AEG / Electrolux (washer/dryer) client
 except Exception:  # pragma: no cover - keeps the bridge running without it
     electrolux = None
+try:
+    import spot  # optional day-ahead exchange prices (aWATTar / EPEX)
+except Exception:  # pragma: no cover - keeps the bridge running without it
+    spot = None
 
 DEFAULT_FRONTEND = os.path.normpath(os.path.join(HERE, "..", "frontend"))
 DEFAULT_DB = os.path.join(HERE, "energy.db")
@@ -101,6 +105,13 @@ def load_config(path: str) -> dict:
         # For models that report no kWh, energy is estimated as wash cycles ×
         # this per-cycle figure (mixed-usage average; tune to your machine).
         "electrolux_kwh_per_cycle": 0.8,
+        # Dynamic exchange tariff (day-ahead spot prices). The market price is
+        # turned into a consumer price: market × (1+VAT) + surcharge (grid fees,
+        # levies, provider margin – all the ct/kWh on top of the raw market).
+        "spot_enabled": False,
+        "spot_market": "de",           # "de" or "at"
+        "spot_surcharge_ct": 15.0,     # ct/kWh added on top of the market price
+        "spot_vat": 19.0,              # % VAT applied to the market price
         # Auto-update: when > 0, the bridge periodically checks the git remote
         # and, if new commits are available, pulls and restarts itself. 0 = off.
         "auto_update_interval": 0,     # minutes between update checks (0 = off)
@@ -476,6 +487,11 @@ class Store:
                 "CREATE TABLE IF NOT EXISTS meter_readings("
                 " ts INTEGER PRIMARY KEY, kwh REAL, note TEXT)"
             )
+            # cached day-ahead exchange market prices (ct/kWh) per hour
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS spot_prices("
+                " ts INTEGER PRIMARY KEY, market_ct REAL)"
+            )
 
     # -- heat pump ------------------------------------------------------- #
     def add_hp_sample(self, row: dict):
@@ -624,6 +640,26 @@ class Store:
     def meter_delete(self, ts: int):
         with self.lock, self.conn:
             self.conn.execute("DELETE FROM meter_readings WHERE ts=?", (int(ts),))
+
+    # -- day-ahead exchange prices --------------------------------------- #
+    def spot_upsert(self, rows: list[tuple]):
+        with self.lock, self.conn:
+            self.conn.executemany(
+                "INSERT INTO spot_prices(ts,market_ct) VALUES(?,?)"
+                " ON CONFLICT(ts) DO UPDATE SET market_ct=excluded.market_ct",
+                [(int(ts), float(ct)) for ts, ct in rows])
+
+    def spot_range(self, ts_from: int, ts_to: int) -> list[dict]:
+        with self.lock:
+            rows = self.conn.execute(
+                "SELECT ts,market_ct FROM spot_prices WHERE ts>=? AND ts<=? ORDER BY ts ASC",
+                (int(ts_from), int(ts_to))).fetchall()
+        return [dict(r) for r in rows]
+
+    def spot_max_ts(self) -> int | None:
+        with self.lock:
+            r = self.conn.execute("SELECT MAX(ts) m FROM spot_prices").fetchone()
+        return r["m"] if r and r["m"] is not None else None
 
     def hp_counter_span(self) -> dict | None:
         """First and last cumulative counters over the whole observed history –
@@ -1766,6 +1802,8 @@ class Runtime:
         self.hp_state = {}      # latest heat-pump snapshot
         self.ael = None         # ElectroluxPoller
         self.ael_state = {}     # latest AEG/Electrolux snapshot
+        self.spot_last_fetch = 0
+        self.spot_last_error = None
 
     def stop(self):
         if self.poller:
@@ -1868,7 +1906,8 @@ def save_config(cfg: dict, path: str):
             "price_per_kwh", "currency", "device_filter",
             "homecom_refresh_token", "homecom_gateway", "homecom_interval",
             "electrolux_api_key", "electrolux_refresh_token", "electrolux_interval",
-            "electrolux_kwh_per_cycle", "auto_update_interval")
+            "electrolux_kwh_per_cycle", "auto_update_interval",
+            "spot_enabled", "spot_market", "spot_surcharge_ct", "spot_vat")
     data = {k: cfg[k] for k in keep if k in cfg and not str(k).startswith("_")}
     try:
         with open(path, "w", encoding="utf-8") as fh:
@@ -1907,6 +1946,44 @@ class Handler(BaseHTTPRequestHandler):
         hp = dict(self.ctx.hp_state)
         hp["connected"] = bool(self.cfg.get("homecom_refresh_token")) or self.ctx.mode == "demo"
         return hp
+
+    def _spot_payload(self) -> dict:
+        """Day-ahead exchange prices as consumer ct/kWh, with a lazy refresh."""
+        cfg = self.cfg
+        vat = float(cfg.get("spot_vat", 19.0) or 0)
+        surch = float(cfg.get("spot_surcharge_ct", 15.0) or 0)
+        def consumer(mkt):
+            return round(mkt * (1 + vat / 100.0) + surch, 2)
+        now = int(time.time())
+
+        # demo mode: synthetic curve so the tab always shows something
+        if self.ctx.mode == "demo":
+            rows = spot.demo_prices(48) if spot else []
+            prices = [{"ts": ts, "market_ct": mc, "consumer_ct": consumer(mc)} for ts, mc in rows]
+            return {"enabled": True, "demo": True, "market": "demo",
+                    "surcharge_ct": surch, "vat": vat, "prices": prices,
+                    "last_error": None}
+
+        if not spot or not cfg.get("spot_enabled"):
+            return {"enabled": False, "available": spot is not None, "prices": []}
+
+        # lazy refresh: fetch at most every ~30 min, or when data runs short
+        need = (self.store.spot_max_ts() or 0) < now + 6 * 3600
+        if need and (now - getattr(self.ctx, "spot_last_fetch", 0)) > 1800:
+            self.ctx.spot_last_fetch = now
+            try:
+                rows = spot.fetch_market_prices(cfg.get("spot_market", "de"))
+                if rows:
+                    self.store.spot_upsert(rows)
+                self.ctx.spot_last_error = None
+            except Exception as exc:
+                self.ctx.spot_last_error = str(exc)
+        rows = self.store.spot_range(now - 2 * 3600, now + 48 * 3600)
+        prices = [{"ts": r["ts"], "market_ct": round(r["market_ct"], 2),
+                   "consumer_ct": consumer(r["market_ct"])} for r in rows]
+        return {"enabled": True, "demo": False, "market": cfg.get("spot_market", "de"),
+                "surcharge_ct": surch, "vat": vat, "prices": prices,
+                "last_error": getattr(self.ctx, "spot_last_error", None)}
 
     def _appliances_payload(self) -> dict:
         """AEG/Electrolux appliances: live snapshot from the poller, enriched
@@ -2019,6 +2096,17 @@ class Handler(BaseHTTPRequestHandler):
                 self.ctx.start_electrolux()   # re-arm poller with the new factor
             except (TypeError, ValueError):
                 pass
+        if body.get("spot_enabled") is not None:
+            cfg["spot_enabled"] = bool(body["spot_enabled"])
+            self.ctx.spot_last_fetch = 0      # allow an immediate refresh
+        if body.get("spot_market") in ("de", "at"):
+            cfg["spot_market"] = body["spot_market"]; self.ctx.spot_last_fetch = 0
+        for k in ("spot_surcharge_ct", "spot_vat"):
+            if body.get(k) is not None:
+                try:
+                    cfg[k] = max(0.0, float(body[k]))
+                except (TypeError, ValueError):
+                    pass
         save_config(cfg, cfg.get("_config_path", DEFAULT_CONFIG))
         return self._send_json({"ok": True})
 
@@ -2303,6 +2391,11 @@ class Handler(BaseHTTPRequestHandler):
                     "electrolux_last_poll": self.ctx.ael_state.get("last_poll"),
                     "electrolux_count": len(self.store.aeg_appliances()),
                     "electrolux_kwh_per_cycle": float(self.cfg.get("electrolux_kwh_per_cycle", 0.8) or 0.8),
+                    "spot_available": spot is not None,
+                    "spot_enabled": bool(self.cfg.get("spot_enabled")),
+                    "spot_market": self.cfg.get("spot_market", "de"),
+                    "spot_surcharge_ct": float(self.cfg.get("spot_surcharge_ct", 15.0) or 0),
+                    "spot_vat": float(self.cfg.get("spot_vat", 19.0) or 0),
                 })
             if path == "/api/devices":
                 return self._send_json({"devices": self.store.devices()})
@@ -2315,6 +2408,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json(self._appliances_payload())
             if path == "/api/meter":
                 return self._send_json({"readings": self.store.meter_list()})
+            if path == "/api/spot":
+                return self._send_json(self._spot_payload())
             if path == "/api/homecom/authurl":
                 if not homecom:
                     return self._send_json({"error": "homecom modul fehlt"}, 500)

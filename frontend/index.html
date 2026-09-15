@@ -422,6 +422,15 @@
         <div><label>E-Auto: kWh / 100 km</label>
           <input id="pv-ev-kwh" type="number" min="0" step="0.5" inputmode="decimal" value="18"></div>
       </div>
+      <label style="margin-top:10px; display:flex; align-items:center; gap:8px; cursor:pointer">
+        <input type="checkbox" id="pv-v2h" style="width:auto"> 🔋 E-Auto bidirektional nutzen (V2H)
+        <span class="info" data-info="pv-v2h" role="button" aria-label="Info">i</span></label>
+      <div class="grid2" id="pv-v2h-row" style="margin-top:8px" hidden>
+        <div><label>nutzbare Auto-Kapazität fürs Haus (kWh)</label>
+          <input id="pv-v2h-kwh" type="number" min="0" step="1" inputmode="decimal" placeholder="z. B. 20"></div>
+        <div><label>Speicherpreis (€/kWh, für Ersparnis)</label>
+          <input id="pv-v2h-price" type="number" min="0" step="50" inputmode="numeric" value="800"></div>
+      </div>
       <label style="margin-top:10px; display:block">Klimaanlage: kWh / Jahr
         <span class="info" data-info="pv-ac" role="button" aria-label="Info">i</span></label>
       <div style="display:flex; gap:8px; align-items:stretch">
@@ -471,6 +480,40 @@
         Tagesprofil geschätzt – je besser Verbrauch und Sonne zusammenpassen
         (z. B. Wärmepumpe/Warmwasser tagsüber, Batterie), desto höher.
       </div>
+    </div>
+  </section>
+
+  <!-- BÖRSE (dynamischer Tarif) ------------------------------------------->
+  <section class="view" id="v-borse">
+    <div class="card" id="borse-off-card" hidden>
+      <h2>⚡ Börsenstrom (dynamischer Tarif)</h2>
+      <div class="note" style="line-height:1.6">
+        Mit einem <b>dynamischen Stromtarif</b> (z. B. Tibber, aWATTar, Ostrom) zahlst du
+        den <b>stündlichen Börsenpreis</b> statt eines Festpreises. Strom ist nachts und
+        mittags (viel Sonne/Wind) oft günstig, morgens und abends teuer. Wer flexible Lasten
+        (<b>Warmwasser, Waschmaschine, E-Auto</b>) in die günstigen Stunden legt, spart bares Geld.
+        <br><br>Aktiviere es im <b>Setup → „Dynamischer Börsentarif"</b>. Die App holt dann die
+        <b>Day-Ahead-Preise</b> (EPEX über aWATTar, kostenlos) und zeigt dir die besten Zeiten.
+      </div>
+    </div>
+    <div class="card" id="borse-price-card" hidden>
+      <h2><span class="info" data-info="spot" role="button" aria-label="Info">i</span>Börsenpreis je Stunde <span class="r" id="borse-now"></span></h2>
+      <div id="borse-chart"></div>
+      <div class="legend" id="borse-legend" style="margin-top:8px"></div>
+      <div class="note" id="borse-note" style="margin-top:8px"></div>
+    </div>
+    <div class="card" id="borse-best-card" hidden>
+      <h2>🕒 Beste Zeiten für flexible Lasten</h2>
+      <div id="borse-best"></div>
+    </div>
+    <div class="card" id="borse-cost-card" hidden>
+      <h2><span class="info" data-info="spot-cost" role="button" aria-label="Info">i</span>Dynamisch vs. Festpreis</h2>
+      <div class="grid2">
+        <div class="kpi sm"><div class="v" id="borse-dyn">–</div><div class="l">Ø dynamisch (heute)</div></div>
+        <div class="kpi sm"><div class="v" id="borse-fix">–</div><div class="l">dein Festpreis</div></div>
+      </div>
+      <div id="borse-cost-body" style="margin-top:12px"></div>
+      <div class="note" id="borse-cost-note" style="margin-top:8px"></div>
     </div>
   </section>
 
@@ -615,6 +658,29 @@
       <div id="meter-list" style="margin-top:8px"></div>
     </div>
 
+    <div class="card" id="spot-card">
+      <h2><span class="info" data-info="spot" role="button" aria-label="Info">i</span>⚡ Dynamischer Börsentarif</h2>
+      <div class="note" style="line-height:1.6; margin-bottom:10px">
+        Wenn du einen <b>dynamischen Tarif</b> hast (Tibber, aWATTar, Ostrom …), zeigt die App
+        die <b>stündlichen Börsenpreise</b> und die günstigsten Zeiten. Die Preise kommen von
+        <b>aWATTar/EPEX</b> (kostenlos, ohne Konto).
+      </div>
+      <label style="display:flex; align-items:center; gap:8px; cursor:pointer">
+        <input type="checkbox" id="spot-enabled" style="width:auto"> Börsentarif aktivieren
+      </label>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px">
+        <div style="flex:1; min-width:110px"><label>Land</label>
+          <select id="spot-market"><option value="de">Deutschland</option><option value="at">Österreich</option></select></div>
+        <div style="flex:1; min-width:110px"><label>Aufschlag ct/kWh</label>
+          <input id="spot-surcharge" type="number" min="0" step="0.5" inputmode="decimal" placeholder="15"></div>
+        <div style="flex:1; min-width:90px"><label>MwSt. %</label>
+          <input id="spot-vat" type="number" min="0" step="1" inputmode="decimal" placeholder="19"></div>
+      </div>
+      <div class="note" style="margin-top:8px">Verbraucherpreis = Börsenpreis × (1 + MwSt.) + Aufschlag
+        (Netzentgelte, Steuern, Abgaben, Marge). Steht auf deiner Tarifübersicht.</div>
+      <div class="note" id="spot-note" style="margin-top:8px"></div>
+    </div>
+
     <div class="card">
       <h2>Anzeige</h2>
       <label>Bridge-Adresse (leer = gleicher Server)</label>
@@ -694,6 +760,8 @@
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>Profil</button>
   <button data-v="pv">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M19 5l-1.5 1.5M6.5 17.5L5 19"/></svg>PV</button>
+  <button data-v="borse">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg>Börse</button>
   <button data-v="settings">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></svg>Setup</button>
 </nav>

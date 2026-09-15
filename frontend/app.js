@@ -6,13 +6,17 @@
 
 const LS = { base: 'bhe_base', price: 'bhe_price', demo: 'bhe_demo', house: 'bhe_house_kwh' };
 const PV_LS = { kwp: 'bhe_pv_kwp', orient: 'bhe_pv_orient', batt: 'bhe_pv_batt',
-  feedin: 'bhe_pv_feedin', invest: 'bhe_pv_invest', evkm: 'bhe_pv_evkm', evkwh: 'bhe_pv_evkwh', ac: 'bhe_pv_ac' };
+  feedin: 'bhe_pv_feedin', invest: 'bhe_pv_invest', evkm: 'bhe_pv_evkm', evkwh: 'bhe_pv_evkwh', ac: 'bhe_pv_ac',
+  v2h: 'bhe_pv_v2h', v2hkwh: 'bhe_pv_v2hkwh', v2hprice: 'bhe_pv_v2hprice' };
+// Hours the car is typically home (and can charge/discharge for the house):
+// overnight + evening. Away during the working day, so it can't soak midday PV.
+const V2H_HOME = [1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1];
 const WD = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
 const MON = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'];
 const COL = { sh: '#4da3ff', hp: '#ef6c4d', heat: '#f6b93b', away: '#ff6b8a' };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-13 · Zählerstand-Abgleich, AEG-Waschgänge, Haushaltsgeräte'
+const APP_VERSION = '2026-09-15 · Börsenstrom (dynamischer Tarif) + bidirektionales Laden'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -104,6 +108,10 @@ const INFO = {
     '<b>Sommermonate</b> und den <b>Nachmittag</b> verteilt – also genau dann, wenn viel PV da ist, ' +
     'darum steigert Kühlung den Eigenverbrauch. „Ø D einsetzen" trägt einen typischen deutschen ' +
     'Haushaltswert (~450 kWh/Jahr) ein; passe ihn an deine Anlage an.',
+  'pv-v2h': () => 'Bidirektionales Laden (V2H): dein <b>Auto-Akku dient als Heimspeicher</b>. Wenn das Auto ' +
+    'abends/nachts zuhause steht, lädt es PV-Überschuss und speist ihn später ins Haus zurück – so kannst du ' +
+    'einen <b>kleineren Heimspeicher</b> kaufen. Tagsüber (Auto weg) hilft es nicht. Braucht eine ' +
+    '<b>bidirektionale Wallbox</b> und ein <b>V2H-fähiges Auto</b>.',
   'pv-batt': () => 'Linker Balken = dein PV-Ertrag, aufgeteilt in <b style="color:#4be0b0">direkt genutzt</b>, ' +
     '<b style="color:#7c5cff">über die Batterie genutzt</b> und <b style="color:#f6b93b">eingespeist</b>. ' +
     'Der lila Anteil ist genau das, was der <b>Speicher</b> bringt: sonst eingespeister Strom, den du dank ' +
@@ -115,6 +123,13 @@ const INFO = {
   behavior: () => 'Aus den <b>Namen</b> deiner Geräte und den Uhrzeiten, zu denen sie am meisten Strom ziehen, ' +
     'liest die App typische Routinen ab (Kochen, Schlafen, Bad …) und leitet konkrete Spar-Ideen ab. ' +
     'Basis: Ø über die gemessenen Tage.',
+  spot: () => 'Stündlicher <b>Börsenpreis</b> (EPEX Day-Ahead über aWATTar) als <b>Verbraucherpreis</b> ' +
+    '= Börse × (1 + MwSt.) + Aufschlag. <span style="color:#4be0b0">Grün</span> = günstig, ' +
+    '<span style="color:#ef6c4d">rot</span> = teuer. Die senkrechte Linie ist <b>jetzt</b>. Morgen erscheint ' +
+    'nachmittags nach der Börsen-Auktion. Verschiebe flexible Lasten in die grünen Stunden.',
+  'spot-cost': () => 'Vergleich deiner realen Last mit dem <b>dynamischen</b> Preis vs. deinem <b>Festpreis</b>. ' +
+    '„Ø dynamisch" gewichtet den Börsenpreis mit deinem <b>Stundenprofil</b> (wann du wie viel verbrauchst). ' +
+    'Liegt er unter dem Festpreis, lohnt der dynamische Tarif – noch mehr, wenn du flexible Lasten verschiebst.',
   meter: () => 'Trag deinen <b>Hauptstromzähler</b>-Stand (Gesamt = Haushalt + Wärmepumpe) ' +
     'ab und zu ein. Aus zwei Ablesungen ergibt sich dein <b>echter Gesamtverbrauch</b>; die App zieht ' +
     'die (saisonale) Wärmepumpe ab, deckt so den <b>noch nicht gemessenen Hausstrom</b> auf und ' +
@@ -350,15 +365,17 @@ async function loadAll() {
       STATE.price = health.price_per_kwh; $('price').value = STATE.price;
     }
     const p = STATE.price;
-    const [ov, hpA, data, appl, meter] = await Promise.all([
+    const [ov, hpA, data, appl, meter, sp] = await Promise.all([
       api('/api/overview?days=90&price=' + p),
       api('/api/heatpump/analytics?days=90&price=' + p),
       api('/api/analytics?days=90&price=' + p),
       api('/api/appliances').catch(() => null),
       api('/api/meter').catch(() => null),
+      api('/api/spot').catch(() => null),
     ]);
     STATE.ov = ov; STATE.hpA = hpA; STATE.data = data; STATE.appliances = appl;
     STATE.meter = (meter && meter.readings) || [];
+    STATE.spot = sp;
     STATE.cur = data.currency || STATE.cur;
     $('cur').textContent = STATE.cur;
     setMode(health.mode || 'live');
@@ -385,6 +402,16 @@ function applyDemo(mode) {
   const nowS = Math.floor(Date.now() / 1000);
   STATE.meter = [{ ts: nowS - 8 * 86400, kwh: 2202, note: '' },
                  { ts: nowS, kwh: 2202 + 8 * 17, note: '' }];
+  const h0 = nowS - (nowS % 3600), sv = 19, sc = 15;
+  const prices = [];
+  for (let i = 0; i < 48; i++) {
+    const ts = h0 + i * 3600, h = new Date(ts * 1000).getHours();
+    let m = 8 + 6 * Math.exp(-((h - 8) ** 2) / 5) + 8 * Math.exp(-((h - 19) ** 2) / 8)
+      - 4 * Math.exp(-((h - 13) ** 2) / 9) - 3 * Math.exp(-((h - 3) ** 2) / 12) + 1.2 * Math.sin(i / 2);
+    m = Math.max(-2, m);
+    prices.push({ ts, market_ct: Math.round(m * 10) / 10, consumer_ct: Math.round((m * (1 + sv / 100) + sc) * 100) / 100 });
+  }
+  STATE.spot = { enabled: true, demo: true, market: 'demo', surcharge_ct: sc, vat: sv, prices };
   STATE.cur = '€'; $('cur').textContent = STATE.cur;
   setMode(mode);
   renderAll();
@@ -643,6 +670,108 @@ function renderMeter() {
     note.textContent = '';
   }
 }
+// Colour a price by where it sits between the day's min and max.
+function spotColor(ct, lo, hi) {
+  const t = hi > lo ? (ct - lo) / (hi - lo) : 0.5;
+  if (t < 0.33) return '#4be0b0';
+  if (t < 0.66) return '#f6b93b';
+  return '#ef6c4d';
+}
+function spotChart(prices, nowTs) {
+  const h = 200, pad = 28, top = 14, base = h - 24, n = prices.length || 1;
+  const cons = prices.map(p => p.consumer_ct);
+  const lo = Math.min(...cons), hi = Math.max(...cons);
+  const maxV = Math.max(0.01, hi), minV = Math.min(0, lo);
+  const span = maxV - minV || 1;
+  const bw = (CW - pad * 2) / n, iw = Math.max(1.5, bw * 0.8);
+  const y = v => base - (v - minV) / span * (base - top);
+  let bars = '', labels = '', nowLine = '';
+  prices.forEach((p, i) => {
+    const x = pad + i * bw, yy = y(p.consumer_ct), y0 = y(0);
+    bars += `<rect x="${x.toFixed(1)}" y="${Math.min(yy, y0).toFixed(1)}" width="${iw.toFixed(1)}" ` +
+      `height="${Math.max(1, Math.abs(yy - y0)).toFixed(1)}" fill="${spotColor(p.consumer_ct, lo, hi)}" rx="1"/>`;
+    const hr = new Date(p.ts * 1000).getHours();
+    if (hr % 6 === 0) labels += `<text class="axis" x="${(x + iw / 2).toFixed(1)}" y="${h - 8}" text-anchor="middle">${hr}</text>`;
+    if (nowTs && p.ts <= nowTs && p.ts + 3600 > nowTs)
+      nowLine = `<line x1="${(x + iw / 2).toFixed(1)}" y1="${top}" x2="${(x + iw / 2).toFixed(1)}" y2="${base}" stroke="#fff" stroke-width="1.5" stroke-dasharray="3 3" opacity="0.8"/>`;
+  });
+  const gy = y(0);
+  const zero = minV < 0 ? `<line x1="${pad}" y1="${gy.toFixed(1)}" x2="${CW - pad}" y2="${gy.toFixed(1)}" stroke="var(--line)"/>` : '';
+  return svg(h, `<text class="axis" x="2" y="${top + 4}">${fmt(hi, 0)}ct</text>` +
+    `<text class="axis" x="2" y="${base}">${fmt(Math.max(0, minV), 0)}</text>` + zero + bars + nowLine + labels);
+}
+function renderBorse() {
+  const sp = STATE.spot;
+  const off = $('borse-off-card');
+  const cards = ['borse-price-card', 'borse-best-card', 'borse-cost-card'];
+  if (!sp || !sp.enabled || !(sp.prices && sp.prices.length)) {
+    if (off) off.hidden = false;
+    cards.forEach(id => { const el = $(id); if (el) el.hidden = true; });
+    return;
+  }
+  if (off) off.hidden = true;
+  cards.forEach(id => { const el = $(id); if (el) el.hidden = false; });
+  const now = Date.now() / 1000;
+  const P = sp.prices;
+  const cons = P.map(p => p.consumer_ct);
+  const lo = Math.min(...cons), hi = Math.max(...cons), avg = mean(cons);
+  const nowP = P.find(p => p.ts <= now && p.ts + 3600 > now) || P[0];
+  $('borse-now').innerHTML = nowP ? `jetzt <b style="color:${spotColor(nowP.consumer_ct, lo, hi)}">${fmt(nowP.consumer_ct, 1)} ct</b>` : '';
+  $('borse-chart').innerHTML = spotChart(P, now);
+  $('borse-legend').innerHTML = legendHtml([
+    { color: '#4be0b0', label: 'günstig' }, { color: '#f6b93b', label: 'mittel' },
+    { color: '#ef6c4d', label: 'teuer' }]);
+  $('borse-note').innerHTML = `Spanne heute/morgen <b>${fmt(lo, 1)}–${fmt(hi, 1)} ct</b>, Ø ${fmt(avg, 1)} ct` +
+    (sp.demo ? ' · <b>Demo-Preise</b>' : (sp.last_error ? ' · <span style="color:#ff6b8a">Abruf-Fehler</span>' : '')) + '.';
+
+  // cheapest windows from now on, for typical flexible loads
+  const future = P.filter(p => p.ts + 3600 > now);
+  const cheapWin = (len) => {
+    if (future.length < len) return null;
+    let best = null;
+    for (let i = 0; i + len <= future.length; i++) {
+      const slice = future.slice(i, i + len);
+      const c = mean(slice.map(s => s.consumer_ct));
+      if (!best || c < best.c) best = { c, start: slice[0].ts, end: slice[len - 1].ts + 3600 };
+    }
+    return best;
+  };
+  const hh = ts => new Date(ts * 1000).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+  const dd = ts => new Date(ts * 1000).toLocaleDateString('de-DE', { weekday: 'short' });
+  const loads = [['🚿 Warmwasser (WP)', 1], ['🧺 Waschen/Trocknen', 3], ['🚗 E-Auto laden', 4]];
+  $('borse-best').innerHTML = loads.map(([lbl, len]) => {
+    const w = cheapWin(len); if (!w) return '';
+    const savePct = avg > 0 ? Math.max(0, (avg - w.c) / avg * 100) : 0;
+    return devRow(lbl, `günstigstes ${len}-h-Fenster · ${dd(w.start)} ${hh(w.start)}–${hh(w.end)}`,
+      fmt(w.c, 1) + ' ct', savePct > 3 ? '−' + fmt(savePct, 0) + '% vs Ø' : '', Math.min(100, savePct), '#4be0b0');
+  }).join('') || '<div class="note">Noch keine künftigen Preise.</div>';
+
+  // dynamic vs fixed, weighted by the real hourly load profile (today)
+  const shShape = normFrac((STATE.data && STATE.data.hourly_profile || []).map(h => h.avg_w));
+  const hpProf = (STATE.hpA && STATE.hpA.hourly_profile) || [];
+  const hpShape = hpProf.length && hpProf.some(h => h.avg_w > 0) ? normFrac(hpProf.map(h => h.avg_w)) : null;
+  const shD = shAvgDaily(), hpD = hpAvgDaily(), totD = shD + hpD;
+  const byHour = new Array(24).fill(0);
+  for (let h = 0; h < 24; h++) byHour[h] = shD * (shShape[h] || 1 / 24) + hpD * (hpShape ? hpShape[h] : 1 / 24);
+  const todays = P.filter(p => { const d = new Date(p.ts * 1000); return d.toDateString() === new Date().toDateString(); });
+  let wSum = 0, wCost = 0;
+  todays.forEach(p => { const h = new Date(p.ts * 1000).getHours(); wSum += byHour[h]; wCost += byHour[h] * p.consumer_ct; });
+  const dynAvg = wSum > 0 ? wCost / wSum : avg;          // ct/kWh, load-weighted
+  const fix = STATE.price * 100;                          // ct/kWh
+  $('borse-dyn').innerHTML = fmt(dynAvg, 1) + '<span> ct</span>';
+  $('borse-fix').innerHTML = fmt(fix, 1) + '<span> ct</span>';
+  const diff = (fix - dynAvg) / 100;                      // €/kWh saved (or lost)
+  const yearKwh = totD * 365;
+  const yearDelta = diff * yearKwh;
+  $('borse-cost-body').innerHTML =
+    devRow('Ø-Preis deiner Last (heute)', 'Börsenpreis × dein Stundenprofil', fmt(dynAvg, 1) + ' ct', '', Math.min(100, dynAvg / Math.max(fix, dynAvg) * 100), dynAvg <= fix ? '#4be0b0' : '#ef6c4d') +
+    devRow('Festpreis', 'dein aktueller Tarif', fmt(fix, 1) + ' ct', '', Math.min(100, fix / Math.max(fix, dynAvg) * 100), '#4da3ff');
+  $('borse-cost-note').innerHTML = yearDelta >= 0
+    ? `Bei deinem Verbrauch (~${kwh(yearKwh, 0)}/Jahr) wäre der dynamische Tarif <b>${money(yearDelta)}/Jahr günstiger</b> ` +
+      `– und mehr, wenn du flexible Lasten in die grünen Stunden legst.`
+    : `Aktuell läge der dynamische Tarif <b>${money(-yearDelta)}/Jahr höher</b> als dein Festpreis. Durch ` +
+      `Verschieben flexibler Lasten (Warmwasser, Waschen, Auto) in günstige Stunden lässt sich das drehen.`;
+}
 function devRow(title, sub, valTop, valBot, pct, col) {
   return `<div class="devrow"><div class="nm"><b>${esc(title)}</b><small>${sub}</small>` +
     `<div class="bar"><i style="width:${pct.toFixed(0)}%${col ? `;background:${col}` : ''}"></i></div></div>` +
@@ -651,7 +780,7 @@ function devRow(title, sub, valTop, valBot, pct, col) {
 
 /* --------------------------------------------------------------- rendering */
 function renderAll() {
-  renderOverview(); renderToday(); renderHistory(); renderHeatpump(); renderProfile(); renderPv(); renderSettings(); renderAppliances(); renderMeter();
+  renderOverview(); renderToday(); renderHistory(); renderHeatpump(); renderProfile(); renderPv(); renderSettings(); renderAppliances(); renderMeter(); renderBorse();
 }
 
 function renderOverview() {
@@ -1333,6 +1462,9 @@ function pvInputs() {
     invest: parseFloat($('pv-invest').value) || 0,
     evAnnual: km * per100 / 100,                                  // kWh/year for the car
     acAnnual: Math.max(0, parseFloat($('pv-ac').value) || 0),     // kWh/year for A/C
+    v2h: !!($('pv-v2h') && $('pv-v2h').checked),
+    carKwh: Math.max(0, parseFloat($('pv-v2h-kwh') && $('pv-v2h-kwh').value) || 0),
+    v2hPrice: Math.max(0, parseFloat($('pv-v2h-price') && $('pv-v2h-price').value) || 800),
   };
 }
 // Air-conditioning: strongly summer (cooling season) and afternoon-weighted –
@@ -1377,7 +1509,8 @@ function simulatePv(p) {
     const dayEv = evDayBase * (1 + 0.12 * Math.cos(2 * Math.PI * m / 12)); // a bit more in winter
     const dayAc = (p.acAnnual * acShare[m]) / days;
     const pvH = pvHourFractions(m);
-    let battery = 0, mDirect = 0, mBatt = 0, mFeed = 0, mGrid = 0, mPv = 0, mLoad = 0;
+    const carCap = p.v2h ? p.carKwh : 0;
+    let battery = 0, carBatt = 0, mDirect = 0, mBatt = 0, mFeed = 0, mGrid = 0, mPv = 0, mLoad = 0;
     let mSh = 0, mHp = 0, mEv = 0, mAc = 0;
     let dPv = null, dLoad = null;
     for (let d = 0; d < days; d++) {
@@ -1388,12 +1521,19 @@ function simulatePv(p) {
         const load = lSh + lHp + lEv + lAc;
         mSh += lSh; mHp += lHp; mEv += lEv; mAc += lAc;
         const direct = Math.min(pv, load);
-        const surplus = pv - direct, deficit = load - direct;
-        const charge = Math.min(surplus, p.batt - battery); battery += charge;
-        const feed = surplus - charge;
-        const dis = Math.min(deficit, battery); battery -= dis;
-        const grid = deficit - dis;
-        mDirect += direct; mBatt += dis; mFeed += feed; mGrid += grid; mPv += pv; mLoad += load;
+        let surplus = pv - direct, deficit = load - direct;
+        const carHome = carCap > 0 && V2H_HOME[h];
+        // charge: home battery first, then the car (only while it is home)
+        const charge = Math.min(surplus, p.batt - battery); battery += charge; surplus -= charge;
+        let carCharge = 0;
+        if (carHome) { carCharge = Math.min(surplus, carCap - carBatt); carBatt += carCharge; surplus -= carCharge; }
+        const feed = surplus;
+        // discharge: home battery first, then the car (while home)
+        const dis = Math.min(deficit, battery); battery -= dis; deficit -= dis;
+        let carDis = 0;
+        if (carHome) { carDis = Math.min(deficit, carBatt); carBatt -= carDis; deficit -= carDis; }
+        const grid = deficit;
+        mDirect += direct; mBatt += dis + carDis; mFeed += feed; mGrid += grid; mPv += pv; mLoad += load;
         if (m === 6 && d === Math.floor(days / 2)) { capturePv.push(pv); captureLoad.push(load); }
       }
       if (capturePv.length) { dPv = capturePv; dLoad = captureLoad; }
@@ -1557,6 +1697,7 @@ function renderPv() {
     return;
   }
   const p = pvInputs(), r = simulatePv(p);
+  const v2hRow = $('pv-v2h-row'); if (v2hRow) v2hRow.hidden = !p.v2h;
   $('pv-yield').innerHTML = kwh(r.yield_kwh, 0);
   $('pv-autarky').innerHTML = fmt(r.autarky * 100, 0) + ' %';
   $('pv-self').innerHTML = fmt(r.self_rate * 100, 0) + ' %';
@@ -1601,7 +1742,27 @@ function renderPv() {
   if (p.invest > 0 && r.benefit > 0) {
     rows.push(['Amortisation', `~${fmt(p.invest / r.benefit, 1)} Jahre bei ${money(p.invest)}`]);
   }
-  $('pv-econ').innerHTML = rows.map(([k, v]) => statusRow(k, v)).join('');
+  let v2hNote = '';
+  if (p.v2h && p.carKwh > 0) {
+    const r0 = simulatePv({ ...p, v2h: false });                              // no car
+    const rBatt = simulatePv({ ...p, v2h: false, batt: p.batt + p.carKwh });  // same-size home battery instead
+    const dAut = (r.autarky - r0.autarky) * 100;
+    const v2hUplift = Math.max(0, r.self_kwh - r0.self_kwh);
+    const battUplift = Math.max(0.001, rBatt.self_kwh - r0.self_kwh);
+    // the car replaces a home battery only as far as it delivers the same self-use
+    const equivBatt = Math.min(p.carKwh, p.carKwh * v2hUplift / battUplift);
+    const saved = equivBatt * p.v2hPrice;
+    const valYr = v2hUplift * (STATE.price - p.feedin);
+    rows.push(['Autarkie mit V2H', `${fmt(r.autarky * 100, 0)} % (ohne ${fmt(r0.autarky * 100, 0)} %, +${fmt(dAut, 0)} PP)`]);
+    v2hNote = `🔋 <b>Bidirektionales Laden:</b> dein Auto deckt <b>${kwh(v2hUplift, 0)}/Jahr</b> zusätzlich aus PV ` +
+      `(~${money(valYr)}/Jahr, Autarkie <b>+${fmt(dAut, 0)} PP</b>). Weil es <b>tagsüber meist weg</b> ist, ersetzt es ` +
+      `real etwa <b>${fmt(equivBatt, 1)} kWh Heimspeicher</b> (~<b>${money(saved)}</b> gespart) – nicht die vollen ${kwh(p.carKwh, 0)}, ` +
+      `die ein fest installierter Speicher mittags fassen würde. ` +
+      `<br><small style="color:var(--muted)">Voraussetzung: <b>bidirektionale Wallbox + V2H-fähiges Auto</b> ` +
+      `(z. B. Hyundai/Kia E-GMP, VW ID mit V2H, MG, BYD, Renault 5). Steht das Auto tagsüber zuhause, ist der Nutzen größer.</small>`;
+  }
+  $('pv-econ').innerHTML = rows.map(([k, v]) => statusRow(k, v)).join('') +
+    (v2hNote ? `<div class="note" style="margin-top:10px;line-height:1.5">${v2hNote}</div>` : '');
 }
 
 /* --------------------------------------------------------------- settings */
@@ -1662,6 +1823,18 @@ function renderSettings() {
   const kpc = $('aeg-kpc');
   if (kpc && document.activeElement !== kpc && h.electrolux_kwh_per_cycle != null)
     kpc.value = h.electrolux_kwh_per_cycle;
+
+  const se = $('spot-enabled');
+  if (se && document.activeElement !== se) {
+    se.checked = !!h.spot_enabled;
+    const sm = $('spot-market'); if (sm && document.activeElement !== sm) sm.value = h.spot_market || 'de';
+    const ss = $('spot-surcharge'); if (ss && document.activeElement !== ss) ss.value = h.spot_surcharge_ct != null ? h.spot_surcharge_ct : 15;
+    const sv = $('spot-vat'); if (sv && document.activeElement !== sv) sv.value = h.spot_vat != null ? h.spot_vat : 19;
+    const sn = $('spot-note');
+    if (sn) sn.innerHTML = h.spot_available === false
+      ? 'Spot-Modul nicht installiert (<code>bridge/spot.py</code> fehlt).'
+      : h.spot_enabled ? 'Aktiv ✓ – im Tab <b>Börse</b> siehst du die Preise.' : 'Aus.';
+  }
 }
 
 function friendlyModel(m) {
@@ -1971,6 +2144,23 @@ function init() {
   if (aegD) aegD.addEventListener('click', () => window.open('https://developer.electrolux.one/dashboard', '_blank'));
   const aegC = $('aeg-connect'); if (aegC) aegC.addEventListener('click', doAegConnect);
   const aegP = $('aeg-probe'); if (aegP) aegP.addEventListener('click', doAegProbe);
+  const saveSpot = async () => {
+    const sn = $('spot-note');
+    const body = {
+      spot_enabled: $('spot-enabled').checked,
+      spot_market: $('spot-market').value,
+      spot_surcharge_ct: parseFloat($('spot-surcharge').value) || 0,
+      spot_vat: parseFloat($('spot-vat').value) || 0,
+    };
+    if (sn) sn.textContent = 'Speichere …';
+    try {
+      const r = await postJSON('/api/config', body);
+      if (r && r.ok) { setTimeout(loadAll, 800); } else if (sn) sn.textContent = 'Konnte nicht gespeichert werden.';
+    } catch (e) { if (sn) sn.textContent = 'Nur möglich, wenn die Seite von der Bridge geöffnet ist.'; }
+  };
+  ['spot-enabled', 'spot-market', 'spot-surcharge', 'spot-vat'].forEach(id => {
+    const el = $(id); if (el) el.addEventListener('change', saveSpot);
+  });
   const aegK = $('aeg-kpc');
   if (aegK) aegK.addEventListener('change', async () => {
     const n = $('aeg-kpc-note'), v = parseFloat(aegK.value);
@@ -2024,13 +2214,22 @@ function init() {
   // PV planner: restore saved inputs, save + recompute on change
   const pvFields = [['pv-kwp', PV_LS.kwp], ['pv-orient', PV_LS.orient], ['pv-batt', PV_LS.batt],
     ['pv-feedin', PV_LS.feedin], ['pv-invest', PV_LS.invest], ['pv-ev-km', PV_LS.evkm],
-    ['pv-ev-kwh', PV_LS.evkwh], ['pv-ac', PV_LS.ac]];
+    ['pv-ev-kwh', PV_LS.evkwh], ['pv-ac', PV_LS.ac],
+    ['pv-v2h-kwh', PV_LS.v2hkwh], ['pv-v2h-price', PV_LS.v2hprice]];
   pvFields.forEach(([id, key]) => {
     const el = $(id); if (!el) return;
     const saved = localStorage.getItem(key);
     if (saved !== null) el.value = saved;
     el.addEventListener('input', () => { try { localStorage.setItem(key, el.value); } catch (e) {} renderPv(); });
   });
+  const v2h = $('pv-v2h');
+  if (v2h) {
+    try { v2h.checked = localStorage.getItem(PV_LS.v2h) === '1'; } catch (e) {}
+    v2h.addEventListener('change', () => {
+      try { localStorage.setItem(PV_LS.v2h, v2h.checked ? '1' : '0'); } catch (e) {}
+      renderPv();
+    });
+  }
   const pvSug = $('pv-suggest'); if (pvSug) pvSug.addEventListener('click', doPvSuggest);
   const pvm = $('pv-monthly');
   if (pvm) {
