@@ -135,6 +135,10 @@ const INFO = {
     '= Börse × (1 + MwSt.) + Aufschlag. <span style="color:#4be0b0">Grün</span> = günstig, ' +
     '<span style="color:#ef6c4d">rot</span> = teuer. Die senkrechte Linie ist <b>jetzt</b>. Morgen erscheint ' +
     'nachmittags nach der Börsen-Auktion. Verschiebe flexible Lasten in die grünen Stunden.',
+  'spot-batt': () => 'Mit einem dynamischen Tarif lohnt sich <b>Arbitrage</b>: den Speicher (Heim + optional V2H-Auto) ' +
+    'in den <b>günstigen</b> Stunden laden und in den <b>teuren</b> nutzen. Der Gewinn ist die Preisdifferenz (Spread) ' +
+    'mal nutzbare Kapazität. Vor allem im Winter interessant, wenn PV den Speicher nicht füllt. Braucht einen ' +
+    'Speicher/EMS, der preisgesteuert laden kann.',
   'spot-cost': () => 'Vergleich deiner realen Last mit dem <b>dynamischen</b> Preis vs. deinem <b>Festpreis</b>. ' +
     '„Ø dynamisch" gewichtet den Börsenpreis mit deinem <b>Stundenprofil</b> (wann du wie viel verbrauchst). ' +
     'Liegt er unter dem Festpreis, lohnt der dynamische Tarif – noch mehr, wenn du flexible Lasten verschiebst.',
@@ -720,7 +724,7 @@ function spotChart(prices, nowTs) {
 function renderBorse() {
   const sp = STATE.spot;
   const off = $('borse-off-card');
-  const cards = ['borse-price-card', 'borse-best-card', 'borse-cost-card'];
+  const cards = ['borse-price-card', 'borse-best-card', 'borse-cost-card', 'borse-batt-card'];
   if (!sp || !sp.enabled || !(sp.prices && sp.prices.length)) {
     if (off) off.hidden = false;
     cards.forEach(id => { const el = $(id); if (el) el.hidden = true; });
@@ -788,7 +792,48 @@ function renderBorse() {
       `– und mehr, wenn du flexible Lasten in die grünen Stunden legst.`
     : `Aktuell läge der dynamische Tarif <b>${money(-yearDelta)}/Jahr höher</b> als dein Festpreis. Durch ` +
       `Verschieben flexibler Lasten (Warmwasser, Waschen, Auto) in günstige Stunden lässt sich das drehen.`;
+
+  // ---- Speicher clever laden: Arbitrage aus dem Börsen-Spread ----------
+  const battCard = $('borse-batt-card');
+  const homeBatt = parseFloat(localStorage.getItem(PV_LS.batt) || '0') || 0;
+  const v2hOn = (() => { try { return localStorage.getItem(PV_LS.v2h) === '1'; } catch (e) { return false; } })();
+  const carKwh = v2hOn ? (parseFloat(localStorage.getItem(PV_LS.v2hkwh) || '0') || 0) : 0;
+  const battKwh = homeBatt + carKwh;
+  if (battKwh <= 0) {
+    $('borse-batt').innerHTML = '<div class="note">Trag im Tab <b>PV</b> deinen <b>Batteriespeicher</b> (und ggf. ' +
+      'V2H-Auto) ein – dann rechne ich hier aus, wie viel du sparst, wenn du ihn in den <b>günstigen</b> Börsenstunden lädst.</div>';
+    $('borse-batt-note').innerHTML = '';
+  } else {
+    // hours needed to (dis)charge, assuming ~3 kW; cheapest to charge vs most expensive to displace
+    const kHours = Math.max(1, Math.min(8, Math.round(battKwh / 3)));
+    const chargeWin = cheapWin(kHours);
+    // most expensive kHours in the next 24h (what the battery would displace)
+    const dayAhead = future.slice(0, 24).map(p => p.consumer_ct).sort((a, b) => b - a);
+    const expAvg = dayAhead.length ? mean(dayAhead.slice(0, kHours)) : hi;
+    const cheapAvg = chargeWin ? chargeWin.c : lo;
+    const spread = expAvg - cheapAvg;                       // ct/kWh
+    const eff = 0.9, usable = battKwh * eff;
+    const savDay = usable * spread / 100;                   // €, upper bound (one cycle)
+    const savYear = savDay * 300;                           // not worth every single day
+    if (spread > 3 && chargeWin) {
+      $('borse-batt').innerHTML =
+        devRow('🔋 Laden (günstig)', `Speicher ${khLbl(battKwh)} · ${dd(chargeWin.start)} ${hh(chargeWin.start)}–${hh(chargeWin.end)}`,
+          fmt(cheapAvg, 1) + ' ct', '', 100, '#4be0b0') +
+        devRow('⚡ Nutzen (teuer)', 'abends/morgens statt Netzbezug', fmt(expAvg, 1) + ' ct', '', Math.min(100, cheapAvg / expAvg * 100), '#ef6c4d');
+      $('borse-batt-note').innerHTML = `Spread <b>${fmt(spread, 1)} ct/kWh</b>: lädst du deinen Speicher (${khLbl(battKwh)}) günstig ` +
+        `und nutzt ihn in den teuren Stunden, sparst du grob <b>${money(savDay)}/Tag</b> (~<b>${money(savYear)}/Jahr</b>). ` +
+        `Vor allem im <b>Winter</b> sinnvoll, wenn die PV den Speicher nicht füllt. ` +
+        `<br><small style="color:var(--muted)">Nur eine Abschätzung (max. 1 Zyklus/Tag, 90 % Wirkungsgrad). Braucht einen ` +
+        `Speicher/EMS, der <b>preisgesteuert laden</b> kann (z. B. sonnen, Huawei, Tibber-Integration).</small>`;
+    } else {
+      $('borse-batt').innerHTML = '';
+      $('borse-batt-note').innerHTML = `Aktuell ist der Tag/Nacht-Spread klein (<b>${fmt(spread, 1)} ct</b>) – gezieltes ` +
+        `Netz-Laden lohnt sich heute kaum. An Tagen mit großem Preisunterschied (oft windig/kalt) schon.`;
+    }
+  }
 }
+// "10 kWh" or "10 kWh Heim + 20 kWh Auto"
+function khLbl(kwh) { return fmt(kwh, 0) + ' kWh'; }
 function devRow(title, sub, valTop, valBot, pct, col) {
   return `<div class="devrow"><div class="nm"><b>${esc(title)}</b><small>${sub}</small>` +
     `<div class="bar"><i style="width:${pct.toFixed(0)}%${col ? `;background:${col}` : ''}"></i></div></div>` +
@@ -1848,6 +1893,28 @@ function pvDayChart(pv, load) {
     `<path d="${loadL}" fill="none" stroke="${COL.sh}" stroke-width="2.5" stroke-linejoin="round"/>` + labels);
 }
 
+// Sweep chart of netzfreie Monate per kWp: value label on each bar + hover/tap
+// hit rects so the exact count is easy to read.
+function gridFreeSweepChart(data, cur) {
+  const h = 185, pad = 26, top = 20, base = h - 22, n = data.length || 1;
+  const max = Math.max(1, ...data.map(d => d.count));
+  const gw = (CW - pad * 2) / n, iw = Math.max(3, gw * 0.62);
+  let bars = '', labels = '', vlab = '', hits = '';
+  data.forEach((d, i) => {
+    const bh = d.count / max * (base - top);
+    const x = pad + i * gw + (gw - iw) / 2, y = base - bh, isCur = d.kwp === cur;
+    bars += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${iw.toFixed(1)}" height="${Math.max(0, bh).toFixed(1)}" rx="2.5" fill="${isCur ? 'url(#g1)' : COL.sh}"/>`;
+    if (d.count > 0) vlab += `<text x="${(x + iw / 2).toFixed(1)}" y="${(y - 4).toFixed(1)}" text-anchor="middle" style="font-size:11px;font-weight:700;fill:var(--ink)">${d.count}</text>`;
+    labels += `<text class="axis" x="${(x + iw / 2).toFixed(1)}" y="${h - 8}" text-anchor="middle"${isCur ? ' style="fill:#4da3ff;font-weight:700"' : ''}>${d.kwp}${isCur ? '★' : ''}</text>`;
+    hits += `<rect class="gfhit" data-kwp="${d.kwp}" data-count="${d.count}" x="${(pad + i * gw).toFixed(1)}" y="${top}" width="${gw.toFixed(1)}" height="${(base - top).toFixed(1)}" fill="#000" opacity="0" pointer-events="all"/>`;
+  });
+  return svg(h, gridLines(h, top, base, pad, max) + bars + vlab + labels + hits);
+}
+function showGfTip(kwp, count) {
+  const t = $('toast'); if (!t) return;
+  t.innerHTML = `<b>${kwp} kWp</b> → <b style="color:${count >= 5 ? '#4be0b0' : count >= 2 ? '#f6b93b' : '#ef6c4d'}">${count} von 12 Monaten</b> ohne Netzbezug`;
+  t.hidden = false; clearTimeout(_toastT); _toastT = setTimeout(() => { t.hidden = true; }, 6000);
+}
 // In which months could you run entirely without grid power – and how does
 // that change with a bigger PV array?
 function renderPvGridFree(p) {
@@ -1880,9 +1947,7 @@ function renderPvGridFree(p) {
   for (let k = step; k <= maxK; k += step) kwps.push(k);
   if (!kwps.includes(cur) && cur <= maxK) { kwps.push(cur); kwps.sort((a, b) => a - b); }
   const data = kwps.map(k => ({ kwp: k, count: gridFreeMonths(k).length }));
-  el.innerHTML = barChart(data.map(d => ({
-    v: d.count, label: d.kwp + (d.kwp === cur ? '★' : ''),
-    color: d.kwp === cur ? 'url(#g1)' : COL.sh })), { h: 170 });
+  el.innerHTML = gridFreeSweepChart(data, cur);
   const maxAch = Math.max(...data.map(d => d.count));
   const satK = (data.find(d => d.count >= maxAch) || {}).kwp;
   $('pv-gridfree-note').innerHTML =
@@ -2455,6 +2520,12 @@ function init() {
     const onMove = e => { const r = e.target.closest && e.target.closest('.pvhit'); if (r) { e.stopPropagation(); showPvTip(+r.dataset.mi); } };
     pvm.addEventListener('pointermove', onMove);
     pvm.addEventListener('pointerdown', onMove);
+  }
+  const gf = $('pv-gridfree');
+  if (gf) {
+    const onGf = e => { const r = e.target.closest && e.target.closest('.gfhit'); if (r) { e.stopPropagation(); showGfTip(+r.dataset.kwp, +r.dataset.count); } };
+    gf.addEventListener('pointermove', onGf);
+    gf.addEventListener('pointerdown', onGf);
   }
   const acFill = $('pv-ac-fill');
   if (acFill) acFill.addEventListener('click', () => {
