@@ -16,7 +16,7 @@ const MON = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Ok
 const COL = { sh: '#4da3ff', hp: '#ef6c4d', heat: '#f6b93b', away: '#ff6b8a' };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-15 · Börsenstrom (dynamischer Tarif) + bidirektionales Laden'
+const APP_VERSION = '2026-09-17 · Theorie-vs-Praxis+, PV kumuliert & netzfreie Monate'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -108,6 +108,9 @@ const INFO = {
     '<b>Sommermonate</b> und den <b>Nachmittag</b> verteilt – also genau dann, wenn viel PV da ist, ' +
     'darum steigert Kühlung den Eigenverbrauch. „Ø D einsetzen" trägt einen typischen deutschen ' +
     'Haushaltswert (~450 kWh/Jahr) ein; passe ihn an deine Anlage an.',
+  'pv-gridfree': () => 'Für jede Anlagengröße (kWp) wird geprüft, in wie vielen <b>Monaten</b> du praktisch ' +
+    '<b>keinen Netzstrom</b> mehr beziehst (Netzbezug &lt; 1 %). Der Speicher bleibt dabei auf deinem Wert. ' +
+    'Zeigt, ab wann mehr kWp nichts mehr bringt – die dunklen Wintermonate bleiben mit PV allein immer auf Netzbezug angewiesen.',
   'pv-v2h': () => 'Bidirektionales Laden (V2H): dein <b>Auto-Akku dient als Heimspeicher</b>. Wenn das Auto ' +
     'abends/nachts zuhause steht, lädt es PV-Überschuss und speist ihn später ins Haus zurück – so kannst du ' +
     'einen <b>kleineren Heimspeicher</b> kaufen. Tagsüber (Auto weg) hilft es nicht. Braucht eine ' +
@@ -138,6 +141,15 @@ const INFO = {
     'Electrolux-Cloud. Angezeigt werden Betriebszustand, <b>Strom pro Waschgang</b> und der ' +
     '<b>Gesamtzähler</b>. „Heute" ist der Zuwachs des Gesamtzählers seit Mitternacht. Verbinden ' +
     'im Setup mit API-Key + Refresh-Token von developer.electrolux.one.',
+  'theory-month': () => 'Der berechnete Jahres-Heizbedarf wird über die <b>Heizsaison</b> verteilt (Winter viel, ' +
+    'Sommer wenig) und das Warmwasser gleichmäßig – ergibt den <b>erwarteten Strom je Monat</b>. Die blauen Balken ' +
+    'sind deine <b>gemessenen</b> Monatswerte aus der CSV. Große Lücken zeigen z. B. Nachtabsenkung, Vorlauf oder Wetter.',
+  'theory-class': () => 'Der <b>spezifische Heizwärmebedarf</b> (kWh je m² und Jahr, nur Heizung) ordnet dein Haus ' +
+    'zwischen Passivhaus und unsaniertem Altbau ein. Er kommt aus dem U·A-Modell geteilt durch die beheizte Fläche – ' +
+    'ein guter Vergleichsmaßstab, unabhängig von der Hausgröße.',
+  'theory-reno': () => 'Für jedes noch schlecht gedämmte Bauteil wird gerechnet, wie viel <b>Strom/Jahr</b> eine ' +
+    'Dämmung auf einen guten U-Wert spart, plus grobe Kosten und <b>Amortisation</b>. Sortiert nach größtem Hebel. ' +
+    'Dazu: was 1 °C weniger Raumtemperatur bringt (~6 % je Grad).',
   theory: () => 'Vereinfachtes Ingenieurmodell: für jedes Bauteil <b>U × Fläche</b> (Wärmeverlust je Grad), ' +
     'mal <b>Heizgradtage</b> (Deutschland ~3500 Kd/a → kWh) plus Lüftung, minus Sonnen-/interne Gewinne, ' +
     'geteilt durch den <b>COP</b> ergibt den erwarteten Strom. Alle Werte sind editierbare Startschätzungen ' +
@@ -1061,6 +1073,40 @@ function computeHeat(b) {
   const eHeat = qHeat / b.cop_heat, eDhw = b.dhw / b.cop_dhw;
   return { factor, items, gross, qHeat, eHeat, eDhw, eTotal: eHeat + eDhw, qTotal: qHeat + b.dhw };
 }
+// Sensible post-renovation U-values and rough insulation cost (€/m²) per part.
+const RENO = {
+  wall:   { u: 0.24, cost: 160, l: 'Außenwände dämmen' },
+  pitch:  { u: 0.24, cost: 150, l: 'Satteldach dämmen' },
+  flat:   { u: 0.20, cost: 220, l: 'Flachdach dämmen' },
+  floorI: { u: 0.30, cost: 90,  l: 'Bodenplatte dämmen' },
+  floorU: { u: 0.30, cost: 90,  l: 'Kellerdecke dämmen' },
+  win:    { u: 0.90, cost: 550, l: 'Fenster tauschen' },
+  door:   { u: 1.10, cost: 0,   l: 'Haustür tauschen' },
+};
+// A horizontal energy-class scale (kWh/m²·a heating) with a marker.
+function classBar(spec) {
+  const h = 56, top = 8, barH = 16, y = top, max = 200;
+  const segs = [[15, '#2ecc71', 'Passiv'], [45, '#4be0b0', 'KfW'],
+    [90, '#f6b93b', 'Neubau'], [140, '#f39c12', 'Bestand'], [max, '#ef6c4d', 'unsaniert']];
+  const X = v => (Math.min(v, max) / max) * CW;
+  let rects = '', ticks = '', lo = 0;
+  segs.forEach(([hi, col]) => {
+    rects += `<rect x="${X(lo).toFixed(1)}" y="${y}" width="${(X(hi) - X(lo)).toFixed(1)}" height="${barH}" fill="${col}"/>`;
+    ticks += `<text class="axis" x="${X(hi).toFixed(1)}" y="${y + barH + 12}" text-anchor="middle">${hi}</text>`;
+    lo = hi;
+  });
+  const mx = X(spec);
+  const marker = `<path d="M${mx.toFixed(1)} ${y - 1} l-5 -7 l10 0 z" fill="#fff"/>` +
+    `<line x1="${mx.toFixed(1)}" y1="${y}" x2="${mx.toFixed(1)}" y2="${y + barH}" stroke="#fff" stroke-width="2"/>`;
+  return svg(h, rects + marker + ticks);
+}
+function buildClass(spec) {
+  if (spec <= 15) return ['Passivhaus-Niveau', '#2ecc71'];
+  if (spec <= 45) return ['KfW-Effizienzhaus-Niveau', '#4be0b0'];
+  if (spec <= 90) return ['Neubau / gut saniert', '#f6b93b'];
+  if (spec <= 140) return ['typischer sanierter Altbau', '#f39c12'];
+  return ['wenig gedämmter Altbau', '#ef6c4d'];
+}
 function renderHeatDemand() {
   const card = $('hp-theory-card'); if (!card) return;
   const b = buildData(), r = computeHeat(b), price = STATE.price;
@@ -1117,6 +1163,76 @@ function renderHeatDemand() {
     `Vereinfachtes U·A-Modell mit Heizgradtagen (Deutschland ~3500 Kd). Werte sind Startschätzungen aus deinen ` +
     `Angaben – bitte anpassen. Boden/Keller mit Faktor 0,5 (gegen Erdreich). Gewinne (Sonne/intern) pauschal ` +
     `abgezogen. Für eine belastbare Heizlast: Energieberater/GEG-Berechnung.`;
+
+  // ---- Monatsansicht: Theorie vs. Praxis ------------------------------
+  const hpSeasShare = normFrac(HP_SEASON);
+  const theoryMonth = [];
+  for (let m = 0; m < 12; m++) theoryMonth[m] = r.eHeat * hpSeasShare[m] + r.eDhw * DIM[m] / 365;
+  const realMap = hpRealMonthMap();
+  const mCard = $('hp-theory-month-card');
+  if (mCard) {
+    mCard.hidden = false;
+    const rows = MON.map((lbl, m) => ({
+      label: lbl, values: { t: theoryMonth[m], p: realMap && realMap[m] != null ? realMap[m] : 0 } }));
+    $('hp-theory-month').innerHTML = groupedBar(rows,
+      [{ key: 't', color: 'url(#gHeat)' }, { key: 'p', color: COL.sh }], { h: 190 });
+    $('hp-theory-month-legend').innerHTML = legendHtml(
+      [{ color: COL.heat, label: 'Theorie' }, { color: COL.sh, label: 'Gemessen (CSV)' }]);
+    if (realMap) {
+      let worst = null, sT = 0, sP = 0;
+      Object.keys(realMap).forEach(m => {
+        const abs = realMap[m] - theoryMonth[m];              // absolute kWh divergence
+        sT += theoryMonth[m]; sP += realMap[m];
+        if (!worst || Math.abs(abs) > Math.abs(worst.abs)) worst = { m: +m, abs, pct: abs / Math.max(1, theoryMonth[m]) };
+      });
+      const totPct = sT > 0 ? (sP - sT) / sT : 0;
+      $('hp-theory-month-note').innerHTML = 'Erwarteter Stromverbrauch pro Monat (Theorie, orange) gegen deine ' +
+        `importierten Monatswerte (blau). Über die gemessenen Monate liegt die Praxis <b>${totPct >= 0 ? '+' : ''}` +
+        `${fmt(totPct * 100, 0)} %</b> zur Theorie.` + (worst ? ` Größter Unterschied im <b>${MON[worst.m]}</b> ` +
+        `(${worst.abs >= 0 ? '+' : '−'}${kwh(Math.abs(worst.abs), 0)}${worst.abs > 0 ? ' – mehr als gerechnet' : ' – weniger, z. B. kaum geheizt/effizient'}).` : '');
+    } else {
+      $('hp-theory-month-note').innerHTML = 'Erwarteter Stromverbrauch pro Monat (Theorie). Für den direkten ' +
+        'Vergleich importiere im Setup eine <b>HomeCom-CSV</b> – dann kommen die gemessenen Monatswerte dazu.';
+    }
+  }
+
+  // ---- Gebäude-Einordnung (kWh/m²·a Heizwärmebedarf) -------------------
+  const spec = b.area > 0 ? r.qHeat / b.area : 0;
+  const [cls, col] = buildClass(spec);
+  $('hp-theory-class').innerHTML = classBar(spec);
+  $('hp-theory-class-note').innerHTML = `Dein <b>spezifischer Heizwärmebedarf</b> ist ~<b style="color:${col}">` +
+    `${fmt(spec, 0)} kWh/m²·a</b> → <b>${cls}</b>. Zum Einordnen: Passivhaus &lt;15, KfW ~30–45, Neubau ~55–70, ` +
+    `unsanierter Altbau ~150–250. (Nur Heizung, ohne Warmwasser; Marker oben.)`;
+
+  // ---- Sanierung: Ersparnis-Ranking + Amortisation --------------------
+  const measures = [];
+  b.comps.forEach(c => {
+    const t = RENO[c.k]; if (!t || c.u <= t.u) return;
+    const saveKwh = (c.u - t.u) * c.a * c.f * r.factor * (1 - b.gain) / b.cop_heat;
+    if (saveKwh < 20) return;
+    const cost = t.cost * c.a * c.f;
+    const saveEur = saveKwh * price;
+    measures.push({ l: t.l, saveKwh, saveEur, cost, u0: c.u, u1: t.u,
+      payback: (cost > 0 && saveEur > 0) ? cost / saveEur : null });
+  });
+  measures.sort((a, z) => z.saveKwh - a.saveKwh);
+  const maxSave = measures.length ? measures[0].saveKwh : 1;
+  $('hp-theory-reno').innerHTML = measures.length
+    ? measures.map(m => devRow(m.l,
+        `U ${fmt(m.u0, 2)} → ${fmt(m.u1, 2)}${m.payback ? ` · grobe Kosten ~${money(m.cost)} · Amortisation ~${fmt(m.payback, 0)} J.` : ''}`,
+        money(m.saveEur) + '/J.', kwh(m.saveKwh, 0), m.saveKwh / maxSave * 100,
+        m.saveKwh === maxSave ? COL.hp : COL.sh)).join('')
+    : '<div class="note">Alle Bauteile sind schon gut gedämmt – kein großer Hebel mehr. 👍</div>';
+
+  // ---- Temperatur-Hebel -----------------------------------------------
+  $('hp-theory-temp-head').innerHTML = '🌡️ <b>Raumtemperatur:</b> je 1 °C ≈ 6 % Heizenergie:';
+  const tempRows = [[-2, 'kühler'], [-1, 'kühler'], [1, 'wärmer']].map(([d, w]) => {
+    const dk = r.eHeat * 0.06 * Math.abs(d);
+    return statusRow(`${Math.abs(d)} °C ${w}`, `${d < 0 ? 'spart' : 'kostet'} ~${kwh(dk, 0)} · ${money(dk * price)}/Jahr`);
+  }).join('');
+  $('hp-theory-temp').innerHTML = tempRows;
+  $('hp-theory-reno-note').innerHTML = 'Ersparnis-Schätzung aus dem U·A-Modell – reale Kosten/Nutzen hängen von ' +
+    'Bauausführung und Förderung ab. Reihenfolge zeigt den <b>größten Hebel zuerst</b>.';
 }
 
 function renderHeatpump() {
@@ -1560,12 +1676,24 @@ let _pvMonths = [];
 function showPvTip(mi) {
   const m = _pvMonths[mi], t = $('toast'); if (!m || !t) return;
   const row = (c, l, v) => v > 0.05 ? `<div class="it"><span class="sw" style="background:${c}"></span>${l}: <b>${kwh(v, 0)}</b></div>` : '';
+  // annual cumulative self-use (Direkt + Batterie, i.e. WITHOUT feed-in)
+  const T = _pvMonths.reduce((a, x) => ({
+    direct: a.direct + x.direct, batt: a.batt + x.batt, sh: a.sh + x.loadSh,
+    hp: a.hp + x.loadHp, ev: a.ev + x.loadEv, ac: a.ac + x.loadAc, load: a.load + x.load,
+  }), { direct: 0, batt: 0, sh: 0, hp: 0, ev: 0, ac: 0, load: 0 });
+  const selfTot = T.direct + T.batt;
   t.innerHTML = `<b>${esc(m.label)}</b> · Erzeugung ${kwh(m.pv, 0)} · Verbrauch ${kwh(m.load, 0)}` +
     `<div class="legend" style="margin-top:6px">` +
     row(PVC.direct, 'PV direkt', m.direct) + row(PVC.batt, 'PV Batterie', m.batt) + row(PVC.feed, 'Einspeisung', m.feed) +
     row(PVC.sh, 'Hausstrom', m.loadSh) + row(PVC.hp, 'Wärmepumpe', m.loadHp) +
-    row(PVC.ev, 'E-Auto', m.loadEv) + row(PVC.ac, 'Klima', m.loadAc) + `</div>`;
-  t.hidden = false; clearTimeout(_toastT); _toastT = setTimeout(() => { t.hidden = true; }, 9000);
+    row(PVC.ev, 'E-Auto', m.loadEv) + row(PVC.ac, 'Klima', m.loadAc) + `</div>` +
+    `<div class="note" style="margin-top:8px"><b>Jahr kumuliert – selbst genutzt ${kwh(selfTot, 0)}</b> ` +
+    `(${fmt(T.load > 0 ? selfTot / T.load * 100 : 0, 0)} % des Verbrauchs, ohne Einspeisung):</div>` +
+    `<div class="legend" style="margin-top:4px">` +
+    row(PVC.direct, 'PV direkt', T.direct) + row(PVC.batt, 'PV Batterie', T.batt) +
+    row(PVC.sh, 'Hausstrom', T.sh) + row(PVC.hp, 'Wärmepumpe', T.hp) +
+    row(PVC.ev, 'E-Auto', T.ev) + row(PVC.ac, 'Klima', T.ac) + `</div>`;
+  t.hidden = false; clearTimeout(_toastT); _toastT = setTimeout(() => { t.hidden = true; }, 12000);
 }
 function pvMonthlyChart(months) {
   const h = 210, pad = 26, top = 12, base = h - 22, n = months.length || 1;
@@ -1686,6 +1814,35 @@ function pvDayChart(pv, load) {
     `<path d="${loadL}" fill="none" stroke="${COL.sh}" stroke-width="2.5" stroke-linejoin="round"/>` + labels);
 }
 
+// How many months would have (practically) zero grid import, per PV size?
+function renderPvGridFree(p) {
+  const el = $('pv-gridfree'); if (!el) return;
+  const cur = Math.max(1, Math.round(p.kwp || 0));
+  const maxK = Math.max(12, cur + 6);
+  const step = Math.max(1, Math.ceil(maxK / 15));
+  const gridFree = kwp => {
+    const r = simulatePv({ ...p, kwp });
+    return r.monthly.filter(mm => mm.grid <= Math.max(2, mm.load * 0.01)).map(mm => mm.m);
+  };
+  const kwps = [];
+  for (let k = step; k <= maxK; k += step) kwps.push(k);
+  if (!kwps.includes(cur) && cur <= maxK) { kwps.push(cur); kwps.sort((a, b) => a - b); }
+  const data = kwps.map(k => ({ kwp: k, months: gridFree(k) }));
+  el.innerHTML = barChart(data.map(d => ({
+    v: d.months.length, label: d.kwp + '', color: d.kwp === cur ? 'url(#g1)' : COL.sh })), { h: 180 });
+  $('pv-gridfree-legend').innerHTML = legendHtml(
+    [{ color: COL.sh, label: 'kWp → netzfreie Monate' }, { color: '#4da3ff', label: 'deine Größe' }]);
+  const curMonths = (data.find(d => d.kwp === cur) || { months: [] }).months;
+  const maxAch = Math.max(...data.map(d => d.months.length));
+  const satK = (data.find(d => d.months.length >= maxAch) || {}).kwp;
+  $('pv-gridfree-note').innerHTML = curMonths.length
+    ? `Mit deinen <b>${fmt(cur, 0)} kWp</b> (Speicher ${kwh(p.batt, 0)}) beziehst du in <b>${curMonths.length} Monaten</b> ` +
+      `praktisch keinen Netzstrom: <b>${curMonths.map(m => MON[m]).join(', ')}</b>. ` +
+      `Mehr als ~${fmt(satK, 0)} kWp bringt kaum weitere netzfreie Monate – die <b>Wintermonate</b> lassen sich mit PV ` +
+      `allein nicht decken (zu wenig Sonne; dafür bräuchte es saisonale Speicher). Ein größerer <b>Speicher</b> hilft dann mehr als mehr kWp.`
+    : `Mit deinen ${fmt(cur, 0)} kWp bleibt jeder Monat auf etwas Netzbezug angewiesen. Mehr kWp und v. a. mehr <b>Speicher</b> ` +
+      `erhöhen die Sommer-Autarkie – volle Netzfreiheit im Winter ist mit PV allein aber nicht erreichbar.`;
+}
 function renderPv() {
   if (!$('pv-yield')) return;
   const haveData = shAvgDaily() > 0 || hpAvgDaily() > 0;
@@ -1729,6 +1886,7 @@ function renderPv() {
     `Erzeugung <b>${kwh(r.yield_kwh, 0)}/Jahr</b> ≈ <b>${fmt(cover * 100, 0)} %</b> deines Verbrauchs (${kwh(r.load_kwh, 0)}${evTxt}).` + battTxt;
 
   renderPvEcon(p);
+  renderPvGridFree(p);
 
   $('pv-day').innerHTML = r.repDay ? pvDayChart(r.repDay.pv, r.repDay.load)
     : '<div class="note">Kein Tagesprofil verfügbar.</div>';
