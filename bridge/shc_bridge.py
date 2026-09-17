@@ -661,6 +661,35 @@ class Store:
             r = self.conn.execute("SELECT MAX(ts) m FROM spot_prices").fetchone()
         return r["m"] if r and r["m"] is not None else None
 
+    def spot_stats(self, days: int = 90) -> dict:
+        """Average stored market price (ct/kWh) over the last `days`, plus how
+        many hours of history that covers – the basis for a realistic annual mean."""
+        since = int(time.time()) - days * 86400
+        with self.lock:
+            r = self.conn.execute(
+                "SELECT AVG(market_ct) a, COUNT(*) c FROM spot_prices WHERE ts>=?",
+                (since,)).fetchone()
+        return {"avg_market_ct": r["a"], "hours": r["c"] or 0}
+
+    def spot_month_hour(self, days: int = 400) -> dict:
+        """Average market price (ct/kWh) bucketed by (month 0-11, hour 0-23) over
+        the stored history – the basis for a load-weighted, seasonal cost."""
+        since = int(time.time()) - days * 86400
+        with self.lock:
+            rows = self.conn.execute(
+                "SELECT ts, market_ct FROM spot_prices WHERE ts>=?", (since,)).fetchall()
+        acc = [[[0.0, 0] for _ in range(24)] for _ in range(12)]     # [sum, count]
+        for r in rows:
+            lt = time.localtime(r["ts"])
+            cell = acc[lt.tm_mon - 1][lt.tm_hour]
+            cell[0] += r["market_ct"]; cell[1] += 1
+        grid = [[round(c[0] / c[1], 3) if c[1] else None for c in mrow] for mrow in acc]
+        month_avg = []
+        for mrow in acc:
+            s = sum(c[0] for c in mrow); n = sum(c[1] for c in mrow)
+            month_avg.append(round(s / n, 3) if n else None)
+        return {"grid": grid, "month_avg": month_avg, "hours": len(rows)}
+
     def hp_counter_span(self) -> dict | None:
         """First and last cumulative counters over the whole observed history –
         gives a robust daily average even across polling gaps."""
@@ -1804,6 +1833,34 @@ class Runtime:
         self.ael_state = {}     # latest AEG/Electrolux snapshot
         self.spot_last_fetch = 0
         self.spot_last_error = None
+        self.spot_backfilling = False
+
+    def start_spot_backfill(self):
+        """One-off: pull ~10 months of historical prices so the seasonal/hourly
+        grid and the annual average are based on real data. Runs in a thread."""
+        if self.spot_backfilling or not spot or not self.cfg.get("spot_enabled"):
+            return
+        self.spot_backfilling = True
+        market = self.cfg.get("spot_market", "de")
+
+        def _run():
+            now = int(time.time())
+            cur = now - 300 * 86400
+            while cur < now:
+                end = min(cur + 30 * 86400, now)
+                try:
+                    rows = spot.fetch_range(market, cur, end)
+                    if rows:
+                        self.store.spot_upsert(rows)
+                    self.spot_last_error = None
+                except Exception as exc:
+                    self.spot_last_error = str(exc)
+                    print(f"[spot] backfill chunk failed: {exc}", file=sys.stderr)
+                cur = end
+                time.sleep(0.4)
+            print("[spot] historical backfill done", file=sys.stderr)
+            self.spot_backfilling = False
+        threading.Thread(target=_run, daemon=True).start()
 
     def stop(self):
         if self.poller:
@@ -1955,13 +2012,22 @@ class Handler(BaseHTTPRequestHandler):
         def consumer(mkt):
             return round(mkt * (1 + vat / 100.0) + surch, 2)
         now = int(time.time())
+        typical = spot.TYPICAL_MARKET_CT if spot else 8.5
 
         # demo mode: synthetic curve so the tab always shows something
         if self.ctx.mode == "demo":
             rows = spot.demo_prices(48) if spot else []
             prices = [{"ts": ts, "market_ct": mc, "consumer_ct": consumer(mc)} for ts, mc in rows]
+            grid = month_avg = None
+            if spot:
+                grid = [[round(typical * spot.DEMO_MONTH_FACTOR[m] * spot.DEMO_HOUR_FACTOR[h], 3)
+                         for h in range(24)] for m in range(12)]
+                month_avg = [round(sum(grid[m]) / 24, 3) for m in range(12)]
             return {"enabled": True, "demo": True, "market": "demo",
                     "surcharge_ct": surch, "vat": vat, "prices": prices,
+                    "hist_market_ct": typical, "hist_hours": 8760, "typical_market_ct": typical,
+                    "annual_consumer_ct": consumer(typical), "annual_basis": "history",
+                    "month_hour_ct": grid, "month_avg_ct": month_avg, "backfilling": False,
                     "last_error": None}
 
         if not spot or not cfg.get("spot_enabled"):
@@ -1981,8 +2047,23 @@ class Handler(BaseHTTPRequestHandler):
         rows = self.store.spot_range(now - 2 * 3600, now + 48 * 3600)
         prices = [{"ts": r["ts"], "market_ct": round(r["market_ct"], 2),
                    "consumer_ct": consumer(r["market_ct"])} for r in rows]
+        # realistic annual average from accumulated history, plus a seasonal
+        # month×hour grid for a load-weighted cost.
+        st = self.store.spot_stats(400)
+        mh = self.store.spot_month_hour(400)
+        # kick off a one-off historical backfill if history is still thin
+        if st["hours"] < 2000:
+            self.ctx.start_spot_backfill()
+        enough = st["hours"] >= 72 and st["avg_market_ct"] is not None
+        annual_mkt = st["avg_market_ct"] if enough else typical
         return {"enabled": True, "demo": False, "market": cfg.get("spot_market", "de"),
                 "surcharge_ct": surch, "vat": vat, "prices": prices,
+                "hist_market_ct": round(st["avg_market_ct"], 3) if st["avg_market_ct"] is not None else None,
+                "hist_hours": st["hours"], "typical_market_ct": typical,
+                "annual_consumer_ct": consumer(annual_mkt),
+                "annual_basis": "history" if enough else "typisch",
+                "month_hour_ct": mh["grid"], "month_avg_ct": mh["month_avg"],
+                "backfilling": self.ctx.spot_backfilling,
                 "last_error": getattr(self.ctx, "spot_last_error", None)}
 
     def _appliances_payload(self) -> dict:
