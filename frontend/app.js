@@ -8,6 +8,19 @@ const LS = { base: 'bhe_base', price: 'bhe_price', demo: 'bhe_demo', house: 'bhe
 const PV_LS = { kwp: 'bhe_pv_kwp', orient: 'bhe_pv_orient', batt: 'bhe_pv_batt',
   feedin: 'bhe_pv_feedin', invest: 'bhe_pv_invest', evkm: 'bhe_pv_evkm', evkwh: 'bhe_pv_evkwh', ac: 'bhe_pv_ac',
   v2h: 'bhe_pv_v2h', v2hkwh: 'bhe_pv_v2hkwh', v2hprice: 'bhe_pv_v2hprice', v2hhome: 'bhe_pv_v2hhome' };
+const TAR_LS = { hhbase: 'bhe_tar_hhbase', wp: 'bhe_tar_wp', wpct: 'bhe_tar_wpct',
+  wpbase: 'bhe_tar_wpbase', meter2: 'bhe_tar_meter2', spotbase: 'bhe_tar_spotbase' };
+function tariffData() {
+  const g = (k, d) => { const v = parseFloat(localStorage.getItem(k)); return isFinite(v) ? v : d; };
+  let wp = false; try { wp = localStorage.getItem(TAR_LS.wp) === '1'; } catch (e) {}
+  return {
+    hhPrice: STATE.price,                                  // €/kWh household
+    hhBase: g(TAR_LS.hhbase, 0),                           // €/year
+    wp, wpPrice: g(TAR_LS.wpct, Math.max(0.1, STATE.price - 0.05)),
+    wpBase: g(TAR_LS.wpbase, 0), meter2: g(TAR_LS.meter2, 0),
+    spotBase: g(TAR_LS.spotbase, 0),
+  };
+}
 // Fraction of each hour the car is typically home (can charge/discharge for
 // the house). Depends on the household: a home-office/family car sits at home
 // most of the day (soaks midday PV), a commuter's car is gone 8–16.
@@ -21,7 +34,7 @@ const MON = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Ok
 const COL = { sh: '#4da3ff', hp: '#ef6c4d', heat: '#f6b93b', away: '#ff6b8a' };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-17 · Theorie-vs-Praxis+, PV kumuliert & netzfreie Monate'
+const APP_VERSION = '2026-09-17 · Tarifvergleich + Konzept-Seite (1/2 Zähler, Börse, PV)'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -135,6 +148,13 @@ const INFO = {
     '= Börse × (1 + MwSt.) + Aufschlag. <span style="color:#4be0b0">Grün</span> = günstig, ' +
     '<span style="color:#ef6c4d">rot</span> = teuer. Die senkrechte Linie ist <b>jetzt</b>. Morgen erscheint ' +
     'nachmittags nach der Börsen-Auktion. Verschiebe flexible Lasten in die grünen Stunden.',
+  konzept: () => 'Vergleicht deine Jahres-Stromkosten in drei Abrechnungs-Varianten – <b>ein Zähler</b>, ' +
+    '<b>zwei Zähler</b> (WP-Sondertarif) und <b>Börse</b> – jeweils ohne und mit deiner PV, und leitet daraus eine ' +
+    '<b>Empfehlung</b> ab. Tarife stellst du im <b>Setup</b> ein, PV/Speicher/Auto im Tab <b>PV</b>.',
+  tariff: () => 'Dein <b>Arbeitspreis</b> (ct/kWh) und <b>Grundpreis</b> (fixe €/Jahr). Optional ein eigener ' +
+    '<b>Wärmepumpen-Tarif</b> über einen <b>Zweitzähler</b> – oft günstiger pro kWh, aber mit extra Grund-/Messkosten. ' +
+    'Wichtig: über einen separaten WP-Zähler kann deine <b>PV den WP-Strom meist nicht</b> mitversorgen. Der Tab ' +
+    '<b>Konzept</b> vergleicht alles (1 Zähler / 2 Zähler / Börse) mit und ohne PV.',
   'spot-batt': () => 'Mit einem dynamischen Tarif lohnt sich <b>Arbitrage</b>: den Speicher (Heim + optional V2H-Auto) ' +
     'in den <b>günstigen</b> Stunden laden und in den <b>teuren</b> nutzen. Der Gewinn ist die Preisdifferenz (Spread) ' +
     'mal nutzbare Kapazität. Vor allem im Winter interessant, wenn PV den Speicher nicht füllt. Braucht einen ' +
@@ -834,6 +854,107 @@ function renderBorse() {
 }
 // "10 kWh" or "10 kWh Heim + 20 kWh Auto"
 function khLbl(kwh) { return fmt(kwh, 0) + ' kWh'; }
+
+// Ranked annual-cost list: cheapest highlighted green, bars scaled to the max.
+function costList(items) {
+  const valid = items.filter(x => x.cost != null);
+  if (!valid.length) return '<div class="note">–</div>';
+  const min = Math.min(...valid.map(x => x.cost)), max = Math.max(...valid.map(x => x.cost));
+  return items.map(x => {
+    if (x.cost == null) return devRow(x.label, x.sub || 'nicht konfiguriert', '–', '', 0, 'var(--muted)');
+    const best = x.cost === min;
+    return devRow((best ? '✅ ' : '') + x.label, x.sub || '', money(x.cost) + '/Jahr',
+      best ? 'günstigste' : '+' + money(x.cost - min), max > 0 ? x.cost / max * 100 : 0,
+      best ? '#4be0b0' : '#4da3ff');
+  }).join('');
+}
+function renderKonzept() {
+  if (!$('konzept-nopv')) return;
+  const tar = tariffData(), price = STATE.price;
+  const hhKwh = shAvgDaily() * 365;                       // household (incl. unmetered)
+  const wpKwh = hpYearFromMonthly() || hpAvgDaily() * 365;
+  const p = pvInputs();
+  const evKwh = p.evAnnual, acKwh = p.acAnnual;
+  const homeKwh = hhKwh + evKwh + acKwh;                  // everything on the main meter
+  const totalKwh = homeKwh + wpKwh;
+  const sp = STATE.spot;
+  const spotAvg = sp && sp.prices && sp.prices.length ? mean(sp.prices.map(x => x.consumer_ct)) / 100 : null;
+
+  if (totalKwh <= 0) {
+    $('konzept-intro').innerHTML = 'Sobald Verbrauchsdaten da sind (Bridge misst bzw. CSV importiert), rechne ich hier ' +
+      'deine Tarif-Optionen und ein Gesamt-Konzept aus.';
+    ['konzept-nopv', 'konzept-pv', 'konzept-reco'].forEach(id => { const e = $(id); if (e) e.innerHTML = ''; });
+    return;
+  }
+  $('konzept-intro').innerHTML = `Basis: Haushalt ~<b>${kwh(homeKwh, 0)}/Jahr</b>` +
+    (evKwh > 0 ? ` (inkl. E-Auto ${kwh(evKwh, 0)})` : '') + `, Wärmepumpe ~<b>${kwh(wpKwh, 0)}/Jahr</b>. ` +
+    `Verglichen werden <b>ein Zähler/ein Tarif</b>, <b>zwei Zähler</b> (WP-Sondertarif) und <b>dynamischer Börsentarif</b>.`;
+
+  // ---- ohne PV ----
+  const oneMeter = totalKwh * tar.hhPrice + tar.hhBase;
+  const twoMeter = tar.wp ? (homeKwh * tar.hhPrice + tar.hhBase + wpKwh * tar.wpPrice + tar.wpBase + tar.meter2) : null;
+  const spotCost = spotAvg != null ? totalKwh * spotAvg + tar.spotBase : null;
+  $('konzept-nopv').innerHTML = costList([
+    { label: 'Ein Zähler, ein Tarif', sub: `${kwh(totalKwh, 0)} × ${fmt(tar.hhPrice * 100, 0)} ct + ${money(tar.hhBase)} Grund`, cost: oneMeter },
+    { label: 'Zwei Zähler (WP-Sondertarif)', sub: tar.wp ? `WP ${kwh(wpKwh, 0)} × ${fmt(tar.wpPrice * 100, 0)} ct, + Messkosten` : 'oben aktivieren', cost: twoMeter },
+    { label: 'Dynamischer Börsentarif', sub: spotAvg != null ? `Ø ~${fmt(spotAvg * 100, 1)} ct (aktuelle Börse)` : 'Börsentarif im Setup aktivieren', cost: spotCost },
+  ]);
+  $('konzept-nopv-note').innerHTML = 'Reine Bezugskosten pro Jahr, ohne PV. ' +
+    (twoMeter != null && twoMeter < oneMeter ? `Der WP-Sondertarif spart hier grob <b>${money(oneMeter - twoMeter)}/Jahr</b> – solange keine PV im Spiel ist.` : '') +
+    (spotAvg == null ? ' Für die Börsen-Zeile im <b>Setup</b> den dynamischen Tarif aktivieren.' : '');
+
+  // ---- mit PV ----
+  const pvCard = $('konzept-pv-card');
+  let reco = [];
+  if (p.kwp > 0) {
+    if (pvCard) pvCard.hidden = false;
+    const rAll = simulatePv(p);                            // PV vs. all loads (one meter)
+    const rHh = simulatePv({ ...p, noHp: true });          // PV vs. household only (HP on 2nd meter)
+    const oneMeterPv = rAll.grid_kwh * tar.hhPrice + tar.hhBase - rAll.feed_kwh * p.feedin;
+    const twoMeterPv = tar.wp
+      ? rHh.grid_kwh * tar.hhPrice + tar.hhBase - rHh.feed_kwh * p.feedin + wpKwh * tar.wpPrice + tar.wpBase + tar.meter2
+      : null;
+    const spotPv = spotAvg != null ? rAll.grid_kwh * spotAvg + tar.spotBase - rAll.feed_kwh * p.feedin : null;
+    $('konzept-pv').innerHTML = costList([
+      { label: 'Ein Zähler + PV', sub: `Netzbezug ${kwh(rAll.grid_kwh, 0)}, Einspeisung ${kwh(rAll.feed_kwh, 0)}`, cost: oneMeterPv },
+      { label: 'Zwei Zähler + PV', sub: tar.wp ? `PV deckt nur Haushalt; WP ${kwh(wpKwh, 0)} voll am WP-Tarif` : 'WP-Tarif oben aktivieren', cost: twoMeterPv },
+      { label: 'Börse + PV', sub: spotAvg != null ? `Restbezug ${kwh(rAll.grid_kwh, 0)} dynamisch` : 'Börsentarif aktivieren', cost: spotPv },
+    ]);
+    // the key PV-vs-HP-tariff insight
+    const hpSelfValue = Math.max(0, (rAll.self_kwh - rHh.self_kwh)) * tar.hhPrice;   // €/yr PV saves on HP via one meter
+    const wpDiscount = tar.wp ? Math.max(0, wpKwh * (tar.hhPrice - tar.wpPrice) - tar.wpBase - tar.meter2) : 0;
+    $('konzept-pv-note').innerHTML = `Wichtig bei PV: über einen <b>separaten WP-Zähler</b> kann deine PV den ` +
+      `Wärmepumpen-Strom <b>nicht</b> mitversorgen. Ein Zähler + PV nutzt PV auch für die WP ` +
+      `(~<b>${money(hpSelfValue)}/Jahr</b> Eigenverbrauchs-Vorteil).` +
+      (tar.wp ? ` Der WP-Sondertarif spart dagegen ~${money(wpDiscount)}/Jahr. ` +
+        `→ <b>${hpSelfValue >= wpDiscount ? 'Ein Zähler + PV lohnt sich mehr.' : 'Der WP-Sondertarif lohnt sich trotz PV.'}</b>` : '');
+    // recommendation seeds
+    const opts = [['Ein Zähler + PV', oneMeterPv], ['Zwei Zähler + PV', twoMeterPv], ['Börse + PV', spotPv]]
+      .filter(o => o[1] != null).sort((a, b) => a[1] - b[1]);
+    if (opts.length) reco.push(['💶', `Günstigste Kombination: <b>${opts[0][0]}</b> mit ~<b>${money(opts[0][1])}/Jahr</b> Netto-Stromkosten.`]);
+    reco.push(['☀️', `Deine PV (${fmt(p.kwp, 1)} kWp${p.batt > 0 ? ` + ${kwh(p.batt, 0)} Speicher` : ''}) deckt ` +
+      `<b>${fmt(rAll.autarky * 100, 0)} %</b> deines Verbrauchs. Warmwasser/Waschen/Auto möglichst <b>mittags</b> laufen lassen.`]);
+    if (tar.wp) reco.push([hpSelfValue >= wpDiscount ? '🔌' : '🔥',
+      hpSelfValue >= wpDiscount
+        ? `Mit PV bringt <b>ein gemeinsamer Zähler</b> mehr als der WP-Sondertarif – der PV-Eigenverbrauch der Wärmepumpe wiegt schwerer.`
+        : `Der <b>WP-Sondertarif</b> lohnt sich bei dir auch mit PV – die WP läuft viel im Winter, wenn die PV wenig liefert.`]);
+  } else {
+    if (pvCard) pvCard.hidden = true;
+    reco.push(['☀️', 'Noch keine PV eingetragen. Im Tab <b>PV</b> kWp & Speicher durchrechnen – bei deinem Verbrauch ' +
+      'meist der größte Hebel. Dann erscheint hier auch der Vergleich „mit PV".']);
+    const opts = [['Ein Zähler', oneMeter], ['Zwei Zähler', twoMeter], ['Börse', spotCost]]
+      .filter(o => o[1] != null).sort((a, b) => a[1] - b[1]);
+    if (opts.length) reco.push(['💶', `Aktuell günstigster Tarif: <b>${opts[0][0]}</b> (~${money(opts[0][1])}/Jahr).`]);
+  }
+  // battery/V2H + börse hints
+  if (p.batt > 0 || (p.v2h && p.carKwh > 0)) reco.push(['🔋', 'Speicher vorhanden: im Tab <b>Börse</b> kannst du ihn ' +
+    'in günstigen Stunden laden („Speicher clever laden") – lohnt v. a. im Winter mit dynamischem Tarif.']);
+  if (spotAvg != null) reco.push(['⚡', `Dynamischer Tarif aktiv: flexible Lasten in die <b>grünen Börsenstunden</b> ` +
+    `legen (Tab Börse) senkt die Kosten zusätzlich.`]);
+  $('konzept-reco').innerHTML = reco.map(([ic, t]) =>
+    `<div class="devrow" style="align-items:flex-start"><div style="font-size:18px;flex:none;width:24px">${ic}</div>` +
+    `<div class="nm"><small style="color:var(--ink);font-size:13px;line-height:1.5">${t}</small></div></div>`).join('');
+}
 function devRow(title, sub, valTop, valBot, pct, col) {
   return `<div class="devrow"><div class="nm"><b>${esc(title)}</b><small>${sub}</small>` +
     `<div class="bar"><i style="width:${pct.toFixed(0)}%${col ? `;background:${col}` : ''}"></i></div></div>` +
@@ -842,7 +963,7 @@ function devRow(title, sub, valTop, valBot, pct, col) {
 
 /* --------------------------------------------------------------- rendering */
 function renderAll() {
-  renderOverview(); renderToday(); renderHistory(); renderHeatpump(); renderProfile(); renderPv(); renderSettings(); renderAppliances(); renderMeter(); renderBorse();
+  renderOverview(); renderToday(); renderHistory(); renderHeatpump(); renderProfile(); renderPv(); renderSettings(); renderAppliances(); renderMeter(); renderBorse(); renderKonzept();
 }
 
 function renderOverview() {
@@ -1716,7 +1837,7 @@ function simulatePv(p) {
       const capturePv = [], captureLoad = [];
       for (let h = 0; h < 24; h++) {
         const pv = dayPv * pvH[h];
-        const lSh = shDaily * shShape[h], lHp = dayHp * hpShape[h], lEv = dayEv * EV_SHAPE[h], lAc = dayAc * AC_SHAPE[h];
+        const lSh = shDaily * shShape[h], lHp = p.noHp ? 0 : dayHp * hpShape[h], lEv = dayEv * EV_SHAPE[h], lAc = dayAc * AC_SHAPE[h];
         const load = lSh + lHp + lEv + lAc;
         mSh += lSh; mHp += lHp; mEv += lEv; mAc += lAc;
         const direct = Math.min(pv, load);
@@ -2448,6 +2569,24 @@ function init() {
       else n.textContent = 'Konnte nicht gespeichert werden.';
     } catch (e) { n.textContent = 'Nur möglich, wenn die Seite von der Bridge geöffnet ist.'; }
   });
+  // tariff inputs (localStorage), restore + save + re-render Konzept
+  const tarFields = [['tar-hhbase', TAR_LS.hhbase], ['tar-wpct', TAR_LS.wpct],
+    ['tar-wpbase', TAR_LS.wpbase], ['tar-meter2', TAR_LS.meter2], ['tar-spotbase', TAR_LS.spotbase]];
+  tarFields.forEach(([id, key]) => {
+    const el = $(id); if (!el) return;
+    const s = localStorage.getItem(key); if (s !== null) el.value = s;
+    el.addEventListener('input', () => { try { localStorage.setItem(key, el.value); } catch (e) {} renderKonzept(); });
+  });
+  const tarWp = $('tar-wp'), tarWpRow = $('tar-wp-row');
+  if (tarWp) {
+    try { tarWp.checked = localStorage.getItem(TAR_LS.wp) === '1'; } catch (e) {}
+    if (tarWpRow) tarWpRow.hidden = !tarWp.checked;
+    tarWp.addEventListener('change', () => {
+      try { localStorage.setItem(TAR_LS.wp, tarWp.checked ? '1' : '0'); } catch (e) {}
+      if (tarWpRow) tarWpRow.hidden = !tarWp.checked;
+      renderKonzept();
+    });
+  }
   const hk = $('house-kwh');
   if (hk) {
     const saved = localStorage.getItem(LS.house); if (saved) hk.value = saved;
