@@ -10,6 +10,7 @@ const PV_LS = { kwp: 'bhe_pv_kwp', orient: 'bhe_pv_orient', batt: 'bhe_pv_batt',
   v2h: 'bhe_pv_v2h', v2hkwh: 'bhe_pv_v2hkwh', v2hprice: 'bhe_pv_v2hprice', v2hhome: 'bhe_pv_v2hhome' };
 const TAR_LS = { hhbase: 'bhe_tar_hhbase', wp: 'bhe_tar_wp', wpct: 'bhe_tar_wpct',
   wpbase: 'bhe_tar_wpbase', meter2: 'bhe_tar_meter2', spotbase: 'bhe_tar_spotbase' };
+const FIN_LS = { invest: 'bhe_fin_invest', rate: 'bhe_fin_rate', years: 'bhe_fin_years', infl: 'bhe_fin_infl' };
 function tariffData() {
   const g = (k, d) => { const v = parseFloat(localStorage.getItem(k)); return isFinite(v) ? v : d; };
   let wp = false; try { wp = localStorage.getItem(TAR_LS.wp) === '1'; } catch (e) {}
@@ -34,7 +35,7 @@ const MON = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Ok
 const COL = { sh: '#4da3ff', hp: '#ef6c4d', heat: '#f6b93b', away: '#ff6b8a' };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-17 · Tarifvergleich + Konzept-Seite (1/2 Zähler, Börse, PV)'
+const APP_VERSION = '2026-09-18 · Boerse lastgewichtet + Warum + Investition/Kredit'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -148,6 +149,10 @@ const INFO = {
     '= Börse × (1 + MwSt.) + Aufschlag. <span style="color:#4be0b0">Grün</span> = günstig, ' +
     '<span style="color:#ef6c4d">rot</span> = teuer. Die senkrechte Linie ist <b>jetzt</b>. Morgen erscheint ' +
     'nachmittags nach der Börsen-Auktion. Verschiebe flexible Lasten in die grünen Stunden.',
+  finance: () => 'Rechnet deine <b>Investition</b> (PV/Speicher) als <b>Kredit</b> mit Zins durch: in den ersten ' +
+    'Jahren ist die Kreditrate oft höher als die Stromersparnis (also ähnlich teuer oder teurer), <b>nach dem ' +
+    'Abbezahlen</b> bleibt die Ersparnis voll übrig. Die Kurve zeigt den kumulierten Saldo und ab wann es sich ' +
+    'gerechnet hat. Ersparnis kommt aus dem Tarifvergleich (bester Tarif mit PV vs. ohne).',
   konzept: () => 'Vergleicht deine Jahres-Stromkosten in drei Abrechnungs-Varianten – <b>ein Zähler</b>, ' +
     '<b>zwei Zähler</b> (WP-Sondertarif) und <b>Börse</b> – jeweils ohne und mit deiner PV, und leitet daraus eine ' +
     '<b>Empfehlung</b> ab. Tarife stellst du im <b>Setup</b> ein, PV/Speicher/Auto im Tab <b>PV</b>.',
@@ -868,6 +873,110 @@ function costList(items) {
       best ? '#4be0b0' : '#4da3ff');
   }).join('');
 }
+// Typical heat-pump hour-of-day shape (cold mornings/evenings + midday DHW).
+const TYPICAL_WP_HOUR = [0.9, 0.85, 0.8, 0.8, 0.85, 1.0, 1.2, 1.25, 1.15, 1.0, 1.05, 1.1,
+  1.05, 0.95, 0.9, 0.95, 1.1, 1.25, 1.3, 1.2, 1.1, 1.0, 0.95, 0.9];
+// Load-weighted dynamic-tariff cost using the real season×hour price grid – the
+// honest number (a heat pump runs in winter/peak hours = expensive spot).
+function spotAnalysis(p) {
+  const sp = STATE.spot;
+  if (!sp || !sp.month_hour_ct) return null;
+  const vat = sp.vat != null ? sp.vat : 19, surch = sp.surcharge_ct != null ? sp.surcharge_ct : 15;
+  const annual = (sp.annual_consumer_ct || 25) / 100;                 // €/kWh fallback
+  const grid = sp.month_hour_ct.map(row => row.map(v => v == null ? annual : (v * (1 + vat / 100) + surch) / 100));
+  const homeShape = normFrac((STATE.data && STATE.data.hourly_profile || []).map(x => x.avg_w));
+  const hpProf = (STATE.hpA && STATE.hpA.hourly_profile) || [];
+  const wpShape = hpProf.length && hpProf.some(x => x.avg_w > 0) ? normFrac(hpProf.map(x => x.avg_w)) : normFrac(TYPICAL_WP_HOUR);
+  const homeKwh = shAvgDaily() * 365, wpKwh = hpYearFromMonthly() || hpAvgDaily() * 365;
+  const evK = p.evAnnual, acK = p.acAnnual, acShare = normFrac(AC_MONTH);
+  let homeCost = 0, wpCost = 0, evCost = 0, acCost = 0;
+  const monthCost = new Array(12).fill(0);
+  for (let m = 0; m < 12; m++) {
+    const homeM = homeKwh * DIM[m] / 365, wpM = hpMonthEst(m), evM = evK * DIM[m] / 365, acM = acK * acShare[m];
+    for (let h = 0; h < 24; h++) {
+      const pr = grid[m][h];
+      const cH = homeM * homeShape[h] * pr, cW = wpM * wpShape[h] * pr,
+        cE = evM * EV_SHAPE[h] * pr, cA = acM * AC_SHAPE[h] * pr;
+      homeCost += cH; wpCost += cW; evCost += cE; acCost += cA;
+      monthCost[m] += cH + cW + cE + cA;
+    }
+  }
+  const wpMSum = Array.from({ length: 12 }, (_, m) => hpMonthEst(m)).reduce((a, b) => a + b, 0) || 1;
+  return {
+    totalCost: homeCost + wpCost + evCost + acCost,
+    effHome: homeKwh > 0 ? homeCost / homeKwh * 100 : 0,
+    effWp: wpCost / wpMSum * 100,
+    effTotal: (homeCost + wpCost + evCost + acCost) / Math.max(1, homeKwh + wpKwh + evK + acK) * 100,
+    monthCost, annualAvg: sp.annual_consumer_ct || 25,
+    basis: sp.annual_basis, demo: sp.demo,
+  };
+}
+// Cumulative net cash-flow over the years (savings − loan payment), crossing
+// zero at break-even; dashed marker where the loan is paid off.
+function financeChart(cum, payoffY) {
+  const h = 175, pad = 40, top = 14, base = h - 26, n = cum.length;
+  const vmax = Math.max(0, ...cum), vmin = Math.min(0, ...cum), span = (vmax - vmin) || 1;
+  const X = i => pad + (CW - pad - 6) * (i / (n - 1));
+  const Y = v => top + (base - top) * (1 - (v - vmin) / span);
+  let pos = '', neg = '';
+  cum.forEach((v, i) => {
+    const seg = `${i ? 'L' : 'M'}${X(i).toFixed(1)} ${Y(v).toFixed(1)} `;
+    pos += seg; neg += seg;
+  });
+  const y0 = Y(0);
+  const zero = `<line x1="${pad}" y1="${y0.toFixed(1)}" x2="${CW - pad}" y2="${y0.toFixed(1)}" stroke="var(--line)"/>`;
+  // area under the curve, clipped green above 0 / red below via two rects masks is complex;
+  // simple: color the whole line, fill light green area to the zero line.
+  const area = `M${X(0).toFixed(1)} ${y0.toFixed(1)} ` + pos + `L${X(n - 1).toFixed(1)} ${y0.toFixed(1)} Z`;
+  const payoff = (payoffY > 0 && payoffY < n)
+    ? `<line x1="${X(payoffY).toFixed(1)}" y1="${top}" x2="${X(payoffY).toFixed(1)}" y2="${base}" stroke="#f6b93b" stroke-width="1.5" stroke-dasharray="3 3"/>` +
+      `<text class="axis" x="${X(payoffY).toFixed(1)}" y="${(top + 9).toFixed(1)}" text-anchor="middle" style="fill:#f6b93b">Kredit aus</text>` : '';
+  let lab = '';
+  for (let y = 0; y < n; y += 5) lab += `<text class="axis" x="${X(y).toFixed(1)}" y="${h - 8}" text-anchor="middle">${y}J</text>`;
+  const yl = `<text class="axis" x="2" y="${(Y(vmax) + 4).toFixed(1)}">${fmt(vmax, 0)}€</text>` +
+    `<text class="axis" x="2" y="${Y(vmin).toFixed(1)}">${fmt(vmin, 0)}</text>`;
+  return svg(h, `<path d="${area}" fill="#4be0b0" opacity="0.14"/>` + zero +
+    `<path d="${pos}" fill="none" stroke="#4be0b0" stroke-width="2.5" stroke-linejoin="round"/>` + payoff + lab + yl);
+}
+function renderFinance(annualSavings) {
+  const card = $('konzept-fin-card'); if (!card) return;
+  const g = (k, d) => { const v = parseFloat(localStorage.getItem(k)); return isFinite(v) ? v : d; };
+  const invest = g(FIN_LS.invest, 0), rate = g(FIN_LS.rate, 4) / 100;
+  const years = Math.max(0, Math.round(g(FIN_LS.years, 10))), infl = g(FIN_LS.infl, 3) / 100;
+  if (!(invest > 0) || !(annualSavings > 0)) {
+    $('fin-kpi').innerHTML = ''; $('fin-chart').innerHTML = '';
+    $('fin-note').innerHTML = !(annualSavings > 0)
+      ? 'Sobald oben eine <b>Ersparnis mit PV</b> herauskommt (Tab <b>PV</b> ausfüllen), rechne ich hier Kreditrate gegen Ersparnis.'
+      : 'Trag deine <b>Investition</b> (PV/Speicher) und den Kreditzins ein.';
+    return;
+  }
+  const cash = years <= 0;
+  const annuity = cash ? 0 : (rate > 0 ? invest * rate / (1 - Math.pow(1 + rate, -years)) : invest / years);
+  const N = 25, cum = [cash ? -invest : 0]; let be = null;
+  for (let y = 1; y <= N; y++) {
+    const sav = annualSavings * Math.pow(1 + infl, y - 1);
+    const pay = (!cash && y <= years) ? annuity : 0;
+    cum.push(cum[cum.length - 1] + sav - pay);
+    if (be == null && cum[cum.length - 1] >= 0) be = y;
+  }
+  const yr1net = annualSavings - annuity;
+  $('fin-kpi').innerHTML =
+    `<div class="grid2"><div class="kpi sm"><div class="v">${money(annualSavings)}</div><div class="l">Stromersparnis / Jahr</div></div>` +
+    `<div class="kpi sm"><div class="v">${cash ? '–' : money(annuity)}</div><div class="l">Kreditrate / Jahr${cash ? ' (bar bezahlt)' : ''}</div></div>` +
+    `<div class="kpi sm"><div class="v" style="color:${yr1net >= 0 ? '#4be0b0' : '#ef6c4d'}">${yr1net >= 0 ? '+' : ''}${money(yr1net / 12)}</div><div class="l">Saldo / Monat (Kreditphase)</div></div>` +
+    `<div class="kpi sm"><div class="v">${be ? be + ' J.' : '> 25 J.'}</div><div class="l">amortisiert nach</div></div></div>`;
+  $('fin-chart').innerHTML = financeChart(cum, cash ? 0 : years);
+  $('fin-note').innerHTML =
+    (cash
+      ? `Bar bezahlt: ab Jahr 1 sparst du <b>${money(annualSavings)}/Jahr</b> (steigt mit dem Strompreis). `
+      : yr1net >= 0
+        ? `Schon während der Kreditlaufzeit bist du <b>${money(yr1net)}/Jahr im Plus</b> (Ersparnis > Rate). `
+        : `Während der ${years} Kreditjahre ist es rund <b>${money(-yr1net)}/Jahr teurer</b> (Rate > Ersparnis), ` +
+          `<b>nach dem Abbezahlen</b> bleibt die volle Ersparnis (${money(annualSavings)}+/Jahr). `) +
+    `Kumuliert nach 25 Jahren: <b>${money(cum[25])}</b>. ` +
+    `<span style="color:var(--muted)">Ersparnis = bester Tarif mit PV vs. ohne, mit ${fmt(infl * 100, 0)} % Strompreis-Steigerung/Jahr; ` +
+    `ohne Förderung/Wartung/Degradation. Kurve = kumulierter Saldo, gelbe Linie = Kredit abbezahlt.</span>`;
+}
 function renderKonzept() {
   if (!$('konzept-nopv')) return;
   const tar = tariffData(), price = STATE.price;
@@ -878,7 +987,8 @@ function renderKonzept() {
   const homeKwh = hhKwh + evKwh + acKwh;                  // everything on the main meter
   const totalKwh = homeKwh + wpKwh;
   const sp = STATE.spot;
-  const spotAvg = sp && sp.prices && sp.prices.length ? mean(sp.prices.map(x => x.consumer_ct)) / 100 : null;
+  const sa = spotAnalysis(p);                             // load-weighted dynamic cost
+  const spotAvg = sa ? sa.effTotal / 100 : null;          // €/kWh, effective (load-weighted)
 
   if (totalKwh <= 0) {
     $('konzept-intro').innerHTML = 'Sobald Verbrauchsdaten da sind (Bridge misst bzw. CSV importiert), rechne ich hier ' +
@@ -893,19 +1003,37 @@ function renderKonzept() {
   // ---- ohne PV ----
   const oneMeter = totalKwh * tar.hhPrice + tar.hhBase;
   const twoMeter = tar.wp ? (homeKwh * tar.hhPrice + tar.hhBase + wpKwh * tar.wpPrice + tar.wpBase + tar.meter2) : null;
-  const spotCost = spotAvg != null ? totalKwh * spotAvg + tar.spotBase : null;
+  const spotCost = sa ? sa.totalCost + tar.spotBase : null;
   $('konzept-nopv').innerHTML = costList([
     { label: 'Ein Zähler, ein Tarif', sub: `${kwh(totalKwh, 0)} × ${fmt(tar.hhPrice * 100, 0)} ct + ${money(tar.hhBase)} Grund`, cost: oneMeter },
     { label: 'Zwei Zähler (WP-Sondertarif)', sub: tar.wp ? `WP ${kwh(wpKwh, 0)} × ${fmt(tar.wpPrice * 100, 0)} ct, + Messkosten` : 'oben aktivieren', cost: twoMeter },
-    { label: 'Dynamischer Börsentarif', sub: spotAvg != null ? `Ø ~${fmt(spotAvg * 100, 1)} ct (aktuelle Börse)` : 'Börsentarif im Setup aktivieren', cost: spotCost },
+    { label: 'Dynamischer Börsentarif', sub: sa ? `lastgewichtet, Ø effektiv ${fmt(sa.effTotal, 1)} ct` : 'Börsentarif im Setup aktivieren', cost: spotCost },
   ]);
+  // the "why Börse isn't automatically cheaper" explanation, from real load-weighting
+  let why = '';
+  if (sa) {
+    const now = new Date().getMonth();
+    const past = sa.monthCost.slice(0, now + 1).reduce((a, b) => a + b, 0);
+    const future = sa.monthCost.slice(now + 1).reduce((a, b) => a + b, 0);
+    why = `<br><b>Warum ist Börse nicht automatisch günstiger?</b> Der dynamische Preis wird ` +
+      `<b>lastgewichtet</b> gerechnet: deine <b>Wärmepumpe</b> läuft v. a. im <b>Winter</b> und morgens/abends – ` +
+      `genau dann ist die Börse <b>teuer</b>. Sie zahlt effektiv ~<b>${fmt(sa.effWp, 1)} ct/kWh</b>, der Haushalt ` +
+      `nur ~<b>${fmt(sa.effHome, 1)} ct/kWh</b> (Jahres-Ø ${fmt(sa.annualAvg, 1)} ct). Dazu kommen ` +
+      `<b>${fmt((sp && sp.surcharge_ct) || 15, 0)} ct</b> Aufschlag auf <b>jede</b> kWh. Ein WP-Sondertarif rabattiert dagegen ` +
+      `gezielt den größten Verbraucher. „Börse spart" gilt vor allem, wenn du <b>flexibel verschieben</b> kannst ` +
+      `(Auto/Warmwasser/Waschen) und PV/Speicher hast.` +
+      `<br><span style="color:var(--muted)">Basis: ${sa.demo ? 'Demo-Preise' : sa.basis === 'history' ? 'echte Börsenpreise deiner Bridge-Historie' : 'typischer Jahresverlauf (bis Historie da ist)'}. ` +
+      `Jan–${MON[now]} ~${money(past)} (bisherige Preise), ${MON[now]}–Dez ~${money(future)} (Prognose Saison).</span>`;
+  }
   $('konzept-nopv-note').innerHTML = 'Reine Bezugskosten pro Jahr, ohne PV. ' +
     (twoMeter != null && twoMeter < oneMeter ? `Der WP-Sondertarif spart hier grob <b>${money(oneMeter - twoMeter)}/Jahr</b> – solange keine PV im Spiel ist.` : '') +
-    (spotAvg == null ? ' Für die Börsen-Zeile im <b>Setup</b> den dynamischen Tarif aktivieren.' : '');
+    (sa == null ? ' Für die Börsen-Zeile im <b>Setup</b> den dynamischen Tarif aktivieren.' : '') + why;
+
+  const bestNoPv = Math.min(...[oneMeter, twoMeter, spotCost].filter(v => v != null));
 
   // ---- mit PV ----
   const pvCard = $('konzept-pv-card');
-  let reco = [];
+  let reco = [], annualSavings = 0;
   if (p.kwp > 0) {
     if (pvCard) pvCard.hidden = false;
     const rAll = simulatePv(p);                            // PV vs. all loads (one meter)
@@ -931,7 +1059,8 @@ function renderKonzept() {
     // recommendation seeds
     const opts = [['Ein Zähler + PV', oneMeterPv], ['Zwei Zähler + PV', twoMeterPv], ['Börse + PV', spotPv]]
       .filter(o => o[1] != null).sort((a, b) => a[1] - b[1]);
-    if (opts.length) reco.push(['💶', `Günstigste Kombination: <b>${opts[0][0]}</b> mit ~<b>${money(opts[0][1])}/Jahr</b> Netto-Stromkosten.`]);
+    if (opts.length) { reco.push(['💶', `Günstigste Kombination: <b>${opts[0][0]}</b> mit ~<b>${money(opts[0][1])}/Jahr</b> Netto-Stromkosten.`]);
+      annualSavings = Math.max(0, bestNoPv - opts[0][1]); }
     reco.push(['☀️', `Deine PV (${fmt(p.kwp, 1)} kWp${p.batt > 0 ? ` + ${kwh(p.batt, 0)} Speicher` : ''}) deckt ` +
       `<b>${fmt(rAll.autarky * 100, 0)} %</b> deines Verbrauchs. Warmwasser/Waschen/Auto möglichst <b>mittags</b> laufen lassen.`]);
     if (tar.wp) reco.push([hpSelfValue >= wpDiscount ? '🔌' : '🔥',
@@ -954,6 +1083,7 @@ function renderKonzept() {
   $('konzept-reco').innerHTML = reco.map(([ic, t]) =>
     `<div class="devrow" style="align-items:flex-start"><div style="font-size:18px;flex:none;width:24px">${ic}</div>` +
     `<div class="nm"><small style="color:var(--ink);font-size:13px;line-height:1.5">${t}</small></div></div>`).join('');
+  renderFinance(annualSavings);
 }
 function devRow(title, sub, valTop, valBot, pct, col) {
   return `<div class="devrow"><div class="nm"><b>${esc(title)}</b><small>${sub}</small>` +
@@ -2575,6 +2705,16 @@ function init() {
   tarFields.forEach(([id, key]) => {
     const el = $(id); if (!el) return;
     const s = localStorage.getItem(key); if (s !== null) el.value = s;
+    el.addEventListener('input', () => { try { localStorage.setItem(key, el.value); } catch (e) {} renderKonzept(); });
+  });
+  // finance inputs (Konzept): investment prefilled from the PV planner
+  const finFields = [['fin-invest', FIN_LS.invest], ['fin-rate', FIN_LS.rate],
+    ['fin-years', FIN_LS.years], ['fin-infl', FIN_LS.infl]];
+  finFields.forEach(([id, key]) => {
+    const el = $(id); if (!el) return;
+    let s = localStorage.getItem(key);
+    if (s === null && id === 'fin-invest') s = localStorage.getItem(PV_LS.invest);   // prefill
+    if (s !== null && s !== '') el.value = s;
     el.addEventListener('input', () => { try { localStorage.setItem(key, el.value); } catch (e) {} renderKonzept(); });
   });
   const tarWp = $('tar-wp'), tarWpRow = $('tar-wp-row');

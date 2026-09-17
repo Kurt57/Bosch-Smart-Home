@@ -573,6 +573,22 @@
       <div id="konzept-pv"></div>
       <div class="note" id="konzept-pv-note" style="margin-top:8px"></div>
     </div>
+    <div class="card" id="konzept-fin-card">
+      <h2><span class="info" data-info="finance" role="button" aria-label="Info">i</span>💰 Investition &amp; Finanzierung</h2>
+      <div class="grid2">
+        <div><label>Investition (€)</label>
+          <input id="fin-invest" type="number" min="0" step="500" inputmode="numeric" placeholder="z. B. 18000"></div>
+        <div><label>Kreditzins (% p. a.)</label>
+          <input id="fin-rate" type="number" min="0" step="0.1" inputmode="decimal" placeholder="z. B. 4"></div>
+        <div><label>Kreditlaufzeit (Jahre)</label>
+          <input id="fin-years" type="number" min="0" step="1" inputmode="numeric" placeholder="z. B. 10"></div>
+        <div><label>Strompreis-Steigerung (%/a)</label>
+          <input id="fin-infl" type="number" min="0" step="0.5" inputmode="decimal" placeholder="z. B. 3"></div>
+      </div>
+      <div id="fin-kpi" style="margin-top:12px"></div>
+      <div id="fin-chart" style="margin-top:10px"></div>
+      <div class="note" id="fin-note" style="margin-top:8px"></div>
+    </div>
     <div class="card">
       <h2>🔧 Empfehlung für dich</h2>
       <div id="konzept-reco"></div>
