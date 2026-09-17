@@ -443,11 +443,19 @@
       <label style="margin-top:10px; display:flex; align-items:center; gap:8px; cursor:pointer">
         <input type="checkbox" id="pv-v2h" style="width:auto"> 🔋 E-Auto bidirektional nutzen (V2H)
         <span class="info" data-info="pv-v2h" role="button" aria-label="Info">i</span></label>
-      <div class="grid2" id="pv-v2h-row" style="margin-top:8px" hidden>
-        <div><label>nutzbare Auto-Kapazität fürs Haus (kWh)</label>
-          <input id="pv-v2h-kwh" type="number" min="0" step="1" inputmode="decimal" placeholder="z. B. 20"></div>
-        <div><label>Speicherpreis (€/kWh, für Ersparnis)</label>
-          <input id="pv-v2h-price" type="number" min="0" step="50" inputmode="numeric" value="800"></div>
+      <div id="pv-v2h-row" style="margin-top:8px" hidden>
+        <div class="grid2">
+          <div><label>nutzbare Auto-Kapazität fürs Haus (kWh)</label>
+            <input id="pv-v2h-kwh" type="number" min="0" step="1" inputmode="decimal" placeholder="z. B. 20"></div>
+          <div><label>Speicherpreis (€/kWh, für Ersparnis)</label>
+            <input id="pv-v2h-price" type="number" min="0" step="50" inputmode="numeric" value="800"></div>
+        </div>
+        <label style="margin-top:10px; display:block">Auto tagsüber</label>
+        <select id="pv-v2h-home">
+          <option value="home">meist zuhause (Homeoffice/Familie)</option>
+          <option value="mixed">teils tagsüber weg</option>
+          <option value="commuter">Pendler – tagsüber weg</option>
+        </select>
       </div>
       <label style="margin-top:10px; display:block">Klimaanlage: kWh / Jahr
         <span class="info" data-info="pv-ac" role="button" aria-label="Info">i</span></label>

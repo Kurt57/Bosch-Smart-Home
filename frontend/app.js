@@ -7,10 +7,15 @@
 const LS = { base: 'bhe_base', price: 'bhe_price', demo: 'bhe_demo', house: 'bhe_house_kwh' };
 const PV_LS = { kwp: 'bhe_pv_kwp', orient: 'bhe_pv_orient', batt: 'bhe_pv_batt',
   feedin: 'bhe_pv_feedin', invest: 'bhe_pv_invest', evkm: 'bhe_pv_evkm', evkwh: 'bhe_pv_evkwh', ac: 'bhe_pv_ac',
-  v2h: 'bhe_pv_v2h', v2hkwh: 'bhe_pv_v2hkwh', v2hprice: 'bhe_pv_v2hprice' };
-// Hours the car is typically home (and can charge/discharge for the house):
-// overnight + evening. Away during the working day, so it can't soak midday PV.
-const V2H_HOME = [1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1];
+  v2h: 'bhe_pv_v2h', v2hkwh: 'bhe_pv_v2hkwh', v2hprice: 'bhe_pv_v2hprice', v2hhome: 'bhe_pv_v2hhome' };
+// Fraction of each hour the car is typically home (can charge/discharge for
+// the house). Depends on the household: a home-office/family car sits at home
+// most of the day (soaks midday PV), a commuter's car is gone 8–16.
+const V2H_PROFILES = {
+  home:     [1,1,1,1,1,1,1, .9,.75,.85,.9,.9, .8,.75,.85,.9,.9, 1,1,1,1,1,1,1],
+  mixed:    [1,1,1,1,1,1,1, .7,.45,.4,.5,.5, .45,.4,.5,.6,.7, 1,1,1,1,1,1,1],
+  commuter: [1,1,1,1,1,1,1,1, 0,0,0,0,0,0,0,0,0, 1,1,1,1,1,1,1],
+};
 const WD = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
 const MON = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'];
 const COL = { sh: '#4da3ff', hp: '#ef6c4d', heat: '#f6b93b', away: '#ff6b8a' };
@@ -111,10 +116,10 @@ const INFO = {
   'pv-gridfree': () => 'Ein Monat ist „netzfrei", wenn PV + Batterie ihn praktisch komplett decken (Netzbezug &lt; 1 %). ' +
     'Oben: welche Monate das mit <b>deiner</b> Anlage sind (grün). Unten: wie viele Monate es mit einer <b>größeren</b> ' +
     'Anlage (kWp) wären – der Speicher bleibt gleich. Die dunklen Wintermonate bleiben mit PV allein immer auf Netzstrom angewiesen.',
-  'pv-v2h': () => 'Bidirektionales Laden (V2H): dein <b>Auto-Akku dient als Heimspeicher</b>. Wenn das Auto ' +
-    'abends/nachts zuhause steht, lädt es PV-Überschuss und speist ihn später ins Haus zurück – so kannst du ' +
-    'einen <b>kleineren Heimspeicher</b> kaufen. Tagsüber (Auto weg) hilft es nicht. Braucht eine ' +
-    '<b>bidirektionale Wallbox</b> und ein <b>V2H-fähiges Auto</b>.',
+  'pv-v2h': () => 'Bidirektionales Laden (V2H): dein <b>Auto-Akku dient als Heimspeicher</b> und speist PV-Strom ' +
+    'später ins Haus zurück – so kannst du einen <b>kleineren Heimspeicher</b> kaufen. Entscheidend ist, wie oft das ' +
+    'Auto <b>tagsüber</b> zuhause steht: nur dann fängt es die Mittagssonne ein. Stell das unter „Auto tagsüber" ein. ' +
+    'Braucht eine <b>bidirektionale Wallbox</b> und ein <b>V2H-fähiges Auto</b>.',
   'pv-batt': () => 'Linker Balken = dein PV-Ertrag, aufgeteilt in <b style="color:#4be0b0">direkt genutzt</b>, ' +
     '<b style="color:#7c5cff">über die Batterie genutzt</b> und <b style="color:#f6b93b">eingespeist</b>. ' +
     'Der lila Anteil ist genau das, was der <b>Speicher</b> bringt: sonst eingespeister Strom, den du dank ' +
@@ -1611,6 +1616,7 @@ function pvInputs() {
     v2h: !!($('pv-v2h') && $('pv-v2h').checked),
     carKwh: Math.max(0, parseFloat($('pv-v2h-kwh') && $('pv-v2h-kwh').value) || 0),
     v2hPrice: Math.max(0, parseFloat($('pv-v2h-price') && $('pv-v2h-price').value) || 800),
+    carHome: V2H_PROFILES[($('pv-v2h-home') && $('pv-v2h-home').value) || 'home'] || V2H_PROFILES.home,
   };
 }
 // Air-conditioning: strongly summer (cooling season) and afternoon-weighted –
@@ -1670,16 +1676,16 @@ function simulatePv(p) {
         mSh += lSh; mHp += lHp; mEv += lEv; mAc += lAc;
         const direct = Math.min(pv, load);
         let surplus = pv - direct, deficit = load - direct;
-        const carHome = carCap > 0 && V2H_HOME[h];
-        // charge: home battery first, then the car (only while it is home)
+        const av = carCap > 0 ? (p.carHome[h] || 0) : 0;   // fraction of the hour the car is home
+        // charge: home battery first, then the car (scaled by how much it is home)
         const charge = Math.min(surplus, p.batt - battery); battery += charge; surplus -= charge;
         let carCharge = 0;
-        if (carHome) { carCharge = Math.min(surplus, carCap - carBatt); carBatt += carCharge; surplus -= carCharge; }
+        if (av > 0) { carCharge = Math.min(surplus, carCap - carBatt) * av; carBatt += carCharge; surplus -= carCharge; }
         const feed = surplus;
         // discharge: home battery first, then the car (while home)
         const dis = Math.min(deficit, battery); battery -= dis; deficit -= dis;
         let carDis = 0;
-        if (carHome) { carDis = Math.min(deficit, carBatt); carBatt -= carDis; deficit -= carDis; }
+        if (av > 0) { carDis = Math.min(deficit, carBatt) * av; carBatt -= carDis; deficit -= carDis; }
         const grid = deficit;
         mDirect += direct; mBatt += dis + carDis; mFeed += feed; mGrid += grid; mPv += pv; mLoad += load;
         if (m === 6 && d === Math.floor(days / 2)) { capturePv.push(pv); captureLoad.push(load); }
@@ -1953,13 +1959,18 @@ function renderPv() {
     const equivBatt = Math.min(p.carKwh, p.carKwh * v2hUplift / battUplift);
     const saved = equivBatt * p.v2hPrice;
     const valYr = v2hUplift * (STATE.price - p.feedin);
+    const dayAvail = mean(p.carHome.slice(8, 17));   // presence during PV hours 8–16
+    const presence = dayAvail > 0.6 ? 'steht auch <b>tagsüber meist zuhause</b> und fängt die Mittagssonne mit ein'
+      : dayAvail < 0.3 ? 'ist <b>tagsüber meist weg</b> und kann den Mittags-Überschuss kaum aufnehmen'
+        : 'ist <b>tagsüber teils da</b>';
+    const equivPct = p.carKwh > 0 ? equivBatt / p.carKwh : 0;
     rows.push(['Autarkie mit V2H', `${fmt(r.autarky * 100, 0)} % (ohne ${fmt(r0.autarky * 100, 0)} %, +${fmt(dAut, 0)} PP)`]);
     v2hNote = `🔋 <b>Bidirektionales Laden:</b> dein Auto deckt <b>${kwh(v2hUplift, 0)}/Jahr</b> zusätzlich aus PV ` +
-      `(~${money(valYr)}/Jahr, Autarkie <b>+${fmt(dAut, 0)} PP</b>). Weil es <b>tagsüber meist weg</b> ist, ersetzt es ` +
-      `real etwa <b>${fmt(equivBatt, 1)} kWh Heimspeicher</b> (~<b>${money(saved)}</b> gespart) – nicht die vollen ${kwh(p.carKwh, 0)}, ` +
-      `die ein fest installierter Speicher mittags fassen würde. ` +
+      `(~${money(valYr)}/Jahr, Autarkie <b>+${fmt(dAut, 0)} PP</b>). Es ${presence} – es ersetzt real etwa ` +
+      `<b>${fmt(equivBatt, 1)} kWh Heimspeicher</b> (${fmt(equivPct * 100, 0)} % seiner Kapazität, ~<b>${money(saved)}</b> gespart). ` +
+      (equivPct > 0.7 ? 'Fast wie ein echter Heimspeicher – für euch lohnt sich V2H also besonders. ' : '') +
       `<br><small style="color:var(--muted)">Voraussetzung: <b>bidirektionale Wallbox + V2H-fähiges Auto</b> ` +
-      `(z. B. Hyundai/Kia E-GMP, VW ID mit V2H, MG, BYD, Renault 5). Steht das Auto tagsüber zuhause, ist der Nutzen größer.</small>`;
+      `(z. B. Hyundai/Kia E-GMP, VW ID mit V2H, MG, BYD, Renault 5).</small>`;
   }
   $('pv-econ').innerHTML = rows.map(([k, v]) => statusRow(k, v)).join('') +
     (v2hNote ? `<div class="note" style="margin-top:10px;line-height:1.5">${v2hNote}</div>` : '');
@@ -2427,6 +2438,14 @@ function init() {
     try { v2h.checked = localStorage.getItem(PV_LS.v2h) === '1'; } catch (e) {}
     v2h.addEventListener('change', () => {
       try { localStorage.setItem(PV_LS.v2h, v2h.checked ? '1' : '0'); } catch (e) {}
+      renderPv();
+    });
+  }
+  const v2hHome = $('pv-v2h-home');
+  if (v2hHome) {
+    try { const s = localStorage.getItem(PV_LS.v2hhome); if (s) v2hHome.value = s; } catch (e) {}
+    v2hHome.addEventListener('change', () => {
+      try { localStorage.setItem(PV_LS.v2hhome, v2hHome.value); } catch (e) {}
       renderPv();
     });
   }
