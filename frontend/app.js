@@ -1121,12 +1121,28 @@ function renderHeatDemand() {
       : diff < 0 ? `Praxis <b>${fmt(-diff * 100, 0)} % besser</b> als berechnet – effiziente Anlage / mildes Wetter / niedrige Vorlauftemperatur.`
         : `Praxis <b>${fmt(diff * 100, 0)} % höher</b> als berechnet – höhere Vorlauftemperatur, mehr Warmwasser oder mehr Lüftungsverluste als angenommen.`;
   }
+  // expected (model) vs. measured seasonal COP / JAZ
+  const copExp = r.eTotal > 0 ? r.qTotal / r.eTotal : null;
+  const A = STATE.hpA;
+  const copMeas = (A && A.imported && A.imported.seasonal_cop) || (A && A.stats && A.stats.seasonal_cop) ||
+    (A && A.live && A.live.cop_lifetime) || null;
+  let copCmp = '';
+  if (copExp && copMeas) {
+    const d = copMeas - copExp;
+    copCmp = Math.abs(d) < 0.15 ? ' – passt gut zusammen.'
+      : d > 0 ? ` – deine WP arbeitet <b>effizienter</b> als angenommen; setze „COP Heizen/Warmwasser" höher, dann sinkt der erwartete Strom.`
+        : ` – deine WP ist <b>weniger effizient</b> als angenommen (höhere Vorlauf-/Warmwassertemperatur?); setze „COP Heizen/Warmwasser" niedriger.`;
+  }
   $('hp-theory-result').innerHTML =
     `<div class="grid2"><div class="kpi sm"><div class="v">${kwh(r.eTotal, 0)}</div><div class="l">Erwarteter Strom (Theorie)</div></div>` +
     `<div class="kpi sm"><div class="v">${measured ? kwh(measured, 0) : '–'}</div><div class="l">Gemessen (deine Daten)</div></div></div>` +
+    `<div class="grid2" style="margin-top:8px"><div class="kpi sm"><div class="v">${copExp ? fmt(copExp, 2) : '–'}</div><div class="l">Arbeitszahl erwartet (Modell)</div></div>` +
+    `<div class="kpi sm"><div class="v">${copMeas ? fmt(copMeas, 2) : '–'}</div><div class="l">Arbeitszahl gemessen (JAZ)</div></div></div>` +
     `<div style="margin-top:12px">${barChart(bars, { h: 130 })}</div>` +
     `<div class="note" style="margin-top:8px">Wärmebedarf gesamt ~<b>${kwh(r.qTotal, 0)}</b> thermisch ` +
-    `(Heizen ${kwh(r.qHeat, 0)} + Warmwasser ${kwh(b.dhw, 0)}), geteilt durch COP. ${cmp}</div>`;
+    `(Heizen ${kwh(r.qHeat, 0)} + Warmwasser ${kwh(b.dhw, 0)}), geteilt durch COP. ${cmp}</div>` +
+    (copExp && copMeas ? `<div class="note" style="margin-top:6px">⚙️ <b>Arbeitszahl:</b> Modell ~${fmt(copExp, 2)}, ` +
+      `gemessen ${fmt(copMeas, 2)}${copCmp}</div>` : '');
   // biggest levers
   const losses = r.items.filter(x => x.c).sort((a, z) => z.q - a.q);
   const top = losses.slice(0, 4);
@@ -1172,27 +1188,41 @@ function renderHeatDemand() {
   const mCard = $('hp-theory-month-card');
   if (mCard) {
     mCard.hidden = false;
+    // Practice per month: real measurement where available, otherwise an
+    // experience-based estimate (from the measured seasonal pattern) – NOT old
+    // history. Measured and estimate are drawn as separate (differently shaded) bars.
+    const isReal = m => !!(realMap && realMap[m] != null);
     const rows = MON.map((lbl, m) => ({
-      label: lbl, values: { t: theoryMonth[m], p: realMap && realMap[m] != null ? realMap[m] : 0 } }));
-    $('hp-theory-month').innerHTML = groupedBar(rows,
-      [{ key: 't', color: 'url(#gHeat)' }, { key: 'p', color: COL.sh }], { h: 190 });
-    $('hp-theory-month-legend').innerHTML = legendHtml(
-      [{ color: COL.heat, label: 'Theorie' }, { color: COL.sh, label: 'Gemessen (CSV)' }]);
+      label: lbl, values: {
+        t: theoryMonth[m],
+        p: isReal(m) ? realMap[m] : 0,
+        e: isReal(m) ? 0 : hpMonthEst(m),
+      } }));
+    $('hp-theory-month').innerHTML = groupedBar(rows, [
+      { key: 't', color: 'url(#gHeat)' },
+      { key: 'p', color: COL.sh },
+      { key: 'e', color: 'rgba(77,163,255,0.40)' }], { h: 190 });
+    $('hp-theory-month-legend').innerHTML = legendHtml([
+      { color: COL.heat, label: 'Theorie' }, { color: COL.sh, label: 'Gemessen' },
+      { color: 'rgba(77,163,255,0.55)', label: 'Erwartet (Erfahrung)' }]);
     if (realMap) {
       let worst = null, sT = 0, sP = 0;
       Object.keys(realMap).forEach(m => {
         const abs = realMap[m] - theoryMonth[m];              // absolute kWh divergence
         sT += theoryMonth[m]; sP += realMap[m];
-        if (!worst || Math.abs(abs) > Math.abs(worst.abs)) worst = { m: +m, abs, pct: abs / Math.max(1, theoryMonth[m]) };
+        if (!worst || Math.abs(abs) > Math.abs(worst.abs)) worst = { m: +m, abs };
       });
       const totPct = sT > 0 ? (sP - sT) / sT : 0;
-      $('hp-theory-month-note').innerHTML = 'Erwarteter Stromverbrauch pro Monat (Theorie, orange) gegen deine ' +
-        `importierten Monatswerte (blau). Über die gemessenen Monate liegt die Praxis <b>${totPct >= 0 ? '+' : ''}` +
-        `${fmt(totPct * 100, 0)} %</b> zur Theorie.` + (worst ? ` Größter Unterschied im <b>${MON[worst.m]}</b> ` +
-        `(${worst.abs >= 0 ? '+' : '−'}${kwh(Math.abs(worst.abs), 0)}${worst.abs > 0 ? ' – mehr als gerechnet' : ' – weniger, z. B. kaum geheizt/effizient'}).` : '');
+      const estN = 12 - Object.keys(realMap).length;
+      $('hp-theory-month-note').innerHTML = 'Pro Monat: <b>Theorie</b> (orange), <b>gemessen</b> (kräftiges Blau) und – ' +
+        'für Monate <b>ohne Messung</b> – der <b>aus deiner Erfahrung erwartete</b> Verbrauch (blasses Blau). ' +
+        `Über die gemessenen Monate liegt die Praxis <b>${totPct >= 0 ? '+' : ''}${fmt(totPct * 100, 0)} %</b> zur Theorie.` +
+        (worst ? ` Größter Unterschied im <b>${MON[worst.m]}</b> (${worst.abs >= 0 ? '+' : '−'}${kwh(Math.abs(worst.abs), 0)}` +
+        `${worst.abs > 0 ? ' – mehr als gerechnet' : ' – weniger, z. B. kaum geheizt/effizient'}).` : '') +
+        (estN > 0 ? ` ${estN} Monat(e) ohne Messung sind als Erwartung ergänzt.` : '');
     } else {
-      $('hp-theory-month-note').innerHTML = 'Erwarteter Stromverbrauch pro Monat (Theorie). Für den direkten ' +
-        'Vergleich importiere im Setup eine <b>HomeCom-CSV</b> – dann kommen die gemessenen Monatswerte dazu.';
+      $('hp-theory-month-note').innerHTML = 'Pro Monat: <b>Theorie</b> (orange) gegen den <b>aus Erfahrung erwarteten</b> ' +
+        'Verbrauch (blau). Für echte Messwerte importiere im Setup eine <b>HomeCom-CSV</b> – dann werden gemessene Monate kräftig markiert.';
     }
   }
 
@@ -1585,7 +1615,9 @@ function pvInputs() {
 }
 // Air-conditioning: strongly summer (cooling season) and afternoon-weighted –
 // which aligns well with PV, so it lifts self-consumption.
-const AC_MONTH = [0, 0, 0.01, 0.03, 0.09, 0.19, 0.28, 0.23, 0.12, 0.04, 0.01, 0];
+// A/C runs essentially only on hot days (> ~25 °C) – in Germany that means the
+// high-summer months, so the load is concentrated in Jun–Aug (little in May/Sep).
+const AC_MONTH = [0, 0, 0, 0.01, 0.05, 0.22, 0.35, 0.28, 0.08, 0.01, 0, 0];
 const AC_SHAPE = (() => {
   const raw = [];
   for (let h = 0; h < 24; h++) raw.push(Math.exp(-((h + 0.5 - 15) ** 2) / (2 * 3.5 * 3.5)));
