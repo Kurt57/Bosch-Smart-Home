@@ -108,9 +108,9 @@ const INFO = {
     '<b>Sommermonate</b> und den <b>Nachmittag</b> verteilt – also genau dann, wenn viel PV da ist, ' +
     'darum steigert Kühlung den Eigenverbrauch. „Ø D einsetzen" trägt einen typischen deutschen ' +
     'Haushaltswert (~450 kWh/Jahr) ein; passe ihn an deine Anlage an.',
-  'pv-gridfree': () => 'Für jede Anlagengröße (kWp) wird geprüft, in wie vielen <b>Monaten</b> du praktisch ' +
-    '<b>keinen Netzstrom</b> mehr beziehst (Netzbezug &lt; 1 %). Der Speicher bleibt dabei auf deinem Wert. ' +
-    'Zeigt, ab wann mehr kWp nichts mehr bringt – die dunklen Wintermonate bleiben mit PV allein immer auf Netzbezug angewiesen.',
+  'pv-gridfree': () => 'Ein Monat ist „netzfrei", wenn PV + Batterie ihn praktisch komplett decken (Netzbezug &lt; 1 %). ' +
+    'Oben: welche Monate das mit <b>deiner</b> Anlage sind (grün). Unten: wie viele Monate es mit einer <b>größeren</b> ' +
+    'Anlage (kWp) wären – der Speicher bleibt gleich. Die dunklen Wintermonate bleiben mit PV allein immer auf Netzstrom angewiesen.',
   'pv-v2h': () => 'Bidirektionales Laden (V2H): dein <b>Auto-Akku dient als Heimspeicher</b>. Wenn das Auto ' +
     'abends/nachts zuhause steht, lädt es PV-Überschuss und speist ihn später ins Haus zurück – so kannst du ' +
     'einen <b>kleineren Heimspeicher</b> kaufen. Tagsüber (Auto weg) hilft es nicht. Braucht eine ' +
@@ -1810,34 +1810,48 @@ function pvDayChart(pv, load) {
     `<path d="${loadL}" fill="none" stroke="${COL.sh}" stroke-width="2.5" stroke-linejoin="round"/>` + labels);
 }
 
-// How many months would have (practically) zero grid import, per PV size?
+// In which months could you run entirely without grid power – and how does
+// that change with a bigger PV array?
 function renderPvGridFree(p) {
   const el = $('pv-gridfree'); if (!el) return;
   const cur = Math.max(1, Math.round(p.kwp || 0));
+  const gridFreeMonths = kwp =>            // month indices with ~zero grid import
+    simulatePv({ ...p, kwp }).monthly.filter(mm => mm.grid <= Math.max(2, mm.load * 0.01)).map(mm => mm.m);
+
+  // --- headline + 12-month strip for the CURRENT array ---
+  const curSet = new Set(gridFreeMonths(cur));
+  const n = curSet.size;
+  $('pv-gridfree-kpi').innerHTML =
+    `<div class="kpi"><div class="v" style="color:${n >= 5 ? '#4be0b0' : n >= 2 ? '#f6b93b' : '#ef6c4d'}">` +
+    `${n} <span style="font-size:16px;color:var(--muted)">von 12</span></div>` +
+    `<div class="l">Monaten deckst du dich <b>komplett selbst</b> (${fmt(cur, 0)} kWp · ${kwh(p.batt, 0)} Speicher)</div></div>`;
+  $('pv-gridfree-strip').innerHTML = '<div style="display:flex; gap:3px">' + MON.map((mn, m) => {
+    const on = curSet.has(m);
+    return `<div style="flex:1; text-align:center; padding:7px 0; border-radius:6px; font-size:11px; font-weight:600;` +
+      `background:${on ? 'rgba(75,224,176,.22)' : 'var(--bg2)'}; color:${on ? '#4be0b0' : 'var(--muted)'}">${mn[0]}</div>`;
+  }).join('') + '</div>';
+  $('pv-gridfree-strip-note').innerHTML = n
+    ? `<span style="color:#4be0b0">Grün</span> = kein Netzstrom nötig (${[...curSet].map(m => MON[m]).join(', ')}). ` +
+      `Grau = du beziehst noch etwas Netzstrom.`
+    : 'In allen Monaten brauchst du noch etwas Netzstrom. Die grünen Sommermonate erreichst du mit mehr kWp/Speicher.';
+
+  // --- sweep: netzfreie Monate je Anlagengröße ---
   const maxK = Math.max(12, cur + 6);
   const step = Math.max(1, Math.ceil(maxK / 15));
-  const gridFree = kwp => {
-    const r = simulatePv({ ...p, kwp });
-    return r.monthly.filter(mm => mm.grid <= Math.max(2, mm.load * 0.01)).map(mm => mm.m);
-  };
   const kwps = [];
   for (let k = step; k <= maxK; k += step) kwps.push(k);
   if (!kwps.includes(cur) && cur <= maxK) { kwps.push(cur); kwps.sort((a, b) => a - b); }
-  const data = kwps.map(k => ({ kwp: k, months: gridFree(k) }));
+  const data = kwps.map(k => ({ kwp: k, count: gridFreeMonths(k).length }));
   el.innerHTML = barChart(data.map(d => ({
-    v: d.months.length, label: d.kwp + '', color: d.kwp === cur ? 'url(#g1)' : COL.sh })), { h: 180 });
-  $('pv-gridfree-legend').innerHTML = legendHtml(
-    [{ color: COL.sh, label: 'kWp → netzfreie Monate' }, { color: '#4da3ff', label: 'deine Größe' }]);
-  const curMonths = (data.find(d => d.kwp === cur) || { months: [] }).months;
-  const maxAch = Math.max(...data.map(d => d.months.length));
-  const satK = (data.find(d => d.months.length >= maxAch) || {}).kwp;
-  $('pv-gridfree-note').innerHTML = curMonths.length
-    ? `Mit deinen <b>${fmt(cur, 0)} kWp</b> (Speicher ${kwh(p.batt, 0)}) beziehst du in <b>${curMonths.length} Monaten</b> ` +
-      `praktisch keinen Netzstrom: <b>${curMonths.map(m => MON[m]).join(', ')}</b>. ` +
-      `Mehr als ~${fmt(satK, 0)} kWp bringt kaum weitere netzfreie Monate – die <b>Wintermonate</b> lassen sich mit PV ` +
-      `allein nicht decken (zu wenig Sonne; dafür bräuchte es saisonale Speicher). Ein größerer <b>Speicher</b> hilft dann mehr als mehr kWp.`
-    : `Mit deinen ${fmt(cur, 0)} kWp bleibt jeder Monat auf etwas Netzbezug angewiesen. Mehr kWp und v. a. mehr <b>Speicher</b> ` +
-      `erhöhen die Sommer-Autarkie – volle Netzfreiheit im Winter ist mit PV allein aber nicht erreichbar.`;
+    v: d.count, label: d.kwp + (d.kwp === cur ? '★' : ''),
+    color: d.kwp === cur ? 'url(#g1)' : COL.sh })), { h: 170 });
+  const maxAch = Math.max(...data.map(d => d.count));
+  const satK = (data.find(d => d.count >= maxAch) || {}).kwp;
+  $('pv-gridfree-note').innerHTML =
+    `Balkenhöhe = netzfreie Monate, X-Achse = Anlagengröße in kWp (★ = deine ${fmt(cur, 0)} kWp). ` +
+    (maxAch > n ? `Mit ~<b>${fmt(satK, 0)} kWp</b> wären es bis zu <b>${maxAch} Monate</b>. ` : '') +
+    `Mehr bringt es kaum: die dunklen <b>Wintermonate</b> bekommst du mit PV allein nie netzfrei ` +
+    `(zu wenig Sonne). Dort hilft nur Netzbezug – idealerweise günstig über einen <b>Börsentarif</b>.`;
 }
 function renderPv() {
   if (!$('pv-yield')) return;
