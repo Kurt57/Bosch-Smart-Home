@@ -1676,24 +1676,20 @@ let _pvMonths = [];
 function showPvTip(mi) {
   const m = _pvMonths[mi], t = $('toast'); if (!m || !t) return;
   const row = (c, l, v) => v > 0.05 ? `<div class="it"><span class="sw" style="background:${c}"></span>${l}: <b>${kwh(v, 0)}</b></div>` : '';
-  // annual cumulative self-use (Direkt + Batterie, i.e. WITHOUT feed-in)
-  const T = _pvMonths.reduce((a, x) => ({
-    direct: a.direct + x.direct, batt: a.batt + x.batt, sh: a.sh + x.loadSh,
-    hp: a.hp + x.loadHp, ev: a.ev + x.loadEv, ac: a.ac + x.loadAc, load: a.load + x.load,
-  }), { direct: 0, batt: 0, sh: 0, hp: 0, ev: 0, ac: 0, load: 0 });
-  const selfTot = T.direct + T.batt;
+  // self-coverage for THIS month: PV directly used + from the battery (no feed-in)
+  const self = m.direct + m.batt;
+  const cover = m.load > 0 ? self / m.load * 100 : 0;
+  const full = cover >= 99.5;
+  const col = full ? '#4be0b0' : cover >= 60 ? '#f6b93b' : '#ef6c4d';
   t.innerHTML = `<b>${esc(m.label)}</b> · Erzeugung ${kwh(m.pv, 0)} · Verbrauch ${kwh(m.load, 0)}` +
+    `<div class="note" style="margin-top:6px">Selbst gedeckt (PV direkt + Batterie): ` +
+    `<b style="color:${col}">${kwh(self, 0)} = ${fmt(Math.min(cover, 100), 0)} %</b> des Verbrauchs` +
+    `${full ? ' – Monat komplett gedeckt ✓' : ''}</div>` +
     `<div class="legend" style="margin-top:6px">` +
-    row(PVC.direct, 'PV direkt', m.direct) + row(PVC.batt, 'PV Batterie', m.batt) + row(PVC.feed, 'Einspeisung', m.feed) +
+    row(PVC.direct, 'PV direkt', m.direct) + row(PVC.batt, 'PV Batterie', m.batt) +
     row(PVC.sh, 'Hausstrom', m.loadSh) + row(PVC.hp, 'Wärmepumpe', m.loadHp) +
-    row(PVC.ev, 'E-Auto', m.loadEv) + row(PVC.ac, 'Klima', m.loadAc) + `</div>` +
-    `<div class="note" style="margin-top:8px"><b>Jahr kumuliert – selbst genutzt ${kwh(selfTot, 0)}</b> ` +
-    `(${fmt(T.load > 0 ? selfTot / T.load * 100 : 0, 0)} % des Verbrauchs, ohne Einspeisung):</div>` +
-    `<div class="legend" style="margin-top:4px">` +
-    row(PVC.direct, 'PV direkt', T.direct) + row(PVC.batt, 'PV Batterie', T.batt) +
-    row(PVC.sh, 'Hausstrom', T.sh) + row(PVC.hp, 'Wärmepumpe', T.hp) +
-    row(PVC.ev, 'E-Auto', T.ev) + row(PVC.ac, 'Klima', T.ac) + `</div>`;
-  t.hidden = false; clearTimeout(_toastT); _toastT = setTimeout(() => { t.hidden = true; }, 12000);
+    row(PVC.ev, 'E-Auto', m.loadEv) + row(PVC.ac, 'Klima', m.loadAc) + `</div>`;
+  t.hidden = false; clearTimeout(_toastT); _toastT = setTimeout(() => { t.hidden = true; }, 10000);
 }
 function pvMonthlyChart(months) {
   const h = 210, pad = 26, top = 12, base = h - 22, n = months.length || 1;
