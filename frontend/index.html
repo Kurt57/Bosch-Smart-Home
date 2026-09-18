@@ -579,6 +579,28 @@
       <div class="legend" id="borse-co2-legend"></div>
       <div class="note" id="borse-co2-note" style="margin-top:10px"></div>
     </div>
+    <div class="card" id="smart-card">
+      <h2><span class="info" data-info="smart" role="button" aria-label="Info">i</span>🎯 Smart-Timer · beste Startzeit</h2>
+      <div class="note" style="margin-bottom:10px">
+        Wann solltest du Waschmaschine, Warmwasser oder E-Auto laufen lassen? Der Timer sucht das beste
+        Startfenster in den nächsten Stunden – nach <b>Preis</b>, <b>CO₂</b> oder <b>PV-Überschuss</b>.
+      </div>
+      <div class="grid2">
+        <div><label>Dauer (h)</label>
+          <input id="smart-dur" type="number" min="1" max="12" step="1" inputmode="numeric" value="2"></div>
+        <div><label>Energie gesamt (kWh)</label>
+          <input id="smart-kwh" type="number" min="0" step="0.5" inputmode="decimal" value="2"></div>
+      </div>
+      <label style="margin-top:10px; display:block">Worauf optimieren?</label>
+      <select id="smart-prio">
+        <option value="balanced">Ausgewogen (Preis + CO₂)</option>
+        <option value="money">Günstigster Preis</option>
+        <option value="co2">Wenigste CO₂</option>
+        <option value="pv">PV-Überschuss</option>
+      </select>
+      <div id="smart-result" style="margin-top:12px"></div>
+      <div class="note" id="smart-note" style="margin-top:8px"></div>
+    </div>
     <div class="card" id="borse-batt-card" hidden>
       <h2><span class="info" data-info="spot-batt" role="button" aria-label="Info">i</span>🔋 Speicher clever laden</h2>
       <div id="borse-batt"></div>

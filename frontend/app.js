@@ -36,7 +36,7 @@ const MON = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Ok
 const COL = { sh: '#4da3ff', hp: '#ef6c4d', heat: '#f6b93b', away: '#ff6b8a' };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-18 · CO2-Bilanz + Wetter-Prognose + PVGIS + Boerse + Kredit'
+const APP_VERSION = '2026-09-18 · Smart-Timer + CO2-Bilanz + Wetter-Prognose + PVGIS + Boerse'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -153,6 +153,11 @@ const INFO = {
   behavior: () => 'Aus den <b>Namen</b> deiner Geräte und den Uhrzeiten, zu denen sie am meisten Strom ziehen, ' +
     'liest die App typische Routinen ab (Kochen, Schlafen, Bad …) und leitet konkrete Spar-Ideen ab. ' +
     'Basis: Ø über die gemessenen Tage.',
+  smart: () => 'Findet das <b>beste Startfenster</b> für eine flexible Last (Waschen, Warmwasser, E-Auto) in den ' +
+    'nächsten Stunden. Du wählst <b>Dauer</b>, <b>Energie</b> und die Priorität: <b>günstigster Preis</b> (echte ' +
+    'Börsen-Day-Ahead-Preise), <b>wenigste CO₂</b> (Netz-Intensität) oder <b>PV-Überschuss</b> (deine Wetter-Prognose ' +
+    'aus dem PV-Tab, sonst ein typischer Sonnenverlauf). Zeigt Start, Kosten, CO₂ und PV-Anteil – und was du gegenüber ' +
+    '„jetzt sofort" sparst.',
   carbon: () => 'Wie viel <b>CO₂</b> dein Strom verursacht. Der deutsche Netzstrom hat je nach Stunde und Jahreszeit eine ' +
     'unterschiedliche <b>CO₂-Intensität</b> (g/kWh): <span style="color:#4be0b0">grün</span> mittags/im Sommer (viel Sonne & Wind), ' +
     '<span style="color:#ef6c4d">grau</span> abends/im Winter (Kohle/Gas). Deine <b>Jahresbilanz</b> gewichtet diese Intensität mit ' +
@@ -974,6 +979,101 @@ function renderCarbon() {
     `<br><span style="color:var(--muted)">Modell nach dt. Netz-Durchschnitt (${fmt(c.annual_g, 0)} g/kWh${c.demo ? ', Demo' : ''}); keine Echtzeit-Messung.</span>`;
 }
 
+// Expected PV power (kW ≈ kWh in that hour) at a given time: from the fetched
+// weather forecast if available, else a typical clear-day shape for the month.
+function smartPvKw(ts, m, h) {
+  const kwp = Math.max(0, parseFloat($('pv-kwp') && $('pv-kwp').value) || 0);
+  if (kwp <= 0) return 0;
+  const w = STATE.weather;
+  if (w && Array.isArray(w.hourly)) {
+    const hit = w.hourly.find(x => Math.abs(x.ts - ts) < 1800);
+    if (hit) return kwp * (Math.max(0, hit.ghi) / 1000) * 0.85;
+  }
+  const spec = parseFloat($('pv-orient') && $('pv-orient').value) || 1000;
+  const dailyPv = (kwp * spec) * pvMonth()[m] / DIM[m];        // kWh that day
+  return dailyPv * pvHourFractions(m)[h];
+}
+
+// Aligned hourly series (price ct, CO₂ g, expected PV kW) for the coming hours.
+function smartHours() {
+  const now = Date.now() / 1000;
+  const sp = STATE.spot, c = STATE.carbon;
+  let base = [];
+  if (sp && sp.prices && sp.prices.length)
+    base = sp.prices.filter(p => p.ts + 3600 > now).map(p => ({ ts: p.ts, price: p.consumer_ct, realPrice: true }));
+  if (!base.length) {
+    const h0 = Math.floor(now / 3600) * 3600;
+    for (let i = 0; i < 24; i++) base.push({ ts: h0 + i * 3600, price: STATE.price * 100, realPrice: false });
+  }
+  base.forEach(o => {
+    const d = new Date(o.ts * 1000), m = d.getMonth(), h = d.getHours();
+    o.co2 = (c && c.month_hour_g) ? c.month_hour_g[m][h] : 380;
+    o.pv = smartPvKw(o.ts, m, h);
+  });
+  return base;
+}
+
+function renderSmart() {
+  const card = $('smart-card'); if (!card) return;
+  const dur = Math.max(1, Math.min(12, Math.round(parseFloat($('smart-dur').value) || 2)));
+  const kwh = Math.max(0, parseFloat($('smart-kwh').value) || 0);
+  const prio = ($('smart-prio').value) || 'balanced';
+  const hrs = smartHours();
+  if (hrs.length < dur) { $('smart-result').innerHTML = ''; $('smart-note').textContent = 'Noch keine Vorschau-Stunden verfügbar.'; return; }
+  const anyPrice = hrs.some(o => o.realPrice);
+  const P = hrs.map(o => o.price), C = hrs.map(o => o.co2), V = hrs.map(o => o.pv);
+  const nrm = (arr, invert) => {
+    const lo = Math.min(...arr), hi = Math.max(...arr), sp = (hi - lo) || 1;
+    return arr.map(v => invert ? 1 - (v - lo) / sp : (v - lo) / sp);
+  };
+  const pN = nrm(P, false), cN = nrm(C, false), vN = nrm(V, true);   // lower score = better
+  const wt = { money: [1, 0, 0], co2: [0, 1, 0], pv: [0, 0, 1], balanced: [0.5, 0.5, 0] }[prio] || [0.5, 0.5, 0];
+  const score = hrs.map((_, i) => wt[0] * pN[i] + wt[1] * cN[i] + wt[2] * vN[i]);
+  // best contiguous window of length `dur`
+  const winAvg = (arr, s) => arr.slice(s, s + dur).reduce((a, b) => a + b, 0) / dur;
+  let best = 0, bestSc = Infinity;
+  for (let s = 0; s + dur <= hrs.length; s++) { const sc = winAvg(score, s); if (sc < bestSc) { bestSc = sc; best = s; } }
+  // metrics for a window starting at index s
+  const winMetrics = s => {
+    const slice = hrs.slice(s, s + dur);
+    const price = mean(slice.map(o => o.price));                    // ct/kWh
+    const co2 = mean(slice.map(o => o.co2));                        // g/kWh
+    const pvKw = mean(slice.map(o => o.pv));                        // kW avg
+    const loadKw = kwh > 0 ? kwh / dur : 0;
+    const pvCover = loadKw > 0 ? Math.min(1, pvKw / loadKw) : 0;
+    const gridKwh = kwh * (1 - pvCover);
+    return { price, co2, pvCover, cost: gridKwh * price / 100, co2kg: gridKwh * co2 / 1000, start: slice[0].ts };
+  };
+  const bw = winMetrics(best), nowW = winMetrics(0);
+  // worst window for a savings reference
+  let worst = 0, worstSc = -Infinity;
+  for (let s = 0; s + dur <= hrs.length; s++) { const sc = winAvg(score, s); if (sc > worstSc) { worstSc = sc; worst = s; } }
+  const ww = winMetrics(worst);
+  const dd = ts => new Date(ts * 1000).toLocaleDateString('de-DE', { weekday: 'short' });
+  const hh = ts => new Date(ts * 1000).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+  const endTs = bw.start + dur * 3600;
+  const pvUsed = STATE.weather ? 'Wetter-Prognose' : 'typischer Sonnenverlauf';
+  $('smart-result').innerHTML =
+    `<div class="kpi" style="text-align:left"><div class="l" style="margin-bottom:4px">Empfohlener Start</div>` +
+    `<div class="v">${dd(bw.start)} ${hh(bw.start)}<span style="font-size:14px;color:var(--muted)"> – ${hh(endTs)} Uhr</span></div></div>` +
+    `<div class="grid2" style="margin-top:10px">` +
+    `<div class="kpi sm"><div class="v">${anyPrice ? money(bw.cost) : '~' + money(bw.cost)}</div><div class="l">Stromkosten</div></div>` +
+    `<div class="kpi sm"><div class="v">${fmt(bw.co2kg, 2)} kg</div><div class="l">CO₂</div></div></div>` +
+    (kwh > 0 && (parseFloat($('pv-kwp') && $('pv-kwp').value) || 0) > 0 ?
+      `<div class="kpi sm" style="margin-top:8px"><div class="v">${fmt(bw.pvCover * 100, 0)} %</div><div class="l">aus PV gedeckt (${esc(pvUsed)})</div></div>` : '');
+  const save = nowW.cost - bw.cost, saveC = nowW.co2kg - bw.co2kg;
+  let msg = '';
+  if (save > 0.01 || saveC > 0.01)
+    msg = `Gegenüber „jetzt sofort" sparst du <b>${money(Math.max(0, save))}</b>` +
+      (saveC > 0.005 ? ` und <b>${fmt(Math.max(0, saveC), 2)} kg CO₂</b>` : '') + '.';
+  else msg = 'Jetzt ist bereits ein guter Zeitpunkt.';
+  const spread = ww.cost - bw.cost;
+  $('smart-note').innerHTML = msg +
+    (spread > 0.02 ? ` Bestes vs. schlechtestes Fenster: bis zu <b>${money(spread)}</b> Unterschied.` : '') +
+    (!anyPrice ? `<br><span style="color:var(--muted)">Ohne aktivierten Börsentarif mit deinem Festpreis gerechnet – für echte Stundenpreise im Setup „Dynamischer Börsentarif" aktivieren.</span>` : '') +
+    (prio === 'pv' && !STATE.weather ? `<br><span style="color:var(--muted)">Tipp: im PV-Tab „Wetter-Prognose holen", dann nutzt der Timer die echte Vorhersage.</span>` : '');
+}
+
 function spotAnalysis(p) {
   const sp = STATE.spot;
   if (!sp || !sp.month_hour_ct) return null;
@@ -1189,7 +1289,7 @@ function devRow(title, sub, valTop, valBot, pct, col) {
 
 /* --------------------------------------------------------------- rendering */
 function renderAll() {
-  renderOverview(); renderToday(); renderHistory(); renderHeatpump(); renderProfile(); renderPv(); renderSettings(); renderAppliances(); renderMeter(); renderBorse(); renderCarbon(); renderKonzept();
+  renderOverview(); renderToday(); renderHistory(); renderHeatpump(); renderProfile(); renderPv(); renderSettings(); renderAppliances(); renderMeter(); renderBorse(); renderCarbon(); renderSmart(); renderKonzept();
 }
 
 function renderOverview() {
@@ -2598,7 +2698,9 @@ async function doWeather() {
     if (!r || r.ok === false || !Array.isArray(r.hourly) || !r.hourly.length) {
       note.textContent = '⚠︎ ' + ((r && r.error) || 'Wetter-Abruf fehlgeschlagen.'); btn.disabled = false; return;
     }
+    STATE.weather = r;
     renderWeather(r);
+    if (typeof renderSmart === 'function') renderSmart();
     note.innerHTML = 'Quelle: <b>Open-Meteo</b>' + (r.demo ? ' <span style="color:var(--muted)">(Demo)</span>' : '') +
       '. Grobe Schätzung – reale Werte hängen von Wetter, Dach und Anlage ab.';
   } catch (e) { note.textContent = 'Nur möglich, wenn die Seite von der Bridge geöffnet ist.'; }
@@ -3036,6 +3138,13 @@ function init() {
     });
   }
   const pvSug = $('pv-suggest'); if (pvSug) pvSug.addEventListener('click', doPvSuggest);
+  // Smart-Timer inputs (persist + re-render on change)
+  [['smart-dur', 'bhe_smart_dur'], ['smart-kwh', 'bhe_smart_kwh'], ['smart-prio', 'bhe_smart_prio']].forEach(([id, key]) => {
+    const el = $(id); if (!el) return;
+    const s = localStorage.getItem(key); if (s !== null) el.value = s;
+    const ev = el.tagName === 'SELECT' ? 'change' : 'input';
+    el.addEventListener(ev, () => { try { localStorage.setItem(key, el.value); } catch (e) {} renderSmart(); });
+  });
   // PVGIS location fields (persist) + buttons
   [['pv-lat', PV_LS.lat], ['pv-lon', PV_LS.lon], ['pv-tilt', PV_LS.tilt], ['pv-az', PV_LS.az]].forEach(([id, key]) => {
     const el = $(id); if (!el) return;
