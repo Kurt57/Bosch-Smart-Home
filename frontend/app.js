@@ -36,7 +36,7 @@ const MON = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Ok
 const COL = { sh: '#4da3ff', hp: '#ef6c4d', heat: '#f6b93b', away: '#ff6b8a' };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-18 · Monatsbudget + Smart-Timer + CO2-Bilanz + Wetter-Prognose + PVGIS'
+const APP_VERSION = '2026-09-18 · CSV-Export + Monatsbudget + Smart-Timer + CO2 + Wetter + PVGIS'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -2933,6 +2933,29 @@ async function doHpImport(ev) {
   inp.value = '';
 }
 
+async function doExport() {
+  const note = $('export-note');
+  const days = ($('export-days') && $('export-days').value) || '365';
+  const url = (STATE.base || '') + `/api/export.csv?days=${encodeURIComponent(days)}&price=${STATE.price}`;
+  note.textContent = 'Erzeuge CSV …';
+  try {
+    const r = await fetch(url, { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const blob = await r.blob();
+    const cd = r.headers.get('Content-Disposition') || '';
+    const m = cd.match(/filename="?([^"]+)"?/);
+    const name = (m && m[1]) || `energie_${new Date().toISOString().slice(0, 10)}.csv`;
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = name;
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    const lines = (await blob.text()).split('\n').filter(Boolean).length - 1;
+    note.innerHTML = `✅ <b>${name}</b> geladen (${Math.max(0, lines)} Tage).`;
+  } catch (e) {
+    note.innerHTML = '⚠︎ Export nur möglich, wenn die Seite von der <b>Bridge</b> geladen ist (' + esc(e.message) + ').';
+  }
+}
+
 async function doBridgeUpdate() {
   const note = $('bridge-update-note'), btn = $('bridge-update');
   btn.disabled = true; note.textContent = 'Hole neuesten Code & starte neu …';
@@ -3064,6 +3087,7 @@ function init() {
   });
   const hpc = $('hp-connect'); if (hpc) hpc.addEventListener('click', doHomecomConnect);
   const hpi = $('hp-import'); if (hpi) hpi.addEventListener('change', doHpImport);
+  const exp = $('export-csv'); if (exp) exp.addEventListener('click', doExport);
   const aegD = $('aeg-dash');
   if (aegD) aegD.addEventListener('click', () => window.open('https://developer.electrolux.one/dashboard', '_blank'));
   const aegC = $('aeg-connect'); if (aegC) aegC.addEventListener('click', doAegConnect);

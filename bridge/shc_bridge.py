@@ -2158,6 +2158,36 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_csv(self, text, filename="export.csv", status=200):
+        body = text.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "text/csv; charset=utf-8")
+        self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _export_csv(self, days, price):
+        """A daily CSV joining smart-home and heat-pump energy per day."""
+        sh = compute_analytics(self.store, days, price)
+        hp = compute_hp_analytics(self.store, days, price, self._hp_live())
+        sh_daily = {d["day"]: d for d in sh.get("daily", [])}
+        hp_daily = {d["day"]: d for d in hp.get("daily", [])}
+        all_days = sorted(set(sh_daily) | set(hp_daily))
+        rows = ["Datum;Smart-Home_kWh;Waermepumpe_Strom_kWh;Waermepumpe_Waerme_kWh;Gesamt_kWh;Kosten_EUR"]
+        for d in all_days:
+            shk = float((sh_daily.get(d) or {}).get("kwh", 0.0) or 0.0)
+            he = float((hp_daily.get(d) or {}).get("elec_kwh", 0.0) or 0.0)
+            hh = float((hp_daily.get(d) or {}).get("heat_kwh", 0.0) or 0.0)
+            total = shk + he
+            cost = total * price
+            # German locale: decimal comma, semicolon separator
+            def g(v, n=3):
+                return f"{v:.{n}f}".replace(".", ",")
+            rows.append(f"{d};{g(shk)};{g(he)};{g(hh)};{g(total)};{g(cost, 2)}")
+        return "\n".join(rows) + "\n"
+
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
@@ -2553,6 +2583,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json(self._weather_payload(qs))
             if path == "/api/carbon":
                 return self._send_json(carbon.payload() if carbon else {"ok": False, "error": "carbon modul fehlt"})
+            if path == "/api/export.csv":
+                ed = int(qs.get("days", ["365"])[0])
+                ep = float(qs.get("price", [self.cfg.get("price_per_kwh", 0.35)])[0])
+                return self._send_csv(self._export_csv(ed, ep),
+                                      filename=f"energie_{time.strftime('%Y-%m-%d')}.csv")
             if path == "/api/homecom/authurl":
                 if not homecom:
                     return self._send_json({"error": "homecom modul fehlt"}, 500)

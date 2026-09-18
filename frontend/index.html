@@ -741,6 +741,23 @@
       <div class="note" id="hp-connect-note" style="margin-top:10px"></div>
     </div>
 
+    <div class="card" id="export-card">
+      <h2>📤 Verbrauchsdaten exportieren (CSV)</h2>
+      <div class="note" style="line-height:1.6; margin-bottom:10px">
+        Lade deine <b>Tageswerte</b> (Smart Home + Wärmepumpe, kWh &amp; Kosten) als <b>CSV</b> herunter –
+        z. B. für Excel/Numbers oder die Steuer. Öffnet sich nur, wenn die Seite von der <b>Bridge</b> geladen ist.
+      </div>
+      <div style="display:flex; gap:8px; align-items:stretch">
+        <select id="export-days" style="flex:1">
+          <option value="90">letzte 90 Tage</option>
+          <option value="365" selected>letztes Jahr</option>
+          <option value="1825">alles (max. 5 Jahre)</option>
+        </select>
+        <button class="btn" id="export-csv" style="width:auto; white-space:nowrap; margin-top:0">⬇️ CSV laden</button>
+      </div>
+      <div class="note" id="export-note" style="margin-top:10px"></div>
+    </div>
+
     <div class="card" id="hp-import-card">
       <h2>📁 Wärmepumpen-Historie (CSV)</h2>
       <div class="note" style="line-height:1.6; margin-bottom:10px">
