@@ -36,7 +36,7 @@ const MON = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Ok
 const COL = { sh: '#4da3ff', hp: '#ef6c4d', heat: '#f6b93b', away: '#ff6b8a' };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-18 · PVGIS-Ertrag nach Standort + Boerse lastgewichtet + Kredit'
+const APP_VERSION = '2026-09-18 · Wetter-Prognose (PV & WP morgen) + PVGIS + Boerse + Kredit'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -134,6 +134,10 @@ const INFO = {
   pvgis: () => 'Holt den <b>echten PV-Ertrag</b> für deinen Standort von <b>PVGIS</b> (EU-Kommission/JRC, kostenlos, ' +
     'ohne Konto) – aus Koordinaten, Dachneigung und Ausrichtung. Setzt den <b>kWh/kWp</b>-Wert und die ' +
     '<b>Monatskurve</b> deiner PV, damit PV-Ertrag, Autarkie und netzfreie Monate standortgenau werden.',
+  'pv-forecast': () => 'Holt die <b>Wetter-Vorhersage</b> für deinen Standort (Open-Meteo, kostenlos, ohne Konto) und ' +
+    'rechnet daraus für die nächsten Tage den <b>erwarteten PV-Ertrag</b> (aus der stündlichen Sonneneinstrahlung × deiner ' +
+    'kWp) und den voraussichtlichen <b>Wärmepumpen-Strombedarf</b> (aus der Außentemperatur und deinen Gebäudedaten). So siehst ' +
+    'du früh, ob morgen ein <b>PV-Überschuss</b>-Tag wird und wann die besten Stunden für Waschen/Laden sind. Grobe Schätzung.',
   'pv-v2h': () => 'Bidirektionales Laden (V2H): dein <b>Auto-Akku dient als Heimspeicher</b> und speist PV-Strom ' +
     'später ins Haus zurück – so kannst du einen <b>kleineren Heimspeicher</b> kaufen. Entscheidend ist, wie oft das ' +
     'Auto <b>tagsüber</b> zuhause steht: nur dann fängt es die Mittagssonne ein. Stell das unter „Auto tagsüber" ein. ' +
@@ -2484,6 +2488,115 @@ async function doPvgis() {
   } catch (e) { note.textContent = 'Nur möglich, wenn die Seite von der Bridge geöffnet ist.'; }
   btn.disabled = false;
 }
+
+// Envelope + ventilation heat-loss coefficient of the building, in W/K –
+// the same terms the annual degree-day model sums (see computeHeat).
+function buildUA(b) {
+  let ua = 0;
+  b.comps.forEach(c => { ua += c.u * c.a * c.f; });
+  ua += 0.34 * b.n * (b.area * b.height);        // ventilation
+  return ua;
+}
+
+async function doWeather() {
+  const note = $('pv-weather-note'), btn = $('pv-weather');
+  const lat = parseFloat($('pv-lat').value), lon = parseFloat($('pv-lon').value);
+  if (!isFinite(lat) || !isFinite(lon)) {
+    note.innerHTML = 'Bitte oben bei <b>PVGIS</b> Breiten- und Längengrad eintragen (oder „📍 Mein Standort").'; return;
+  }
+  btn.disabled = true; note.textContent = 'Frage Wetter-Vorhersage für deinen Standort …';
+  try {
+    const r = await api(`/api/weather?lat=${lat}&lon=${lon}`);
+    if (!r || r.ok === false || !Array.isArray(r.hourly) || !r.hourly.length) {
+      note.textContent = '⚠︎ ' + ((r && r.error) || 'Wetter-Abruf fehlgeschlagen.'); btn.disabled = false; return;
+    }
+    renderWeather(r);
+    note.innerHTML = 'Quelle: <b>Open-Meteo</b>' + (r.demo ? ' <span style="color:var(--muted)">(Demo)</span>' : '') +
+      '. Grobe Schätzung – reale Werte hängen von Wetter, Dach und Anlage ab.';
+  } catch (e) { note.textContent = 'Nur möglich, wenn die Seite von der Bridge geöffnet ist.'; }
+  btn.disabled = false;
+}
+
+// Turn an hourly forecast row into expected PV (kWh) and heat-pump power (kWh).
+function forecastHour(h, ctx) {
+  const pv = ctx.kwp > 0 ? ctx.kwp * (Math.max(0, h.ghi) / 1000) * ctx.PR : 0;
+  let hp = ctx.dhwElec;                          // constant warm-water baseload
+  if (h.temp != null)
+    hp += ctx.ua * Math.max(0, ctx.tIndoor - h.temp) / 1000 * (1 - ctx.gain) / ctx.copHeat;
+  return { pv, hp };
+}
+
+function renderWeather(r) {
+  const b = buildData();
+  const ctx = {
+    kwp: Math.max(0, parseFloat($('pv-kwp').value) || 0),
+    PR: 0.85, ua: buildUA(b), tIndoor: 20, gain: b.gain,
+    copHeat: b.cop_heat || 2.6, dhwElec: (b.dhw / (b.cop_dhw || 2.7)) / 8760,
+  };
+  // group forecast rows into local calendar days
+  const dayMap = new Map();
+  r.hourly.forEach(h => {
+    const d = new Date(h.ts * 1000);
+    const key = d.getFullYear() * 10000 + d.getMonth() * 100 + d.getDate();
+    if (!dayMap.has(key)) dayMap.set(key, []);
+    dayMap.get(key).push(h);
+  });
+  const now = new Date();
+  const todayKey = now.getFullYear() * 10000 + now.getMonth() * 100 + now.getDate();
+  const keys = [...dayMap.keys()].sort((a, z) => a - z);
+  // "tomorrow" = first day after today with a (near) full set of hours, else the fullest day
+  let pick = keys.find(k => k > todayKey && dayMap.get(k).length >= 20);
+  if (pick == null) pick = keys.filter(k => k > todayKey)[0];
+  if (pick == null) pick = keys.reduce((best, k) => dayMap.get(k).length > dayMap.get(best).length ? k : best, keys[0]);
+  const rows = (dayMap.get(pick) || []).slice().sort((a, z) => a.ts - z.ts);
+
+  // per-day totals for the summary of every available day
+  const dayTotals = keys.map(k => {
+    let pv = 0, hp = 0;
+    dayMap.get(k).forEach(h => { const f = forecastHour(h, ctx); pv += f.pv; hp += f.hp; });
+    const d = new Date(dayMap.get(k)[0].ts * 1000);
+    return { k, pv, hp, label: k === todayKey ? 'heute' : ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'][d.getDay()] };
+  });
+
+  // the picked day, hour by hour
+  const barRows = [], hourF = [];
+  rows.forEach(h => {
+    const f = forecastHour(h, ctx); hourF.push({ h, f });
+    barRows.push({ label: String(new Date(h.ts * 1000).getHours()), values: { pv: f.pv, hp: f.hp } });
+  });
+  const pvDay = hourF.reduce((a, x) => a + x.f.pv, 0);
+  const hpDay = hourF.reduce((a, x) => a + x.f.hp, 0);
+  const cover = hpDay > 0 ? Math.min(1, hourF.reduce((a, x) => a + Math.min(x.f.pv, x.f.hp), 0) / hpDay) : null;
+  const pickDate = new Date(rows[0].ts * 1000);
+  const dayName = pick === todayKey ? 'heute' : (pick === todayKey + 1 || (keys.indexOf(pick) >= 0)) ?
+    ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'][pickDate.getDay()] : 'morgen';
+
+  $('pv-weather-kpi').innerHTML =
+    `<div class="grid2"><div class="kpi sm"><div class="v">${kwh(pvDay, 1)}</div><div class="l">PV-Ertrag ${esc(dayName)}</div></div>` +
+    `<div class="kpi sm"><div class="v">${kwh(hpDay, 1)}</div><div class="l">WP-Strombedarf ${esc(dayName)}</div></div></div>` +
+    `<div class="grid2" style="margin-top:8px"><div class="kpi sm"><div class="v">${cover == null ? '–' : fmt(cover * 100, 0) + ' %'}</div><div class="l">PV deckt WP</div></div>` +
+    `<div class="kpi sm"><div class="v">${Math.round(Math.max(...rows.map(h => h.temp == null ? -99 : h.temp)))}°C</div><div class="l">Höchsttemperatur</div></div></div>`;
+
+  $('pv-weather-chart').innerHTML =
+    `<div class="note" style="margin:2px 0 6px"><b>${esc(dayName)}</b> · stündlich (0–23 Uhr)</div>` +
+    groupedBar(barRows, [{ key: 'pv', color: COL.heat }, { key: 'hp', color: COL.hp }], { h: 190 });
+  $('pv-weather-legend').innerHTML =
+    `<div class="it"><span class="sw" style="background:${COL.heat}"></span>PV-Ertrag (kWh/h)</div>` +
+    `<div class="it"><span class="sw" style="background:${COL.hp}"></span>WP-Strombedarf (kWh/h)</div>`;
+
+  // best PV hours to run flexible loads
+  const best = hourF.filter(x => x.f.pv > 0.05).sort((a, z) => z.f.pv - a.f.pv).slice(0, 3)
+    .map(x => new Date(x.h.ts * 1000).getHours()).sort((a, z) => a - z);
+  const outlook = dayTotals.map(d => `${d.label}: ☀️ ${fmt(d.pv, 0)}·🔥 ${fmt(d.hp, 0)} kWh`).join('   ');
+  let msg = '';
+  if (pvDay > hpDay && hpDay > 0) msg = `☀️ <b>Überschuss-Tag:</b> die PV deckt den Wärmepumpen-Strom voraussichtlich vollständig.`;
+  else if (cover != null && cover < 0.3) msg = `🔥 <b>Wenig Sonne / kalt:</b> die Wärmepumpe zieht ${esc(dayName)} überwiegend Netzstrom.`;
+  else msg = `Teils Sonne: flexible Lasten am besten in die Mittagsstunden legen.`;
+  $('pv-weather-best').innerHTML = msg +
+    (best.length ? `<br>Beste PV-Stunden ${esc(dayName)}: <b>${best.map(h => h + '–' + (h + 1) + ' Uhr').join(', ')}</b> – ideal für Waschen/Laden.` : '') +
+    `<br><span style="color:var(--muted)">Ausblick: ${outlook}</span>`;
+}
+
 function doPvSuggest() {
   const note = $('pv-suggest-note');
   const evAnnual = (Math.max(0, parseFloat($('pv-ev-km').value) || 0) * Math.max(0, parseFloat($('pv-ev-kwh').value) || 18)) / 100;
@@ -2842,6 +2955,7 @@ function init() {
     el.addEventListener('input', () => { try { localStorage.setItem(key, el.value); } catch (e) {} });
   });
   const pvGis = $('pv-pvgis'); if (pvGis) pvGis.addEventListener('click', doPvgis);
+  const pvWx = $('pv-weather'); if (pvWx) pvWx.addEventListener('click', doWeather);
   const pvLoc = $('pv-locate');
   if (pvLoc) pvLoc.addEventListener('click', () => {
     const note = $('pv-pvgis-note');

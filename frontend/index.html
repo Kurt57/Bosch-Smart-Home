@@ -496,6 +496,19 @@
       <div class="kpi"><div class="v" id="pv-benefit">–</div><div class="l">Ersparnis / Jahr</div></div>
     </div>
     <div class="card">
+      <h2><span class="info" data-info="pv-forecast" role="button" aria-label="Info">i</span>🌤️ Wetter-Prognose · morgen</h2>
+      <div class="note" style="margin-bottom:10px">
+        Erwarteter PV-Ertrag und – aus deinen Gebäudedaten – der voraussichtliche
+        Wärmepumpen-Strombedarf für die nächsten Tage. Braucht deinen Standort (oben bei PVGIS eintragen).
+      </div>
+      <button class="btn" id="pv-weather" style="margin-bottom:6px">🌤️ Wetter-Prognose holen</button>
+      <div class="note" id="pv-weather-note" style="margin-bottom:10px"></div>
+      <div id="pv-weather-kpi"></div>
+      <div id="pv-weather-chart" style="margin-top:10px"></div>
+      <div class="legend" id="pv-weather-legend"></div>
+      <div class="note" id="pv-weather-best" style="margin-top:10px"></div>
+    </div>
+    <div class="card">
       <h2><span class="info" data-info="pv-batt" role="button" aria-label="Info">i</span>PV-Nutzung pro Monat</h2>
       <div id="pv-monthly"></div>
       <div class="legend" id="pv-monthly-legend"></div>

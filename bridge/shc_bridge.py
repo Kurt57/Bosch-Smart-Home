@@ -69,6 +69,10 @@ try:
     import pvgis  # optional PV yield lookup by location (EU JRC PVGIS)
 except Exception:  # pragma: no cover - keeps the bridge running without it
     pvgis = None
+try:
+    import weather  # optional weather forecast for PV/heat prognosis (Open-Meteo)
+except Exception:  # pragma: no cover - keeps the bridge running without it
+    weather = None
 
 DEFAULT_FRONTEND = os.path.normpath(os.path.join(HERE, "..", "frontend"))
 DEFAULT_DB = os.path.join(HERE, "energy.db")
@@ -2091,6 +2095,26 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:
             return {"ok": False, "error": f"PVGIS-Abruf fehlgeschlagen: {exc}"}
 
+    def _weather_payload(self, qs) -> dict:
+        """Hourly weather forecast (irradiance + outside temp) for a PV- and
+        heat-demand prognosis (or a plausible demo curve)."""
+        def q(name, default):
+            try:
+                return float(qs.get(name, [default])[0])
+            except (TypeError, ValueError):
+                return default
+        lat, lon = q("lat", None), q("lon", None)
+        if self.ctx.mode == "demo" or not weather:
+            r = weather.demo() if weather else {"hourly": [], "tz": "demo", "utc_offset": 0}
+            return {"ok": True, "demo": True, **r}
+        if lat is None or lon is None:
+            return {"ok": False, "error": "lat und lon erforderlich."}
+        try:
+            r = weather.fetch(lat, lon)
+            return {"ok": True, "demo": False, **r}
+        except Exception as exc:
+            return {"ok": False, "error": f"Wetter-Abruf fehlgeschlagen: {exc}"}
+
     def _appliances_payload(self) -> dict:
         """AEG/Electrolux appliances: live snapshot from the poller, enriched
         with today's kWh, or the last stored reading when the poller is idle."""
@@ -2503,6 +2527,7 @@ class Handler(BaseHTTPRequestHandler):
                     "spot_surcharge_ct": float(self.cfg.get("spot_surcharge_ct", 15.0) or 0),
                     "spot_vat": float(self.cfg.get("spot_vat", 19.0) or 0),
                     "pvgis_available": pvgis is not None,
+                    "weather_available": weather is not None,
                 })
             if path == "/api/devices":
                 return self._send_json({"devices": self.store.devices()})
@@ -2519,6 +2544,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json(self._spot_payload())
             if path == "/api/pvgis":
                 return self._send_json(self._pvgis_payload(qs))
+            if path == "/api/weather":
+                return self._send_json(self._weather_payload(qs))
             if path == "/api/homecom/authurl":
                 if not homecom:
                     return self._send_json({"error": "homecom modul fehlt"}, 500)
