@@ -36,7 +36,7 @@ const MON = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Ok
 const COL = { sh: '#4da3ff', hp: '#ef6c4d', heat: '#f6b93b', away: '#ff6b8a' };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-18 · CSV-Export + Monatsbudget + Smart-Timer + CO2 + Wetter + PVGIS'
+const APP_VERSION = '2026-09-18 · Grundlast + CSV-Export + Monatsbudget + Smart-Timer + CO2 + Wetter'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -81,6 +81,10 @@ const INFO = {
   'ov-month': () => 'Hochrechnung für den laufenden Monat: dein durchschnittlicher Tagesverbrauch ' +
     '(Smart Home aus dem Zählerstand, Wärmepumpe aus dem Zählerwachstum) – <b>saisonal</b> für diesen ' +
     'Monat gewichtet und mit deinem kWh-Preis multipliziert.',
+  baseload: () => 'Deine <b>Grundlast</b> ist der Strom, der <b>rund um die Uhr</b> fließt, auch wenn niemand etwas ' +
+    'benutzt. Geschätzt aus dem Mittel der <b>drei ruhigsten Stunden</b> deines Tagesprofils, hochgerechnet aufs Jahr. ' +
+    'Hohe Grundlast heißt: viele <b>Dauerverbraucher/Standby</b> (Router, Netzteile, alte Kühlgeräte, Pumpen). Schon ' +
+    '10 W weniger sparen ~88 kWh im Jahr. Bezieht sich auf die von den Modulen gemessenen Geräte.',
   budget: () => 'Setz dir ein <b>Monatsbudget</b> (in € oder kWh). Die App zeigt, wie viel du <b>bisher</b> diesen ' +
     'Monat verbraucht hast, und rechnet – aus deinem Ø-Tagesverbrauch, saisonal gewichtet – auf das <b>Monatsende</b> ' +
     'hoch. Der weiße Strich markiert die Hochrechnung: liegt er rechts vom Budget, drohst du drüber zu landen, und die ' +
@@ -2062,7 +2066,41 @@ function renderProfile() {
     ? 'mehr Licht & Heizung – der Verbrauch liegt jetzt über dem Jahresmittel'
     : m >= 5 && m <= 7 ? 'wenig Licht, wenig Heizung – meist unter dem Jahresmittel' : 'Übergangszeit, nahe am Mittel')]);
   $('profile-insights').innerHTML = rows.map(([k, v]) => statusRow(k, v)).join('');
+  renderBaseload();
   renderBehavior();
+}
+
+// Always-on base load of the MEASURED smart-home devices: the robust minimum of
+// the hourly power profile (mean of the three quietest hours), projected to a
+// year. Reveals standby / phantom loads worth switching off.
+function renderBaseload() {
+  const card = $('pf-base-card'); if (!card) return;
+  const prof = (STATE.data && STATE.data.hourly_profile) || [];
+  const vals = prof.map(h => h.avg_w).filter(v => v != null);
+  const nDays = ((STATE.data && STATE.data.daily) || []).length;
+  if (vals.length < 24 || nDays < 3) {
+    $('pf-base-kpi').innerHTML = '';
+    $('pf-base-note').innerHTML = 'Noch zu wenig Messtage für eine belastbare Grundlast-Schätzung – kommt nach ein paar Tagen.';
+    return;
+  }
+  const lowest = vals.slice().sort((a, b) => a - b).slice(0, 3);
+  const baseW = mean(lowest);
+  const price = STATE.price;
+  const baseYearKwh = baseW / 1000 * 8760;
+  const baseCost = baseYearKwh * price;
+  const shYear = Math.max(0.001, shAvgDaily() * 365);
+  const sharePct = Math.min(100, baseYearKwh / shYear * 100);
+  const per10 = 10 / 1000 * 8760;                        // kWh/a per 10 W permanent
+  $('pf-base-kpi').innerHTML =
+    `<div class="grid2"><div class="kpi sm"><div class="v">${fmt(baseW, 0)} W</div><div class="l">Dauerleistung (Grundlast)</div></div>` +
+    `<div class="kpi sm"><div class="v">${kwh(baseYearKwh, 0)}</div><div class="l">≈ pro Jahr · ${money(baseCost)}</div></div></div>` +
+    `<div class="bar" style="height:12px;margin-top:10px"><i style="width:${sharePct.toFixed(0)}%;background:${COL.sh}"></i></div>`;
+  $('pf-base-note').innerHTML =
+    `Rund <b>${fmt(baseW, 0)} W</b> laufen <b>durchgehend</b> (Ø der drei ruhigsten Stunden) – das sind ` +
+    `~<b>${fmt(sharePct, 0)} %</b> deines gemessenen Smart-Home-Stroms, ganz ohne dass jemand etwas tut. ` +
+    `Typische Dauerverbraucher: Router, Standby von TV/Konsole, Netzteile, alte Kühlgeräte, Umwälzpumpen. ` +
+    `<br>💡 Jede <b>10 W</b> Dauerlast weniger sparen <b>${kwh(per10, 0)}/Jahr</b> (~${money(per10 * price)}). ` +
+    `<span style="color:var(--muted)">Bezieht sich auf die von den Modulen gemessenen Geräte.</span>`;
 }
 
 function behaviorInterp(nm) {
