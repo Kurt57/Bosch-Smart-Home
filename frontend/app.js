@@ -36,7 +36,7 @@ const MON = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Ok
 const COL = { sh: '#4da3ff', hp: '#ef6c4d', heat: '#f6b93b', away: '#ff6b8a' };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-18 · Grundlast + CSV-Export + Monatsbudget + Smart-Timer + CO2 + Wetter'
+const APP_VERSION = '2026-09-18 · Live-Ampel + Grundlast + CSV + Budget + Smart-Timer + CO2 + Wetter'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -775,10 +775,40 @@ function spotChart(prices, nowTs) {
   return svg(h, `<text class="axis" x="2" y="${top + 4}">${fmt(hi, 0)}ct</text>` +
     `<text class="axis" x="2" y="${base}">${fmt(Math.max(0, minV), 0)}</text>` + zero + bars + nowLine + labels);
 }
+// Live verdict for the CURRENT hour: is now a good moment to run flexible
+// loads? Combines the price tercile (from the day-ahead window) with the grid
+// CO₂ tercile (from the model's hourly curve).
+function renderNowSignal(nowP, lo, hi) {
+  const banner = $('borse-now-banner'); if (!banner || !nowP) return;
+  const tercile = (v, a, b) => v <= a + (b - a) / 3 ? 0 : v >= a + 2 * (b - a) / 3 ? 2 : 1;   // 0 green,1 mid,2 red
+  const pT = tercile(nowP.consumer_ct, lo, hi);
+  const c = STATE.carbon;
+  let cT = null, coNow = null;
+  if (c && c.hour_g) {
+    const hr = new Date().getHours(); coNow = c.hour_g[hr];
+    const clo = Math.min(...c.hour_g), chi = Math.max(...c.hour_g);
+    cT = tercile(coNow, clo, chi);
+  }
+  const score = cT == null ? pT : (pT + cT) / 2;          // combined 0..2
+  const col = score <= 0.7 ? '#4be0b0' : score >= 1.4 ? '#ef6c4d' : '#f6b93b';
+  const icon = score <= 0.7 ? '🟢' : score >= 1.4 ? '🔴' : '🟡';
+  const priceWord = ['günstig', 'mittel', 'teuer'][pT];
+  const co2Word = cT == null ? null : ['grün', 'mittel', 'grau'][cT];
+  const verdict = score <= 0.7 ? 'Guter Moment – jetzt Waschmaschine, Warmwasser oder E-Auto laufen lassen.'
+    : score >= 1.4 ? 'Eher warten – Strom ist teuer' + (co2Word ? ' und grau' : '') + '. Flexible Lasten später.'
+      : 'Mittel – geht, aber es gibt heute günstigere/grünere Stunden (siehe unten).';
+  banner.innerHTML =
+    `<div style="display:flex;align-items:center;gap:12px">` +
+    `<div style="font-size:30px;line-height:1">${icon}</div>` +
+    `<div style="flex:1"><div style="font-size:16px;font-weight:700;color:${col}">Jetzt: ${fmt(nowP.consumer_ct, 1)} ct/kWh · ${priceWord}` +
+    (co2Word ? ` · ${fmt(coNow, 0)} g CO₂ · ${co2Word}` : '') + `</div>` +
+    `<div class="note" style="margin-top:2px">${verdict}</div></div></div>`;
+}
+
 function renderBorse() {
   const sp = STATE.spot;
   const off = $('borse-off-card');
-  const cards = ['borse-price-card', 'borse-best-card', 'borse-cost-card', 'borse-batt-card'];
+  const cards = ['borse-now-card', 'borse-price-card', 'borse-best-card', 'borse-cost-card', 'borse-batt-card'];
   if (!sp || !sp.enabled || !(sp.prices && sp.prices.length)) {
     if (off) off.hidden = false;
     cards.forEach(id => { const el = $(id); if (el) el.hidden = true; });
@@ -798,6 +828,7 @@ function renderBorse() {
     { color: '#ef6c4d', label: 'teuer' }]);
   $('borse-note').innerHTML = `Spanne heute/morgen <b>${fmt(lo, 1)}–${fmt(hi, 1)} ct</b>, Ø ${fmt(avg, 1)} ct` +
     (sp.demo ? ' · <b>Demo-Preise</b>' : (sp.last_error ? ' · <span style="color:#ff6b8a">Abruf-Fehler</span>' : '')) + '.';
+  renderNowSignal(nowP, lo, hi);
 
   // cheapest windows from now on, for typical flexible loads
   const future = P.filter(p => p.ts + 3600 > now);
