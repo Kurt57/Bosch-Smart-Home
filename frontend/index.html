@@ -882,6 +882,25 @@
       <div class="note" style="margin-top:8px">Verbraucherpreis = Börsenpreis × (1 + MwSt.) + Aufschlag
         (Netzentgelte, Steuern, Abgaben, Marge). Steht auf deiner Tarifübersicht.</div>
       <div class="note" id="spot-note" style="margin-top:8px"></div>
+      <div class="note" style="margin-top:8px; color:var(--muted)">Hast du <b>Tibber</b>? Dann verbinde unten dein
+        Konto – die App nutzt dann deine <b>echten Tarifpreise</b> statt der Börse-plus-Aufschlag-Schätzung.</div>
+    </div>
+
+    <div class="card" id="tibber-card">
+      <h2><span class="info" data-info="tibber" role="button" aria-label="Info">i</span>⚡ Tibber verbinden (echte Preise)</h2>
+      <div class="note" id="tibber-status" style="margin-bottom:10px"></div>
+      <div class="note" style="line-height:1.6; margin-bottom:10px">
+        Mit einem <b>Tibber</b>-Konto zeigt die App deine <b>tatsächlichen</b> stündlichen Tarifpreise
+        (all-in, inkl. Netz/Abgaben/MwSt.) – genauer als die Börse-Schätzung. So bekommst du den Token:<br>
+        1. Auf <b>developer.tibber.com</b> mit deinem Tibber-Konto einloggen →
+        2. <b>Access Token</b> erzeugen/kopieren →
+        3. hier einfügen. Der Token bleibt <b>lokal</b> auf der Bridge (in <code>config.json</code>).
+      </div>
+      <label>Tibber Access Token</label>
+      <input id="tibber-token" type="password" autocomplete="off" autocapitalize="off" spellcheck="false"
+             placeholder="Token aus developer.tibber.com">
+      <button class="btn" id="tibber-connect" style="margin-top:8px">Verbinden</button>
+      <div class="note" id="tibber-note" style="margin-top:8px"></div>
     </div>
 
     <div class="card">

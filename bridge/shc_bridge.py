@@ -77,6 +77,10 @@ try:
     import carbon  # optional grid CO2-intensity model (footprint / greenest hours)
 except Exception:  # pragma: no cover - keeps the bridge running without it
     carbon = None
+try:
+    import tibber  # optional Tibber dynamic-tariff client (real all-in prices)
+except Exception:  # pragma: no cover - keeps the bridge running without it
+    tibber = None
 
 DEFAULT_FRONTEND = os.path.normpath(os.path.join(HERE, "..", "frontend"))
 DEFAULT_DB = os.path.join(HERE, "energy.db")
@@ -124,6 +128,9 @@ def load_config(path: str) -> dict:
         "spot_market": "de",           # "de" or "at"
         "spot_surcharge_ct": 15.0,     # ct/kWh added on top of the market price
         "spot_vat": 19.0,              # % VAT applied to the market price
+        # Optional Tibber account: a personal read token yields the user's REAL
+        # all-in tariff price per hour (overrides the market+surcharge estimate).
+        "tibber_token": "",
         # Auto-update: when > 0, the bridge periodically checks the git remote
         # and, if new commits are available, pulls and restarts itself. 0 = off.
         "auto_update_interval": 0,     # minutes between update checks (0 = off)
@@ -1846,6 +1853,29 @@ class Runtime:
         self.spot_last_fetch = 0
         self.spot_last_error = None
         self.spot_backfilling = False
+        self.tibber_cache = None        # {"data":..., "ts":...}
+        self.tibber_last_error = None
+
+    def tibber_prices(self):
+        """Lazily fetch the user's real Tibber prices (cached ~15 min). Returns
+        the tibber.fetch_prices dict, or None when not connected/unavailable."""
+        if self.mode == "demo":
+            return tibber.demo() if tibber else None
+        token = (self.cfg.get("tibber_token") or "").strip()
+        if not tibber or not token:
+            return None
+        c = self.tibber_cache
+        now = int(time.time())
+        if c and now - c["ts"] < 900:
+            return c["data"]
+        try:
+            data = tibber.fetch_prices(token)
+            self.tibber_cache = {"data": data, "ts": now}
+            self.tibber_last_error = None
+            return data
+        except Exception as exc:
+            self.tibber_last_error = str(exc)
+            return c["data"] if c else None
 
     def start_spot_backfill(self):
         """One-off: pull ~10 months of historical prices so the seasonal/hourly
@@ -2017,7 +2047,8 @@ class Handler(BaseHTTPRequestHandler):
         return hp
 
     def _spot_payload(self) -> dict:
-        """Day-ahead exchange prices as consumer ct/kWh, with a lazy refresh."""
+        """Hourly consumer prices for the Börse tab. Uses the user's REAL Tibber
+        tariff when connected, otherwise the EPEX/aWATTar market + surcharge."""
         cfg = self.cfg
         vat = float(cfg.get("spot_vat", 19.0) or 0)
         surch = float(cfg.get("spot_surcharge_ct", 15.0) or 0)
@@ -2025,25 +2056,54 @@ class Handler(BaseHTTPRequestHandler):
             return round(mkt * (1 + vat / 100.0) + surch, 2)
         now = int(time.time())
         typical = spot.TYPICAL_MARKET_CT if spot else 8.5
+        demo = self.ctx.mode == "demo"
+        tib = self.ctx.tibber_prices()          # real (or, in demo, synthetic) Tibber prices
 
-        # demo mode: synthetic curve so the tab always shows something
-        if self.ctx.mode == "demo":
+        def leveled_grid(base):
+            """A seasonal month×hour grid at the given ct/kWh average level."""
+            if not spot:
+                return None, None
+            g = [[round(base * spot.DEMO_MONTH_FACTOR[m] * spot.DEMO_HOUR_FACTOR[h], 3)
+                  for h in range(24)] for m in range(12)]
+            return g, [round(sum(g[m]) / 24, 3) for m in range(12)]
+
+        def tibber_rows():
+            return [{"ts": r["ts"], "market_ct": r["total_ct"],
+                     "consumer_ct": r["total_ct"], "level": r.get("level")}
+                    for r in (tib.get("prices") or []) if r.get("total_ct") is not None]
+
+        def tibber_payload(is_demo):
+            prices = tibber_rows()
+            annual = round(sum(p["consumer_ct"] for p in prices) / len(prices), 2) if prices else consumer(typical)
+            # grid at the all-in Tibber level (surcharge/VAT already included → 0)
+            grid, month_avg = leveled_grid(annual)
+            return {"enabled": True, "demo": is_demo, "source": "tibber", "home": tib.get("home"),
+                    "market": "tibber", "surcharge_ct": 0, "vat": 0, "prices": prices,
+                    "annual_consumer_ct": annual, "annual_basis": "tibber",
+                    "month_hour_ct": grid, "month_avg_ct": month_avg, "backfilling": False,
+                    "last_error": self.ctx.tibber_last_error}
+
+        # ---- demo mode: always show something -----------------------------
+        if demo:
+            if tib:                              # prefer the (synthetic) Tibber curve
+                return tibber_payload(True)
+            grid, month_avg = leveled_grid(typical)
             rows = spot.demo_prices(48) if spot else []
             prices = [{"ts": ts, "market_ct": mc, "consumer_ct": consumer(mc)} for ts, mc in rows]
-            grid = month_avg = None
-            if spot:
-                grid = [[round(typical * spot.DEMO_MONTH_FACTOR[m] * spot.DEMO_HOUR_FACTOR[h], 3)
-                         for h in range(24)] for m in range(12)]
-                month_avg = [round(sum(grid[m]) / 24, 3) for m in range(12)]
-            return {"enabled": True, "demo": True, "market": "demo",
+            return {"enabled": True, "demo": True, "source": "spot", "market": "demo",
                     "surcharge_ct": surch, "vat": vat, "prices": prices,
                     "hist_market_ct": typical, "hist_hours": 8760, "typical_market_ct": typical,
                     "annual_consumer_ct": consumer(typical), "annual_basis": "history",
                     "month_hour_ct": grid, "month_avg_ct": month_avg, "backfilling": False,
                     "last_error": None}
 
+        # ---- live: Tibber takes precedence over the market estimate --------
+        if tib and tib.get("prices"):
+            return tibber_payload(False)
+
         if not spot or not cfg.get("spot_enabled"):
-            return {"enabled": False, "available": spot is not None, "prices": []}
+            return {"enabled": False, "available": spot is not None,
+                    "tibber_available": tibber is not None, "prices": []}
 
         # lazy refresh: fetch at most every ~30 min, or when data runs short
         need = (self.store.spot_max_ts() or 0) < now + 6 * 3600
@@ -2068,7 +2128,7 @@ class Handler(BaseHTTPRequestHandler):
             self.ctx.start_spot_backfill()
         enough = st["hours"] >= 72 and st["avg_market_ct"] is not None
         annual_mkt = st["avg_market_ct"] if enough else typical
-        return {"enabled": True, "demo": False, "market": cfg.get("spot_market", "de"),
+        return {"enabled": True, "demo": False, "source": "spot", "market": cfg.get("spot_market", "de"),
                 "surcharge_ct": surch, "vat": vat, "prices": prices,
                 "hist_market_ct": round(st["avg_market_ct"], 3) if st["avg_market_ct"] is not None else None,
                 "hist_hours": st["hours"], "typical_market_ct": typical,
@@ -2227,6 +2287,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._post_electrolux_connect(body)
             if parsed.path == "/api/electrolux/probe":
                 return self._post_electrolux_probe(body)
+            if parsed.path == "/api/tibber/connect":
+                return self._post_tibber_connect(body)
             if parsed.path == "/api/meter":
                 return self._post_meter(body)
             if parsed.path == "/api/meter/delete":
@@ -2460,6 +2522,25 @@ class Handler(BaseHTTPRequestHandler):
                                 "appliances": appliances,
                                 "message": f"Verbunden. Geräte: {names}."})
 
+    def _post_tibber_connect(self, body):
+        """Save + verify a Tibber personal token (real all-in tariff prices)."""
+        if not tibber:
+            return self._send_json({"ok": False, "error": "Tibber-Modul fehlt (tibber.py)."}, 500)
+        token = str(body.get("token") or "").strip()
+        if not token:
+            return self._send_json({"ok": False, "error": "Tibber-Token ist erforderlich."}, 400)
+        try:
+            info = tibber.verify(token)
+        except tibber.TibberAuthError as exc:
+            return self._send_json({"ok": False, "error": str(exc)}, 200)
+        except Exception as exc:
+            return self._send_json({"ok": False, "error": f"Verbindung fehlgeschlagen: {exc}"}, 200)
+        self.cfg["tibber_token"] = token
+        save_config(self.cfg, self.cfg.get("_config_path", DEFAULT_CONFIG))
+        self.ctx.tibber_cache = None            # force a fresh pull on next read
+        return self._send_json({"ok": True, "connected": True, "home": info.get("home"),
+                                "message": f"Verbunden mit Tibber ({info.get('home')})."})
+
     def _post_electrolux_probe(self, body):
         """Diagnostic: dump one appliance's full reported state + energy fields,
         so the exact per-model field names can be inspected."""
@@ -2563,6 +2644,8 @@ class Handler(BaseHTTPRequestHandler):
                     "pvgis_available": pvgis is not None,
                     "weather_available": weather is not None,
                     "carbon_available": carbon is not None,
+                    "tibber_available": tibber is not None,
+                    "tibber_connected": bool(self.cfg.get("tibber_token")),
                 })
             if path == "/api/devices":
                 return self._send_json({"devices": self.store.devices()})
@@ -2583,6 +2666,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json(self._weather_payload(qs))
             if path == "/api/carbon":
                 return self._send_json(carbon.payload() if carbon else {"ok": False, "error": "carbon modul fehlt"})
+            if path == "/api/tibber":
+                data = self.ctx.tibber_prices()
+                connected = bool(self.cfg.get("tibber_token")) or self.ctx.mode == "demo"
+                return self._send_json({
+                    "available": tibber is not None, "connected": connected,
+                    "home": (data or {}).get("home"),
+                    "count": len((data or {}).get("prices") or []),
+                    "last_error": self.ctx.tibber_last_error})
             if path == "/api/export.csv":
                 ed = int(qs.get("days", ["365"])[0])
                 ep = float(qs.get("price", [self.cfg.get("price_per_kwh", 0.35)])[0])

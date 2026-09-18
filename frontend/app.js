@@ -36,7 +36,7 @@ const MON = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Ok
 const COL = { sh: '#4da3ff', hp: '#ef6c4d', heat: '#f6b93b', away: '#ff6b8a' };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-18 · Warmwasser-Kosten + WP-Wetterprognose + Live-Ampel + Grundlast + CSV + Budget'
+const APP_VERSION = '2026-09-18 · Tibber (echte Preise) + WP-Wetterprognose + Live-Ampel + CO2 + Smart-Timer'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -175,6 +175,10 @@ const INFO = {
     '<span style="color:#ef6c4d">grau</span> abends/im Winter (Kohle/Gas). Deine <b>Jahresbilanz</b> gewichtet diese Intensität mit ' +
     'deinem echten Lastprofil. Verschiebst du flexible Lasten in die <b>grünen Stunden</b>, sinkt dein CO₂-Fußabdruck. ' +
     'Modell auf Basis der veröffentlichten deutschen Netz-Durchschnitte (~380 g/kWh, sinkend).',
+  tibber: () => 'Verbindet dein <b>Tibber</b>-Konto (Access Token von developer.tibber.com). Dann nutzt der ganze ' +
+    'Börse-Tab – Preiskurve, beste Zeiten, Live-Ampel, Smart-Timer – deine <b>echten stündlichen Tarifpreise</b> ' +
+    '(all-in inkl. Netz, Abgaben, MwSt.) statt der Börse-plus-Aufschlag-Schätzung. Der Token bleibt lokal auf der ' +
+    'Bridge (in <code>config.json</code>, nie im Code/Chat).',
   spot: () => 'Stündlicher <b>Börsenpreis</b> (EPEX Day-Ahead über aWATTar) als <b>Verbraucherpreis</b> ' +
     '= Börse × (1 + MwSt.) + Aufschlag. <span style="color:#4be0b0">Grün</span> = günstig, ' +
     '<span style="color:#ef6c4d">rot</span> = teuer. Die senkrechte Linie ist <b>jetzt</b>. Morgen erscheint ' +
@@ -830,8 +834,11 @@ function renderBorse() {
   $('borse-legend').innerHTML = legendHtml([
     { color: '#4be0b0', label: 'günstig' }, { color: '#f6b93b', label: 'mittel' },
     { color: '#ef6c4d', label: 'teuer' }]);
-  $('borse-note').innerHTML = `Spanne heute/morgen <b>${fmt(lo, 1)}–${fmt(hi, 1)} ct</b>, Ø ${fmt(avg, 1)} ct` +
-    (sp.demo ? ' · <b>Demo-Preise</b>' : (sp.last_error ? ' · <span style="color:#ff6b8a">Abruf-Fehler</span>' : '')) + '.';
+  const srcLabel = sp.source === 'tibber'
+    ? `Quelle: <b>Tibber</b>${sp.home ? ' (' + esc(sp.home) + ')' : ''} – deine echten Tarifpreise (all-in)`
+    : `Quelle: <b>Börse</b> (EPEX/aWATTar) + Aufschlag`;
+  $('borse-note').innerHTML = `${srcLabel}. Spanne heute/morgen <b>${fmt(lo, 1)}–${fmt(hi, 1)} ct</b>, Ø ${fmt(avg, 1)} ct` +
+    (sp.demo ? ' · <b>Demo</b>' : (sp.last_error ? ' · <span style="color:#ff6b8a">Abruf-Fehler</span>' : '')) + '.';
   renderNowSignal(nowP, lo, hi);
 
   // cheapest windows from now on, for typical flexible loads
@@ -2720,6 +2727,17 @@ function renderSettings() {
   if (kpc && document.activeElement !== kpc && h.electrolux_kwh_per_cycle != null)
     kpc.value = h.electrolux_kwh_per_cycle;
 
+  const ts = $('tibber-status');
+  if (ts) {
+    ts.innerHTML = h.tibber_available === false
+      ? 'Tibber-Modul nicht installiert (Datei <code>bridge/tibber.py</code> fehlt).'
+      : h.mode === 'demo'
+        ? '<b>Demo</b> – es werden Beispiel-Tarifpreise gezeigt. Verbinde auf deiner Bridge dein echtes Konto.'
+        : h.tibber_connected
+          ? '<b style="color:#4be0b0">Verbunden ✓</b> – die Börse-Ansicht nutzt deine echten Tibber-Preise.'
+          : 'Noch nicht verbunden.';
+  }
+
   const se = $('spot-enabled');
   if (se && document.activeElement !== se) {
     se.checked = !!h.spot_enabled;
@@ -2797,6 +2815,22 @@ async function doAegConnect() {
       note.innerHTML = '✅ ' + esc(r.message || 'Verbunden.');
       $('aeg-refresh').value = ''; $('aeg-access').value = '';   // don't leave tokens on screen
       setTimeout(loadAll, 1500);
+    } else note.innerHTML = '⚠︎ ' + esc(r.error || 'Verbindung fehlgeschlagen.');
+  } catch (e) { note.textContent = 'Fehler: ' + e.message + ' – Seite von der Bridge geöffnet?'; }
+  btn.disabled = false;
+}
+
+async function doTibberConnect() {
+  const note = $('tibber-note'), btn = $('tibber-connect');
+  const token = $('tibber-token').value.trim();
+  if (!token) { note.textContent = 'Bitte deinen Tibber Access Token einfügen.'; return; }
+  btn.disabled = true; note.textContent = 'Verbinde mit Tibber …';
+  try {
+    const r = await postJSON('/api/tibber/connect', { token });
+    if (r.ok) {
+      note.innerHTML = '✅ ' + esc(r.message || 'Verbunden.');
+      $('tibber-token').value = '';                 // don't leave the token on screen
+      setTimeout(loadAll, 1200);
     } else note.innerHTML = '⚠︎ ' + esc(r.error || 'Verbindung fehlgeschlagen.');
   } catch (e) { note.textContent = 'Fehler: ' + e.message + ' – Seite von der Bridge geöffnet?'; }
   btn.disabled = false;
@@ -3279,6 +3313,7 @@ function init() {
   const aegD = $('aeg-dash');
   if (aegD) aegD.addEventListener('click', () => window.open('https://developer.electrolux.one/dashboard', '_blank'));
   const aegC = $('aeg-connect'); if (aegC) aegC.addEventListener('click', doAegConnect);
+  const tibC = $('tibber-connect'); if (tibC) tibC.addEventListener('click', doTibberConnect);
   const aegP = $('aeg-probe'); if (aegP) aegP.addEventListener('click', doAegProbe);
   const saveSpot = async () => {
     const sn = $('spot-note');
