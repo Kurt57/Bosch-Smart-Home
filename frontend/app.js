@@ -36,7 +36,7 @@ const MON = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Ok
 const COL = { sh: '#4da3ff', hp: '#ef6c4d', heat: '#f6b93b', away: '#ff6b8a' };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-18 · Smart-Timer + CO2-Bilanz + Wetter-Prognose + PVGIS + Boerse'
+const APP_VERSION = '2026-09-18 · Monatsbudget + Smart-Timer + CO2-Bilanz + Wetter-Prognose + PVGIS'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -81,6 +81,10 @@ const INFO = {
   'ov-month': () => 'Hochrechnung für den laufenden Monat: dein durchschnittlicher Tagesverbrauch ' +
     '(Smart Home aus dem Zählerstand, Wärmepumpe aus dem Zählerwachstum) – <b>saisonal</b> für diesen ' +
     'Monat gewichtet und mit deinem kWh-Preis multipliziert.',
+  budget: () => 'Setz dir ein <b>Monatsbudget</b> (in € oder kWh). Die App zeigt, wie viel du <b>bisher</b> diesen ' +
+    'Monat verbraucht hast, und rechnet – aus deinem Ø-Tagesverbrauch, saisonal gewichtet – auf das <b>Monatsende</b> ' +
+    'hoch. Der weiße Strich markiert die Hochrechnung: liegt er rechts vom Budget, drohst du drüber zu landen, und die ' +
+    'App sagt dir, wie viel pro restlichem Tag noch drin ist. Wird lokal gespeichert.',
   fill: () => 'Gemessene Tage werden voll angezeigt. Für Tage <b>ohne</b> Messung (Bridge lief nicht) ' +
     'wird dein bisheriger Verbrauch <b>saisonal</b> hochgerechnet und blass dargestellt. Echte Messungen ' +
     'ersetzen die Schätzung automatisch.',
@@ -1335,7 +1339,56 @@ function renderOverview() {
     $('ov-hp-body').innerHTML = rows;
   } else { card.hidden = true; }
 
+  renderBudget();
   renderTips();
+}
+
+// Actual kWh consumed since the 1st of the current month (measured days full,
+// missing days seasonally estimated by filledDaily).
+function monthToDateKwh() {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), 1);
+  return filledDaily(start, now).reduce((a, d) => a + (d.sh || 0) + (d.hp || 0), 0);
+}
+
+function renderBudget() {
+  const card = $('ov-budget-card'); if (!card) return;
+  const unit = ($('ov-budget-unit') && $('ov-budget-unit').value) || 'eur';
+  const budget = parseFloat($('ov-budget') && $('ov-budget').value);
+  const fc = annualForecast(), price = STATE.price;
+  const now = new Date(), dom = now.getDate(), dim = DIM[now.getMonth()], left = Math.max(0, dim - dom);
+  const mtdKwh = monthToDateKwh();
+  const toVal = k => unit === 'kwh' ? k : k * price;
+  const fmtV = v => unit === 'kwh' ? kwh(v, 0) : money(v);
+  const budgetKwh = unit === 'kwh' ? budget : (price > 0 ? budget / price : 0);
+  const mtdVal = toVal(mtdKwh), projVal = toVal(fc.monthNow), budgetV = budget;
+  if (!(budget > 0)) {
+    $('ov-budget-bar').innerHTML = '';
+    $('ov-budget-note').innerHTML =
+      `Trag ein Budget ein – dann zeige ich Stand & Hochrechnung. Aktuell läuft der Monat auf ` +
+      `<b>${kwh(fc.monthNow, 0)}</b> · <b>${money(fc.monthNowCost)}</b> hinaus.`;
+    return;
+  }
+  const spentPct = Math.min(100, mtdVal / budgetV * 100);
+  const projPct = Math.min(100, projVal / budgetV * 100);
+  const over = projVal > budgetV, col = over ? '#ef6c4d' : '#4be0b0';
+  $('ov-budget-bar').innerHTML =
+    `<div class="bar" style="height:14px;position:relative;overflow:visible">` +
+    `<i style="width:${spentPct.toFixed(0)}%;background:${col}"></i>` +
+    `<span title="Hochrechnung" style="position:absolute;top:-4px;left:${projPct.toFixed(0)}%;width:2px;height:22px;background:#fff;transform:translateX(-1px)"></span>` +
+    `</div>` +
+    `<div class="legend" style="margin-top:8px">` +
+    `<div class="it"><span class="sw" style="background:${col}"></span>bisher ${fmtV(mtdVal)}</div>` +
+    `<div class="it"><span class="sw" style="background:#fff"></span>Hochrechnung ${fmtV(projVal)}</div>` +
+    `<div class="it">Budget ${fmtV(budgetV)}</div></div>`;
+  const diff = Math.abs(projVal - budgetV);
+  const remainKwh = Math.max(0, budgetKwh - mtdKwh), perDay = left > 0 ? remainKwh / left : 0;
+  $('ov-budget-note').innerHTML = over
+    ? `⚠️ Hochrechnung <b style="color:#ef6c4d">${fmtV(diff)} über</b> Budget (Tag ${dom}/${dim}). ` +
+      (remainKwh > 0 && left > 0
+        ? `Um es zu halten: höchstens <b>${kwh(perDay, 1)}/Tag</b> (${money(perDay * price)}) an den letzten ${left} Tagen.`
+        : `Budget für diesen Monat bereits ausgeschöpft.`)
+    : `✅ Hochrechnung <b style="color:#4be0b0">${fmtV(diff)} unter</b> Budget – bisher ${fmtV(mtdVal)} an Tag ${dom}/${dim}.`;
 }
 
 // Data-driven, actionable tips – only the relevant ones are shown.
@@ -3138,6 +3191,13 @@ function init() {
     });
   }
   const pvSug = $('pv-suggest'); if (pvSug) pvSug.addEventListener('click', doPvSuggest);
+  // Monthly-budget inputs (persist + re-render on change)
+  [['ov-budget', 'bhe_budget'], ['ov-budget-unit', 'bhe_budget_unit']].forEach(([id, key]) => {
+    const el = $(id); if (!el) return;
+    const s = localStorage.getItem(key); if (s !== null) el.value = s;
+    const ev = el.tagName === 'SELECT' ? 'change' : 'input';
+    el.addEventListener(ev, () => { try { localStorage.setItem(key, el.value); } catch (e) {} renderBudget(); });
+  });
   // Smart-Timer inputs (persist + re-render on change)
   [['smart-dur', 'bhe_smart_dur'], ['smart-kwh', 'bhe_smart_kwh'], ['smart-prio', 'bhe_smart_prio']].forEach(([id, key]) => {
     const el = $(id); if (!el) return;

@@ -12,7 +12,7 @@ deinem Heimnetz; die Wärmepumpe kommt über Bosch HomeCom Easy dazu.
 
 | Ansicht | Inhalt |
 |---|---|
-| **Übersicht** | **Heute bisher** (kWh + Kosten), aktuelle Gesamtleistung inkl. Wärmepumpen-Anteil, Monats-Hochrechnung, **Wofür-heute-Donut** (Wärmepumpe + Geräte), letzte 14 Tage **gestapelt** (Smart Home vs. Wärmepumpe), Wärmepumpen-Kurzstatus |
+| **Übersicht** | **Heute bisher** (kWh + Kosten), aktuelle Gesamtleistung inkl. Wärmepumpen-Anteil, Monats-Hochrechnung, **Monatsbudget** (Stand + Hochrechnung, warnt vor Überschreitung), **Wofür-heute-Donut** (Wärmepumpe + Geräte), letzte 14 Tage **gestapelt** (Smart Home vs. Wärmepumpe), Wärmepumpen-Kurzstatus |
 | **Heute** | Verbrauch **nach Stunde** (Smart Home + Wärmepumpe gestapelt), Aufteilung heute als Donut mit Kosten, Smart-Home-Geräte heute |
 | **Verlauf** | kWh **pro Tag** (14/30/90 Tage) bzw. **pro Monat** (1 Jahr, fehlende Monate geschätzt), gestapelt nach Quelle; **Anteil je Quelle**; **Abwesenheit** (wie oft ihr nicht zuhause wart) + Kalender; **Jahres-Hochrechnung** & Einordnung |
 | **Wärmepumpe** | Live-Karte (elektr./therm. Leistung, **COP jetzt**, Zähler-Splits Kompressor/Heizstab, Temperaturen, Starts/Stunden), **Strom & Wärme pro Tag**, **COP-Verlauf**, **COP pro Monat**, **Monatsbilanz**, **Wärmekarte** Wochentag × Stunde, **Theorie vs. Praxis** (erwarteter Stromverbrauch aus deinen Gebäudedaten – U·A + Heizgradtage – gegen den gemessenen Verbrauch, mit den größten Sanierungs-Hebeln) |

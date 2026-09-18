@@ -182,6 +182,18 @@
       <div class="kpi"><div class="v" id="ov-month">–</div><div class="l">Hochrechnung / Monat <span class="info" data-info="ov-month" role="button" aria-label="Info" style="margin-left:3px">i</span></div></div>
       <div class="kpi"><div class="v" id="ov-month-cost">–</div><div class="l">Kosten / Monat</div></div>
     </div>
+    <div class="card" id="ov-budget-card">
+      <h2><span class="info" data-info="budget" role="button" aria-label="Info">i</span>🎯 Monatsbudget</h2>
+      <div style="display:flex; gap:8px; align-items:stretch; margin-bottom:4px">
+        <input id="ov-budget" type="number" min="0" step="10" inputmode="numeric" placeholder="Budget €/Monat" style="flex:1">
+        <select id="ov-budget-unit" style="width:auto">
+          <option value="eur">€ / Monat</option>
+          <option value="kwh">kWh / Monat</option>
+        </select>
+      </div>
+      <div id="ov-budget-bar" style="margin-top:8px"></div>
+      <div class="note" id="ov-budget-note" style="margin-top:8px"></div>
+    </div>
     <div class="card">
       <h2><span class="info" data-info="wofuer" role="button" aria-label="Info">i</span>Wofür heute? <span class="r" id="ov-break-sum"></span></h2>
       <div id="ov-donut"></div>
