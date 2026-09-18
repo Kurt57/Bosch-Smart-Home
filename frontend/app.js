@@ -36,7 +36,7 @@ const MON = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Ok
 const COL = { sh: '#4da3ff', hp: '#ef6c4d', heat: '#f6b93b', away: '#ff6b8a' };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-18 · WP-Wetterprognose + Live-Ampel + Grundlast + CSV + Budget + Smart-Timer'
+const APP_VERSION = '2026-09-18 · Warmwasser-Kosten + WP-Wetterprognose + Live-Ampel + Grundlast + CSV + Budget'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -1921,6 +1921,26 @@ function renderHeatpump() {
     : '<div class="note">Sobald die Bridge Betriebsdaten gesammelt hat, erscheint hier die Aufteilung Heizung/Warmwasser.</div>';
   $('hp-mode-legend').innerHTML = legendHtml(mSegs.map(s => ({
     label: s.label, color: s.color, sub: kwh(s.value, 0) + ' · ' + (s.value / mTot * 100).toFixed(0) + ' %' })));
+  // warm-water: annual electricity & cost, plus an optimisation hint
+  const nDays = (A.daily || []).length;
+  const waterKwh = mw.water || 0;
+  if (waterKwh > 0.01 && nDays > 0 && mTot > 0) {
+    const price = STATE.price;
+    const waterYear = waterKwh / nDays * 365, waterCost = waterYear * price;
+    const sharePct = waterKwh / mTot * 100;
+    const cbhW = ((A.imported && A.imported.cop_by_hour) || []).filter(x => x.water_kwh > 0);
+    let tip;
+    if (cbhW.length) {
+      const wpk = cbhW.reduce((a, b) => b.water_kwh > a.water_kwh ? b : a);
+      tip = (wpk.hour >= 10 && wpk.hour <= 15)
+        ? `Deine Warmwasser-Bereitung liegt schon gut in der <b>Mittagszeit</b> (${wpk.hour}:00 Uhr) – ideal für PV/günstigen Börsenstrom.`
+        : `Meiste Bereitung gegen <b>${wpk.hour}:00 Uhr</b>. Per Zeitprogramm in die <b>Mittagszeit</b> verlegt, nutzt du PV/günstige Stunden und die WP arbeitet effizienter (wärmere Luft).`;
+    } else {
+      tip = `Bereite Warmwasser möglichst <b>mittags</b> (PV/günstiger Börsenstrom, wärmere Luft = besserer COP) und halte die Temperatur moderat (Legionellenschaltung ~1×/Woche auf 60&nbsp;°C reicht) – das spürst du direkt hier.`;
+    }
+    $('hp-mode-note').innerHTML = `🚿 <b>Warmwasser</b>: ~<b>${kwh(waterYear, 0)}/Jahr</b> Strom (~${money(waterCost)}), ` +
+      `${fmt(sharePct, 0)} % des Wärmepumpen-Stroms. ` + tip;
+  } else { $('hp-mode-note').innerHTML = ''; }
 
   const daily = (A.daily || []).slice(-30);
   $('hp-daily').innerHTML = daily.length ? groupedBar(
