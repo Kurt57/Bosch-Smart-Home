@@ -304,6 +304,18 @@
       <div class="kpi sm"><div class="v" id="hp-scop">–</div><div class="l" id="hp-scop-l">Arbeitszahl (Zeitraum)</div></div>
       <div class="kpi sm"><div class="v" id="hp-cost">–</div><div class="l">Stromkosten (Zeitraum)</div></div>
     </div>
+    <div class="card" id="hp-fc-card">
+      <h2><span class="info" data-info="hp-forecast" role="button" aria-label="Info">i</span>🌦️ Strombedarf-Prognose (Wetter)</h2>
+      <div class="note" style="margin-bottom:10px">
+        Erwarteter Wärmepumpen-Strom der nächsten Tage – aus der Außentemperatur-Vorhersage und deinen
+        Gebäudedaten. Braucht deinen Standort (im <b>PV</b>-Tab eintragen).
+      </div>
+      <button class="btn" id="hp-fc-btn" style="margin-bottom:6px">🌦️ Prognose holen</button>
+      <div class="note" id="hp-fc-note" style="margin-bottom:8px"></div>
+      <div id="hp-fc-kpi"></div>
+      <div id="hp-fc-chart" style="margin-top:10px"></div>
+      <div class="legend" id="hp-fc-legend"></div>
+    </div>
     <div class="card">
       <h2>Wofür läuft die Wärmepumpe? <span class="r" id="hp-mode-sum"></span></h2>
       <div id="hp-mode-donut"></div>

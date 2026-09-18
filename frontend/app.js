@@ -36,7 +36,7 @@ const MON = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Ok
 const COL = { sh: '#4da3ff', hp: '#ef6c4d', heat: '#f6b93b', away: '#ff6b8a' };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-18 · Live-Ampel + Grundlast + CSV + Budget + Smart-Timer + CO2 + Wetter'
+const APP_VERSION = '2026-09-18 · WP-Wetterprognose + Live-Ampel + Grundlast + CSV + Budget + Smart-Timer'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -142,6 +142,10 @@ const INFO = {
   pvgis: () => 'Holt den <b>echten PV-Ertrag</b> für deinen Standort von <b>PVGIS</b> (EU-Kommission/JRC, kostenlos, ' +
     'ohne Konto) – aus Koordinaten, Dachneigung und Ausrichtung. Setzt den <b>kWh/kWp</b>-Wert und die ' +
     '<b>Monatskurve</b> deiner PV, damit PV-Ertrag, Autarkie und netzfreie Monate standortgenau werden.',
+  'hp-forecast': () => 'Rechnet aus der <b>Außentemperatur-Vorhersage</b> (Open-Meteo) und deinen Gebäudedaten den ' +
+    'voraussichtlichen <b>Wärmepumpen-Strombedarf</b> der nächsten Tage – gleiche Grundlage wie „Theorie vs. Praxis" ' +
+    '(U·A + Heizgradtage), nur mit der echten Wettervorhersage statt Jahresmittel. So siehst du, ob eine <b>Kältewelle</b> ' +
+    'kommt und was sie kostet. Braucht deinen Standort aus dem PV-Tab. Grobe Schätzung.',
   'pv-forecast': () => 'Holt die <b>Wetter-Vorhersage</b> für deinen Standort (Open-Meteo, kostenlos, ohne Konto) und ' +
     'rechnet daraus für die nächsten Tage den <b>erwarteten PV-Ertrag</b> (aus der stündlichen Sonneneinstrahlung × deiner ' +
     'kWp) und den voraussichtlichen <b>Wärmepumpen-Strombedarf</b> (aus der Außentemperatur und deinen Gebäudedaten). So siehst ' +
@@ -1897,6 +1901,7 @@ function renderHeatpump() {
         ? '<div class="note" style="margin-top:8px">Leistung & COP erscheinen nach der zweiten Messung (Zählerdifferenz).</div>' : '');
   }
 
+  renderHpForecast();
   $('hp-today-e').innerHTML = kwh(A.today.elec_kwh, 2);
   $('hp-today-h').innerHTML = kwh(A.today.heat_kwh, 1);
   $('hp-scop').innerHTML = A.stats.seasonal_cop != null ? fmt(A.stats.seasonal_cop, 2) : '–';
@@ -2824,6 +2829,83 @@ function buildUA(b) {
   return ua;
 }
 
+// The user's location: from the PV inputs, else from what PVGIS saved.
+function getLatLon() {
+  let lat = parseFloat($('pv-lat') && $('pv-lat').value), lon = parseFloat($('pv-lon') && $('pv-lon').value);
+  if (!isFinite(lat) || !isFinite(lon)) {
+    try { lat = parseFloat(localStorage.getItem(PV_LS.lat)); lon = parseFloat(localStorage.getItem(PV_LS.lon)); } catch (e) {}
+  }
+  return (isFinite(lat) && isFinite(lon)) ? { lat, lon } : null;
+}
+
+// Expected heat-pump electricity & heat per forecast day, from outside temp +
+// the building model (same degree-day basis as the annual theory).
+function hpForecastDays(w) {
+  const b = buildData(), ua = buildUA(b);
+  const copHeat = b.cop_heat || 2.6, gain = b.gain, tIndoor = 20;
+  const dhwElec = (b.dhw / (b.cop_dhw || 2.7)) / 8760;
+  const dayMap = new Map();
+  (w.hourly || []).forEach(h => {
+    const d = new Date(h.ts * 1000), key = d.getFullYear() * 10000 + d.getMonth() * 100 + d.getDate();
+    if (!dayMap.has(key)) dayMap.set(key, []);
+    dayMap.get(key).push(h);
+  });
+  const now = new Date(), todayKey = now.getFullYear() * 10000 + now.getMonth() * 100 + now.getDate();
+  return [...dayMap.keys()].sort((a, z) => a - z).map(k => {
+    const rows = dayMap.get(k); let elec = 0, heat = 0, tmin = 99, tmax = -99;
+    rows.forEach(h => {
+      elec += dhwElec;
+      if (h.temp != null) {
+        const th = ua * Math.max(0, tIndoor - h.temp) / 1000 * (1 - gain);   // kWh thermal that hour
+        heat += th; elec += th / copHeat; tmin = Math.min(tmin, h.temp); tmax = Math.max(tmax, h.temp);
+      }
+    });
+    const d = new Date(rows[0].ts * 1000);
+    return { key: k, elec, heat, tmin, tmax, partial: rows.length < 20,
+      label: k === todayKey ? 'heute' : ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'][d.getDay()] };
+  });
+}
+
+function renderHpForecast() {
+  const card = $('hp-fc-card'); if (!card) return;
+  const w = STATE.weather;
+  if (!w || !Array.isArray(w.hourly) || !w.hourly.length) {
+    $('hp-fc-kpi').innerHTML = ''; $('hp-fc-chart').innerHTML = ''; $('hp-fc-legend').innerHTML = '';
+    return;
+  }
+  const days = hpForecastDays(w), price = STATE.price;
+  if (!days.length) return;
+  const tom = days.find(d => d.label !== 'heute') || days[0];
+  $('hp-fc-kpi').innerHTML =
+    `<div class="grid2"><div class="kpi sm"><div class="v">${kwh(tom.elec, 1)}</div><div class="l">WP-Strom ${esc(tom.label)} · ${money(tom.elec * price)}</div></div>` +
+    `<div class="kpi sm"><div class="v">${fmt(tom.tmin, 0)}…${fmt(tom.tmax, 0)}°C</div><div class="l">Außentemperatur ${esc(tom.label)}</div></div></div>`;
+  $('hp-fc-chart').innerHTML = groupedBar(
+    days.map(d => ({ label: d.label, values: { e: d.elec, h: d.heat } })),
+    [{ key: 'e', color: COL.hp }, { key: 'h', color: COL.heat }], { h: 180 });
+  $('hp-fc-legend').innerHTML =
+    `<div class="it"><span class="sw" style="background:${COL.hp}"></span>Strom (kWh)</div>` +
+    `<div class="it"><span class="sw" style="background:${COL.heat}"></span>Wärme (kWh)</div>`;
+  const total = days.reduce((a, d) => a + d.elec, 0);
+  $('hp-fc-note').innerHTML = `Quelle: <b>Open-Meteo</b>${w.tz === 'demo' ? ' <span style="color:var(--muted)">(Demo)</span>' : ''}. ` +
+    `Summe der ${days.length} Tage: <b>${kwh(total, 0)}</b> (~${money(total * price)}). Grobe Schätzung aus deinem Gebäudemodell.`;
+}
+
+async function doHpWeather() {
+  const note = $('hp-fc-note'), btn = $('hp-fc-btn');
+  const loc = getLatLon();
+  if (!loc) { note.innerHTML = 'Bitte zuerst im <b>PV</b>-Tab deinen Standort eintragen („📍 Mein Standort").'; return; }
+  btn.disabled = true; note.textContent = 'Frage Wetter-Vorhersage …';
+  try {
+    const r = await api(`/api/weather?lat=${loc.lat}&lon=${loc.lon}`);
+    if (!r || r.ok === false || !Array.isArray(r.hourly) || !r.hourly.length) {
+      note.textContent = '⚠︎ ' + ((r && r.error) || 'Wetter-Abruf fehlgeschlagen.'); btn.disabled = false; return;
+    }
+    STATE.weather = r; renderHpForecast();
+    if (typeof renderSmart === 'function') renderSmart();
+  } catch (e) { note.textContent = 'Nur möglich, wenn die Seite von der Bridge geöffnet ist.'; }
+  btn.disabled = false;
+}
+
 async function doWeather() {
   const note = $('pv-weather-note'), btn = $('pv-weather');
   const lat = parseFloat($('pv-lat').value), lon = parseFloat($('pv-lon').value);
@@ -2838,6 +2920,7 @@ async function doWeather() {
     }
     STATE.weather = r;
     renderWeather(r);
+    if (typeof renderHpForecast === 'function') renderHpForecast();
     if (typeof renderSmart === 'function') renderSmart();
     note.innerHTML = 'Quelle: <b>Open-Meteo</b>' + (r.demo ? ' <span style="color:var(--muted)">(Demo)</span>' : '') +
       '. Grobe Schätzung – reale Werte hängen von Wetter, Dach und Anlage ab.';
@@ -3322,6 +3405,7 @@ function init() {
   });
   const pvGis = $('pv-pvgis'); if (pvGis) pvGis.addEventListener('click', doPvgis);
   const pvWx = $('pv-weather'); if (pvWx) pvWx.addEventListener('click', doWeather);
+  const hpWx = $('hp-fc-btn'); if (hpWx) hpWx.addEventListener('click', doHpWeather);
   const pvLoc = $('pv-locate');
   if (pvLoc) pvLoc.addEventListener('click', () => {
     const note = $('pv-pvgis-note');
