@@ -1842,10 +1842,26 @@ function renderHeatpump() {
     if (l.cop_lifetime != null) rows.push(['Jahresarbeitszahl (∅ COP)', fmt(l.cop_lifetime, 2)]);
     if (l.outdoor_c != null) rows.push(['Außentemperatur', fmt(l.outdoor_c, 1) + ' °C']);
     if (l.supply_c != null && l.return_c != null) rows.push(['Vor-/Rücklauf', fmt(l.supply_c, 1) + ' / ' + fmt(l.return_c, 1) + ' °C']);
-    if (l.starts != null) rows.push(['Starts / Betriebsstunden', fmt(l.starts, 0) + (l.working_h != null ? ' / ' + fmt(l.working_h, 0) + ' h' : '')]);
+    let taktNote = '';
+    if (l.starts != null) {
+      let extra = '';
+      if (l.working_h != null && l.starts > 0) {
+        const runMin = l.working_h / l.starts * 60;             // Ø minutes per compressor start (lifetime)
+        const rating = runMin >= 60 ? ['ruhig, effizient', '#4be0b0'] : runMin >= 20 ? ['ok', '#f6b93b'] : ['häufiges Takten', '#ef6c4d'];
+        extra = `<br><small style="color:var(--muted)">Ø Laufzeit je Start: <b style="color:${rating[1]}">` +
+          `${runMin >= 90 ? fmt(runMin / 60, 1) + ' h' : fmt(runMin, 0) + ' min'}</b> (${rating[0]})</small>`;
+        if (runMin < 20) taktNote = `<div class="note" style="margin-top:8px">⚠️ <b>Kurzes Takten:</b> im Schnitt nur ` +
+          `${fmt(runMin, 0)} min je Kompressorstart. Häufiges Ein-/Ausschalten senkt Effizienz und Lebensdauer. ` +
+          `Mögliche Ursachen: zu hohe Heizkurve bei mildem Wetter, überdimensionierte Leistung, zu kleiner Pufferspeicher ` +
+          `oder zugedrehte Heizkreise. Eine niedrigere Heizkurve und offene Heizflächen helfen oft. ` +
+          `<span style="color:var(--muted)">Wert über die gesamte Laufzeit gemittelt.</span></div>`;
+      }
+      rows.push(['Starts / Betriebsstunden', fmt(l.starts, 0) + (l.working_h != null ? ' / ' + fmt(l.working_h, 0) + ' h' : '') + extra]);
+    }
     body.innerHTML = `<div class="note" style="margin:-2px 0 10px">${hpStatusPill(l)}</div>` +
       (rows.length ? rows.map(([k, v]) => statusRow(k, v)).join('')
         : '<div class="note">Verbunden – warte auf die erste Messung.</div>') +
+      taktNote +
       ((connected && (l.power_w == null || l.heat_w == null))
         ? '<div class="note" style="margin-top:8px">Leistung & COP erscheinen nach der zweiten Messung (Zählerdifferenz).</div>' : '');
   }
