@@ -73,6 +73,10 @@ try:
     import weather  # optional weather forecast for PV/heat prognosis (Open-Meteo)
 except Exception:  # pragma: no cover - keeps the bridge running without it
     weather = None
+try:
+    import carbon  # optional grid CO2-intensity model (footprint / greenest hours)
+except Exception:  # pragma: no cover - keeps the bridge running without it
+    carbon = None
 
 DEFAULT_FRONTEND = os.path.normpath(os.path.join(HERE, "..", "frontend"))
 DEFAULT_DB = os.path.join(HERE, "energy.db")
@@ -2528,6 +2532,7 @@ class Handler(BaseHTTPRequestHandler):
                     "spot_vat": float(self.cfg.get("spot_vat", 19.0) or 0),
                     "pvgis_available": pvgis is not None,
                     "weather_available": weather is not None,
+                    "carbon_available": carbon is not None,
                 })
             if path == "/api/devices":
                 return self._send_json({"devices": self.store.devices()})
@@ -2546,6 +2551,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json(self._pvgis_payload(qs))
             if path == "/api/weather":
                 return self._send_json(self._weather_payload(qs))
+            if path == "/api/carbon":
+                return self._send_json(carbon.payload() if carbon else {"ok": False, "error": "carbon modul fehlt"})
             if path == "/api/homecom/authurl":
                 if not homecom:
                     return self._send_json({"error": "homecom modul fehlt"}, 500)

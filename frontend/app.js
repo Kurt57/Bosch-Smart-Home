@@ -36,7 +36,7 @@ const MON = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Ok
 const COL = { sh: '#4da3ff', hp: '#ef6c4d', heat: '#f6b93b', away: '#ff6b8a' };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-18 · Wetter-Prognose (PV & WP morgen) + PVGIS + Boerse + Kredit'
+const APP_VERSION = '2026-09-18 · CO2-Bilanz + Wetter-Prognose + PVGIS + Boerse + Kredit'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -153,6 +153,11 @@ const INFO = {
   behavior: () => 'Aus den <b>Namen</b> deiner Geräte und den Uhrzeiten, zu denen sie am meisten Strom ziehen, ' +
     'liest die App typische Routinen ab (Kochen, Schlafen, Bad …) und leitet konkrete Spar-Ideen ab. ' +
     'Basis: Ø über die gemessenen Tage.',
+  carbon: () => 'Wie viel <b>CO₂</b> dein Strom verursacht. Der deutsche Netzstrom hat je nach Stunde und Jahreszeit eine ' +
+    'unterschiedliche <b>CO₂-Intensität</b> (g/kWh): <span style="color:#4be0b0">grün</span> mittags/im Sommer (viel Sonne & Wind), ' +
+    '<span style="color:#ef6c4d">grau</span> abends/im Winter (Kohle/Gas). Deine <b>Jahresbilanz</b> gewichtet diese Intensität mit ' +
+    'deinem echten Lastprofil. Verschiebst du flexible Lasten in die <b>grünen Stunden</b>, sinkt dein CO₂-Fußabdruck. ' +
+    'Modell auf Basis der veröffentlichten deutschen Netz-Durchschnitte (~380 g/kWh, sinkend).',
   spot: () => 'Stündlicher <b>Börsenpreis</b> (EPEX Day-Ahead über aWATTar) als <b>Verbraucherpreis</b> ' +
     '= Börse × (1 + MwSt.) + Aufschlag. <span style="color:#4be0b0">Grün</span> = günstig, ' +
     '<span style="color:#ef6c4d">rot</span> = teuer. Die senkrechte Linie ist <b>jetzt</b>. Morgen erscheint ' +
@@ -419,17 +424,19 @@ async function loadAll() {
       STATE.price = health.price_per_kwh; $('price').value = STATE.price;
     }
     const p = STATE.price;
-    const [ov, hpA, data, appl, meter, sp] = await Promise.all([
+    const [ov, hpA, data, appl, meter, sp, co2] = await Promise.all([
       api('/api/overview?days=90&price=' + p),
       api('/api/heatpump/analytics?days=90&price=' + p),
       api('/api/analytics?days=90&price=' + p),
       api('/api/appliances').catch(() => null),
       api('/api/meter').catch(() => null),
       api('/api/spot').catch(() => null),
+      api('/api/carbon').catch(() => null),
     ]);
     STATE.ov = ov; STATE.hpA = hpA; STATE.data = data; STATE.appliances = appl;
     STATE.meter = (meter && meter.readings) || [];
     STATE.spot = sp;
+    STATE.carbon = (co2 && co2.ok) ? co2 : demoCarbon();
     STATE.cur = data.currency || STATE.cur;
     $('cur').textContent = STATE.cur;
     setMode(health.mode || 'live');
@@ -466,6 +473,7 @@ function applyDemo(mode) {
     prices.push({ ts, market_ct: Math.round(m * 10) / 10, consumer_ct: Math.round((m * (1 + sv / 100) + sc) * 100) / 100 });
   }
   STATE.spot = { enabled: true, demo: true, market: 'demo', surcharge_ct: sc, vat: sv, prices };
+  STATE.carbon = demoCarbon();
   STATE.cur = '€'; $('cur').textContent = STATE.cur;
   setMode(mode);
   renderAll();
@@ -886,6 +894,86 @@ const TYPICAL_WP_HOUR = [0.9, 0.85, 0.8, 0.8, 0.85, 1.0, 1.2, 1.25, 1.15, 1.0, 1
   1.05, 0.95, 0.9, 0.95, 1.1, 1.25, 1.3, 1.2, 1.1, 1.0, 0.95, 0.9];
 // Load-weighted dynamic-tariff cost using the real season×hour price grid – the
 // honest number (a heat pump runs in winter/peak hours = expensive spot).
+// A client-side copy of the bridge's grid-CO₂ model, for the demo / no-bridge
+// case (kept in sync with bridge/carbon.py).
+function demoCarbon() {
+  const MF = [1.14, 1.11, 1.02, 0.93, 0.85, 0.81, 0.82, 0.85, 0.94, 1.04, 1.12, 1.17];
+  const HF = [1.05, 1.07, 1.07, 1.06, 1.05, 1.03, 0.99, 0.94, 0.88, 0.82, 0.77, 0.74,
+    0.73, 0.75, 0.80, 0.88, 0.98, 1.09, 1.15, 1.16, 1.13, 1.10, 1.08, 1.06];
+  const base = 380;
+  const grid = MF.map(mf => HF.map(hf => Math.round(base * mf * hf * 10) / 10));
+  const month_avg = grid.map(r => Math.round(mean(r) * 10) / 10);
+  const m = new Date().getMonth();
+  return { ok: true, demo: true, base_g: base, annual_g: Math.round(mean(month_avg) * 10) / 10,
+    month_hour_g: grid, month_avg_g: month_avg, hour_g: grid[m], month: m + 1 };
+}
+
+// Annual CO₂ footprint of the user's electricity, load-weighted with the grid
+// intensity grid – same load-shape machinery as spotAnalysis.
+function carbonAnalysis() {
+  const c = STATE.carbon;
+  if (!c || !c.month_hour_g) return null;
+  const g = c.month_hour_g;
+  const homeShape = normFrac((STATE.data && STATE.data.hourly_profile || []).map(x => x.avg_w));
+  const hpProf = (STATE.hpA && STATE.hpA.hourly_profile) || [];
+  const wpShape = hpProf.length && hpProf.some(x => x.avg_w > 0) ? normFrac(hpProf.map(x => x.avg_w)) : normFrac(TYPICAL_WP_HOUR);
+  const p = pvInputs();
+  const homeKwh = shAvgDaily() * 365, wpKwh = hpYearFromMonthly() || hpAvgDaily() * 365;
+  const evK = p.evAnnual, acK = p.acAnnual, acShare = normFrac(AC_MONTH);
+  let homeG = 0, wpG = 0, evG = 0, acG = 0;
+  for (let m = 0; m < 12; m++) {
+    const homeM = homeKwh * DIM[m] / 365, wpM = hpMonthEst(m), evM = evK * DIM[m] / 365, acM = acK * acShare[m];
+    for (let h = 0; h < 24; h++) {
+      const gi = g[m][h];
+      homeG += homeM * homeShape[h] * gi; wpG += wpM * wpShape[h] * gi;
+      evG += evM * EV_SHAPE[h] * gi; acG += acM * AC_SHAPE[h] * gi;
+    }
+  }
+  const totalG = homeG + wpG + evG + acG, totalKwh = homeKwh + wpKwh + evK + acK;
+  return { totalKg: totalG / 1000, homeKg: homeG / 1000, wpKg: wpG / 1000,
+    evKg: evG / 1000, acKg: acG / 1000, totalKwh,
+    intensity: totalKwh > 0 ? totalG / totalKwh : c.annual_g };
+}
+
+function renderCarbon() {
+  const card = $('borse-co2-card'); if (!card) return;
+  const c = STATE.carbon, a = carbonAnalysis();
+  if (!c || !a) { if ($('borse-co2-note')) $('borse-co2-note').textContent = 'Noch keine Verbrauchsdaten.'; return; }
+  $('borse-co2-kpi').innerHTML =
+    `<div class="grid2"><div class="kpi sm"><div class="v">${fmt(a.totalKg / 1000, 2)} t</div><div class="l">CO₂ / Jahr (Strom)</div></div>` +
+    `<div class="kpi sm"><div class="v">${fmt(a.intensity, 0)} g</div><div class="l">Ø Intensität /kWh</div></div></div>`;
+  const hourG = c.hour_g || c.month_hour_g[new Date().getMonth()];
+  const lo = Math.min(...hourG), hi = Math.max(...hourG), span = (hi - lo) || 1;
+  const col = v => v <= lo + span * 0.34 ? '#4be0b0' : v >= lo + span * 0.67 ? '#ef6c4d' : '#f6b93b';
+  const bars = hourG.map((v, h) => ({ v, label: String(h), color: col(v) }));
+  $('borse-co2-chart').innerHTML =
+    `<div class="note" style="margin:2px 0 6px">Netz-CO₂ je Stunde (g/kWh, aktueller Monat)</div>` + barChart(bars, { h: 170 });
+  $('borse-co2-legend').innerHTML = legendHtml([
+    { color: '#4be0b0', label: 'grün' }, { color: '#f6b93b', label: 'mittel' }, { color: '#ef6c4d', label: 'grau' }]);
+  const idx = [...hourG.keys()];
+  const green = idx.slice().sort((x, y) => hourG[x] - hourG[y]).slice(0, 3).sort((x, y) => x - y);
+  const dirty = idx.slice().sort((x, y) => hourG[y] - hourG[x]).slice(0, 3).sort((x, y) => x - y);
+  const rng = hs => hs.map(h => h + '–' + (h + 1)).join(', ') + ' Uhr';
+  // what a plan-scale PV would save (operational grid CO₂ avoided by self-use)
+  let pvLine = '';
+  if ((parseFloat($('pv-kwp').value) || 0) > 0) {
+    try {
+      const r = simulatePv(pvInputs());
+      const savedKg = r.self_kwh * a.intensity / 1000;
+      if (savedKg > 5) pvLine = `<br>🌞 Deine geplante PV vermeidet grob <b>${fmt(savedKg, 0)} kg CO₂/Jahr</b> ` +
+        `(${fmt(savedKg / Math.max(1, a.totalKg) * 100, 0)} % deiner Strom-Emissionen).`;
+    } catch (e) {}
+  }
+  const trees = a.totalKg / 22;   // ~22 kg CO₂/a bound by one young tree – a common yardstick
+  $('borse-co2-note').innerHTML =
+    `Aufteilung: Hausstrom <b>${fmt(a.homeKg, 0)}</b>, Wärmepumpe <b>${fmt(a.wpKg, 0)}</b>` +
+    (a.evKg > 1 ? `, E-Auto <b>${fmt(a.evKg, 0)}</b>` : '') + (a.acKg > 1 ? `, Klima <b>${fmt(a.acKg, 0)}</b>` : '') +
+    ` kg/Jahr. Entspricht rund <b>${fmt(trees, 0)} Bäumen</b>, die das binden müssten.` +
+    `<br>🌱 <b>Grünste Stunden:</b> ${rng(green)} – <span style="color:#ef6c4d">graue</span>: ${rng(dirty)}. ` +
+    `Flexible Lasten in die grünen Stunden legen.` + pvLine +
+    `<br><span style="color:var(--muted)">Modell nach dt. Netz-Durchschnitt (${fmt(c.annual_g, 0)} g/kWh${c.demo ? ', Demo' : ''}); keine Echtzeit-Messung.</span>`;
+}
+
 function spotAnalysis(p) {
   const sp = STATE.spot;
   if (!sp || !sp.month_hour_ct) return null;
@@ -1101,7 +1189,7 @@ function devRow(title, sub, valTop, valBot, pct, col) {
 
 /* --------------------------------------------------------------- rendering */
 function renderAll() {
-  renderOverview(); renderToday(); renderHistory(); renderHeatpump(); renderProfile(); renderPv(); renderSettings(); renderAppliances(); renderMeter(); renderBorse(); renderKonzept();
+  renderOverview(); renderToday(); renderHistory(); renderHeatpump(); renderProfile(); renderPv(); renderSettings(); renderAppliances(); renderMeter(); renderBorse(); renderCarbon(); renderKonzept();
 }
 
 function renderOverview() {
