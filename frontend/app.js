@@ -7,7 +7,8 @@
 const LS = { base: 'bhe_base', price: 'bhe_price', demo: 'bhe_demo', house: 'bhe_house_kwh' };
 const PV_LS = { kwp: 'bhe_pv_kwp', orient: 'bhe_pv_orient', batt: 'bhe_pv_batt',
   feedin: 'bhe_pv_feedin', invest: 'bhe_pv_invest', evkm: 'bhe_pv_evkm', evkwh: 'bhe_pv_evkwh', ac: 'bhe_pv_ac',
-  v2h: 'bhe_pv_v2h', v2hkwh: 'bhe_pv_v2hkwh', v2hprice: 'bhe_pv_v2hprice', v2hhome: 'bhe_pv_v2hhome' };
+  v2h: 'bhe_pv_v2h', v2hkwh: 'bhe_pv_v2hkwh', v2hprice: 'bhe_pv_v2hprice', v2hhome: 'bhe_pv_v2hhome',
+  lat: 'bhe_pv_lat', lon: 'bhe_pv_lon', tilt: 'bhe_pv_tilt', az: 'bhe_pv_az', pgm: 'bhe_pv_pvgis_monthly' };
 const TAR_LS = { hhbase: 'bhe_tar_hhbase', wp: 'bhe_tar_wp', wpct: 'bhe_tar_wpct',
   wpbase: 'bhe_tar_wpbase', meter2: 'bhe_tar_meter2', spotbase: 'bhe_tar_spotbase' };
 const FIN_LS = { invest: 'bhe_fin_invest', rate: 'bhe_fin_rate', years: 'bhe_fin_years', infl: 'bhe_fin_infl' };
@@ -35,7 +36,7 @@ const MON = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Ok
 const COL = { sh: '#4da3ff', hp: '#ef6c4d', heat: '#f6b93b', away: '#ff6b8a' };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-18 · Boerse lastgewichtet + Warum + Investition/Kredit'
+const APP_VERSION = '2026-09-18 · PVGIS-Ertrag nach Standort + Boerse lastgewichtet + Kredit'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -130,6 +131,9 @@ const INFO = {
   'pv-gridfree': () => 'Ein Monat ist „netzfrei", wenn PV + Batterie ihn praktisch komplett decken (Netzbezug &lt; 1 %). ' +
     'Oben: welche Monate das mit <b>deiner</b> Anlage sind (grün). Unten: wie viele Monate es mit einer <b>größeren</b> ' +
     'Anlage (kWp) wären – der Speicher bleibt gleich. Die dunklen Wintermonate bleiben mit PV allein immer auf Netzstrom angewiesen.',
+  pvgis: () => 'Holt den <b>echten PV-Ertrag</b> für deinen Standort von <b>PVGIS</b> (EU-Kommission/JRC, kostenlos, ' +
+    'ohne Konto) – aus Koordinaten, Dachneigung und Ausrichtung. Setzt den <b>kWh/kWp</b>-Wert und die ' +
+    '<b>Monatskurve</b> deiner PV, damit PV-Ertrag, Autarkie und netzfreie Monate standortgenau werden.',
   'pv-v2h': () => 'Bidirektionales Laden (V2H): dein <b>Auto-Akku dient als Heimspeicher</b> und speist PV-Strom ' +
     'später ins Haus zurück – so kannst du einen <b>kleineren Heimspeicher</b> kaufen. Entscheidend ist, wie oft das ' +
     'Auto <b>tagsüber</b> zuhause steht: nur dann fängt es die Mittagssonne ein. Stell das unter „Auto tagsüber" ein. ' +
@@ -1889,9 +1893,19 @@ function normFrac(arr) {
   const s = arr.reduce((a, b) => a + Math.max(0, b), 0);
   return s > 0 ? arr.map(v => Math.max(0, v) / s) : arr.map(() => 1 / (arr.length || 1));
 }
+// Monthly PV production shape: real values from a PVGIS lookup if present,
+// otherwise the generic central-European default.
+function pvMonth() {
+  try {
+    const s = JSON.parse(localStorage.getItem(PV_LS.pgm));
+    if (Array.isArray(s) && s.length === 12 && s.every(v => v > 0)) return normFrac(s);
+  } catch (e) {}
+  return normFrac(PV_MONTH);
+}
 function pvHourFractions(m) {
   // daylight bell around 13:00; wider (longer days) in summer
-  const seasonal = (PV_MONTH[m] - Math.min(...PV_MONTH)) / (Math.max(...PV_MONTH) - Math.min(...PV_MONTH) || 1);
+  const pm = pvMonth();
+  const seasonal = (pm[m] - Math.min(...pm)) / (Math.max(...pm) - Math.min(...pm) || 1);
   const sigma = 2.1 + 1.5 * seasonal;
   const raw = [];
   for (let h = 0; h < 24; h++) raw.push(Math.exp(-((h + 0.5 - 13) ** 2) / (2 * sigma * sigma)));
@@ -1945,7 +1959,7 @@ function simulatePv(p) {
   const shDaily = shAvgDaily();
   const hpDaily = hpAvgDaily();
   const hpAnnual = hpDaily * 365;
-  const pvShare = normFrac(PV_MONTH), hpSeas = normFrac(HP_SEASON);
+  const pvShare = pvMonth(), hpSeas = normFrac(HP_SEASON);
   let Y = 0, S = 0, F = 0, G = 0, L = 0, repDay = null;
   const monthly = [];
   const evDayBase = p.evAnnual / 365;
@@ -2443,6 +2457,33 @@ async function doAegProbe() {
   btn.disabled = false;
 }
 
+async function doPvgis() {
+  const note = $('pv-pvgis-note'), btn = $('pv-pvgis');
+  const lat = parseFloat($('pv-lat').value), lon = parseFloat($('pv-lon').value);
+  if (!isFinite(lat) || !isFinite(lon)) { note.textContent = 'Bitte Breiten- und Längengrad eingeben (oder „Mein Standort").'; return; }
+  const tilt = parseFloat($('pv-tilt').value) || 35, az = parseFloat($('pv-az').value) || 0;
+  btn.disabled = true; note.textContent = 'Frage PVGIS für deinen Standort …';
+  try {
+    const r = await api(`/api/pvgis?lat=${lat}&lon=${lon}&tilt=${tilt}&az=${az}`);
+    if (!r || r.ok === false) { note.textContent = '⚠︎ ' + ((r && r.error) || 'PVGIS-Abruf fehlgeschlagen.'); btn.disabled = false; return; }
+    if (r.yield) {
+      // add/replace a PVGIS option in the yield dropdown and select it
+      const sel = $('pv-orient');
+      let opt = [...sel.options].find(o => o.dataset.pvgis);
+      if (!opt) { opt = document.createElement('option'); opt.dataset.pvgis = '1'; sel.appendChild(opt); }
+      opt.value = Math.round(r.yield); opt.textContent = `PVGIS Standort: ${Math.round(r.yield)} kWh/kWp`;
+      sel.value = opt.value;
+      try { localStorage.setItem(PV_LS.orient, opt.value); } catch (e) {}
+    }
+    if (Array.isArray(r.monthly) && r.monthly.every(v => v > 0)) {
+      try { localStorage.setItem(PV_LS.pgm, JSON.stringify(r.monthly)); } catch (e) {}
+    }
+    note.innerHTML = `✅ Übernommen: <b>${Math.round(r.yield)} kWh/kWp</b> und die Monatskurve für deinen Standort` +
+      (r.demo ? ' <span style="color:var(--muted)">(Demo)</span>' : '') + '.';
+    renderPv(); renderKonzept();
+  } catch (e) { note.textContent = 'Nur möglich, wenn die Seite von der Bridge geöffnet ist.'; }
+  btn.disabled = false;
+}
 function doPvSuggest() {
   const note = $('pv-suggest-note');
   const evAnnual = (Math.max(0, parseFloat($('pv-ev-km').value) || 0) * Math.max(0, parseFloat($('pv-ev-kwh').value) || 18)) / 100;
@@ -2794,6 +2835,26 @@ function init() {
     });
   }
   const pvSug = $('pv-suggest'); if (pvSug) pvSug.addEventListener('click', doPvSuggest);
+  // PVGIS location fields (persist) + buttons
+  [['pv-lat', PV_LS.lat], ['pv-lon', PV_LS.lon], ['pv-tilt', PV_LS.tilt], ['pv-az', PV_LS.az]].forEach(([id, key]) => {
+    const el = $(id); if (!el) return;
+    const s = localStorage.getItem(key); if (s !== null) el.value = s;
+    el.addEventListener('input', () => { try { localStorage.setItem(key, el.value); } catch (e) {} });
+  });
+  const pvGis = $('pv-pvgis'); if (pvGis) pvGis.addEventListener('click', doPvgis);
+  const pvLoc = $('pv-locate');
+  if (pvLoc) pvLoc.addEventListener('click', () => {
+    const note = $('pv-pvgis-note');
+    if (!navigator.geolocation) { note.textContent = 'Standort wird vom Browser nicht unterstützt – Koordinaten manuell eingeben.'; return; }
+    note.textContent = 'Ermittle Standort …';
+    navigator.geolocation.getCurrentPosition(
+      pos => {
+        $('pv-lat').value = pos.coords.latitude.toFixed(4); $('pv-lon').value = pos.coords.longitude.toFixed(4);
+        try { localStorage.setItem(PV_LS.lat, $('pv-lat').value); localStorage.setItem(PV_LS.lon, $('pv-lon').value); } catch (e) {}
+        note.textContent = 'Standort übernommen – jetzt „Ertrag von PVGIS holen".';
+      },
+      () => { note.textContent = 'Standort nicht verfügbar – bitte Koordinaten manuell eingeben.'; });
+  });
   const pvm = $('pv-monthly');
   if (pvm) {
     const onMove = e => { const r = e.target.closest && e.target.closest('.pvhit'); if (r) { e.stopPropagation(); showPvTip(+r.dataset.mi); } };

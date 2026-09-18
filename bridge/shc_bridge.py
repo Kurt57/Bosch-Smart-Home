@@ -65,6 +65,10 @@ try:
     import spot  # optional day-ahead exchange prices (aWATTar / EPEX)
 except Exception:  # pragma: no cover - keeps the bridge running without it
     spot = None
+try:
+    import pvgis  # optional PV yield lookup by location (EU JRC PVGIS)
+except Exception:  # pragma: no cover - keeps the bridge running without it
+    pvgis = None
 
 DEFAULT_FRONTEND = os.path.normpath(os.path.join(HERE, "..", "frontend"))
 DEFAULT_DB = os.path.join(HERE, "energy.db")
@@ -2066,6 +2070,27 @@ class Handler(BaseHTTPRequestHandler):
                 "backfilling": self.ctx.spot_backfilling,
                 "last_error": getattr(self.ctx, "spot_last_error", None)}
 
+    def _pvgis_payload(self, qs) -> dict:
+        """PV yield for a location via PVGIS (or a plausible demo value)."""
+        def q(name, default):
+            try:
+                return float(qs.get(name, [default])[0])
+            except (TypeError, ValueError):
+                return default
+        lat, lon = q("lat", None), q("lon", None)
+        tilt, az, loss = q("tilt", 35), q("az", 0), q("loss", 14)
+        if self.ctx.mode == "demo" or not pvgis:
+            # a plausible central-European south-facing result for the demo
+            monthly = [0.030, 0.050, 0.085, 0.112, 0.128, 0.130, 0.132, 0.115, 0.088, 0.060, 0.036, 0.024]
+            return {"ok": True, "demo": True, "yield": 1000, "monthly": monthly}
+        if lat is None or lon is None:
+            return {"ok": False, "error": "lat und lon erforderlich."}
+        try:
+            r = pvgis.fetch(lat, lon, tilt, az, loss)
+            return {"ok": True, "demo": False, **r}
+        except Exception as exc:
+            return {"ok": False, "error": f"PVGIS-Abruf fehlgeschlagen: {exc}"}
+
     def _appliances_payload(self) -> dict:
         """AEG/Electrolux appliances: live snapshot from the poller, enriched
         with today's kWh, or the last stored reading when the poller is idle."""
@@ -2477,6 +2502,7 @@ class Handler(BaseHTTPRequestHandler):
                     "spot_market": self.cfg.get("spot_market", "de"),
                     "spot_surcharge_ct": float(self.cfg.get("spot_surcharge_ct", 15.0) or 0),
                     "spot_vat": float(self.cfg.get("spot_vat", 19.0) or 0),
+                    "pvgis_available": pvgis is not None,
                 })
             if path == "/api/devices":
                 return self._send_json({"devices": self.store.devices()})
@@ -2491,6 +2517,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json({"readings": self.store.meter_list()})
             if path == "/api/spot":
                 return self._send_json(self._spot_payload())
+            if path == "/api/pvgis":
+                return self._send_json(self._pvgis_payload(qs))
             if path == "/api/homecom/authurl":
                 if not homecom:
                     return self._send_json({"error": "homecom modul fehlt"}, 500)

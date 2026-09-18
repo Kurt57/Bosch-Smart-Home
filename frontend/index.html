@@ -428,6 +428,24 @@
             <option value="800">flach / teilverschattet (~800)</option>
           </select></div>
       </div>
+      <details style="margin-top:10px">
+        <summary style="cursor:pointer; color:var(--accent); font-size:13px">
+          📍 Echten Ertrag für deinen Standort holen (PVGIS)
+          <span class="info" data-info="pvgis" role="button" aria-label="Info">i</span></summary>
+        <div class="grid2" style="margin-top:8px">
+          <div><label>Breitengrad (lat)</label>
+            <input id="pv-lat" type="number" step="0.0001" inputmode="decimal" placeholder="z. B. 51.05"></div>
+          <div><label>Längengrad (lon)</label>
+            <input id="pv-lon" type="number" step="0.0001" inputmode="decimal" placeholder="z. B. 13.74"></div>
+          <div><label>Dachneigung (°)</label>
+            <input id="pv-tilt" type="number" step="1" min="0" max="90" inputmode="numeric" placeholder="35"></div>
+          <div><label>Azimut (0=Süd, −90=Ost, 90=West)</label>
+            <input id="pv-az" type="number" step="5" min="-180" max="180" inputmode="numeric" placeholder="0"></div>
+        </div>
+        <button class="btn sec" id="pv-locate" style="margin-top:8px">📍 Mein Standort</button>
+        <button class="btn" id="pv-pvgis" style="margin-top:8px">☀️ Ertrag von PVGIS holen</button>
+        <div class="note" id="pv-pvgis-note" style="margin-top:8px">Kostenlos, ohne Konto (EU-Kommission/JRC). Füllt Ertrag &amp; Monatskurve für deinen Standort.</div>
+      </details>
       <div class="grid2" style="margin-top:10px">
         <div><label>Batteriespeicher (kWh)</label>
           <input id="pv-batt" type="number" step="0.5" min="0" inputmode="decimal" value="0"></div>
