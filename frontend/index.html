@@ -493,6 +493,10 @@
         <div><label>Einspeisung (ct/kWh)</label>
           <input id="pv-feedin" type="number" step="0.1" min="0" inputmode="decimal" value="8.0"></div>
       </div>
+      <label style="margin-top:10px; display:flex; align-items:center; gap:8px; cursor:pointer">
+        <input type="checkbox" id="pv-cap60" style="width:auto"> 🔌 60 %-Einspeisegrenze (ohne Smart Meter)
+        <span class="info" data-info="cap60" role="button" aria-label="Info">i</span></label>
+      <div class="note" id="pv-cap60-note" style="margin-top:6px"></div>
       <div class="grid2" style="margin-top:10px">
         <div><label>E-Auto: km / Jahr <span class="info" data-info="pv-ev" role="button" aria-label="Info">i</span></label>
           <input id="pv-ev-km" type="number" min="0" step="500" inputmode="numeric" placeholder="0 = keins"></div>

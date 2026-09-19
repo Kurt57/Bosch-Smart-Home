@@ -8,7 +8,8 @@ const LS = { base: 'bhe_base', price: 'bhe_price', demo: 'bhe_demo', house: 'bhe
 const PV_LS = { kwp: 'bhe_pv_kwp', orient: 'bhe_pv_orient', batt: 'bhe_pv_batt',
   feedin: 'bhe_pv_feedin', invest: 'bhe_pv_invest', evkm: 'bhe_pv_evkm', evkwh: 'bhe_pv_evkwh', ac: 'bhe_pv_ac',
   v2h: 'bhe_pv_v2h', v2hkwh: 'bhe_pv_v2hkwh', v2hprice: 'bhe_pv_v2hprice', v2hhome: 'bhe_pv_v2hhome',
-  lat: 'bhe_pv_lat', lon: 'bhe_pv_lon', tilt: 'bhe_pv_tilt', az: 'bhe_pv_az', pgm: 'bhe_pv_pvgis_monthly' };
+  lat: 'bhe_pv_lat', lon: 'bhe_pv_lon', tilt: 'bhe_pv_tilt', az: 'bhe_pv_az', pgm: 'bhe_pv_pvgis_monthly',
+  cap60: 'bhe_pv_cap60' };
 const TAR_LS = { hhbase: 'bhe_tar_hhbase', wp: 'bhe_tar_wp', wpct: 'bhe_tar_wpct',
   wpbase: 'bhe_tar_wpbase', meter2: 'bhe_tar_meter2', spotbase: 'bhe_tar_spotbase' };
 const FIN_LS = { invest: 'bhe_fin_invest', rate: 'bhe_fin_rate', years: 'bhe_fin_years', infl: 'bhe_fin_infl' };
@@ -36,7 +37,7 @@ const MON = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Ok
 const COL = { sh: '#4da3ff', hp: '#ef6c4d', heat: '#f6b93b', away: '#ff6b8a' };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-19 · AEG-Startzeit + Sparpotenzial + Tibber + WP-Wetterprognose'
+const APP_VERSION = '2026-09-19 · 60%-Einspeisegrenze + Sparpotenzial + Tibber-Verbrauch + Tibber-Preise'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -154,6 +155,13 @@ const INFO = {
     'rechnet daraus für die nächsten Tage den <b>erwarteten PV-Ertrag</b> (aus der stündlichen Sonneneinstrahlung × deiner ' +
     'kWp) und den voraussichtlichen <b>Wärmepumpen-Strombedarf</b> (aus der Außentemperatur und deinen Gebäudedaten). So siehst ' +
     'du früh, ob morgen ein <b>PV-Überschuss</b>-Tag wird und wann die besten Stunden für Waschen/Laden sind. Grobe Schätzung.',
+  cap60: () => '<b>60 %-Einspeisegrenze (Solarspitzengesetz, seit 2025):</b> Neue PV-Anlagen <b>ohne intelligentes ' +
+    'Messsystem (Smart Meter)</b> dürfen am Netzanschluss höchstens <b>60 % der installierten kWp</b> ins Netz ' +
+    'einspeisen. Das ist eine <b>Momentanleistungs-Grenze, keine Jahresgrenze</b>: bei 10 kWp nie mehr als 6 kW ' +
+    'gleichzeitig. Der Überschuss in den Mittagsspitzen muss selbst verbraucht, gespeichert oder <b>abgeregelt</b> ' +
+    '(= verworfen) werden. <b>Eigenverbrauch und Speicher</b> senken den Verlust stark; mit <b>Smart Meter entfällt ' +
+    'die Grenze</b> (dafür darf der Netzbetreiber bei Engpässen/negativen Preisen steuern). Regeln ändern sich – ' +
+    'maßgeblich ist dein Netzbetreiber.',
   'pv-v2h': () => 'Bidirektionales Laden (V2H): dein <b>Auto-Akku dient als Heimspeicher</b> und speist PV-Strom ' +
     'später ins Haus zurück – so kannst du einen <b>kleineren Heimspeicher</b> kaufen. Entscheidend ist, wie oft das ' +
     'Auto <b>tagsüber</b> zuhause steht: nur dann fängt es die Mittagssonne ein. Stell das unter „Auto tagsüber" ein. ' +
@@ -2437,6 +2445,7 @@ function pvInputs() {
     carKwh: Math.max(0, parseFloat($('pv-v2h-kwh') && $('pv-v2h-kwh').value) || 0),
     v2hPrice: Math.max(0, parseFloat($('pv-v2h-price') && $('pv-v2h-price').value) || 800),
     carHome: V2H_PROFILES[($('pv-v2h-home') && $('pv-v2h-home').value) || 'home'] || V2H_PROFILES.home,
+    cap60: !!($('pv-cap60') && $('pv-cap60').checked),
   };
 }
 // Air-conditioning: strongly summer (cooling season) and afternoon-weighted –
@@ -2518,12 +2527,50 @@ function simulatePv(p) {
       loadSh: mSh, loadHp: mHp, loadEv: mEv, loadAc: mAc });
     if (dPv) repDay = { pv: dPv, load: dLoad };
   }
+  // 60 % feed-in cap: curtailment only occurs on CLEAR days (peak > 0.6·kWp),
+  // which the average-day balance above smooths away – so estimate it separately.
+  const C = p.cap60 ? Math.min(F, curtailEstimate(p)) : 0;
+  const feedFinal = F - C;                       // the cap only throws away feed, not self-use
   return {
-    yield_kwh: Y, self_kwh: S, feed_kwh: F, grid_kwh: G, load_kwh: L,
+    yield_kwh: Y, self_kwh: S, feed_kwh: feedFinal, grid_kwh: G, load_kwh: L,
+    curtail_kwh: C, curtail_loss: C * p.feedin,
     self_rate: Y > 0 ? S / Y : 0, autarky: L > 0 ? S / L : 0,
-    savings: S * STATE.price, feed_rev: F * p.feedin, benefit: S * STATE.price + F * p.feedin,
+    savings: S * STATE.price, feed_rev: feedFinal * p.feedin, benefit: S * STATE.price + feedFinal * p.feedin,
     monthly, repDay,
   };
+}
+
+// Estimate annual energy curtailed by a 60 % feed-in cap. The average day never
+// reaches the cap, so we model a representative CLEAR day per month (higher
+// output, same daylight shape) and cap its midday grid export; a battery soaks
+// up part of the peak. Rough but physically grounded.
+function curtailEstimate(p) {
+  const cap = 0.6 * p.kwp; if (cap <= 0) return 0;
+  const shShape = normFrac((STATE.data && STATE.data.hourly_profile || []).map(h => h.avg_w));
+  const hpProf = (STATE.hpA && STATE.hpA.hourly_profile) || [];
+  const hpShape = hpProf.length && hpProf.some(h => h.avg_w > 0) ? normFrac(hpProf.map(h => h.avg_w)) : new Array(24).fill(1 / 24);
+  const shDaily = shAvgDaily(), hpDaily = hpAvgDaily(), hpAnnual = hpDaily * 365;
+  const pvShare = pvMonth(), hpSeas = normFrac(HP_SEASON), acShare = normFrac(AC_MONTH);
+  const useReal = !!hpRealMonthMap(), evDayBase = p.evAnnual / 365;
+  let C = 0;
+  for (let m = 0; m < 12; m++) {
+    const days = new Date(2025, m + 1, 0).getDate();
+    const clearDays = Math.max(1, Math.round(days * 0.30));       // ~30 % of days are clear
+    const clearDayPv = (p.kwp * p.spec * pvShare[m]) * 0.55 / clearDays;  // carrying ~55 % of the month's yield
+    const pvH = pvHourFractions(m);
+    const dayHp = (useReal ? hpMonthEst(m) : hpAnnual * (0.35 * (days / 365) + 0.65 * hpSeas[m])) / days;
+    const dayEv = evDayBase * (1 + 0.12 * Math.cos(2 * Math.PI * m / 12));
+    const dayAc = (p.acAnnual * acShare[m]) / days;
+    const battPeak = p.batt / 3;                                  // a battery soaks up ~its capacity over ~3 midday hours
+    for (let h = 0; h < 24; h++) {
+      const pv = clearDayPv * pvH[h];
+      const load = shDaily * shShape[h] + (p.noHp ? 0 : dayHp * hpShape[h]) + dayEv * EV_SHAPE[h] + dayAc * AC_SHAPE[h];
+      const batt = (h >= 11 && h <= 14) ? battPeak : 0;
+      const feed = Math.max(0, pv - load - batt);
+      C += Math.max(0, feed - cap) * clearDays;
+    }
+  }
+  return C;
 }
 
 // Per month: a stacked PV bar (direct self / battery self / feed-in) next to a
@@ -2747,6 +2794,25 @@ function renderPv() {
   $('pv-autarky').innerHTML = fmt(r.autarky * 100, 0) + ' %';
   $('pv-self').innerHTML = fmt(r.self_rate * 100, 0) + ' %';
   $('pv-benefit').innerHTML = money(r.benefit);
+
+  // 60 % feed-in cap: what it costs, and how storage / self-use rescues it
+  const capNote = $('pv-cap60-note');
+  if (capNote) {
+    if (p.cap60 && r.curtail_kwh > 0.5) {
+      const bare = simulatePv({ ...p, batt: 0, v2h: false });
+      const rescued = Math.max(0, bare.curtail_kwh - r.curtail_kwh);
+      const pctLost = r.yield_kwh > 0 ? r.curtail_kwh / r.yield_kwh * 100 : 0;
+      capNote.innerHTML = `🔌 Durch die <b>60 %-Kappung</b> (max. ${fmt(0.6 * p.kwp, 1)} kW ins Netz) werden ` +
+        `~<b>${kwh(r.curtail_kwh, 0)}/Jahr</b> abgeregelt = <b>${fmt(pctLost, 0)} %</b> des Ertrags ` +
+        `(~${money(r.curtail_loss)} entgangene Einspeisung).` +
+        (p.batt > 0 && rescued > 1 ? ` Dein <b>Speicher</b> rettet davon schon ~<b>${kwh(rescued, 0)}/Jahr</b>.` : '') +
+        ` Mit <b>Smart Meter</b> entfällt die Grenze. <span style="color:var(--muted)">Momentanleistung, keine Jahresgrenze – grobe Stundenschätzung.</span>`;
+    } else if (p.cap60) {
+      capNote.innerHTML = `🔌 Mit dieser Konfiguration greift die 60 %-Kappung kaum – Eigenverbrauch/Speicher fangen die Mittagsspitzen ab. 👍`;
+    } else {
+      capNote.innerHTML = '';
+    }
+  }
 
   _pvMonths = r.monthly.map(x => ({ label: MON[x.m], ...x }));
   $('pv-monthly').innerHTML = pvMonthlyChart(_pvMonths);
@@ -3575,6 +3641,14 @@ function init() {
     v2h.addEventListener('change', () => {
       try { localStorage.setItem(PV_LS.v2h, v2h.checked ? '1' : '0'); } catch (e) {}
       renderPv();
+    });
+  }
+  const cap60 = $('pv-cap60');
+  if (cap60) {
+    try { cap60.checked = localStorage.getItem(PV_LS.cap60) === '1'; } catch (e) {}
+    cap60.addEventListener('change', () => {
+      try { localStorage.setItem(PV_LS.cap60, cap60.checked ? '1' : '0'); } catch (e) {}
+      renderPv(); renderKonzept();
     });
   }
   const v2hHome = $('pv-v2h-home');
