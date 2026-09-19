@@ -37,7 +37,7 @@ const MON = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Ok
 const COL = { sh: '#4da3ff', hp: '#ef6c4d', heat: '#f6b93b', away: '#ff6b8a' };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-19 · 60%-Einspeisegrenze + Sparpotenzial + Tibber-Verbrauch + Tibber-Preise'
+const APP_VERSION = '2026-09-19 · Home-Assistant-Anbindung + 60%-Kappung + Tibber + Sparpotenzial'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -190,6 +190,10 @@ const INFO = {
   'tibber-cons': () => 'Dein <b>tatsächlicher Gesamtverbrauch</b> pro Tag, direkt aus dem Tibber-Zähler (also dem ' +
     'Netzzähler des ganzen Hauses). Das erfasst <b>alles</b> – auch Geräte, die die Bosch-Module nicht messen ' +
     '(Kühlschrank, Herd, Licht …). Gut als Gegenprobe zur gemessenen Smart-Home-Summe und zur Zählerkalibrierung.',
+  ha: () => 'Liest Leistungs- und Energiesensoren aus deinem <b>Home Assistant</b> (lokal, über dessen REST-API mit ' +
+    'einem Zugangs-Token). Damit kommen Geräte in die App, die die Bosch-Module nicht messen – z. B. eine alte ' +
+    '<b>Koogeek-Steckdose</b>, die du in HA über den <b>HomeKit Controller</b> eingebunden hast: HA erledigt die ' +
+    'HomeKit-Kopplung, wir lesen nur den fertigen <b>Watt-Wert</b>. Adresse und Token bleiben lokal auf der Bridge.',
   tibber: () => 'Verbindet dein <b>Tibber</b>-Konto (Access Token von developer.tibber.com). Dann nutzt der ganze ' +
     'Börse-Tab – Preiskurve, beste Zeiten, Live-Ampel, Smart-Timer – deine <b>echten stündlichen Tarifpreise</b> ' +
     '(all-in inkl. Netz, Abgaben, MwSt.) statt der Börse-plus-Aufschlag-Schätzung. Der Token bleibt lokal auf der ' +
@@ -461,7 +465,8 @@ async function loadAll() {
     }
     const p = STATE.price;
     const wantTib = health.tibber_connected || health.mode === 'demo';
-    const [ov, hpA, data, appl, meter, sp, co2, tibCons] = await Promise.all([
+    const wantHa = health.ha_connected || health.mode === 'demo';
+    const [ov, hpA, data, appl, meter, sp, co2, tibCons, haData] = await Promise.all([
       api('/api/overview?days=90&price=' + p),
       api('/api/heatpump/analytics?days=90&price=' + p),
       api('/api/analytics?days=90&price=' + p),
@@ -470,11 +475,13 @@ async function loadAll() {
       api('/api/spot').catch(() => null),
       api('/api/carbon').catch(() => null),
       wantTib ? api('/api/tibber/consumption?resolution=DAILY&last=30').catch(() => null) : Promise.resolve(null),
+      wantHa ? api('/api/ha').catch(() => null) : Promise.resolve(null),
     ]);
     STATE.ov = ov; STATE.hpA = hpA; STATE.data = data; STATE.appliances = appl;
     STATE.meter = (meter && meter.readings) || [];
     STATE.spot = sp;
     STATE.tibberCons = (tibCons && tibCons.ok) ? tibCons : null;
+    STATE.ha = haData || null;
     STATE.carbon = (co2 && co2.ok) ? co2 : demoCarbon();
     STATE.cur = data.currency || STATE.cur;
     $('cur').textContent = STATE.cur;
@@ -523,6 +530,10 @@ function applyDemo(mode) {
   STATE.tibberCons = { ok: true, demo: true, resolution: 'DAILY', nodes: tNodes,
     total_kwh: Math.round(tNodes.reduce((a, n) => a + n.kwh, 0) * 100) / 100,
     total_cost: Math.round(tNodes.reduce((a, n) => a + n.cost, 0) * 100) / 100 };
+  STATE.ha = { available: true, connected: true, demo: true, entities: [
+    { entity_id: 'sensor.koogeek_p1eu_power', name: 'Koogeek P1EU – Leistung', kind: 'power', unit: 'W', watt: 47 },
+    { entity_id: 'sensor.koogeek_p1eu_energy', name: 'Koogeek P1EU – Energie', kind: 'energy', unit: 'kWh', kwh: 128.4 },
+    { entity_id: 'sensor.fridge_power', name: 'Kühlschrank – Leistung', kind: 'power', unit: 'W', watt: 78 }] };
   STATE.cur = '€'; $('cur').textContent = STATE.cur;
   setMode(mode);
   renderAll();
@@ -787,6 +798,42 @@ function renderAppliances() {
         '<b>Waschgänge × ø kWh/Gang</b> (im Setup anpassbar). „Heute" = neue Waschgänge seit Mitternacht.'
       : 'Strom pro Waschgang & gesamt aus der AEG/Electrolux-Cloud. „Heute" = Zuwachs des Gesamtzählers seit Mitternacht.'));
 }
+// Home Assistant power/energy sensors (e.g. a Koogeek plug via HA's HomeKit
+// Controller), shown live on the overview.
+function renderHa() {
+  const card = $('ov-ha-card'); if (!card) return;
+  const ha = STATE.ha;
+  const ents = (ha && ha.entities) || [];
+  if (!ha || !ha.connected || !ents.length) { card.hidden = true; return; }
+  card.hidden = false;
+  const price = STATE.price;
+  const powers = ents.filter(e => e.kind === 'power' && e.watt != null);
+  const energies = ents.filter(e => e.kind === 'energy' && e.kwh != null);
+  const energyByPrefix = {};
+  energies.forEach(e => { energyByPrefix[e.entity_id.replace(/_energy$/i, '')] = e; });
+  const rows = powers.map(e => {
+    const w = e.watt;
+    const en = energyByPrefix[e.entity_id.replace(/_power$/i, '')];
+    const sub = [`${fmt(w, 0)} W jetzt`];
+    if (en) sub.push(`Zähler ${kwh(en.kwh, 0)}`);
+    // rough running cost if this load stayed constant
+    const yearCost = w / 1000 * 8760 * price;
+    return `<div class="devrow"><div class="nm"><b>${esc(e.name)}</b><small>${sub.join(' · ')}</small></div>` +
+      `<div class="val"><b>${fmt(w, 0)} W</b>${w > 1 ? `<small>~${money(yearCost)}/J bei Dauerlauf</small>` : ''}</div></div>`;
+  });
+  // energy-only sensors without a matching power sensor
+  energies.filter(e => !powers.some(pw => pw.entity_id.replace(/_power$/i, '') === e.entity_id.replace(/_energy$/i, '')))
+    .forEach(e => rows.push(`<div class="devrow"><div class="nm"><b>${esc(e.name)}</b><small>Energiezähler</small></div>` +
+      `<div class="val"><b>${kwh(e.kwh, 0)}</b></div></div>`));
+  $('ov-ha-body').innerHTML = rows.join('') || '<div class="note">Keine Leistungs-/Energiesensoren gefunden.</div>';
+  const totW = powers.reduce((a, e) => a + e.watt, 0);
+  $('ov-ha-sum').textContent = powers.length ? fmt(totW, 0) + ' W' : '';
+  $('ov-ha-note').innerHTML = (ha.last_error
+    ? `<span style="color:#ff6b8a">Letzter Fehler: ${esc(ha.last_error)}</span> · `
+    : '') + `Live aus <b>Home Assistant</b>${ha.demo ? ' <span style="color:var(--muted)">(Demo)</span>' : ''}. ` +
+    `„W jetzt" ist die aktuelle Leistung; der Jahreswert gilt nur bei Dauerlauf.`;
+}
+
 function renderMeter() {
   const list = $('meter-list'), note = $('meter-note'); if (!note) return;
   const di = $('meter-date'); if (di && !di.value) di.value = new Date().toISOString().slice(0, 10);
@@ -1399,7 +1446,7 @@ function devRow(title, sub, valTop, valBot, pct, col) {
 
 /* --------------------------------------------------------------- rendering */
 function renderAll() {
-  renderOverview(); renderToday(); renderHistory(); renderHeatpump(); renderProfile(); renderPv(); renderSettings(); renderAppliances(); renderMeter(); renderBorse(); renderCarbon(); renderSmart(); renderKonzept();
+  renderOverview(); renderToday(); renderHistory(); renderHeatpump(); renderProfile(); renderPv(); renderSettings(); renderAppliances(); renderMeter(); renderBorse(); renderCarbon(); renderSmart(); renderKonzept(); renderHa();
 }
 
 function renderOverview() {
@@ -2951,6 +2998,18 @@ function renderSettings() {
           ? '<b style="color:#4be0b0">Verbunden ✓</b> – die Börse-Ansicht nutzt deine echten Tibber-Preise.'
           : 'Noch nicht verbunden.';
   }
+  const has = $('ha-status');
+  if (has) {
+    const cnt = (STATE.ha && STATE.ha.entities || []).length;
+    has.innerHTML = h.ha_available === false
+      ? 'HA-Modul nicht installiert (Datei <code>bridge/ha_client.py</code> fehlt).'
+      : h.mode === 'demo'
+        ? '<b>Demo</b> – Beispiel-Sensoren (Koogeek P1EU). Auf deiner Bridge dein echtes Home Assistant verbinden.'
+        : h.ha_connected
+          ? `<b style="color:#4be0b0">Verbunden ✓</b>${cnt ? ' – ' + cnt + ' Sensor(en) auf der Übersicht' : ''}.`
+          : 'Noch nicht verbunden.';
+    const uu = $('ha-url'); if (uu && document.activeElement !== uu && h.ha_url) uu.value = h.ha_url;
+  }
 
   const se = $('spot-enabled');
   if (se && document.activeElement !== se) {
@@ -3029,6 +3088,24 @@ async function doAegConnect() {
       note.innerHTML = '✅ ' + esc(r.message || 'Verbunden.');
       $('aeg-refresh').value = ''; $('aeg-access').value = '';   // don't leave tokens on screen
       setTimeout(loadAll, 1500);
+    } else note.innerHTML = '⚠︎ ' + esc(r.error || 'Verbindung fehlgeschlagen.');
+  } catch (e) { note.textContent = 'Fehler: ' + e.message + ' – Seite von der Bridge geöffnet?'; }
+  btn.disabled = false;
+}
+
+async function doHaConnect() {
+  const note = $('ha-note'), btn = $('ha-connect');
+  const url = $('ha-url').value.trim(), token = $('ha-token').value.trim();
+  const entities = $('ha-entities').value.trim();
+  if (!url || !token) { note.textContent = 'Bitte Adresse und Token eingeben.'; return; }
+  btn.disabled = true; note.textContent = 'Verbinde mit Home Assistant …';
+  try {
+    const r = await postJSON('/api/ha/connect', { url, token, entities });
+    if (r.ok) {
+      const n = (r.entities || []).length;
+      note.innerHTML = '✅ ' + esc(r.message || 'Verbunden.') + (n ? ` (${n} Sensor(en))` : '');
+      $('ha-token').value = '';                     // don't leave the token on screen
+      setTimeout(loadAll, 1200);
     } else note.innerHTML = '⚠︎ ' + esc(r.error || 'Verbindung fehlgeschlagen.');
   } catch (e) { note.textContent = 'Fehler: ' + e.message + ' – Seite von der Bridge geöffnet?'; }
   btn.disabled = false;
@@ -3528,6 +3605,7 @@ function init() {
   if (aegD) aegD.addEventListener('click', () => window.open('https://developer.electrolux.one/dashboard', '_blank'));
   const aegC = $('aeg-connect'); if (aegC) aegC.addEventListener('click', doAegConnect);
   const tibC = $('tibber-connect'); if (tibC) tibC.addEventListener('click', doTibberConnect);
+  const haC = $('ha-connect'); if (haC) haC.addEventListener('click', doHaConnect);
   const aegP = $('aeg-probe'); if (aegP) aegP.addEventListener('click', doAegProbe);
   const saveSpot = async () => {
     const sn = $('spot-note');

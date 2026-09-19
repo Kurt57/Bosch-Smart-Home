@@ -217,6 +217,11 @@
       <div id="ov-aeg-body"></div>
       <div class="note" id="ov-aeg-note" style="margin-top:8px"></div>
     </div>
+    <div class="card" id="ov-ha-card" hidden>
+      <h2><span class="info" data-info="ha" role="button" aria-label="Info">i</span>🏠 Home Assistant <span class="r" id="ov-ha-sum"></span></h2>
+      <div id="ov-ha-body"></div>
+      <div class="note" id="ov-ha-note" style="margin-top:8px"></div>
+    </div>
     <div class="card" id="ov-savings-card" hidden>
       <h2><span class="info" data-info="savings" role="button" aria-label="Info">i</span>💶 Sparpotenzial</h2>
       <div id="ov-savings-body"></div>
@@ -916,6 +921,31 @@
              placeholder="Token aus developer.tibber.com">
       <button class="btn" id="tibber-connect" style="margin-top:8px">Verbinden</button>
       <div class="note" id="tibber-note" style="margin-top:8px"></div>
+    </div>
+
+    <div class="card" id="ha-card">
+      <h2><span class="info" data-info="ha" role="button" aria-label="Info">i</span>🏠 Home Assistant verbinden</h2>
+      <div class="note" id="ha-status" style="margin-bottom:10px"></div>
+      <div class="note" style="line-height:1.6; margin-bottom:10px">
+        Läuft bei dir <b>Home Assistant</b>? Dann kann die App die <b>Leistung/Energie-Sensoren</b> von dort lesen –
+        z. B. eine per <b>HomeKit Controller</b> eingebundene <b>Koogeek-Steckdose</b>. So geht's:<br>
+        1. In HA: Profil → <b>Langlebige Zugangs-Tokens</b> → Token erstellen.<br>
+        2. Adresse (z. B. <code>http://homeassistant.local:8123</code>) und Token hier eintragen.<br>
+        Token &amp; Adresse bleiben <b>lokal</b> auf der Bridge (in <code>config.json</code>).
+      </div>
+      <div class="grid2">
+        <div><label>Home-Assistant-Adresse</label>
+          <input id="ha-url" autocomplete="off" autocapitalize="off" spellcheck="false"
+                 placeholder="http://homeassistant.local:8123"></div>
+        <div><label>Zugangs-Token</label>
+          <input id="ha-token" type="password" autocomplete="off" autocapitalize="off" spellcheck="false"
+                 placeholder="Long-Lived Access Token"></div>
+      </div>
+      <label style="margin-top:10px; display:block">Nur bestimmte Sensoren (optional, Komma-getrennt)</label>
+      <input id="ha-entities" autocomplete="off" autocapitalize="off" spellcheck="false"
+             placeholder="leer = alle Leistungs-/Energiesensoren">
+      <button class="btn" id="ha-connect" style="margin-top:8px">Verbinden</button>
+      <div class="note" id="ha-note" style="margin-top:8px"></div>
     </div>
 
     <div class="card">

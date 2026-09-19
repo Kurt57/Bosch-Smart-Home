@@ -81,6 +81,10 @@ try:
     import tibber  # optional Tibber dynamic-tariff client (real all-in prices)
 except Exception:  # pragma: no cover - keeps the bridge running without it
     tibber = None
+try:
+    import ha_client as ha  # optional Home Assistant REST client (power/energy sensors)
+except Exception:  # pragma: no cover - keeps the bridge running without it
+    ha = None
 
 DEFAULT_FRONTEND = os.path.normpath(os.path.join(HERE, "..", "frontend"))
 DEFAULT_DB = os.path.join(HERE, "energy.db")
@@ -131,6 +135,11 @@ def load_config(path: str) -> dict:
         # Optional Tibber account: a personal read token yields the user's REAL
         # all-in tariff price per hour (overrides the market+surcharge estimate).
         "tibber_token": "",
+        # Optional Home Assistant: read power/energy sensors (e.g. a Koogeek plug
+        # paired via HA's HomeKit Controller) over HA's REST API.
+        "ha_url": "",
+        "ha_token": "",
+        "ha_entities": "",             # comma-separated entity_ids ("" = auto power/energy)
         # Auto-update: when > 0, the bridge periodically checks the git remote
         # and, if new commits are available, pulls and restarts itself. 0 = off.
         "auto_update_interval": 0,     # minutes between update checks (0 = off)
@@ -1855,6 +1864,30 @@ class Runtime:
         self.spot_backfilling = False
         self.tibber_cache = None        # {"data":..., "ts":...}
         self.tibber_last_error = None
+        self.ha_cache = None            # {"data":..., "ts":...}
+        self.ha_last_error = None
+
+    def ha_values(self):
+        """Lazily read Home Assistant power/energy sensors (cached ~20 s)."""
+        if self.mode == "demo":
+            return ha.demo() if ha else None
+        url = (self.cfg.get("ha_url") or "").strip()
+        token = (self.cfg.get("ha_token") or "").strip()
+        if not ha or not url or not token:
+            return None
+        c = self.ha_cache
+        now = int(time.time())
+        if c and now - c["ts"] < 20:
+            return c["data"]
+        ents = [e.strip() for e in (self.cfg.get("ha_entities") or "").split(",") if e.strip()]
+        try:
+            data = ha.fetch(url, token, ents or None)
+            self.ha_cache = {"data": data, "ts": now}
+            self.ha_last_error = None
+            return data
+        except Exception as exc:
+            self.ha_last_error = str(exc)
+            return c["data"] if c else None
 
     def tibber_prices(self):
         """Lazily fetch the user's real Tibber prices (cached ~15 min). Returns
@@ -2289,6 +2322,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._post_electrolux_probe(body)
             if parsed.path == "/api/tibber/connect":
                 return self._post_tibber_connect(body)
+            if parsed.path == "/api/ha/connect":
+                return self._post_ha_connect(body)
             if parsed.path == "/api/meter":
                 return self._post_meter(body)
             if parsed.path == "/api/meter/delete":
@@ -2541,6 +2576,32 @@ class Handler(BaseHTTPRequestHandler):
         return self._send_json({"ok": True, "connected": True, "home": info.get("home"),
                                 "message": f"Verbunden mit Tibber ({info.get('home')})."})
 
+    def _post_ha_connect(self, body):
+        """Save + verify Home Assistant URL and token, return discovered
+        power/energy entities."""
+        if not ha:
+            return self._send_json({"ok": False, "error": "HA-Modul fehlt (ha_client.py)."}, 500)
+        url = str(body.get("url") or "").strip()
+        token = str(body.get("token") or "").strip()
+        ents = str(body.get("entities") or "").strip()
+        if not url or not token:
+            return self._send_json({"ok": False, "error": "Adresse und Token sind erforderlich."}, 400)
+        try:
+            ha.verify(url, token)
+            found = ha.fetch(url, token, [e.strip() for e in ents.split(",") if e.strip()] or None)
+        except ha.HAAuthError as exc:
+            return self._send_json({"ok": False, "error": str(exc)}, 200)
+        except Exception as exc:
+            return self._send_json({"ok": False, "error": f"Verbindung fehlgeschlagen: {exc}"}, 200)
+        self.cfg["ha_url"] = url
+        self.cfg["ha_token"] = token
+        self.cfg["ha_entities"] = ents
+        save_config(self.cfg, self.cfg.get("_config_path", DEFAULT_CONFIG))
+        self.ctx.ha_cache = None
+        names = ", ".join(e["name"] for e in found.get("entities", [])[:6]) or "keine"
+        return self._send_json({"ok": True, "connected": True, "entities": found.get("entities", []),
+                                "message": f"Verbunden. Sensoren: {names}."})
+
     def _post_electrolux_probe(self, body):
         """Diagnostic: dump one appliance's full reported state + energy fields,
         so the exact per-model field names can be inspected."""
@@ -2646,6 +2707,9 @@ class Handler(BaseHTTPRequestHandler):
                     "carbon_available": carbon is not None,
                     "tibber_available": tibber is not None,
                     "tibber_connected": bool(self.cfg.get("tibber_token")),
+                    "ha_available": ha is not None,
+                    "ha_connected": bool(self.cfg.get("ha_url") and self.cfg.get("ha_token")),
+                    "ha_url": self.cfg.get("ha_url", ""),
                 })
             if path == "/api/devices":
                 return self._send_json({"devices": self.store.devices()})
@@ -2674,6 +2738,14 @@ class Handler(BaseHTTPRequestHandler):
                     "home": (data or {}).get("home"),
                     "count": len((data or {}).get("prices") or []),
                     "last_error": self.ctx.tibber_last_error})
+            if path == "/api/ha":
+                data = self.ctx.ha_values()
+                connected = bool(self.cfg.get("ha_token") and self.cfg.get("ha_url")) or self.ctx.mode == "demo"
+                return self._send_json({
+                    "available": ha is not None, "connected": connected,
+                    "entities": (data or {}).get("entities") or [],
+                    "demo": bool((data or {}).get("demo")),
+                    "last_error": self.ctx.ha_last_error})
             if path == "/api/tibber/consumption":
                 res = (qs.get("resolution", ["DAILY"])[0] or "DAILY")
                 last = int(qs.get("last", ["30"])[0])

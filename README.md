@@ -25,7 +25,9 @@ Auf der **Übersicht** erscheinen zusätzlich verbundene **AEG/Electrolux-Hausha
 (Waschmaschine, Trockner) mit **Zustand, Strom pro Waschgang und Gesamtzähler** – siehe
 **[docs/AEG.md](docs/AEG.md)**. Mit einem **Tibber**-Konto nutzt der Börse-Tab deine
 **echten Tarifpreise** statt der Börse-Schätzung – siehe **[docs/TIBBER.md](docs/TIBBER.md)**.
-| **Setup** | Strompreis, **Controller automatisch finden**, Kopplung per Formular, Live-Status, **Geräte lokal umbenennen**, **Wärmepumpe (HomeCom) verbinden**, **Wärmepumpen-Historie als CSV importieren**, **AEG/Electrolux verbinden**, **Tibber verbinden** (echte Tarifpreise), **Gesamt-Stromzähler** ablesen (kalibriert Prognosen & deckt fehlenden Hausstrom auf), **Verbrauchsdaten als CSV exportieren** (Tageswerte für Excel/Steuer), **Bridge aktualisieren** (Self-Update, manuell oder **automatisch** im Hintergrund) |
+Läuft bei dir **Home Assistant**, liest die App dessen **Leistungs-/Energiesensoren** mit (z. B. eine
+alte **Koogeek-Steckdose** über den HomeKit Controller) – siehe **[docs/HOME-ASSISTANT.md](docs/HOME-ASSISTANT.md)**.
+| **Setup** | Strompreis, **Controller automatisch finden**, Kopplung per Formular, Live-Status, **Geräte lokal umbenennen**, **Wärmepumpe (HomeCom) verbinden**, **Wärmepumpen-Historie als CSV importieren**, **AEG/Electrolux verbinden**, **Tibber verbinden** (echte Tarifpreise), **Home Assistant verbinden** (Leistungs-/Energiesensoren, z. B. Koogeek-Steckdose), **Gesamt-Stromzähler** ablesen (kalibriert Prognosen & deckt fehlenden Hausstrom auf), **Verbrauchsdaten als CSV exportieren** (Tageswerte für Excel/Steuer), **Bridge aktualisieren** (Self-Update, manuell oder **automatisch** im Hintergrund) |
 
 Der Smart-Home-Teil basiert auf den `PowerMeter`-Daten (Wirkleistung in W,
 Energiezähler in Wh) der Bosch-Module; die Wärmepumpe liefert kumulative
