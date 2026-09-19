@@ -36,7 +36,7 @@ const MON = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Ok
 const COL = { sh: '#4da3ff', hp: '#ef6c4d', heat: '#f6b93b', away: '#ff6b8a' };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-19 · Tibber-Verbrauch + Tibber-Preise + WP-Wetterprognose + CO2 + Smart-Timer'
+const APP_VERSION = '2026-09-19 · Sparpotenzial + Tibber-Verbrauch + Tibber-Preise + WP-Wetterprognose'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -85,6 +85,10 @@ const INFO = {
     'benutzt. Geschätzt aus dem Mittel der <b>drei ruhigsten Stunden</b> deines Tagesprofils, hochgerechnet aufs Jahr. ' +
     'Hohe Grundlast heißt: viele <b>Dauerverbraucher/Standby</b> (Router, Netzteile, alte Kühlgeräte, Pumpen). Schon ' +
     '10 W weniger sparen ~88 kWh im Jahr. Bezieht sich auf die von den Modulen gemessenen Geräte.',
+  savings: () => 'Fasst die <b>größten Sparhebel</b> zusammen, die die App aus deinen Daten erkennt – jeweils mit ' +
+    'grob geschätztem <b>€/Jahr</b>-Potenzial und sortiert nach Wirkung: Dauerverbraucher/Standby, Elektro-Zuheizer ' +
+    'der Wärmepumpe, PV-Anlage, Lastverschiebung in günstige Stunden und die wirkungsvollste Sanierung. Die Zahlen ' +
+    'sind Orientierung, keine Zusage – Aufwand und Kosten der Maßnahmen sind sehr unterschiedlich. Details in den Tabs.',
   budget: () => 'Setz dir ein <b>Monatsbudget</b> (in € oder kWh). Die App zeigt, wie viel du <b>bisher</b> diesen ' +
     'Monat verbraucht hast, und rechnet – aus deinem Ø-Tagesverbrauch, saisonal gewichtet – auf das <b>Monatsende</b> ' +
     'hoch. Der weiße Strich markiert die Hochrechnung: liegt er rechts vom Budget, drohst du drüber zu landen, und die ' +
@@ -1402,7 +1406,77 @@ function renderOverview() {
   } else { card.hidden = true; }
 
   renderBudget();
+  renderSavings();
   renderTips();
+}
+
+// The renovation measure with the biggest heating-electricity saving.
+function renoBest(b, r) {
+  let best = null;
+  b.comps.forEach(c => {
+    const R = RENO[c.k]; if (!R || c.u <= R.u) return;
+    const kwh = (c.u - R.u) * c.a * c.f * r.factor * (1 - b.gain) / (b.cop_heat || 2.6);
+    if (kwh > 0 && (!best || kwh > best.kwh)) best = { label: R.l, kwh };
+  });
+  return best;
+}
+
+// A ranked, actionable list of the biggest saving levers (€/year), synthesised
+// from what the app already computes. Rough estimates – labelled as such.
+function renderSavings() {
+  const card = $('ov-savings-card'); if (!card) return;
+  const price = STATE.price, L = [];
+  // 1) always-on base load (measured Smart-Home devices)
+  const prof = (STATE.data && STATE.data.hourly_profile) || [];
+  const vals = prof.map(h => h.avg_w).filter(v => v != null);
+  if (vals.length >= 24) {
+    const baseW = mean(vals.slice().sort((a, b) => a - b).slice(0, 3));
+    const eur = baseW * 0.3 / 1000 * 8760 * price;      // trimming ~30 % of the base load
+    if (eur > 8) L.push({ label: 'Dauerverbraucher/Standby senken', hint: 'Profil → Grundlast', eur, color: COL.sh });
+  }
+  // 2) electric booster heater (Heizstab) on the heat pump
+  const hl = (STATE.hpA && STATE.hpA.live) || {};
+  if (hl.energy_kwh > 0 && hl.eheater_kwh > 0) {
+    const share = hl.eheater_kwh / hl.energy_kwh;
+    if (share > 0.06) {
+      const hpYear = hpYearFromMonthly() || hpAvgDaily() * 365;
+      const eur = hpYear * share * 0.6 * price;          // shifting most heat to the compressor (COP≈2.5)
+      if (eur > 10) L.push({ label: 'Elektro-Zuheizer zurückdrängen (Heizkurve/WW-Temp)', hint: 'Wärmepumpe', eur, color: COL.hp });
+    }
+  }
+  // 3) PV self-consumption + feed-in (if a plan is entered)
+  if ((parseFloat($('pv-kwp') && $('pv-kwp').value) || 0) > 0) {
+    try { const r = simulatePv(pvInputs()); if (r.benefit > 20) L.push({ label: 'PV-Anlage (Eigenverbrauch + Einspeisung)', hint: 'PV-Tab', eur: r.benefit, color: COL.heat }); } catch (e) {}
+  }
+  // 4) shifting flexible loads into cheap hours (dynamic / Tibber tariff)
+  const sp = STATE.spot;
+  if (sp && sp.prices && sp.prices.length >= 12) {
+    const cons = sp.prices.map(p => p.consumer_ct), avg = mean(cons);
+    const cheap = cons.slice().sort((a, b) => a - b).slice(0, Math.max(1, Math.floor(cons.length / 3)));
+    const spread = Math.max(0, (avg - mean(cheap)) / 100);         // €/kWh saved by shifting
+    let wwYear = 600;
+    const mw = STATE.hpA && STATE.hpA.mode_window, nD = (STATE.hpA && STATE.hpA.daily || []).length;
+    if (mw && mw.water > 0 && nD > 0) wwYear = mw.water / nD * 365;
+    const flex = wwYear + 1.5 * 365;                                // warm water + ~1.5 kWh/day flexible household
+    const eur = flex * spread;
+    if (eur > 10) L.push({ label: 'Flexible Lasten in günstige Stunden', hint: 'Börse / Smart-Timer', eur, color: '#4be0b0' });
+  }
+  // 5) biggest building renovation lever
+  try {
+    const b = buildData(), r = computeHeat(b), best = renoBest(b, r);
+    if (best && best.kwh * price > 20) L.push({ label: best.label, hint: 'Wärmepumpe → Theorie', eur: best.kwh * price, color: '#b07a4d' });
+  } catch (e) {}
+
+  L.sort((a, b) => b.eur - a.eur);
+  if (!L.length) { card.hidden = true; return; }
+  card.hidden = false;
+  const max = L[0].eur || 1;
+  $('ov-savings-body').innerHTML = L.slice(0, 6).map(x =>
+    devRow(x.label, x.hint || '', money(x.eur) + '/Jahr', '', Math.max(6, x.eur / max * 100), x.color)).join('');
+  const tot = L.reduce((a, x) => a + x.eur, 0);
+  $('ov-savings-note').innerHTML =
+    `Zusammen bis zu <b>${money(tot)}/Jahr</b> Einsparpotenzial (grobe Schätzung – die Maßnahmen unterscheiden ` +
+    `sich in Aufwand und Kosten). Details und Umsetzung in den jeweiligen Tabs.`;
 }
 
 // Actual kWh consumed since the 1st of the current month (measured days full,
