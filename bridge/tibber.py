@@ -134,6 +134,43 @@ def verify(token: str) -> dict:
     return fetch_prices(token)
 
 
+_CONS_QUERY = (
+    "{{ viewer {{ homes {{ consumption(resolution: {res}, last: {last}) {{ "
+    "nodes {{ from to cost unitPrice consumption }} }} }} }} }}")
+
+
+def fetch_consumption(token: str, resolution: str = "DAILY", last: int = 30,
+                      timeout: float = 20.0) -> dict:
+    """Return {'nodes':[{ts, kwh, cost, unit_ct},…], 'currency','total_kwh',
+    'total_cost'} – the user's REAL metered consumption from Tibber."""
+    res = (resolution or "DAILY").upper()
+    if res not in ("HOURLY", "DAILY", "WEEKLY", "MONTHLY"):
+        res = "DAILY"
+    last = max(1, min(int(last), 744))
+    data = _request(token, _CONS_QUERY.format(res=res, last=last), timeout)
+    homes = ((data.get("viewer") or {}).get("homes") or [])
+    if not homes:
+        raise TibberError("Kein Zuhause im Tibber-Konto gefunden.")
+    nodes_raw = (((homes[0].get("consumption") or {}).get("nodes")) or [])
+    nodes, tk, tc = [], 0.0, 0.0
+    for n in nodes_raw:
+        kwh = n.get("consumption")
+        if kwh is None:
+            continue
+        cost = n.get("cost")
+        up = n.get("unitPrice")
+        row = {"ts": _parse_iso(n.get("from")), "kwh": round(float(kwh), 3),
+               "cost": round(float(cost), 3) if cost is not None else None,
+               "unit_ct": round(float(up) * 100, 2) if up is not None else None}
+        nodes.append(row)
+        tk += row["kwh"]
+        if row["cost"]:
+            tc += row["cost"]
+    nodes.sort(key=lambda r: (r["ts"] is None, r["ts"]))
+    return {"resolution": res, "nodes": nodes, "currency": "EUR",
+            "total_kwh": round(tk, 2), "total_cost": round(tc, 2)}
+
+
 # ---- demo -------------------------------------------------------------- #
 def demo() -> dict:
     """A synthetic Tibber-shaped result (all-in ct/kWh) for --demo / offline:
@@ -154,3 +191,31 @@ def demo() -> dict:
     cur = next((r for r in rows if r["ts"] <= now < r["ts"] + 3600), rows[0])
     return {"home": "Demo-Zuhause", "currency": "EUR",
             "current": dict(cur), "prices": rows}
+
+
+def demo_consumption(resolution: str = "DAILY", last: int = 30) -> dict:
+    """Synthetic metered consumption (whole-house) for --demo / offline."""
+    import math
+    res = (resolution or "DAILY").upper()
+    now = int(time.time())
+    step = 3600 if res == "HOURLY" else 86400
+    lt = time.localtime(now)
+    if res == "HOURLY":
+        anchor = now - (now % 3600) - (last - 1) * step
+    else:
+        anchor = now - (lt.tm_hour * 3600 + lt.tm_min * 60 + lt.tm_sec) - (last - 1) * step
+    nodes, tk, tc = [], 0.0, 0.0
+    for i in range(last):
+        ts = anchor + i * step
+        if res == "HOURLY":
+            h = time.localtime(ts).tm_hour
+            kwh = 0.3 + 0.5 * math.exp(-((h - 8) ** 2) / 6) + 0.7 * math.exp(-((h - 19) ** 2) / 8)
+        else:
+            kwh = 16.0 + 3.0 * math.sin(i / 3.0)          # ~16 kWh/day whole house
+        kwh = round(max(0.05, kwh), 3)
+        unit = 0.30
+        cost = round(kwh * unit, 3)
+        nodes.append({"ts": ts, "kwh": kwh, "cost": cost, "unit_ct": round(unit * 100, 2)})
+        tk += kwh; tc += cost
+    return {"resolution": res, "nodes": nodes, "currency": "EUR",
+            "total_kwh": round(tk, 2), "total_cost": round(tc, 2)}

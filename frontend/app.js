@@ -36,7 +36,7 @@ const MON = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Ok
 const COL = { sh: '#4da3ff', hp: '#ef6c4d', heat: '#f6b93b', away: '#ff6b8a' };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-18 · Tibber (echte Preise) + WP-Wetterprognose + Live-Ampel + CO2 + Smart-Timer'
+const APP_VERSION = '2026-09-19 · Tibber-Verbrauch + Tibber-Preise + WP-Wetterprognose + CO2 + Smart-Timer'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -175,6 +175,9 @@ const INFO = {
     '<span style="color:#ef6c4d">grau</span> abends/im Winter (Kohle/Gas). Deine <b>Jahresbilanz</b> gewichtet diese Intensität mit ' +
     'deinem echten Lastprofil. Verschiebst du flexible Lasten in die <b>grünen Stunden</b>, sinkt dein CO₂-Fußabdruck. ' +
     'Modell auf Basis der veröffentlichten deutschen Netz-Durchschnitte (~380 g/kWh, sinkend).',
+  'tibber-cons': () => 'Dein <b>tatsächlicher Gesamtverbrauch</b> pro Tag, direkt aus dem Tibber-Zähler (also dem ' +
+    'Netzzähler des ganzen Hauses). Das erfasst <b>alles</b> – auch Geräte, die die Bosch-Module nicht messen ' +
+    '(Kühlschrank, Herd, Licht …). Gut als Gegenprobe zur gemessenen Smart-Home-Summe und zur Zählerkalibrierung.',
   tibber: () => 'Verbindet dein <b>Tibber</b>-Konto (Access Token von developer.tibber.com). Dann nutzt der ganze ' +
     'Börse-Tab – Preiskurve, beste Zeiten, Live-Ampel, Smart-Timer – deine <b>echten stündlichen Tarifpreise</b> ' +
     '(all-in inkl. Netz, Abgaben, MwSt.) statt der Börse-plus-Aufschlag-Schätzung. Der Token bleibt lokal auf der ' +
@@ -445,7 +448,8 @@ async function loadAll() {
       STATE.price = health.price_per_kwh; $('price').value = STATE.price;
     }
     const p = STATE.price;
-    const [ov, hpA, data, appl, meter, sp, co2] = await Promise.all([
+    const wantTib = health.tibber_connected || health.mode === 'demo';
+    const [ov, hpA, data, appl, meter, sp, co2, tibCons] = await Promise.all([
       api('/api/overview?days=90&price=' + p),
       api('/api/heatpump/analytics?days=90&price=' + p),
       api('/api/analytics?days=90&price=' + p),
@@ -453,10 +457,12 @@ async function loadAll() {
       api('/api/meter').catch(() => null),
       api('/api/spot').catch(() => null),
       api('/api/carbon').catch(() => null),
+      wantTib ? api('/api/tibber/consumption?resolution=DAILY&last=30').catch(() => null) : Promise.resolve(null),
     ]);
     STATE.ov = ov; STATE.hpA = hpA; STATE.data = data; STATE.appliances = appl;
     STATE.meter = (meter && meter.readings) || [];
     STATE.spot = sp;
+    STATE.tibberCons = (tibCons && tibCons.ok) ? tibCons : null;
     STATE.carbon = (co2 && co2.ok) ? co2 : demoCarbon();
     STATE.cur = data.currency || STATE.cur;
     $('cur').textContent = STATE.cur;
@@ -495,6 +501,16 @@ function applyDemo(mode) {
   }
   STATE.spot = { enabled: true, demo: true, market: 'demo', surcharge_ct: sc, vat: sv, prices };
   STATE.carbon = demoCarbon();
+  // synthetic whole-house consumption (as Tibber would report)
+  const tNodes = [];
+  const midnight = nowS - (nowS % 86400);
+  for (let i = 29; i >= 0; i--) {
+    const ts = midnight - i * 86400, kwh = Math.round((16 + 3 * Math.sin((29 - i) / 3)) * 1000) / 1000;
+    tNodes.push({ ts, kwh, cost: Math.round(kwh * 0.30 * 1000) / 1000, unit_ct: 30 });
+  }
+  STATE.tibberCons = { ok: true, demo: true, resolution: 'DAILY', nodes: tNodes,
+    total_kwh: Math.round(tNodes.reduce((a, n) => a + n.kwh, 0) * 100) / 100,
+    total_cost: Math.round(tNodes.reduce((a, n) => a + n.cost, 0) * 100) / 100 };
   STATE.cur = '€'; $('cur').textContent = STATE.cur;
   setMode(mode);
   renderAll();
@@ -1627,6 +1643,32 @@ function renderHistory() {
     ['Grundlast Smart Home / Jahr', `${kwh(standbyYear, 1)} · ${(S.standby_share * 100).toFixed(0)} %`],
     ['Vermutete Abwesenheit', `${A.count} Tage · ~${money(A.count * (S.day_avg_cost || 0))}`],
   ].map(([k, v]) => statusRow(k, v)).join('');
+  renderTibberCons();
+}
+
+// Real whole-house metered consumption from Tibber (daily), as a bar chart with
+// totals – a true meter feed alongside the device-level Bosch data.
+function renderTibberCons() {
+  const card = $('h-tibber-card'); if (!card) return;
+  const t = STATE.tibberCons;
+  if (!t || !Array.isArray(t.nodes) || !t.nodes.length) { card.hidden = true; return; }
+  card.hidden = false;
+  const nodes = t.nodes.slice(-30);
+  const days = nodes.length || 1;
+  const avg = t.total_kwh / days, avgCost = (t.total_cost || 0) / days;
+  const price = STATE.price;
+  $('h-tibber-kpi').innerHTML =
+    `<div class="grid2"><div class="kpi sm"><div class="v">${kwh(avg, 1)}</div><div class="l">Ø / Tag · ${money(avgCost || avg * price)}</div></div>` +
+    `<div class="kpi sm"><div class="v">${kwh(t.total_kwh, 0)}</div><div class="l">Summe ${days} Tage · ${money(t.total_cost || t.total_kwh * price)}</div></div></div>`;
+  $('h-tibber-chart').innerHTML = barChart(
+    nodes.map(n => ({ v: n.kwh, label: shortDay(new Date(n.ts * 1000).toISOString().slice(0, 10)) })), { h: 180 });
+  const maxN = nodes.reduce((a, b) => b.kwh > a.kwh ? b : a);
+  const minN = nodes.reduce((a, b) => b.kwh < a.kwh ? b : a);
+  const dd = ts => new Date(ts * 1000).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' });
+  $('h-tibber-note').innerHTML =
+    `Echter <b>Gesamtverbrauch</b> deines Hauses aus dem Tibber-Zähler${t.demo ? ' <span style="color:var(--muted)">(Demo)</span>' : ''}. ` +
+    `Höchster Tag <b>${kwh(maxN.kwh, 1)}</b> (${dd(maxN.ts)}), niedrigster <b>${kwh(minN.kwh, 1)}</b> (${dd(minN.ts)}). ` +
+    `Das umfasst <b>alle</b> Verbraucher – auch die, die die Bosch-Module nicht messen.`;
 }
 
 /* ------------------------------------------------------------- heat pump */

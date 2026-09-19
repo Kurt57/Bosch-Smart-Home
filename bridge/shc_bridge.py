@@ -2674,6 +2674,19 @@ class Handler(BaseHTTPRequestHandler):
                     "home": (data or {}).get("home"),
                     "count": len((data or {}).get("prices") or []),
                     "last_error": self.ctx.tibber_last_error})
+            if path == "/api/tibber/consumption":
+                res = (qs.get("resolution", ["DAILY"])[0] or "DAILY")
+                last = int(qs.get("last", ["30"])[0])
+                if self.ctx.mode == "demo":
+                    return self._send_json({"ok": True, "demo": True, **tibber.demo_consumption(res, last)}) if tibber \
+                        else self._send_json({"ok": False, "error": "tibber modul fehlt"})
+                token = (self.cfg.get("tibber_token") or "").strip()
+                if not tibber or not token:
+                    return self._send_json({"ok": False, "error": "Nicht mit Tibber verbunden."})
+                try:
+                    return self._send_json({"ok": True, "demo": False, **tibber.fetch_consumption(token, res, last)})
+                except Exception as exc:
+                    return self._send_json({"ok": False, "error": f"Tibber-Verbrauch fehlgeschlagen: {exc}"})
             if path == "/api/export.csv":
                 ed = int(qs.get("days", ["365"])[0])
                 ep = float(qs.get("price", [self.cfg.get("price_per_kwh", 0.35)])[0])

@@ -34,6 +34,17 @@ Für die **saisonale Kostenrechnung** (Konzept-Tab, Jahreswerte) wird die
 Tages-/Stundenkurve auf das typische Jahresprofil hochgerechnet, weil Tibber
 nur die nächsten ~2 Tage liefert.
 
+## Echter Gesamtverbrauch
+
+Zusätzlich zu den Preisen liest die App deinen **tatsächlichen Verbrauch** aus
+dem Tibber-Zähler – den **Netzzähler des ganzen Hauses**. Im **Verlauf**-Tab
+erscheint dann die Karte **„Gesamtverbrauch (Tibber)"** mit den Tageswerten
+(kWh + Kosten) der letzten 30 Tage. Das erfasst **alle** Verbraucher, auch die,
+die die Bosch-Module nicht messen (Kühlschrank, Herd, Licht …) – eine gute
+Gegenprobe zur gemessenen Smart-Home-Summe.
+
+Route: `GET /api/tibber/consumption?resolution=DAILY&last=30`.
+
 ## Kein Tibber?
 
 Ohne Tibber bleibt alles beim **kostenlosen Börsen-Feed** (EPEX Day-Ahead über
