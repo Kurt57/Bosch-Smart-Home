@@ -65,6 +65,35 @@ def _get(url: str, token: str, path: str, timeout: float = 15.0):
         conn.close()
 
 
+def _post(url: str, token: str, path: str, payload: dict, timeout: float = 20.0):
+    body = json.dumps(payload).encode("utf-8")
+    conn, _ = _conn(url, timeout)
+    try:
+        conn.request("POST", path, body=body, headers={
+            "Authorization": "Bearer " + (token or "").strip(),
+            "Content-Type": "application/json"})
+        resp = conn.getresponse()
+        raw = resp.read()
+        if resp.status in (401, 403):
+            raise HAAuthError("Home-Assistant-Token abgelehnt (401/403).")
+        if resp.status not in (200, 201):
+            raise HAError(f"Home Assistant HTTP {resp.status}: {raw[:160]!r}")
+        return json.loads(raw) if raw else None
+    finally:
+        conn.close()
+
+
+def refresh_entities(url: str, token: str, entity_ids: list, timeout: float = 20.0):
+    """Force Home Assistant to re-read the given entities NOW. Needed for
+    HomeKit accessories (e.g. Koogeek) that advertise push updates but never
+    send them, so their sensor otherwise stays frozen at its last value. The
+    service call blocks until the poll completed."""
+    ids = [e for e in (entity_ids or []) if e]
+    if not ids:
+        return
+    _post(url, token, "/api/services/homeassistant/update_entity", {"entity_id": ids}, timeout)
+
+
 def verify(url: str, token: str) -> bool:
     """True if the token is accepted; raises HAAuthError/HAError otherwise."""
     data = _get(url, token, "/api/")
@@ -100,15 +129,8 @@ def _to_kwh(val, unit):
     return val                              # assume kWh
 
 
-def fetch(url: str, token: str, entity_ids: list[str] | None = None,
-          timeout: float = 15.0) -> dict:
-    """Return {'entities': [{entity_id,name,kind,watt|kwh,unit,raw}], 'count'}.
-
-    ``kind`` is 'power' or 'energy'. When ``entity_ids`` is given, only those are
-    returned (any numeric sensor); otherwise power/energy sensors are
-    auto-discovered by device_class."""
-    states = _get(url, token, "/api/states", timeout)
-    wanted = set(e.strip() for e in (entity_ids or []) if e.strip())
+def _select(states, wanted):
+    """Turn a /api/states list into our normalized power/energy rows."""
     out = []
     for s in states if isinstance(states, list) else []:
         eid = s.get("entity_id", "")
@@ -138,7 +160,30 @@ def fetch(url: str, token: str, entity_ids: list[str] | None = None,
             row["value"] = val
         out.append(row)
     out.sort(key=lambda r: (r["kind"] != "power", r["name"].lower()))
-    return {"entities": out, "count": len(out)}
+    return out
+
+
+def fetch(url: str, token: str, entity_ids: list[str] | None = None,
+          refresh: bool = False, timeout: float = 15.0) -> dict:
+    """Return {'entities': [{entity_id,name,kind,watt|kwh,unit,raw}], 'count'}.
+
+    ``kind`` is 'power' or 'energy'. When ``entity_ids`` is given, only those are
+    returned (any numeric sensor); otherwise power/energy sensors are
+    auto-discovered by device_class. With ``refresh``, HA is told to re-read the
+    relevant entities first (for HomeKit sensors that don't push updates)."""
+    states = _get(url, token, "/api/states", timeout)
+    wanted = set(e.strip() for e in (entity_ids or []) if e.strip())
+    rows = _select(states, wanted)
+    if refresh and rows:
+        try:
+            refresh_entities(url, token, [r["entity_id"] for r in rows], timeout)
+            states = _get(url, token, "/api/states", timeout)      # re-read the fresh values
+            rows = _select(states, wanted)
+        except HAAuthError:
+            raise
+        except Exception:
+            pass                                                   # keep the un-refreshed values
+    return {"entities": rows, "count": len(rows)}
 
 
 # ---- demo -------------------------------------------------------------- #

@@ -1881,7 +1881,9 @@ class Runtime:
             return c["data"]
         ents = [e.strip() for e in (self.cfg.get("ha_entities") or "").split(",") if e.strip()]
         try:
-            data = ha.fetch(url, token, ents or None)
+            # refresh=True: some HomeKit sensors (e.g. Koogeek) never push updates,
+            # so ask HA to re-read them before we take the values.
+            data = ha.fetch(url, token, ents or None, refresh=True)
             self.ha_cache = {"data": data, "ts": now}
             self.ha_last_error = None
             return data

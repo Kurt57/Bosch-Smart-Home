@@ -48,3 +48,14 @@ per `.gitignore` von Commits ausgeschlossen) – niemals im Code oder in der Clo
 * Erkannt werden Sensoren mit `device_class: power` (W/kW → W) und
   `device_class: energy` (Wh/kWh → kWh); Einheiten werden normalisiert.
 * Bridge-Routen: `POST /api/ha/connect`, `GET /api/ha` (gecacht ~20 s).
+
+## HomeKit-Sensoren, die „bei 0 hängen" (z. B. Koogeek)
+
+Manche HomeKit-Geräte (u. a. **Koogeek P1EU**) melden zwar eine Leistungs-
+Characteristic, schicken aber **keine Update-Events**. HA zeigt den Sensor dann
+dauerhaft mit dem alten Wert (oft `0 W`) an, obwohl das Gerät den echten Wert auf
+Abruf liefert. Unsere Bridge fängt das ab: sie ruft vor jedem Auslesen den
+HA-Dienst **`homeassistant.update_entity`** für die betroffenen Sensoren auf
+(`refresh=True`), sodass HA den Wert frisch einliest. Man braucht dafür **keine
+Automatisierung in HA**. Alternativ ginge eine HA-Automatisierung mit
+`time_pattern` + `homeassistant.update_entity`.
