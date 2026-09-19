@@ -36,7 +36,7 @@ const MON = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Ok
 const COL = { sh: '#4da3ff', hp: '#ef6c4d', heat: '#f6b93b', away: '#ff6b8a' };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-19 · Sparpotenzial + Tibber-Verbrauch + Tibber-Preise + WP-Wetterprognose'
+const APP_VERSION = '2026-09-19 · AEG-Startzeit + Sparpotenzial + Tibber + WP-Wetterprognose'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -711,6 +711,28 @@ function aegProgram(p) {
   s = parts[parts.length - 1] || s;                 // keep the meaningful tail
   return s.charAt(0) + s.slice(1).toLowerCase();
 }
+// Cheapest ~2 h delay-start window in the next hours for a wash of `kwh`,
+// reusing the Smart-Timer's aligned price series. Returns null if no data.
+function aegBestStart(kwh) {
+  if (typeof smartHours !== 'function') return null;
+  const hrs = smartHours(); if (!hrs || hrs.length < 2) return null;
+  const dur = 2, now = Date.now() / 1000;
+  let best = null, nowCost = null;
+  for (let s = 0; s + dur <= hrs.length; s++) {
+    const c = hrs.slice(s, s + dur).reduce((a, o) => a + o.price, 0) / dur;
+    if (s === 0) nowCost = c;
+    if (!best || c < best.c) best = { c, ts: hrs[s].ts };
+  }
+  if (!best) return null;
+  const future = best.ts > now + 1800;
+  const save = future ? Math.max(0, (nowCost - best.c) / 100 * (kwh || 1)) : 0;
+  const d = new Date(best.ts * 1000);
+  const timeLabel = future
+    ? d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) + ' Uhr'
+    : 'jetzt';
+  return { timeLabel, save, source: (STATE.spot && STATE.spot.source) || 'spot', future };
+}
+
 function renderAppliances() {
   const card = $('ov-aeg-card'); if (!card) return;
   const list = (STATE.appliances && STATE.appliances.appliances) || [];
@@ -739,13 +761,23 @@ function renderAppliances() {
   }).join('');
   $('ov-aeg-body').innerHTML = rows;
   $('ov-aeg-sum').textContent = todaySum > 0 ? (anyEst ? '≈ ' : '') + kwh(todaySum, 2) + ' heute' : '';
+  // delay-start recommendation for an appliance that is ready but not running
+  let recTip = '';
+  const ready = list.find(a => /READY|IDLE|OFF|STANDBY/i.test(a.state || '') && !/RUN/i.test(a.state || ''));
+  if (ready && typeof smartHours === 'function') {
+    const rec = aegBestStart(ready.cycle_kwh || 1);
+    if (rec) recTip = `<div class="note" style="margin-bottom:8px">🕒 <b>Günstigster Start</b> für „${esc(ready.name || 'Gerät')}": ` +
+      `<b>${rec.timeLabel}</b> (Verzögerungsstart)` +
+      (rec.save > 0.02 ? ` – spart ~<b>${money(rec.save)}</b> ggü. jetzt` : '') +
+      (rec.source === 'tibber' ? ' · echte Tibber-Preise' : '') + `. Mehr im <b>Smart-Timer</b> (Börse).</div>`;
+  }
   const err = STATE.appliances && STATE.appliances.last_error;
-  $('ov-aeg-note').innerHTML = err
+  $('ov-aeg-note').innerHTML = recTip + (err
     ? '<span style="color:#ff6b8a">Letzter Fehler: ' + esc(err) + '</span>'
     : (anyEst
       ? '„≈" = <b>geschätzt</b>: dein Gerät meldet keinen kWh-Wert, daher rechnet die App ' +
         '<b>Waschgänge × ø kWh/Gang</b> (im Setup anpassbar). „Heute" = neue Waschgänge seit Mitternacht.'
-      : 'Strom pro Waschgang & gesamt aus der AEG/Electrolux-Cloud. „Heute" = Zuwachs des Gesamtzählers seit Mitternacht.');
+      : 'Strom pro Waschgang & gesamt aus der AEG/Electrolux-Cloud. „Heute" = Zuwachs des Gesamtzählers seit Mitternacht.'));
 }
 function renderMeter() {
   const list = $('meter-list'), note = $('meter-note'); if (!note) return;
