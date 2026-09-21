@@ -49,7 +49,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-21 · Einheitliche Kategorie-Farbpalette + Theorie-Monat 3 Reihen'
+const APP_VERSION = '2026-09-21 · Hochrechnung mit Herkunft, Zaehler-Abgleich und Grundlast-Fix'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -1821,18 +1821,62 @@ function renderHistory() {
   // seasonal forecast & insights
   const S = data.stats, price = STATE.price, m = new Date().getMonth();
   const fc = annualForecast();
-  const standbyYear = data.baseline_w * 24 * 365 / 1000;
-  $('h-insights').innerHTML = [
+  // robust base load from the hourly profile (min of the 3 quietest hours);
+  // the bridge's baseline_w is ~0 when the modules measure little.
+  const prof = (data.hourly_profile || []).map(h => h.avg_w).filter(v => v != null);
+  let baseW = data.baseline_w || 0;
+  if (prof.length >= 24) baseW = Math.max(baseW, mean(prof.slice().sort((a, b) => a - b).slice(0, 3)));
+  const standbyYear = baseW * 24 * 365 / 1000;
+  const rows = [
     ['Hochrechnung / Jahr', `${kwh(fc.year, 0)} · ${money(fc.yearCost)}`],
     ['davon Wärmepumpe', fc.hpYear > 0 ? `${kwh(fc.hpYear, 0)} · ${money(fc.hpYear * price)}` + (fc.hpImported ? ' ✓' : '') : '–'],
     ['davon Smart Home', `${kwh(fc.shYear, 0)} · ${money(fc.shYear * price)}`],
     [`Prognose ${MON[m]}`, `${kwh(fc.monthNow, 0)} · ${money(fc.monthNowCost)}`],
     ['Wärmepumpe Winter vs. Sommer', fc.hpYear > 0
       ? `${kwh(hpMonthEst(0), 0)} (Jan) ↔ ${kwh(hpMonthEst(6), 0)} (Jul)` : '–'],
-    ['Grundlast Smart Home / Jahr', `${kwh(standbyYear, 1)} · ${(S.standby_share * 100).toFixed(0)} %`],
-    ['Vermutete Abwesenheit', `${A.count} Tage · ~${money(A.count * (S.day_avg_cost || 0))}`],
-  ].map(([k, v]) => statusRow(k, v)).join('');
+  ];
+  // only show the module base load when the modules actually measure a
+  // meaningful base (avoids the misleading "0,0 kWh · 0 %" line)
+  if (standbyYear > 20) rows.push(['Grundlast (gemessene Geräte) / Jahr',
+    `${kwh(standbyYear, 0)} · ${fmt(fc.shYear > 0 ? standbyYear / fc.shYear * 100 : 0, 0)} % des Hausstroms`]);
+  rows.push(['Vermutete Abwesenheit', `${A.count} Tage · ~${money(A.count * (S.day_avg_cost || 0))}`]);
+  $('h-insights').innerHTML = rows.map(([k, v]) => statusRow(k, v)).join('');
+  renderForecastBasis(fc);
   renderTibberCons();
+}
+
+// Explains WHERE the yearly number comes from and how sure it is – so a
+// surprisingly high (or low) figure is legible and improvable.
+function renderForecastBasis(fc) {
+  const el = $('h-insights-note'); if (!el) return;
+  const ms = meterStats();
+  const parts = [];
+  // heat pump source
+  parts.push(fc.hpImported
+    ? '<b>Wärmepumpe</b>: aus deiner <b>importierten HomeCom-Historie</b> (echte Monatswerte) ✓'
+    : '<b>Wärmepumpe</b>: aus dem gemessenen Zählerwachstum <b>hochgerechnet</b> (noch keine CSV importiert).');
+  // household source
+  if (ms && ms.dailyAvg != null) {
+    const days = Math.round(ms.spanDays);
+    parts.push(`<b>Hausstrom</b>: aus deiner <b>Zählerablesung</b> (${days} Tag(e), Gesamtzähler minus Wärmepumpe), aufs Jahr hochgerechnet.`);
+  } else if (houseManual() > 0) {
+    parts.push('<b>Hausstrom</b>: aus deinem <b>manuell eingetragenen</b> Jahreswert.');
+  } else {
+    parts.push('<b>Hausstrom</b>: nur aus den <b>gemessenen Bosch-Modulen</b> – erfasst evtl. nicht das ganze Haus. Trag im Setup deinen <b>Gesamtzähler</b> ein für eine realistische Zahl.');
+  }
+  // plausibility cross-check against the real meter daily average
+  let cross = '';
+  if (ms && ms.dailyAvg != null) {
+    const projDaily = fc.year / 365;
+    cross = ` <br>🔎 Dein Zähler zeigt aktuell ~<b>${kwh(ms.dailyAvg, 1)}/Tag</b>; die Jahresprognose entspricht Ø <b>${kwh(projDaily, 1)}/Tag</b>` +
+      (projDaily > ms.dailyAvg * 1.15
+        ? ` – mehr, <b>weil die Wärmepumpe im Winter viel stärker heizt</b> als jetzt. Das treibt die Jahreszahl.`
+        : ` – passt gut zusammen.`);
+  }
+  const accuracy = (ms && ms.spanDays < 25)
+    ? ' <span style="color:var(--muted)">Für eine stabilere Prognose weitere Zählerstände über mehrere Monate eintragen – dann glättet sich die Hochrechnung.</span>'
+    : '';
+  el.innerHTML = 'Woher die Zahlen kommen: ' + parts.join(' ') + cross + accuracy;
 }
 
 // Real whole-house metered consumption from Tibber (daily), as a bar chart with
