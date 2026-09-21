@@ -37,7 +37,7 @@ const MON = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Ok
 const COL = { sh: '#4da3ff', hp: '#ef6c4d', heat: '#f6b93b', away: '#ff6b8a' };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-19 · Home-Assistant-Anbindung + 60%-Kappung + Tibber + Sparpotenzial'
+const APP_VERSION = '2026-09-21 · Theorie-Monat 3 Reihen umschaltbar + HA-Anbindung + 60%-Kappung'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -228,9 +228,11 @@ const INFO = {
     'Electrolux-Cloud. Angezeigt werden Betriebszustand, <b>Strom pro Waschgang</b> und der ' +
     '<b>Gesamtzähler</b>. „Heute" ist der Zuwachs des Gesamtzählers seit Mitternacht. Verbinden ' +
     'im Setup mit API-Key + Refresh-Token von developer.electrolux.one.',
-  'theory-month': () => 'Der berechnete Jahres-Heizbedarf wird über die <b>Heizsaison</b> verteilt (Winter viel, ' +
-    'Sommer wenig) und das Warmwasser gleichmäßig – ergibt den <b>erwarteten Strom je Monat</b>. Die blauen Balken ' +
-    'sind deine <b>gemessenen</b> Monatswerte aus der CSV. Große Lücken zeigen z. B. Nachtabsenkung, Vorlauf oder Wetter.',
+  'theory-month': () => 'Drei Balken je Monat, oben per Häkchen <b>ein-/ausblendbar</b>: <b>Theorie</b> (aus dem ' +
+    'Gebäudemodell, Heizsaison-verteilt + Warmwasser), <b>Gemessen</b> (deine echten Monatswerte aus der HomeCom-CSV; ' +
+    'stammt ein Monat noch aus dem <b>Vorjahr</b>, steht das dran) und <b>Erwartet</b> (dein <b>gemessenes Jahresniveau</b>, ' +
+    'saisonal verteilt – so haben auch noch nicht gemessene Monate wie Nov/Dez eine echte Prognose statt des Vorjahreswerts). ' +
+    'Große Unterschiede zeigen z. B. Nachtabsenkung, Vorlauftemperatur oder Wetter.',
   'theory-class': () => 'Der <b>spezifische Heizwärmebedarf</b> (kWh je m² und Jahr, nur Heizung) ordnet dein Haus ' +
     'zwischen Passivhaus und unsaniertem Altbau ein. Er kommt aus dem U·A-Modell geteilt durch die beheizte Fläche – ' +
     'ein guter Vergleichsmaßstab, unabhängig von der Hausgröße.',
@@ -353,6 +355,20 @@ function hpRealMonthMap() {
   const map = {};
   im.monthly.forEach(r => { if (r.month !== cur && r.elec_kwh > 0) map[+r.month.slice(5) - 1] = r.elec_kwh; });
   return Object.keys(map).length ? map : null;
+}
+// Real measured value per calendar month WITH its year (most recent per month,
+// excluding the current still-running month) – lets the chart tell this-year
+// data from previous-year data.
+function hpMeasuredByMonth() {
+  const im = STATE.hpA && STATE.hpA.imported;
+  if (!im || !(im.monthly || []).length) return null;
+  const cur = im.latest, byM = {};
+  im.monthly.forEach(r => {
+    if (r.month === cur || !(r.elec_kwh > 0)) return;
+    const m = +r.month.slice(5) - 1, y = +r.month.slice(0, 4);
+    if (!byM[m] || y > byM[m].year) byM[m] = { kwh: r.elec_kwh, year: y };
+  });
+  return Object.keys(byM).length ? byM : null;
 }
 // Full-month heat-pump electricity estimate for calendar month m.
 function hpMonthEst(m) {
@@ -1987,41 +2003,68 @@ function renderHeatDemand() {
   const mCard = $('hp-theory-month-card');
   if (mCard) {
     mCard.hidden = false;
-    // Practice per month: real measurement where available, otherwise an
-    // experience-based estimate (from the measured seasonal pattern) – NOT old
-    // history. Measured and estimate are drawn as separate (differently shaded) bars.
-    const isReal = m => !!(realMap && realMap[m] != null);
-    const rows = MON.map((lbl, m) => ({
-      label: lbl, values: {
+    // Three series per month, each independently toggleable:
+    //  • Theorie  – from the U·A building model
+    //  • Gemessen – the real measured value (this year, or a previous year → then labelled "Vorjahr")
+    //  • Erwartet – an experience-based expectation for EVERY month (your measured
+    //               annual level × the seasonal shape), so unmeasured months (Nov/Dec)
+    //               show a proper forecast bar instead of borrowing last year's number.
+    const measured = hpMeasuredByMonth();
+    const annualExp = hpYearFromMonthly() || (hpAvgDaily() * 365);
+    const expectedMonth = MON.map((_, m) => annualExp * hpSeasShare[m]);
+    // year handling for the "measured" series label
+    const years = measured ? [...new Set(Object.values(measured).map(v => v.year))] : [];
+    const curY = new Date().getFullYear();
+    const hasPrev = years.some(y => y < curY), hasCur = years.some(y => y >= curY);
+    const measLabel = !measured ? 'Gemessen'
+      : hasPrev && !hasCur ? `Vorjahr ${Math.max(...years)}`
+        : hasPrev ? 'Gemessen / Vorjahr' : 'Gemessen';
+    const lbl = $('thm-p-label'); if (lbl) lbl.textContent = measLabel;
+    // checkbox state (persisted); measured checkbox disabled when no data
+    const on = id => { const el = $(id); return el ? el.checked : true; };
+    const pOn = !!measured && on('thm-p');
+    if ($('thm-p')) $('thm-p').disabled = !measured;
+
+    const series = [];
+    if (on('thm-t')) series.push({ key: 't', color: 'url(#gHeat)' });
+    if (pOn) series.push({ key: 'p', color: COL.sh });
+    if (on('thm-e')) series.push({ key: 'e', color: 'rgba(56,189,216,0.85)' });
+    const rows = MON.map((lbl2, m) => ({
+      label: lbl2, values: {
         t: theoryMonth[m],
-        p: isReal(m) ? realMap[m] : 0,
-        e: isReal(m) ? 0 : hpMonthEst(m),
+        p: measured && measured[m] ? measured[m].kwh : 0,
+        e: expectedMonth[m],
       } }));
-    $('hp-theory-month').innerHTML = groupedBar(rows, [
-      { key: 't', color: 'url(#gHeat)' },
-      { key: 'p', color: COL.sh },
-      { key: 'e', color: 'rgba(77,163,255,0.40)' }], { h: 190 });
+    $('hp-theory-month').innerHTML = series.length
+      ? groupedBar(rows, series, { h: 190 })
+      : '<div class="note">Alle Reihen ausgeblendet – oben wieder anhaken.</div>';
     $('hp-theory-month-legend').innerHTML = legendHtml([
-      { color: COL.heat, label: 'Theorie' }, { color: COL.sh, label: 'Gemessen' },
-      { color: 'rgba(77,163,255,0.55)', label: 'Erwartet (Erfahrung)' }]);
-    if (realMap) {
+      on('thm-t') ? { color: COL.heat, label: 'Theorie' } : null,
+      pOn ? { color: COL.sh, label: measLabel } : null,
+      on('thm-e') ? { color: '#38bdd8', label: 'Erwartet (Erfahrung)' } : null,
+    ].filter(Boolean));
+    // note: compare measured vs theory over the measured months
+    if (measured) {
       let worst = null, sT = 0, sP = 0;
-      Object.keys(realMap).forEach(m => {
-        const abs = realMap[m] - theoryMonth[m];              // absolute kWh divergence
-        sT += theoryMonth[m]; sP += realMap[m];
-        if (!worst || Math.abs(abs) > Math.abs(worst.abs)) worst = { m: +m, abs };
+      Object.keys(measured).forEach(mk => {
+        const m = +mk, abs = measured[m].kwh - theoryMonth[m];
+        sT += theoryMonth[m]; sP += measured[m].kwh;
+        if (!worst || Math.abs(abs) > Math.abs(worst.abs)) worst = { m, abs };
       });
       const totPct = sT > 0 ? (sP - sT) / sT : 0;
-      const estN = 12 - Object.keys(realMap).length;
-      $('hp-theory-month-note').innerHTML = 'Pro Monat: <b>Theorie</b> (orange), <b>gemessen</b> (kräftiges Blau) und – ' +
-        'für Monate <b>ohne Messung</b> – der <b>aus deiner Erfahrung erwartete</b> Verbrauch (blasses Blau). ' +
+      const prevMonths = Object.keys(measured).filter(m => measured[m].year < curY).map(m => MON[+m]);
+      $('hp-theory-month-note').innerHTML =
+        'Drei Reihen je Monat – oben ein-/ausblendbar: <b>Theorie</b> (Gebäudemodell), <b>' + esc(measLabel) +
+        '</b> (echte Messung) und <b>Erwartet</b> (dein gemessenes Jahresniveau, saisonal verteilt – auch für noch nicht ' +
+        'gemessene Monate wie Nov/Dez). ' +
         `Über die gemessenen Monate liegt die Praxis <b>${totPct >= 0 ? '+' : ''}${fmt(totPct * 100, 0)} %</b> zur Theorie.` +
         (worst ? ` Größter Unterschied im <b>${MON[worst.m]}</b> (${worst.abs >= 0 ? '+' : '−'}${kwh(Math.abs(worst.abs), 0)}` +
-        `${worst.abs > 0 ? ' – mehr als gerechnet' : ' – weniger, z. B. kaum geheizt/effizient'}).` : '') +
-        (estN > 0 ? ` ${estN} Monat(e) ohne Messung sind als Erwartung ergänzt.` : '');
+          `${worst.abs > 0 ? ' – mehr als gerechnet' : ' – weniger, z. B. kaum geheizt/effizient'}).` : '') +
+        (prevMonths.length ? ` <span style="color:var(--muted)">Noch aus dem Vorjahr: ${prevMonths.join(', ')} – dafür zeigt „Erwartet" die aktuelle Prognose.</span>` : '');
     } else {
-      $('hp-theory-month-note').innerHTML = 'Pro Monat: <b>Theorie</b> (orange) gegen den <b>aus Erfahrung erwarteten</b> ' +
-        'Verbrauch (blau). Für echte Messwerte importiere im Setup eine <b>HomeCom-CSV</b> – dann werden gemessene Monate kräftig markiert.';
+      $('hp-theory-month-note').innerHTML = 'Zwei Reihen: <b>Theorie</b> (Gebäudemodell) und <b>Erwartet</b> ' +
+        '(aus deinem gemessenen Niveau, saisonal verteilt). Für echte Monatsmesswerte importiere im Setup eine ' +
+        '<b>HomeCom-CSV</b> – dann kommt die Reihe „Gemessen" dazu.';
     }
   }
 
@@ -3566,6 +3609,12 @@ function init() {
   });
   ['hist-from', 'hist-to'].forEach(id => { const el = $(id); if (el) el.addEventListener('change', renderHistory); });
   const hm = $('hp-heat-month'); if (hm) hm.addEventListener('change', renderHeatpump);
+  // Theorie/Gemessen/Erwartet series toggles (persisted)
+  [['thm-t', 'bhe_thm_t'], ['thm-p', 'bhe_thm_p'], ['thm-e', 'bhe_thm_e']].forEach(([id, key]) => {
+    const el = $(id); if (!el) return;
+    const s = localStorage.getItem(key); if (s !== null) el.checked = s === '1';
+    el.addEventListener('change', () => { try { localStorage.setItem(key, el.checked ? '1' : '0'); } catch (e) {} renderHeatDemand(); });
+  });
   $('save-base').addEventListener('click', () => {
     STATE.base = $('base').value.trim().replace(/\/+$/, '');
     localStorage.setItem(LS.base, STATE.base);

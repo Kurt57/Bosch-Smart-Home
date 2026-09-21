@@ -387,6 +387,11 @@
     </div>
     <div class="card" id="hp-theory-month-card" hidden>
       <h2><span class="info" data-info="theory-month" role="button" aria-label="Info">i</span>📅 Theorie vs. Praxis pro Monat</h2>
+      <div id="thm-toggles" style="display:flex; flex-wrap:wrap; gap:14px; margin-bottom:10px; font-size:13px">
+        <label style="display:flex; align-items:center; gap:6px; cursor:pointer"><input type="checkbox" id="thm-t" checked style="width:auto"> Theorie</label>
+        <label style="display:flex; align-items:center; gap:6px; cursor:pointer"><input type="checkbox" id="thm-p" checked style="width:auto"> <span id="thm-p-label">Gemessen</span></label>
+        <label style="display:flex; align-items:center; gap:6px; cursor:pointer"><input type="checkbox" id="thm-e" checked style="width:auto"> Erwartet</label>
+      </div>
       <div id="hp-theory-month"></div>
       <div class="legend" id="hp-theory-month-legend" style="margin-top:8px"></div>
       <div class="note" id="hp-theory-month-note" style="margin-top:8px"></div>
