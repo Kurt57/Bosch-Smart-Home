@@ -308,8 +308,9 @@
       <div class="note" id="h-insights-note" style="margin-top:10px"></div>
       <label class="toggle" id="h-baukorr-wrap" style="margin-top:10px;display:flex;gap:8px;align-items:flex-start;cursor:pointer">
         <input type="checkbox" id="h-baukorr" style="margin-top:2px">
-        <span>🏗️ <b>Bauphase-Korrektur</b> (fertiges, dichtes Haus): WP-Jahresprognose aus dem
-        <b>Gebäudemodell</b> statt aus den Einzugs-Messwerten (Rohbau/Baulücken heizen unrealistisch viel).</span>
+        <span>🏗️ <b>Bauphase-Dämpfung</b>: deine echten WP-Messwerte werden genutzt, aber die
+        überhöhten Einzugs-Wintermonate (Rohbau/Baulücken) werden <b>teilweise Richtung
+        Gebäudemodell gedämpft</b>. Sommermonate bleiben unverändert.</span>
       </label>
     </div>
   </section>
@@ -939,8 +940,9 @@
       <h2><span class="info" data-info="ha" role="button" aria-label="Info">i</span>🏠 Home Assistant verbinden</h2>
       <div class="note" id="ha-status" style="margin-bottom:10px"></div>
       <div class="note" style="line-height:1.6; margin-bottom:10px">
-        Läuft bei dir <b>Home Assistant</b>? Dann kann die App die <b>Leistung/Energie-Sensoren</b> von dort lesen –
-        z. B. eine per <b>HomeKit Controller</b> eingebundene <b>Koogeek-Steckdose</b>. So geht's:<br>
+        Läuft bei dir <b>Home Assistant</b>? Dann kann die App beliebige <b>Leistung/Energie-Sensoren</b> von dort
+        lesen – z. B. einen Lesekopf am Hauptzähler, PV/Batterie oder andere Nicht-Bosch-Geräte. (Für messende
+        Steckdosen ist der <b>Bosch Smart Plug+</b> einfacher – der erscheint automatisch als Bosch-Zähler.) So geht's:<br>
         1. In HA: Profil → <b>Langlebige Zugangs-Tokens</b> → Token erstellen.<br>
         2. Adresse (z. B. <code>http://homeassistant.local:8123</code>) und Token hier eintragen.<br>
         Token &amp; Adresse bleiben <b>lokal</b> auf der Bridge (in <code>config.json</code>).

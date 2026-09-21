@@ -1,26 +1,22 @@
 # Home Assistant verbinden 🏠
 
 Wenn bei dir **Home Assistant (HA)** läuft, kann die App dessen **Leistungs- und
-Energiesensoren** mitlesen. Das ist der einfachste Weg, um Geräte in die App zu
-holen, welche die Bosch-Module **nicht** messen – zum Beispiel eine alte
-**Koogeek-Steckdose** (P1EU), deren Cloud/App es nicht mehr gibt.
+Energiesensoren** mitlesen. Das ist ein **optionaler Zusatz**, um Geräte in die
+App zu holen, welche die Bosch-Module **nicht** messen – zum Beispiel einen
+**Lesekopf am Hauptzähler**, eine **PV-/Batterie-Integration** oder andere
+Nicht-Bosch-Geräte.
 
-## Warum über Home Assistant?
+## Für messende Steckdosen lieber Bosch Smart Plug+
 
-Die Koogeek ist ein **HomeKit-Gerät** und liefert ihren Momentanverbrauch nur
-**lokal, verschlüsselt** über HomeKit (nicht über eine Cloud). Ein neuer
-Controller muss sich dafür **kryptografisch koppeln** – das übernimmt HA mit
-seiner Integration **„HomeKit Controller"** (Einstellungen → Geräte & Dienste →
-Integration hinzufügen → *HomeKit Controller*, dann mit dem 8-stelligen
-Setup-Code koppeln). Danach taucht der **Watt-Wert** als Sensor in HA auf – und
-unsere Bridge liest ihn ganz normal über die **HA-REST-API** (nur HTTP + Token,
-passt zum zero-dependency-Prinzip). HA kann die Steckdose außerdem über seine
-eigene **HomeKit Bridge** wieder an Apple Home zurückgeben, sodass Siri/Home-App
-weiter funktionieren.
+Für einzelne Verbraucher (Waschmaschine, Kühlschrank, Trockner …) ist der
+**Bosch Smart Plug+** der einfachere Weg: Er wird ganz normal im Bosch Smart
+Home gekoppelt, benannt und einem Raum zugeordnet – und **erscheint dann
+automatisch** als Bosch-Zähler in dieser App. Kein HA, kein Token, kein
+Zusatz-Setup nötig; die Bridge erkennt jedes Gerät mit `PowerMeter`-Service
+dynamisch (siehe `bridge/shc_bridge.py`, `list_power_devices`).
 
-> Hinweis: Um die Steckdose in HA zu koppeln, musst du sie meist **einmal aus
-> Apple Home entfernen** (HomeKit erlaubt keine zweite fremde Kopplung). Danach
-> übernimmt HA – einmalig, dann hast du Verbrauch **und** Apple Home wieder.
+Der HA-Weg lohnt sich also vor allem für Sensoren, die es als Bosch-Gerät nicht
+gibt – z. B. den Netz-/Hauptzähler oder Wechselrichter-Daten.
 
 ## Token erstellen & verbinden
 
@@ -49,9 +45,9 @@ per `.gitignore` von Commits ausgeschlossen) – niemals im Code oder in der Clo
   `device_class: energy` (Wh/kWh → kWh); Einheiten werden normalisiert.
 * Bridge-Routen: `POST /api/ha/connect`, `GET /api/ha` (gecacht ~20 s).
 
-## HomeKit-Sensoren, die „bei 0 hängen" (z. B. Koogeek)
+## Sensoren, die „bei 0 hängen"
 
-Manche HomeKit-Geräte (u. a. **Koogeek P1EU**) melden zwar eine Leistungs-
+Manche Geräte (vor allem alte **HomeKit-Steckdosen**) melden zwar eine Leistungs-
 Characteristic, schicken aber **keine Update-Events**. HA zeigt den Sensor dann
 dauerhaft mit dem alten Wert (oft `0 W`) an, obwohl das Gerät den echten Wert auf
 Abruf liefert. Unsere Bridge fängt das ab: sie ruft vor jedem Auslesen den
@@ -59,3 +55,8 @@ HA-Dienst **`homeassistant.update_entity`** für die betroffenen Sensoren auf
 (`refresh=True`), sodass HA den Wert frisch einliest. Man braucht dafür **keine
 Automatisierung in HA**. Alternativ ginge eine HA-Automatisierung mit
 `time_pattern` + `homeassistant.update_entity`.
+
+> Praxis-Hinweis: Bei manchen Geräten (z. B. der alten Koogeek P1EU) hilft auch
+> `update_entity` nicht, weil sie den Wert nur intern aktualisieren. Für einzelne
+> Verbraucher ist deshalb der **Bosch Smart Plug+** die zuverlässigere Wahl – er
+> misst nativ und erscheint automatisch in der App.

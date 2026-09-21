@@ -49,7 +49,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-21 · Bauphase-Korrektur (WP aus Gebaeudemodell) + Zaehler-Abgleich WP-Fenster'
+const APP_VERSION = '2026-09-21 · Bauphase-Daempfung (WP-Winterspitzen) + Bosch-Smart-Plug-Vorbereitung'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -202,10 +202,10 @@ const INFO = {
   'tibber-cons': () => 'Dein <b>tatsächlicher Gesamtverbrauch</b> pro Tag, direkt aus dem Tibber-Zähler (also dem ' +
     'Netzzähler des ganzen Hauses). Das erfasst <b>alles</b> – auch Geräte, die die Bosch-Module nicht messen ' +
     '(Kühlschrank, Herd, Licht …). Gut als Gegenprobe zur gemessenen Smart-Home-Summe und zur Zählerkalibrierung.',
-  ha: () => 'Liest Leistungs- und Energiesensoren aus deinem <b>Home Assistant</b> (lokal, über dessen REST-API mit ' +
-    'einem Zugangs-Token). Damit kommen Geräte in die App, die die Bosch-Module nicht messen – z. B. eine alte ' +
-    '<b>Koogeek-Steckdose</b>, die du in HA über den <b>HomeKit Controller</b> eingebunden hast: HA erledigt die ' +
-    'HomeKit-Kopplung, wir lesen nur den fertigen <b>Watt-Wert</b>. Adresse und Token bleiben lokal auf der Bridge.',
+  ha: () => 'Optionaler Zusatz: liest beliebige Leistungs- und Energiesensoren aus deinem <b>Home Assistant</b> ' +
+    '(lokal, über dessen REST-API mit einem Zugangs-Token) – z. B. einen Lesekopf am Hauptzähler, eine PV-/Batterie-' +
+    'Integration oder andere Nicht-Bosch-Geräte. Für messende <b>Steckdosen</b> ist der <b>Bosch Smart Plug+</b> der ' +
+    'einfachere Weg (erscheint automatisch als Bosch-Zähler). Adresse und Token bleiben lokal auf der Bridge.',
   tibber: () => 'Verbindet dein <b>Tibber</b>-Konto (Access Token von developer.tibber.com). Dann nutzt der ganze ' +
     'Börse-Tab – Preiskurve, beste Zeiten, Live-Ampel, Smart-Timer – deine <b>echten stündlichen Tarifpreise</b> ' +
     '(all-in inkl. Netz, Abgaben, MwSt.) statt der Börse-plus-Aufschlag-Schätzung. Der Token bleibt lokal auf der ' +
@@ -384,17 +384,33 @@ function hpYearFromMonthly() {
   return s;
 }
 
-// Bauphase-Korrektur: use the finished-house building model (theory) for the
-// heat-pump forecast instead of the move-in/construction measurements, which
-// are inflated (Rohbau, undichte Baulücken, WP im Dauerbetrieb). Opt-in toggle.
-function hpUseTheory() { try { return localStorage.getItem('bhe_hp_use_theory') === '1'; } catch (e) { return false; } }
-// Full-year heat-pump electricity from the building model (space heat + DHW).
-function hpTheoryYear() { const r = computeHeat(buildData()); return r.eTotal; }
+// Bauphase-Dämpfung: the first heating season was the move-in/construction
+// phase (Rohbau, undichte Baulücken, WP im Dauerbetrieb), so the measured
+// winter months are unrealistically high for the finished, tight house. Instead
+// of discarding them (pure theory), we KEEP the measurements but pull the part
+// that lies ABOVE the building-model expectation partway back toward theory.
+// Months at/below theory (typically summer) stay untouched. Opt-in.
+function hpDampBauphase() { try { return localStorage.getItem('bhe_hp_damp') === '1'; } catch (e) { return false; } }
+const HP_DAMP_W = 0.6; // how strongly the excess over theory is pulled back (0=aus, 1=reine Theorie)
 // Per-calendar-month heat-pump electricity from the building model:
 // space heat follows the heating-season shape, DHW is spread evenly by days.
 function hpTheoryMonth(m) {
   const r = computeHeat(buildData()), hs = normFrac(HP_SEASON);
   return r.eHeat * hs[m] + r.eDhw * DIM[m] / 365;
+}
+// Measured/estimated month for m, with the Bauphase excess dampened toward
+// theory when the correction is on.
+function hpMonthCorrected(m) {
+  const meas = hpMonthEst(m);
+  if (!hpDampBauphase()) return meas;
+  const theory = hpTheoryMonth(m);
+  if (!(theory > 0) || meas <= theory) return meas; // at/below theory: trust the measurement
+  return theory + (meas - theory) * (1 - HP_DAMP_W);  // keep the measurement, tame the peak
+}
+// Full 12-month heat-pump electricity with the Bauphase-Dämpfung applied.
+function hpYearCorrected() {
+  let s = 0; for (let m = 0; m < 12; m++) s += hpMonthCorrected(m);
+  return s;
 }
 
 // Real per-calendar-month heat-pump electricity from imported history
@@ -452,14 +468,14 @@ function annualForecast() {
   const now = new Date(), m = now.getMonth();
   const shMonth = sh * shDayFactor(m) * DIM[m];
   const imported = !!hpYearFromMonthly();
-  const theory = hpUseTheory();
+  const damp = hpDampBauphase();
   // hpBasis: which source drives the WP forecast.
-  //  'theorie'    – Bauphase-Korrektur on: finished-house building model
-  //  'importiert' – real imported monthly meter readings
+  //  'gedämpft'   – Bauphase-Dämpfung on: measured, but winter peaks tamed toward theory
+  //  'importiert' – real imported monthly meter readings (undampened)
   //  'geschätzt'  – seasonal average fallback (no imported data)
-  const hpBasis = theory ? 'theorie' : (imported ? 'importiert' : 'geschätzt');
-  const hpMonth = theory ? hpTheoryMonth(m) : hpMonthEst(m);
-  const hpYear = theory ? hpTheoryYear() : (hpYearFromMonthly() || hpAvgDaily() * 365);
+  const hpBasis = damp ? 'gedämpft' : (imported ? 'importiert' : 'geschätzt');
+  const hpMonth = damp ? hpMonthCorrected(m) : hpMonthEst(m);
+  const hpYear = damp ? hpYearCorrected() : (hpYearFromMonthly() || hpAvgDaily() * 365);
   return {
     shYear: sh * 365, hpYear, year: sh * 365 + hpYear, yearCost: (sh * 365 + hpYear) * p,
     monthNow: shMonth + hpMonth, monthNowCost: (shMonth + hpMonth) * p,
@@ -605,8 +621,8 @@ function applyDemo(mode) {
     total_kwh: Math.round(tNodes.reduce((a, n) => a + n.kwh, 0) * 100) / 100,
     total_cost: Math.round(tNodes.reduce((a, n) => a + n.cost, 0) * 100) / 100 };
   STATE.ha = { available: true, connected: true, demo: true, entities: [
-    { entity_id: 'sensor.koogeek_p1eu_power', name: 'Koogeek P1EU – Leistung', kind: 'power', unit: 'W', watt: 47 },
-    { entity_id: 'sensor.koogeek_p1eu_energy', name: 'Koogeek P1EU – Energie', kind: 'energy', unit: 'kWh', kwh: 128.4 },
+    { entity_id: 'sensor.hauptzaehler_power', name: 'Hauptzähler – Leistung', kind: 'power', unit: 'W', watt: 612 },
+    { entity_id: 'sensor.hauptzaehler_energy', name: 'Hauptzähler – Energie', kind: 'energy', unit: 'kWh', kwh: 2502.0 },
     { entity_id: 'sensor.fridge_power', name: 'Kühlschrank – Leistung', kind: 'power', unit: 'W', watt: 78 }] };
   STATE.cur = '€'; $('cur').textContent = STATE.cur;
   setMode(mode);
@@ -1876,12 +1892,12 @@ function renderHistory() {
   const rows = [
     ['Hochrechnung / Jahr', `${kwh(fc.year, 0)} · ${money(fc.yearCost)}`],
     ['davon Wärmepumpe', fc.hpYear > 0 ? `${kwh(fc.hpYear, 0)} · ${money(fc.hpYear * price)}`
-      + (fc.hpBasis === 'theorie' ? ' 🏗️' : fc.hpImported ? ' ✓' : '') : '–'],
+      + (fc.hpBasis === 'gedämpft' ? ' 🏗️' : fc.hpImported ? ' ✓' : '') : '–'],
     ['davon Smart Home', `${kwh(fc.shYear, 0)} · ${money(fc.shYear * price)}`],
     [`Prognose ${MON[m]}`, `${kwh(fc.monthNow, 0)} · ${money(fc.monthNowCost)}`],
     ['Wärmepumpe Winter vs. Sommer', fc.hpYear > 0
-      ? (fc.hpBasis === 'theorie'
-          ? `${kwh(hpTheoryMonth(0), 0)} (Jan) ↔ ${kwh(hpTheoryMonth(6), 0)} (Jul)`
+      ? (fc.hpBasis === 'gedämpft'
+          ? `${kwh(hpMonthCorrected(0), 0)} (Jan) ↔ ${kwh(hpMonthCorrected(6), 0)} (Jul)`
           : `${kwh(hpMonthEst(0), 0)} (Jan) ↔ ${kwh(hpMonthEst(6), 0)} (Jul)`) : '–'],
   ];
   // only show the module base load when the modules actually measure a
@@ -1901,8 +1917,8 @@ function renderForecastBasis(fc) {
   const ms = meterStats();
   const parts = [];
   // heat pump source
-  if (fc.hpBasis === 'theorie') {
-    parts.push('<b>Wärmepumpe</b>: aus deinem <b>Gebäudemodell</b> (fertiges, dichtes Haus) 🏗️ – <b>Bauphase-Korrektur aktiv</b>, die hohen Einzugs-Messwerte fließen bewusst <b>nicht</b> in die Jahresprognose.');
+  if (fc.hpBasis === 'gedämpft') {
+    parts.push('<b>Wärmepumpe</b>: aus deiner <b>importierten HomeCom-Historie</b>, aber mit <b>Bauphase-Dämpfung</b> 🏗️ – die überhöhten Einzugs-/Rohbau-Wintermonate werden Richtung Gebäudemodell gedämpft (Sommermonate bleiben unverändert).');
   } else {
     parts.push(fc.hpImported
       ? '<b>Wärmepumpe</b>: aus deiner <b>importierten HomeCom-Historie</b> (echte Monatswerte) ✓'
@@ -2609,8 +2625,9 @@ function renderBehavior() {
     `<b>Nicht</b> dabei: Kühlschrank, Herd/Backofen, Wasch­maschine, Trockner, Geschirrspüler, Router, TV, Ladegeräte … ` +
     `So bekommst du sie rein:<br>` +
     `• <b>Stromrechnung</b>: Jahres-kWh im Setup unter „Haushaltsstrom ergänzen" eintragen – schnellste Lösung.<br>` +
-    `• <b>Mess-Steckdosen</b> (z. B. Shelly Plug&nbsp;S) an großen Verbrauchern – zeigt Einzelwerte.<br>` +
-    `• <b>Zähler auslesen</b> am Hauptzähler (z. B. Shelly&nbsp;3EM oder ein Lesekopf/Tibber Pulse) misst den ` +
+    `• <b>Bosch Smart Plug+</b> (messende Zwischenstecker) an großen Verbrauchern – sie erscheinen ` +
+    `<b>automatisch</b> hier in der App (Bosch-Zähler), ganz ohne Zusatz-Setup.<br>` +
+    `• <b>Zähler auslesen</b> am Hauptzähler (z. B. ein Lesekopf/Tibber Pulse) misst den ` +
     `<b>ganzen</b> Haushalt live – ließe sich später auch direkt anbinden.`;
 }
 
@@ -3171,7 +3188,7 @@ function renderSettings() {
     has.innerHTML = h.ha_available === false
       ? 'HA-Modul nicht installiert (Datei <code>bridge/ha_client.py</code> fehlt).'
       : h.mode === 'demo'
-        ? '<b>Demo</b> – Beispiel-Sensoren (Koogeek P1EU). Auf deiner Bridge dein echtes Home Assistant verbinden.'
+        ? '<b>Demo</b> – Beispiel-Sensoren. Auf deiner Bridge dein echtes Home Assistant verbinden.'
         : h.ha_connected
           ? `<b style="color:#4be0b0">Verbunden ✓</b>${cnt ? ' – ' + cnt + ' Sensor(en) auf der Übersicht' : ''}.`
           : 'Noch nicht verbunden.';
@@ -3193,6 +3210,9 @@ function renderSettings() {
 
 function friendlyModel(m) {
   m = m || '';
+  // Bosch Smart Plug / Smart Plug+ (measuring plug) report models like
+  // PSM, PLUG_COMPACT, SMARTPLUG, BSP…; match by pattern, never a fixed id.
+  if (/PLUG|PSM|SMART[\s_-]?PLUG|\bBSP\b/i.test(m)) return 'Zwischenstecker (Smart Plug)';
   if (/SHUTTER/i.test(m)) return 'Rollladen-Modul';
   if (/LIGHT/i.test(m)) return 'Licht-/Rollladen-Modul';
   return m || 'Modul';
@@ -3739,12 +3759,12 @@ function init() {
     const s = localStorage.getItem(key); if (s !== null) el.checked = s === '1';
     el.addEventListener('change', () => { try { localStorage.setItem(key, el.checked ? '1' : '0'); } catch (e) {} renderHeatDemand(); });
   });
-  // Bauphase-Korrektur: WP forecast from the building model instead of move-in data
+  // Bauphase-Dämpfung: keep measurements but tame the inflated move-in winter peaks
   (() => {
     const el = $('h-baukorr'); if (!el) return;
-    try { el.checked = localStorage.getItem('bhe_hp_use_theory') === '1'; } catch (e) {}
+    try { el.checked = localStorage.getItem('bhe_hp_damp') === '1'; } catch (e) {}
     el.addEventListener('change', () => {
-      try { localStorage.setItem('bhe_hp_use_theory', el.checked ? '1' : '0'); } catch (e) {}
+      try { localStorage.setItem('bhe_hp_damp', el.checked ? '1' : '0'); } catch (e) {}
       renderAll();
     });
   })();
