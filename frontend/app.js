@@ -37,7 +37,7 @@ const MON = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Ok
 const COL = { sh: '#4da3ff', hp: '#ef6c4d', heat: '#f6b93b', away: '#ff6b8a' };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-21 · Theorie-Monat 3 Reihen umschaltbar + HA-Anbindung + 60%-Kappung'
+const APP_VERSION = '2026-09-21 · Theorie-Monat: Kontraste + Jahressummen je Kategorie + 3 Reihen'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -2025,10 +2025,12 @@ function renderHeatDemand() {
     const pOn = !!measured && on('thm-p');
     if ($('thm-p')) $('thm-p').disabled = !measured;
 
+    // high-contrast, well-separated hues (orange / blue / violet)
+    const COLT = '#ff9f40', COLP = '#3d8bff', COLE = '#b07cff';
     const series = [];
-    if (on('thm-t')) series.push({ key: 't', color: 'url(#gHeat)' });
-    if (pOn) series.push({ key: 'p', color: COL.sh });
-    if (on('thm-e')) series.push({ key: 'e', color: 'rgba(56,189,216,0.85)' });
+    if (on('thm-t')) series.push({ key: 't', color: COLT });
+    if (pOn) series.push({ key: 'p', color: COLP });
+    if (on('thm-e')) series.push({ key: 'e', color: COLE });
     const rows = MON.map((lbl2, m) => ({
       label: lbl2, values: {
         t: theoryMonth[m],
@@ -2039,10 +2041,22 @@ function renderHeatDemand() {
       ? groupedBar(rows, series, { h: 190 })
       : '<div class="note">Alle Reihen ausgeblendet – oben wieder anhaken.</div>';
     $('hp-theory-month-legend').innerHTML = legendHtml([
-      on('thm-t') ? { color: COL.heat, label: 'Theorie' } : null,
-      pOn ? { color: COL.sh, label: measLabel } : null,
-      on('thm-e') ? { color: '#38bdd8', label: 'Erwartet (Erfahrung)' } : null,
+      on('thm-t') ? { color: COLT, label: 'Theorie' } : null,
+      pOn ? { color: COLP, label: measLabel } : null,
+      on('thm-e') ? { color: COLE, label: 'Erwartet (Erfahrung)' } : null,
     ].filter(Boolean));
+    // Gesamtverbrauch je Kategorie (Jahressumme), respektiert die Häkchen
+    const price = STATE.price;
+    const theoTot = theoryMonth.reduce((a, b) => a + b, 0);
+    const expTot = expectedMonth.reduce((a, b) => a + b, 0);
+    let measTot = 0, measCnt = 0;
+    if (measured) Object.keys(measured).forEach(m => { measTot += measured[m].kwh; measCnt++; });
+    const totCard = (c, label, v) => `<div class="kpi sm"><div class="v" style="color:${c}">${kwh(v, 0)}</div>` +
+      `<div class="l">${label} · ${money(v * price)}</div></div>`;
+    $('hp-theory-month-tot').innerHTML = '<div class="grid3">' +
+      (on('thm-t') ? totCard(COLT, 'Theorie / Jahr', theoTot) : '') +
+      (pOn ? totCard(COLP, measCnt >= 12 ? measLabel + ' / Jahr' : `${measLabel} (${measCnt} Mon.)`, measTot) : '') +
+      (on('thm-e') ? totCard(COLE, 'Erwartet / Jahr', expTot) : '') + '</div>';
     // note: compare measured vs theory over the measured months
     if (measured) {
       let worst = null, sT = 0, sP = 0;
