@@ -34,10 +34,22 @@ const V2H_PROFILES = {
 };
 const WD = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
 const MON = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'];
-const COL = { sh: '#4da3ff', hp: '#ef6c4d', heat: '#f6b93b', away: '#ff6b8a' };
+// Central category palette – the single source of truth for chart colours, so
+// each category has exactly ONE colour everywhere (Übersicht, Verlauf, PV, …).
+// Hues are chosen to be well separated and high-contrast on the dark theme.
+const COL = {
+  sh: '#4da3ff',    // Hausstrom / Smart Home – blau
+  hp: '#ef6c4d',    // Wärmepumpe (Strom) – rot-orange
+  heat: '#f6b93b',  // Wärme erzeugt / PV-Einspeisung – bernstein
+  ev: '#e26fb0',    // E-Auto – pink
+  ac: '#38bdd8',    // Klima – türkis
+  pv: '#4be0b0',    // PV direkt genutzt – grün
+  batt: '#a970ff',  // Batterie – violett
+  away: '#ff6b8a',  // Abwesenheit – rosa-rot
+};
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-21 · Theorie-Monat: Kontraste + Jahressummen je Kategorie + 3 Reihen'
+const APP_VERSION = '2026-09-21 · Einheitliche Kategorie-Farbpalette + Theorie-Monat 3 Reihen'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -166,12 +178,12 @@ const INFO = {
     'später ins Haus zurück – so kannst du einen <b>kleineren Heimspeicher</b> kaufen. Entscheidend ist, wie oft das ' +
     'Auto <b>tagsüber</b> zuhause steht: nur dann fängt es die Mittagssonne ein. Stell das unter „Auto tagsüber" ein. ' +
     'Braucht eine <b>bidirektionale Wallbox</b> und ein <b>V2H-fähiges Auto</b>.',
-  'pv-batt': () => 'Linker Balken = dein PV-Ertrag, aufgeteilt in <b style="color:#4be0b0">direkt genutzt</b>, ' +
-    '<b style="color:#7c5cff">über die Batterie genutzt</b> und <b style="color:#f6b93b">eingespeist</b>. ' +
+  'pv-batt': () => `Linker Balken = dein PV-Ertrag, aufgeteilt in <b style="color:${COL.pv}">direkt genutzt</b>, ` +
+    `<b style="color:${COL.batt}">über die Batterie genutzt</b> und <b style="color:${COL.heat}">eingespeist</b>. ` +
     'Der lila Anteil ist genau das, was der <b>Speicher</b> bringt: sonst eingespeister Strom, den du dank ' +
     'Batterie selbst nutzt. Rechter Balken = dein <b>Verbrauch nach Quelle</b> ' +
-    '(<b style="color:#4da3ff">Hausstrom</b>, <b style="color:#ef6c4d">Wärmepumpe</b>, ' +
-    '<b style="color:#e26fb0">E-Auto</b>).',
+    `(<b style="color:${COL.sh}">Hausstrom</b>, <b style="color:${COL.hp}">Wärmepumpe</b>, ` +
+    `<b style="color:${COL.ev}">E-Auto</b>).`,
   share: () => 'Anteil je Quelle über die <b>gemessenen</b> Tage im Zeitraum (kumulierte kWh). ' +
     'Geschätzte Tage zählen hier nicht mit.',
   behavior: () => 'Aus den <b>Namen</b> deiner Geräte und den Uhrzeiten, zu denen sie am meisten Strom ziehen, ' +
@@ -2679,8 +2691,9 @@ function curtailEstimate(p) {
 
 // Per month: a stacked PV bar (direct self / battery self / feed-in) next to a
 // consumption bar – shows what the battery shifts from feed-in to self-use.
-const PVC = { direct: '#4be0b0', batt: '#7c5cff', feed: '#f6b93b',
-  sh: '#4da3ff', hp: '#ef6c4d', ev: '#e26fb0', ac: '#38bdd8' };
+// PV chart colours derive from the central palette (single source of truth).
+const PVC = { direct: COL.pv, batt: COL.batt, feed: COL.heat,
+  sh: COL.sh, hp: COL.hp, ev: COL.ev, ac: COL.ac };
 let _pvMonths = [];
 function showPvTip(mi) {
   const m = _pvMonths[mi], t = $('toast'); if (!m || !t) return;
