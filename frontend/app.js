@@ -49,7 +49,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-21 · Hochrechnung mit Herkunft, Zaehler-Abgleich und Grundlast-Fix'
+const APP_VERSION = '2026-09-21 · Bauphase-Korrektur (WP aus Gebaeudemodell) + Zaehler-Abgleich WP-Fenster'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -318,12 +318,38 @@ function meterStats() {
   }
   return { count: r.length, first, last, spanDays, dailyAvg: (last.kwh - first.kwh) / spanDays, months, readings: r };
 }
+// Measured heat-pump electricity over the exact meter window [fromTs,toTs],
+// summed from the REAL daily series (HomeCom). This is what the meter's growth
+// actually contained, so household = meter − this reconciles with the HomeCom
+// counter the user reads. Returns null when the daily data doesn't cover the
+// span well enough (then we fall back to the seasonal model).
+function hpKwhOverSpan(fromTs, toTs) {
+  const days = (STATE.ov && STATE.ov.combined_daily) || [];
+  if (!days.length) return null;
+  const fromKey = localKey(new Date(fromTs * 1000)), toKey = localKey(new Date(toTs * 1000));
+  const spanDays = Math.max(1, Math.round((toTs - fromTs) / 86400));
+  let sum = 0, n = 0;
+  // days AFTER the first reading up to and including the last: that's the energy
+  // the meter growth accumulated over the window.
+  days.forEach(d => {
+    if (d.day > fromKey && d.day <= toKey && d.heatpump_kwh != null) { sum += d.heatpump_kwh; n++; }
+  });
+  return n >= Math.ceil(spanDays * 0.6) ? { kwh: sum, days: n, spanDays } : null;
+}
+// Heat-pump daily kWh to subtract from the meter for the calibration window.
+// Prefers the real windowed measurement; falls back to the seasonal model.
+function meterHpDaily(s) {
+  if (!s) return hpAvgDaily();
+  const w = hpKwhOverSpan(s.first.ts, s.last.ts);
+  if (w && s.spanDays > 0) return w.kwh / s.spanDays;
+  return s.months && s.months.length
+    ? mean(s.months.map(m => (hpMonthEst(m) || 0) / DIM[m])) : hpAvgDaily();
+}
 // Household daily derived from the meter: real total minus the heat pump's
-// seasonal share over the same months (household baseload is ~constant).
+// actual consumption over the same window (household baseload is ~constant).
 function meterHouseholdDaily() {
   const s = meterStats(); if (!s || s.dailyAvg == null) return null;
-  const hpDaily = s.months.length ? mean(s.months.map(m => (hpMonthEst(m) || 0) / DIM[m])) : hpAvgDaily();
-  return Math.max(0, s.dailyAvg - (hpDaily || 0));
+  return Math.max(0, s.dailyAvg - (meterHpDaily(s) || 0));
 }
 // Mean daily heat-pump electricity for the measured season. Prefer the
 // meter-growth-over-span figure (robust to polling gaps) over sparse day deltas.
@@ -356,6 +382,19 @@ function hpYearFromMonthly() {
   if (!hpRealMonthMap()) return null;
   let s = 0; for (let m = 0; m < 12; m++) s += hpMonthEst(m);
   return s;
+}
+
+// Bauphase-Korrektur: use the finished-house building model (theory) for the
+// heat-pump forecast instead of the move-in/construction measurements, which
+// are inflated (Rohbau, undichte Baulücken, WP im Dauerbetrieb). Opt-in toggle.
+function hpUseTheory() { try { return localStorage.getItem('bhe_hp_use_theory') === '1'; } catch (e) { return false; } }
+// Full-year heat-pump electricity from the building model (space heat + DHW).
+function hpTheoryYear() { const r = computeHeat(buildData()); return r.eTotal; }
+// Per-calendar-month heat-pump electricity from the building model:
+// space heat follows the heating-season shape, DHW is spread evenly by days.
+function hpTheoryMonth(m) {
+  const r = computeHeat(buildData()), hs = normFrac(HP_SEASON);
+  return r.eHeat * hs[m] + r.eDhw * DIM[m] / 365;
 }
 
 // Real per-calendar-month heat-pump electricity from imported history
@@ -412,12 +451,19 @@ function annualForecast() {
   const p = STATE.price, sh = shAvgDaily();
   const now = new Date(), m = now.getMonth();
   const shMonth = sh * shDayFactor(m) * DIM[m];
-  const hpMonth = hpMonthEst(m);
-  const hpYear = hpYearFromMonthly() || hpAvgDaily() * 365;
+  const imported = !!hpYearFromMonthly();
+  const theory = hpUseTheory();
+  // hpBasis: which source drives the WP forecast.
+  //  'theorie'    – Bauphase-Korrektur on: finished-house building model
+  //  'importiert' – real imported monthly meter readings
+  //  'geschätzt'  – seasonal average fallback (no imported data)
+  const hpBasis = theory ? 'theorie' : (imported ? 'importiert' : 'geschätzt');
+  const hpMonth = theory ? hpTheoryMonth(m) : hpMonthEst(m);
+  const hpYear = theory ? hpTheoryYear() : (hpYearFromMonthly() || hpAvgDaily() * 365);
   return {
     shYear: sh * 365, hpYear, year: sh * 365 + hpYear, yearCost: (sh * 365 + hpYear) * p,
     monthNow: shMonth + hpMonth, monthNowCost: (shMonth + hpMonth) * p,
-    shMonth, hpMonth, hpImported: !!hpYearFromMonthly(),
+    shMonth, hpMonth, hpImported: imported, hpBasis,
   };
 }
 // Complete per-day series over [from,to]; real where measured, else a
@@ -873,7 +919,7 @@ function renderMeter() {
     : '<div class="note">Noch keine Ablesung. Trag oben deinen aktuellen Zählerstand ein – und in ein paar Tagen den nächsten.</div>';
   const s = meterStats();
   if (s && s.dailyAvg != null) {
-    const hpDaily = s.months.length ? mean(s.months.map(m => (hpMonthEst(m) || 0) / DIM[m])) : hpAvgDaily();
+    const hpDaily = meterHpDaily(s);
     const household = Math.max(0, s.dailyAvg - hpDaily);
     const unmetered = Math.max(0, household - shMeteredDaily());
     note.innerHTML = `Realer Gesamtverbrauch <b>${kwh(s.dailyAvg, 1)}/Tag</b> ` +
@@ -1652,7 +1698,7 @@ function renderTips() {
   // 0) whole-house meter calibration: reveal the not-yet-measured household load
   const ms = meterStats();
   if (ms && ms.dailyAvg != null) {
-    const hpDaily = ms.months.length ? mean(ms.months.map(m => (hpMonthEst(m) || 0) / DIM[m])) : hpAvgDaily();
+    const hpDaily = meterHpDaily(ms);
     const household = Math.max(0, ms.dailyAvg - hpDaily);
     const unmetered = Math.max(0, household - shMeteredDaily());
     tips.push(['🔢', `Dein <b>Gesamtzähler</b>: real <b>${kwh(ms.dailyAvg, 1)}/Tag</b> ` +
@@ -1829,11 +1875,14 @@ function renderHistory() {
   const standbyYear = baseW * 24 * 365 / 1000;
   const rows = [
     ['Hochrechnung / Jahr', `${kwh(fc.year, 0)} · ${money(fc.yearCost)}`],
-    ['davon Wärmepumpe', fc.hpYear > 0 ? `${kwh(fc.hpYear, 0)} · ${money(fc.hpYear * price)}` + (fc.hpImported ? ' ✓' : '') : '–'],
+    ['davon Wärmepumpe', fc.hpYear > 0 ? `${kwh(fc.hpYear, 0)} · ${money(fc.hpYear * price)}`
+      + (fc.hpBasis === 'theorie' ? ' 🏗️' : fc.hpImported ? ' ✓' : '') : '–'],
     ['davon Smart Home', `${kwh(fc.shYear, 0)} · ${money(fc.shYear * price)}`],
     [`Prognose ${MON[m]}`, `${kwh(fc.monthNow, 0)} · ${money(fc.monthNowCost)}`],
     ['Wärmepumpe Winter vs. Sommer', fc.hpYear > 0
-      ? `${kwh(hpMonthEst(0), 0)} (Jan) ↔ ${kwh(hpMonthEst(6), 0)} (Jul)` : '–'],
+      ? (fc.hpBasis === 'theorie'
+          ? `${kwh(hpTheoryMonth(0), 0)} (Jan) ↔ ${kwh(hpTheoryMonth(6), 0)} (Jul)`
+          : `${kwh(hpMonthEst(0), 0)} (Jan) ↔ ${kwh(hpMonthEst(6), 0)} (Jul)`) : '–'],
   ];
   // only show the module base load when the modules actually measure a
   // meaningful base (avoids the misleading "0,0 kWh · 0 %" line)
@@ -1852,9 +1901,13 @@ function renderForecastBasis(fc) {
   const ms = meterStats();
   const parts = [];
   // heat pump source
-  parts.push(fc.hpImported
-    ? '<b>Wärmepumpe</b>: aus deiner <b>importierten HomeCom-Historie</b> (echte Monatswerte) ✓'
-    : '<b>Wärmepumpe</b>: aus dem gemessenen Zählerwachstum <b>hochgerechnet</b> (noch keine CSV importiert).');
+  if (fc.hpBasis === 'theorie') {
+    parts.push('<b>Wärmepumpe</b>: aus deinem <b>Gebäudemodell</b> (fertiges, dichtes Haus) 🏗️ – <b>Bauphase-Korrektur aktiv</b>, die hohen Einzugs-Messwerte fließen bewusst <b>nicht</b> in die Jahresprognose.');
+  } else {
+    parts.push(fc.hpImported
+      ? '<b>Wärmepumpe</b>: aus deiner <b>importierten HomeCom-Historie</b> (echte Monatswerte) ✓'
+      : '<b>Wärmepumpe</b>: aus dem gemessenen Zählerwachstum <b>hochgerechnet</b> (noch keine CSV importiert).');
+  }
   // household source
   if (ms && ms.dailyAvg != null) {
     const days = Math.round(ms.spanDays);
@@ -3686,6 +3739,15 @@ function init() {
     const s = localStorage.getItem(key); if (s !== null) el.checked = s === '1';
     el.addEventListener('change', () => { try { localStorage.setItem(key, el.checked ? '1' : '0'); } catch (e) {} renderHeatDemand(); });
   });
+  // Bauphase-Korrektur: WP forecast from the building model instead of move-in data
+  (() => {
+    const el = $('h-baukorr'); if (!el) return;
+    try { el.checked = localStorage.getItem('bhe_hp_use_theory') === '1'; } catch (e) {}
+    el.addEventListener('change', () => {
+      try { localStorage.setItem('bhe_hp_use_theory', el.checked ? '1' : '0'); } catch (e) {}
+      renderAll();
+    });
+  })();
   $('save-base').addEventListener('click', () => {
     STATE.base = $('base').value.trim().replace(/\/+$/, '');
     localStorage.setItem(LS.base, STATE.base);
