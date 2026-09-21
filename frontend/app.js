@@ -49,7 +49,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-21 · Bauphase-Daempfung (WP-Winterspitzen) + Bosch-Smart-Plug-Vorbereitung'
+const APP_VERSION = '2026-09-21 · Karte "Noch nicht gemessen" (Dunkelverbrauch) + Bauphase-Daempfung'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -202,6 +202,10 @@ const INFO = {
   'tibber-cons': () => 'Dein <b>tatsächlicher Gesamtverbrauch</b> pro Tag, direkt aus dem Tibber-Zähler (also dem ' +
     'Netzzähler des ganzen Hauses). Das erfasst <b>alles</b> – auch Geräte, die die Bosch-Module nicht messen ' +
     '(Kühlschrank, Herd, Licht …). Gut als Gegenprobe zur gemessenen Smart-Home-Summe und zur Zählerkalibrierung.',
+  dark: () => 'Vergleicht deinen <b>Gesamt-Haushaltsstrom</b> (aus Zählerablesung bzw. eingetragenem Jahreswert, ' +
+    'ohne Wärmepumpe) mit dem, was <b>explizit gemessen</b> wird (Bosch-Module + Smart Plugs). Die Differenz ist ' +
+    'der noch <b>nicht einzeln gemessene</b> Anteil („Dunkelverbrauch"). So siehst du, ob sich weitere ' +
+    '<b>Mess-Steckdosen</b> lohnen und wie viel da noch im Verborgenen läuft. Wird kleiner, sobald du Plugs ergänzt.',
   ha: () => 'Optionaler Zusatz: liest beliebige Leistungs- und Energiesensoren aus deinem <b>Home Assistant</b> ' +
     '(lokal, über dessen REST-API mit einem Zugangs-Token) – z. B. einen Lesekopf am Hauptzähler, eine PV-/Batterie-' +
     'Integration oder andere Nicht-Bosch-Geräte. Für messende <b>Steckdosen</b> ist der <b>Bosch Smart Plug+</b> der ' +
@@ -1536,7 +1540,74 @@ function devRow(title, sub, valTop, valBot, pct, col) {
 
 /* --------------------------------------------------------------- rendering */
 function renderAll() {
-  renderOverview(); renderToday(); renderHistory(); renderHeatpump(); renderProfile(); renderPv(); renderSettings(); renderAppliances(); renderMeter(); renderBorse(); renderCarbon(); renderSmart(); renderKonzept(); renderHa();
+  renderOverview(); renderToday(); renderHistory(); renderHeatpump(); renderProfile(); renderPv(); renderSettings(); renderAppliances(); renderMeter(); renderBorse(); renderCarbon(); renderSmart(); renderKonzept(); renderHa(); renderDarkLoad();
+}
+
+// "Noch nicht gemessen": whole-house household load (meter/manual, minus heat
+// pump) vs. what the Bosch modules + smart plugs actually measure. The gap is
+// the not-yet-individually-metered ("dark") load – shrinks as plugs are added.
+function renderDarkLoad() {
+  const card = $('ov-dark-card'); if (!card) return;
+  const data = STATE.data;
+  // need a whole-house household reference beyond the modules themselves
+  const md = meterHouseholdDaily();
+  const houseDaily = (md != null && md > 0) ? md : (houseManual() > 0 ? houseManual() / 365 : null);
+  if (!data || houseDaily == null) { card.hidden = true; return; }
+  card.hidden = false;
+  const price = STATE.price;
+  const measured = Math.min(shMeteredDaily(), houseDaily);   // measured modules+plugs (capped)
+  const dark = Math.max(0, houseDaily - measured);
+  const darkPct = houseDaily > 0 ? dark / houseDaily * 100 : 0;
+  const src = (md != null && md > 0) ? 'Zählerablesung' : 'eingetragener Jahreswert';
+
+  $('ov-dark-sum').textContent = `${fmt(darkPct, 0)} % offen`;
+
+  // proportion bar: measured (blue) vs dark (grey)
+  const GREY = '#8b93a7';
+  const wMeas = houseDaily > 0 ? measured / houseDaily * 100 : 0;
+  $('ov-dark-bar').innerHTML =
+    `<div style="display:flex;height:22px;border-radius:6px;overflow:hidden;background:var(--card-bd,#2a2f3a)">` +
+    `<div title="gemessen" style="width:${wMeas.toFixed(1)}%;background:${COL.sh}"></div>` +
+    `<div title="nicht gemessen" style="width:${(100 - wMeas).toFixed(1)}%;background:${GREY}"></div></div>` +
+    `<div class="legend" style="margin-top:6px">` +
+    `<div class="it"><span class="sw" style="background:${COL.sh}"></span>gemessen ${kwh(measured, 1)}/Tag</div>` +
+    `<div class="it"><span class="sw" style="background:${GREY}"></span>nicht gemessen ${kwh(dark, 1)}/Tag</div></div>`;
+
+  $('ov-dark-kpi').innerHTML =
+    `<div class="kpi sm"><div class="v">${kwh(dark * 365, 0)}</div><div class="l">nicht gemessen / Jahr · ${money(dark * 365 * price)}</div></div>` +
+    `<div class="kpi sm"><div class="v">${kwh(houseDaily * 365, 0)}</div><div class="l">Haushalt gesamt / Jahr (${src})</div></div>`;
+
+  // biggest measured devices, so the scale is tangible – plus the dark remainder
+  const pdd = data.per_device_day || {};
+  const names = {}; ((data.live && data.live.devices) || []).forEach(d => names[d.id] = devLabel(d).title);
+  const rows = [];
+  Object.keys(pdd).forEach(id => {
+    const ds = Object.keys(pdd[id]); if (!ds.length) return;
+    let s = 0; ds.forEach(d => s += pdd[id][d]); const avg = s / ds.length;
+    if (avg > 0.01) rows.push({ label: names[id] || id, kwh: avg });
+  });
+  rows.sort((a, b) => b.kwh - a.kwh);
+  const scaleMax = Math.max(dark, rows.length ? rows[0].kwh : 0) || 1;
+  let html = rows.slice(0, 6).map(r =>
+    devRow(r.label, 'gemessen', kwh(r.kwh, 2) + '/Tag', '', r.kwh / scaleMax * 100, COL.sh)).join('');
+  if (dark > 0.05) html += devRow('Noch nicht gemessen', 'geschätzt (Zähler − Module)',
+    kwh(dark, 2) + '/Tag', money(dark * 365 * price) + '/Jahr', dark / scaleMax * 100, GREY);
+  $('ov-dark-list').innerHTML = html || '<div class="note">Noch keine Einzelgeräte gemessen.</div>';
+
+  // guidance: is it worth more plugs? plus a tangible appliance-equivalent
+  const darkYear = dark * 365;
+  const equiv = Math.round(darkYear / 250); // ~250 kWh ≈ a typical bigger appliance/year
+  let advice;
+  if (dark >= 5) advice = `<b>Da läuft noch viel im Verborgenen.</b> Weitere <b>Bosch Smart Plug+</b> an großen ` +
+    `Verbrauchern (Kühl-/Gefrierkombi, Herd/Backofen, Trockner, Server/Netzwerk) lohnen sich klar – ` +
+    `das entspricht grob <b>${equiv}</b> typischen Großgeräten à ~250 kWh/Jahr.`;
+  else if (dark >= 2) advice = `<b>Moderater ungemessener Rest.</b> 2–3 gezielte <b>Smart Plugs</b> an den größten ` +
+    `Verbrauchern (Küche, Waschküche, Unterhaltung) würden das meiste davon sichtbar machen ` +
+    `(~${equiv} Großgeräte-Äquivalente).`;
+  else advice = `<b>Schon gut abgedeckt</b> – der ungemessene Rest ist klein (Kühlschrank, Router, Ladegeräte, ` +
+    `Standby). Weitere Steckdosen bringen hier wenig Neues.`;
+  $('ov-dark-note').innerHTML = `Basis: Haushalt <b>${kwh(houseDaily, 1)}/Tag</b> (${src}, ohne Wärmepumpe) ` +
+    `minus gemessene <b>${kwh(measured, 1)}/Tag</b>. ` + advice;
 }
 
 function renderOverview() {
