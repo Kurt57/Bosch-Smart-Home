@@ -38,6 +38,21 @@ function evBenefit() {
   const include = (localStorage.getItem(EV_LS.incl) ?? '1') === '1';
   return { km, per100, evKwh, evEnergyCost, fuelCost, tankSave, tax, thg, maint, total, include };
 }
+// How much of the car's annual charging PV covers directly (extra self-consumption
+// the car adds), so the user sees that in sunny months little/no grid power is
+// bought for it. Informational only – the € value already lives in the PV savings.
+function evPvCoverage() {
+  try {
+    const p = pvInputs();
+    if (!(p.kwp > 0) || !(p.evAnnual > 0)) return null;
+    const rWith = simulatePv(p);
+    const rNo = simulatePv({ ...p, evAnnual: 0 });
+    const pvToEv = Math.max(0, rWith.self_kwh - rNo.self_kwh);   // PV kWh now used by the car
+    const share = Math.min(1, pvToEv / p.evAnnual);
+    return { evKwh: p.evAnnual, pvToEv, share,
+      pvValue: pvToEv * Math.max(0, STATE.price - p.feedin) };   // saving vs. feeding it in
+  } catch (e) { return null; }
+}
 function tariffData() {
   const g = (k, d) => { const v = parseFloat(localStorage.getItem(k)); return isFinite(v) ? v : d; };
   let wp = false; try { wp = localStorage.getItem(TAR_LS.wp) === '1'; } catch (e) {}
@@ -74,7 +89,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-28 · PV: Selbstbau vs. Fachfirma Kostenvergleich (kWp/Speicher/Foerderung)'
+const APP_VERSION = '2026-09-28 · E-Auto: PV-Ladeanteil sichtbar (kein Netzstrom im Sommer), Doppelzaehlung vermieden'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -1480,9 +1495,16 @@ function renderEvBenefit(ev) {
     `<div class="kpi sm"><div class="v">${money(ev.thg)}</div><div class="l">THG-Quote / Jahr</div></div>` +
     `<div class="kpi sm"><div class="v">${money(ev.maint)}</div><div class="l">Wartung gespart / Jahr</div></div>` +
     `<div class="kpi sm"><div class="v" style="color:#4be0b0">${money(ev.total)}</div><div class="l">E-Auto-Vorteil gesamt / Jahr</div></div></div>`;
+  const cov = evPvCoverage();
+  const covTxt = cov
+    ? `☀️ Davon deckt deine <b>PV ~${kwh(cov.pvToEv, 0)}/Jahr</b> (${fmt(cov.share * 100, 0)} %) direkt – ` +
+      `dafür kaufst du <b>keinen Netzstrom</b>; <b>im Sommer oft fast der ganze Ladebedarf, im Winter kaum</b>. ` +
+      `Dieser PV-Ladevorteil (~${money(cov.pvValue)}/Jahr) steckt schon in der <b>Stromersparnis oben</b> – ` +
+      `deshalb rechnet der „Sprit gespart"-Wert hier bewusst mit dem <b>Netz-/Referenzpreis</b>, damit nichts doppelt zählt. `
+    : '';
   note.innerHTML =
-    `Bei <b>${fmt(ev.km, 0)} km/Jahr</b>: E-Auto braucht ~<b>${kwh(ev.evKwh, 0)}</b> Strom (${money(ev.evEnergyCost)}), ` +
-    `ein Verbrenner hätte ~<b>${money(ev.fuelCost)}</b> getankt. ` +
+    `Bei <b>${fmt(ev.km, 0)} km/Jahr</b>: E-Auto braucht ~<b>${kwh(ev.evKwh, 0)}</b> Strom (${money(ev.evEnergyCost)} zum Netzpreis), ` +
+    `ein Verbrenner hätte ~<b>${money(ev.fuelCost)}</b> getankt. ` + covTxt +
     (ev.include ? 'Fließt in die Amortisation oben ein. ' : 'Zählt <b>nicht</b> in die Amortisation oben. ') +
     `<span style="color:var(--muted)">THG-Quote sinkt jährlich; Kfz-Steuer-Befreiung für E-Autos gilt bis Ende 2030. ` +
     `Werte anpassbar. Der Auto-Kaufpreis selbst steckt hier nicht drin – nur die laufenden Vorteile.</span>`;
