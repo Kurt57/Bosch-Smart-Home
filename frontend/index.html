@@ -589,6 +589,41 @@
       <div id="pv-econchart"></div>
       <div class="note" id="pv-econchart-note" style="margin-top:10px"></div>
     </div>
+    <div class="card" id="pv-build-card">
+      <h2><span class="info" data-info="pv-build" role="button" aria-label="Info">i</span>🧰 Selbstbau vs. Fachfirma</h2>
+      <div class="note" style="margin-bottom:10px">Anlagengröße (<b>kWp</b>) und <b>Speicher</b> kommen aus deiner Planung oben –
+        ändere sie dort, um zu sehen, wie sich die Kosten verschieben. Preise unten sind grobe Richtwerte, alle anpassbar.</div>
+      <div style="font-weight:600;margin:4px 0 6px;color:var(--pv,#4be0b0)">🔧 Selbstbau (Einkauf + Elektro-Anschluss)</div>
+      <div class="grid2">
+        <div><label>Hardware (€/kWp)</label>
+          <input id="pc-diy-kwp" type="number" min="0" step="50" inputmode="numeric" placeholder="z. B. 750"></div>
+        <div><label>Speicher (€/kWh)</label>
+          <input id="pc-diy-kwh" type="number" min="0" step="10" inputmode="numeric" placeholder="z. B. 350"></div>
+        <div><label>Elektriker / Anschluss (€, fix)</label>
+          <input id="pc-diy-fix" type="number" min="0" step="50" inputmode="numeric" placeholder="z. B. 900"></div>
+        <div><label>Eigenleistung (Std., optional)</label>
+          <input id="pc-diy-hours" type="number" min="0" step="5" inputmode="numeric" placeholder="0 = ignorieren"></div>
+      </div>
+      <div style="font-weight:600;margin:14px 0 6px;color:var(--hp,#ef6c4d)">🏢 Fachfirma (schlüsselfertig)</div>
+      <div class="grid2">
+        <div><label>Komplettpreis (€/kWp)</label>
+          <input id="pc-pro-kwp" type="number" min="0" step="50" inputmode="numeric" placeholder="z. B. 1500"></div>
+        <div><label>Speicher (€/kWh)</label>
+          <input id="pc-pro-kwh" type="number" min="0" step="10" inputmode="numeric" placeholder="z. B. 650"></div>
+        <div><label>Basiskosten (€, fix)</label>
+          <input id="pc-pro-fix" type="number" min="0" step="50" inputmode="numeric" placeholder="z. B. 2500"></div>
+        <div><label>Förderung (€, wird abgezogen)</label>
+          <input id="pc-foerder" type="number" min="0" step="100" inputmode="numeric" placeholder="z. B. 3000"></div>
+      </div>
+      <div id="pc-kpi" style="margin-top:14px"></div>
+      <div id="pc-bar" style="margin-top:12px"></div>
+      <div id="pc-table" style="margin-top:12px"></div>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button class="btn sec" id="pc-use-diy" style="flex:1">Selbstbau als Investition</button>
+        <button class="btn sec" id="pc-use-pro" style="flex:1">Fachfirma als Investition</button>
+      </div>
+      <div class="note" id="pc-note" style="margin-top:10px"></div>
+    </div>
     <div class="card">
       <h2><span class="info" data-info="pv-gridfree" role="button" aria-label="Info">i</span>🔌 Wann brauchst du kein Netz?</h2>
       <div id="pv-gridfree-kpi"></div>

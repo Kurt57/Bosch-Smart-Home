@@ -15,6 +15,12 @@ const TAR_LS = { hhbase: 'bhe_tar_hhbase', wp: 'bhe_tar_wp', wpct: 'bhe_tar_wpct
 const FIN_LS = { invest: 'bhe_fin_invest', rate: 'bhe_fin_rate', years: 'bhe_fin_years', infl: 'bhe_fin_infl' };
 const EV_LS = { l100: 'bhe_ev_l100', fuelp: 'bhe_ev_fuelp', chargep: 'bhe_ev_chargep',
   tax: 'bhe_ev_tax', thg: 'bhe_ev_thg', maint: 'bhe_ev_maint', incl: 'bhe_ev_incl' };
+// DIY vs. professional PV install cost comparison (Selbstbau vs. Fachfirma)
+const PCOST_LS = { diyKwp: 'bhe_pc_diy_kwp', diyKwh: 'bhe_pc_diy_kwh', diyFix: 'bhe_pc_diy_fix',
+  diyHours: 'bhe_pc_diy_hours', proKwp: 'bhe_pc_pro_kwp', proKwh: 'bhe_pc_pro_kwh',
+  proFix: 'bhe_pc_pro_fix', foerder: 'bhe_pc_foerder' };
+const PCOST_DEF = { diyKwp: 750, diyKwh: 350, diyFix: 900, diyHours: 0,
+  proKwp: 1500, proKwh: 650, proFix: 2500, foerder: 0 };
 // Annual mobility benefit of driving electric vs. a comparable combustion car:
 // fuel saved (petrol cost − charging cost), plus Kfz-Steuer, THG-Quote, lower
 // maintenance. Fahrleistung/Verbrauch reuse the PV-planner EV inputs.
@@ -68,7 +74,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-28 · E-Auto-Vorteile in Investition & Finanzierung (Sprit/Steuer/THG/Wartung)'
+const APP_VERSION = '2026-09-28 · PV: Selbstbau vs. Fachfirma Kostenvergleich (kWp/Speicher/Foerderung)'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -159,6 +165,11 @@ const INFO = {
     'Netzbezug × Preis − Einspeisung × Vergütung. Unter der <b>0-€-Linie</b> verdienst du netto. Marker: ' +
     '<span style="color:#4da3ff">Wahl</span> = deine Größe, <span style="color:#f6b93b">Deckung</span> = Ertrag = ' +
     'Verbrauch, <span style="color:#4be0b0">0 €</span> = ab hier deckt die Einspeisung den Netzbezug.',
+  'pv-build': () => 'Vergleicht die <b>Anschaffungskosten</b>: <b>Selbstbau</b> (Hardware im Einkauf pro kWp + ' +
+    'Speicher pro kWh + ein fixer Betrag für den nötigen <b>Elektro-Anschluss durch eine Fachkraft</b>) gegen ' +
+    '<b>Fachfirma</b> (schlüsselfertiger Komplettpreis pro kWp + Speicher + Basiskosten wie Gerüst/Netzanschluss, ' +
+    'minus <b>Förderung</b>). kWp und Speicher kommen aus deiner Planung oben. So siehst du, welche Variante bei ' +
+    'welcher Größe günstiger ist. Eigenleistung (Std.) ist nur Info – dein Zeitaufwand, kein Geld.',
   cophour: () => 'COP je Uhrzeit (erzeugte Wärme ÷ Strom, gemittelt über die importierten Stunden). ' +
     'Zeigt, wann die Wärmepumpe am effizientesten läuft – meist mittags/nachmittags (wärmer). ' +
     'Warmwasser/Heizen dann einplanen spart Strom.',
@@ -3234,6 +3245,79 @@ function renderPv() {
   }
   $('pv-econ').innerHTML = rows.map(([k, v]) => statusRow(k, v)).join('') +
     (v2hNote ? `<div class="note" style="margin-top:10px;line-height:1.5">${v2hNote}</div>` : '');
+
+  renderBuildCompare(p);
+}
+// Selbstbau vs. Fachfirma: anschaffungskosten side by side, driven by the
+// planner's kWp/battery, so the user sees how size + who-builds shift the price.
+function renderBuildCompare(p) {
+  const card = $('pv-build-card'); if (!card) return;
+  const g = (k, d) => { const v = parseFloat(localStorage.getItem(k)); return isFinite(v) ? v : d; };
+  const kwp = Math.max(0, p.kwp), bat = Math.max(0, p.batt);
+  const diyKwp = g(PCOST_LS.diyKwp, PCOST_DEF.diyKwp), diyKwh = g(PCOST_LS.diyKwh, PCOST_DEF.diyKwh);
+  const diyFix = g(PCOST_LS.diyFix, PCOST_DEF.diyFix), diyHours = g(PCOST_LS.diyHours, PCOST_DEF.diyHours);
+  const proKwp = g(PCOST_LS.proKwp, PCOST_DEF.proKwp), proKwh = g(PCOST_LS.proKwh, PCOST_DEF.proKwh);
+  const proFix = g(PCOST_LS.proFix, PCOST_DEF.proFix), foerder = Math.max(0, g(PCOST_LS.foerder, PCOST_DEF.foerder));
+
+  const diyMod = kwp * diyKwp, diyBat = bat * diyKwh, diyTotal = diyMod + diyBat + diyFix;
+  const proMod = kwp * proKwp, proBat = bat * proKwh, proGross = proMod + proBat + proFix;
+  const proTotal = Math.max(0, proGross - foerder);
+  const cheaper = diyTotal <= proTotal ? 'diy' : 'pro';
+  const diff = Math.abs(proTotal - diyTotal);
+  const diffPct = Math.max(diyTotal, proTotal) > 0 ? diff / Math.max(diyTotal, proTotal) * 100 : 0;
+
+  // KPIs
+  $('pc-kpi').innerHTML =
+    `<div class="grid2"><div class="kpi sm"><div class="v" style="color:${cheaper === 'diy' ? '#4be0b0' : 'inherit'}">${money(diyTotal)}</div><div class="l">Selbstbau gesamt</div></div>` +
+    `<div class="kpi sm"><div class="v" style="color:${cheaper === 'pro' ? '#4be0b0' : 'inherit'}">${money(proTotal)}</div><div class="l">Fachfirma gesamt (netto)</div></div>` +
+    `<div class="kpi sm"><div class="v">${money(diff)}</div><div class="l">${cheaper === 'diy' ? 'Selbstbau spart' : 'Fachfirma günstiger'} · ${fmt(diffPct, 0)} %</div></div>` +
+    `<div class="kpi sm"><div class="v">${fmt(kwp, 1)} kWp · ${fmt(bat, 1)} kWh</div><div class="l">Anlage (aus Planung)</div></div></div>`;
+
+  // two comparison bars (net totals), scaled to the larger one
+  const mx = Math.max(diyTotal, proTotal, 1);
+  const bar = (label, mod, batv, fix, minus, total, win) => {
+    const seg = (v, c) => v > 0 ? `<div title="${money(v)}" style="width:${(v / mx * 100).toFixed(1)}%;background:${c}"></div>` : '';
+    return `<div style="display:flex;justify-content:space-between;font-size:13px;margin:2px 0">` +
+      `<span>${label}${win ? ' <b style="color:#4be0b0">✓ günstiger</b>' : ''}</span><b>${money(total)}</b></div>` +
+      `<div style="display:flex;height:20px;border-radius:6px;overflow:hidden;background:var(--card-bd,#2a2f3a)">` +
+      seg(mod, COL.pv) + seg(batv, COL.batt) + seg(fix, COL.heat) + `</div>` +
+      (minus > 0 ? `<div style="font-size:12px;color:var(--muted);margin-top:2px">brutto ${money(mod + batv + fix)} − Förderung ${money(minus)}</div>` : '');
+  };
+  $('pc-bar').innerHTML =
+    bar('🔧 Selbstbau', diyMod, diyBat, diyFix, 0, diyTotal, cheaper === 'diy') +
+    `<div style="height:8px"></div>` +
+    bar('🏢 Fachfirma', proMod, proBat, proFix, foerder, proTotal, cheaper === 'pro') +
+    `<div class="legend" style="margin-top:8px">` +
+    `<div class="it"><span class="sw" style="background:${COL.pv}"></span>Module/Anlage</div>` +
+    `<div class="it"><span class="sw" style="background:${COL.batt}"></span>Speicher</div>` +
+    `<div class="it"><span class="sw" style="background:${COL.heat}"></span>Fix/Installation</div></div>`;
+
+  // breakdown table
+  const row = (l, a, b) => `<tr><td style="padding:4px 0">${l}</td>` +
+    `<td style="text-align:right;padding:4px 8px">${a}</td><td style="text-align:right;padding:4px 0">${b}</td></tr>`;
+  $('pc-table').innerHTML =
+    `<table style="width:100%;border-collapse:collapse;font-size:14px">` +
+    `<tr style="border-bottom:1px solid var(--card-bd,#2a2f3a);color:var(--muted);font-size:12px">` +
+    `<th style="text-align:left;padding:4px 0">Posten</th><th style="text-align:right;padding:4px 8px">Selbstbau</th><th style="text-align:right;padding:4px 0">Fachfirma</th></tr>` +
+    row(`Module/Anlage (${fmt(kwp, 1)} kWp)`, money(diyMod), money(proMod)) +
+    row(`Speicher (${fmt(bat, 1)} kWh)`, bat > 0 ? money(diyBat) : '–', bat > 0 ? money(proBat) : '–') +
+    row('Installation/Anschluss (fix)', money(diyFix), money(proFix)) +
+    (foerder > 0 ? row('Förderung', '–', '− ' + money(foerder)) : '') +
+    `<tr style="border-top:1px solid var(--card-bd,#2a2f3a);font-weight:600">` +
+    `<td style="padding:6px 0">Gesamt</td><td style="text-align:right;padding:6px 8px">${money(diyTotal)}</td><td style="text-align:right;padding:6px 0">${money(proTotal)}</td></tr>` +
+    `</table>`;
+
+  const perKwpDiy = kwp > 0 ? diyTotal / kwp : 0, perKwpPro = kwp > 0 ? proTotal / kwp : 0;
+  $('pc-note').innerHTML =
+    (kwp > 0
+      ? `Bei <b>${fmt(kwp, 1)} kWp</b>${bat > 0 ? ` + <b>${fmt(bat, 1)} kWh</b> Speicher` : ''} ist <b>` +
+        (cheaper === 'diy' ? 'Selbstbau' : 'die Fachfirma') + `</b> rund <b>${money(diff)}</b> günstiger ` +
+        `(${money(perKwpDiy)} vs. ${money(perKwpPro)} pro kWp). `
+      : 'Trag oben eine <b>kWp</b>-Größe ein. ') +
+    (diyHours > 0 ? `Dein Eigenaufwand: ~<b>${fmt(diyHours, 0)} Std.</b> Arbeit (nicht in Geld gerechnet). ` : '') +
+    `<span style="color:var(--muted)">Selbstbau enthält keine eigene Arbeitszeit; der <b>Netzanschluss/die Anmeldung ` +
+    `muss i. d. R. eine Elektrofachkraft</b> machen (Fixkosten). Förderungen setzen oft eine Fachfirma voraus. ` +
+    `Preise sind Richtwerte – trag deine echten Angebote ein.</span>`;
 }
 
 /* --------------------------------------------------------------- settings */
@@ -3996,6 +4080,35 @@ function init() {
       renderKonzept();
     });
   }
+  // Selbstbau-vs-Fachfirma cost inputs (PV tab) with defaults, re-render on edit
+  [['pc-diy-kwp', PCOST_LS.diyKwp, PCOST_DEF.diyKwp], ['pc-diy-kwh', PCOST_LS.diyKwh, PCOST_DEF.diyKwh],
+   ['pc-diy-fix', PCOST_LS.diyFix, PCOST_DEF.diyFix], ['pc-diy-hours', PCOST_LS.diyHours, ''],
+   ['pc-pro-kwp', PCOST_LS.proKwp, PCOST_DEF.proKwp], ['pc-pro-kwh', PCOST_LS.proKwh, PCOST_DEF.proKwh],
+   ['pc-pro-fix', PCOST_LS.proFix, PCOST_DEF.proFix], ['pc-foerder', PCOST_LS.foerder, '']
+  ].forEach(([id, key, def]) => {
+    const el = $(id); if (!el) return;
+    const s = localStorage.getItem(key);
+    el.value = (s !== null && s !== '') ? s : def;
+    el.addEventListener('input', () => { try { localStorage.setItem(key, el.value); } catch (e) {} renderPv(); });
+  });
+  const adoptInvest = (total) => {
+    try { localStorage.setItem(FIN_LS.invest, String(Math.round(total))); localStorage.setItem(PV_LS.invest, String(Math.round(total))); } catch (e) {}
+    const fi = $('fin-invest'); if (fi) fi.value = Math.round(total);
+    const pi = $('pv-invest'); if (pi) pi.value = Math.round(total);
+    renderPv(); renderKonzept();
+  };
+  const g2 = (k, d) => { const v = parseFloat(localStorage.getItem(k)); return isFinite(v) ? v : d; };
+  const useDiy = $('pc-use-diy');
+  if (useDiy) useDiy.addEventListener('click', () => {
+    const p = pvInputs();
+    adoptInvest(p.kwp * g2(PCOST_LS.diyKwp, PCOST_DEF.diyKwp) + p.batt * g2(PCOST_LS.diyKwh, PCOST_DEF.diyKwh) + g2(PCOST_LS.diyFix, PCOST_DEF.diyFix));
+  });
+  const usePro = $('pc-use-pro');
+  if (usePro) usePro.addEventListener('click', () => {
+    const p = pvInputs();
+    const gross = p.kwp * g2(PCOST_LS.proKwp, PCOST_DEF.proKwp) + p.batt * g2(PCOST_LS.proKwh, PCOST_DEF.proKwh) + g2(PCOST_LS.proFix, PCOST_DEF.proFix);
+    adoptInvest(Math.max(0, gross - Math.max(0, g2(PCOST_LS.foerder, PCOST_DEF.foerder))));
+  });
   const tarWp = $('tar-wp'), tarWpRow = $('tar-wp-row');
   if (tarWp) {
     try { tarWp.checked = localStorage.getItem(TAR_LS.wp) === '1'; } catch (e) {}
