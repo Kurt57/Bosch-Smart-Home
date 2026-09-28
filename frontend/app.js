@@ -13,6 +13,25 @@ const PV_LS = { kwp: 'bhe_pv_kwp', orient: 'bhe_pv_orient', batt: 'bhe_pv_batt',
 const TAR_LS = { hhbase: 'bhe_tar_hhbase', wp: 'bhe_tar_wp', wpct: 'bhe_tar_wpct',
   wpbase: 'bhe_tar_wpbase', meter2: 'bhe_tar_meter2', spotbase: 'bhe_tar_spotbase' };
 const FIN_LS = { invest: 'bhe_fin_invest', rate: 'bhe_fin_rate', years: 'bhe_fin_years', infl: 'bhe_fin_infl' };
+const EV_LS = { l100: 'bhe_ev_l100', fuelp: 'bhe_ev_fuelp', chargep: 'bhe_ev_chargep',
+  tax: 'bhe_ev_tax', thg: 'bhe_ev_thg', maint: 'bhe_ev_maint', incl: 'bhe_ev_incl' };
+// Annual mobility benefit of driving electric vs. a comparable combustion car:
+// fuel saved (petrol cost − charging cost), plus Kfz-Steuer, THG-Quote, lower
+// maintenance. Fahrleistung/Verbrauch reuse the PV-planner EV inputs.
+function evBenefit() {
+  const g = (k, d) => { const v = parseFloat(localStorage.getItem(k)); return isFinite(v) ? v : d; };
+  const km = g(PV_LS.evkm, 0), per100 = g(PV_LS.evkwh, 18);
+  const l100 = g(EV_LS.l100, 7), fuelp = g(EV_LS.fuelp, 1.80);
+  const chargep = g(EV_LS.chargep, STATE.price || 0.30);
+  const tax = g(EV_LS.tax, 120), thg = g(EV_LS.thg, 60), maint = g(EV_LS.maint, 200);
+  const evKwh = km * per100 / 100;
+  const evEnergyCost = evKwh * chargep;
+  const fuelCost = km / 100 * l100 * fuelp;
+  const tankSave = Math.max(0, fuelCost - evEnergyCost);
+  const total = tankSave + tax + thg + maint;
+  const include = (localStorage.getItem(EV_LS.incl) ?? '1') === '1';
+  return { km, per100, evKwh, evEnergyCost, fuelCost, tankSave, tax, thg, maint, total, include };
+}
 function tariffData() {
   const g = (k, d) => { const v = parseFloat(localStorage.getItem(k)); return isFinite(v) ? v : d; };
   let wp = false; try { wp = localStorage.getItem(TAR_LS.wp) === '1'; } catch (e) {}
@@ -49,7 +68,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-21 · Karte "Noch nicht gemessen" (Dunkelverbrauch) + Bauphase-Daempfung'
+const APP_VERSION = '2026-09-28 · E-Auto-Vorteile in Investition & Finanzierung (Sprit/Steuer/THG/Wartung)'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -221,7 +240,8 @@ const INFO = {
   finance: () => 'Rechnet deine <b>Investition</b> (PV/Speicher) als <b>Kredit</b> mit Zins durch: in den ersten ' +
     'Jahren ist die Kreditrate oft höher als die Stromersparnis (also ähnlich teuer oder teurer), <b>nach dem ' +
     'Abbezahlen</b> bleibt die Ersparnis voll übrig. Die Kurve zeigt den kumulierten Saldo und ab wann es sich ' +
-    'gerechnet hat. Ersparnis kommt aus dem Tarifvergleich (bester Tarif mit PV vs. ohne).',
+    'gerechnet hat. Ersparnis kommt aus dem Tarifvergleich (bester Tarif mit PV vs. ohne). Optional werden auch ' +
+    'die <b>E-Auto-Vorteile</b> (Sprit, Kfz-Steuer, THG-Quote, Wartung) mit einbezogen.',
   konzept: () => 'Vergleicht deine Jahres-Stromkosten in drei Abrechnungs-Varianten – <b>ein Zähler</b>, ' +
     '<b>zwei Zähler</b> (WP-Sondertarif) und <b>Börse</b> – jeweils ohne und mit deiner PV, und leitet daraus eine ' +
     '<b>Empfehlung</b> ab. Tarife stellst du im <b>Setup</b> ein, PV/Speicher/Auto im Tab <b>PV</b>.',
@@ -1390,6 +1410,13 @@ function renderFinance(annualSavings) {
   const g = (k, d) => { const v = parseFloat(localStorage.getItem(k)); return isFinite(v) ? v : d; };
   const invest = g(FIN_LS.invest, 0), rate = g(FIN_LS.rate, 4) / 100;
   const years = Math.max(0, Math.round(g(FIN_LS.years, 10))), infl = g(FIN_LS.infl, 3) / 100;
+
+  // ---- E-Auto-Vorteile (independent of the PV investment) -----------------
+  const ev = evBenefit();
+  renderEvBenefit(ev);
+  const evAdd = ev.include ? ev.total : 0;
+  // savings driving the payback: PV electricity savings + (optionally) EV benefit.
+  // The amortization needs a real PV saving; the EV benefit only augments it.
   if (!(invest > 0) || !(annualSavings > 0)) {
     $('fin-kpi').innerHTML = ''; $('fin-chart').innerHTML = '';
     $('fin-note').innerHTML = !(annualSavings > 0)
@@ -1397,32 +1424,57 @@ function renderFinance(annualSavings) {
       : 'Trag deine <b>Investition</b> (PV/Speicher) und den Kreditzins ein.';
     return;
   }
+  const totalSavings = annualSavings + evAdd;
   const cash = years <= 0;
   const annuity = cash ? 0 : (rate > 0 ? invest * rate / (1 - Math.pow(1 + rate, -years)) : invest / years);
   const N = 25, cum = [cash ? -invest : 0]; let be = null;
   for (let y = 1; y <= N; y++) {
-    const sav = annualSavings * Math.pow(1 + infl, y - 1);
+    const sav = totalSavings * Math.pow(1 + infl, y - 1);
     const pay = (!cash && y <= years) ? annuity : 0;
     cum.push(cum[cum.length - 1] + sav - pay);
     if (be == null && cum[cum.length - 1] >= 0) be = y;
   }
-  const yr1net = annualSavings - annuity;
+  const yr1net = totalSavings - annuity;
+  const savLabel = evAdd > 0 ? 'Ersparnis / Jahr (Strom + E-Auto)' : 'Stromersparnis / Jahr';
   $('fin-kpi').innerHTML =
-    `<div class="grid2"><div class="kpi sm"><div class="v">${money(annualSavings)}</div><div class="l">Stromersparnis / Jahr</div></div>` +
+    `<div class="grid2"><div class="kpi sm"><div class="v">${money(totalSavings)}</div><div class="l">${savLabel}</div></div>` +
     `<div class="kpi sm"><div class="v">${cash ? '–' : money(annuity)}</div><div class="l">Kreditrate / Jahr${cash ? ' (bar bezahlt)' : ''}</div></div>` +
     `<div class="kpi sm"><div class="v" style="color:${yr1net >= 0 ? '#4be0b0' : '#ef6c4d'}">${yr1net >= 0 ? '+' : ''}${money(yr1net / 12)}</div><div class="l">Saldo / Monat (Kreditphase)</div></div>` +
     `<div class="kpi sm"><div class="v">${be ? be + ' J.' : '> 25 J.'}</div><div class="l">amortisiert nach</div></div></div>`;
   $('fin-chart').innerHTML = financeChart(cum, cash ? 0 : years);
   $('fin-note').innerHTML =
     (cash
-      ? `Bar bezahlt: ab Jahr 1 sparst du <b>${money(annualSavings)}/Jahr</b> (steigt mit dem Strompreis). `
+      ? `Bar bezahlt: ab Jahr 1 sparst du <b>${money(totalSavings)}/Jahr</b> (steigt mit dem Preis). `
       : yr1net >= 0
         ? `Schon während der Kreditlaufzeit bist du <b>${money(yr1net)}/Jahr im Plus</b> (Ersparnis > Rate). `
         : `Während der ${years} Kreditjahre ist es rund <b>${money(-yr1net)}/Jahr teurer</b> (Rate > Ersparnis), ` +
-          `<b>nach dem Abbezahlen</b> bleibt die volle Ersparnis (${money(annualSavings)}+/Jahr). `) +
+          `<b>nach dem Abbezahlen</b> bleibt die volle Ersparnis (${money(totalSavings)}+/Jahr). `) +
     `Kumuliert nach 25 Jahren: <b>${money(cum[25])}</b>. ` +
-    `<span style="color:var(--muted)">Ersparnis = bester Tarif mit PV vs. ohne, mit ${fmt(infl * 100, 0)} % Strompreis-Steigerung/Jahr; ` +
-    `ohne Förderung/Wartung/Degradation. Kurve = kumulierter Saldo, gelbe Linie = Kredit abbezahlt.</span>`;
+    (evAdd > 0 ? `<b>Inkl. E-Auto-Vorteil ${money(evAdd)}/Jahr.</b> ` : '') +
+    `<span style="color:var(--muted)">Stromersparnis = bester Tarif mit PV vs. ohne, mit ${fmt(infl * 100, 0)} % Preis-Steigerung/Jahr; ` +
+    `ohne Förderung/Degradation. Kurve = kumulierter Saldo, gelbe Linie = Kredit abbezahlt.</span>`;
+}
+// E-Auto-Vorteile breakdown (fuel/tax/THG/maintenance).
+function renderEvBenefit(ev) {
+  const kpi = $('ev-kpi'), note = $('ev-note'); if (!kpi || !note) return;
+  if (!(ev.km > 0)) {
+    kpi.innerHTML = '';
+    note.innerHTML = 'Trag im Tab <b>PV</b> deine <b>Jahres-km</b> und den EV-Verbrauch ein, dann rechne ich hier ' +
+      'Sprit-Ersparnis, Kfz-Steuer, THG-Quote und Wartung zusammen.';
+    return;
+  }
+  kpi.innerHTML =
+    `<div class="grid2"><div class="kpi sm"><div class="v">${money(ev.tankSave)}</div><div class="l">Sprit gespart / Jahr</div></div>` +
+    `<div class="kpi sm"><div class="v">${money(ev.tax)}</div><div class="l">Kfz-Steuer / Jahr</div></div>` +
+    `<div class="kpi sm"><div class="v">${money(ev.thg)}</div><div class="l">THG-Quote / Jahr</div></div>` +
+    `<div class="kpi sm"><div class="v">${money(ev.maint)}</div><div class="l">Wartung gespart / Jahr</div></div>` +
+    `<div class="kpi sm"><div class="v" style="color:#4be0b0">${money(ev.total)}</div><div class="l">E-Auto-Vorteil gesamt / Jahr</div></div></div>`;
+  note.innerHTML =
+    `Bei <b>${fmt(ev.km, 0)} km/Jahr</b>: E-Auto braucht ~<b>${kwh(ev.evKwh, 0)}</b> Strom (${money(ev.evEnergyCost)}), ` +
+    `ein Verbrenner hätte ~<b>${money(ev.fuelCost)}</b> getankt. ` +
+    (ev.include ? 'Fließt in die Amortisation oben ein. ' : 'Zählt <b>nicht</b> in die Amortisation oben. ') +
+    `<span style="color:var(--muted)">THG-Quote sinkt jährlich; Kfz-Steuer-Befreiung für E-Autos gilt bis Ende 2030. ` +
+    `Werte anpassbar. Der Auto-Kaufpreis selbst steckt hier nicht drin – nur die laufenden Vorteile.</span>`;
 }
 function renderKonzept() {
   if (!$('konzept-nopv')) return;
@@ -3926,6 +3978,24 @@ function init() {
     if (s !== null && s !== '') el.value = s;
     el.addEventListener('input', () => { try { localStorage.setItem(key, el.value); } catch (e) {} renderKonzept(); });
   });
+  // E-Auto-Vorteile inputs (Konzept finance card) with sensible defaults
+  const evFields = [['ev-l100', EV_LS.l100, 7], ['ev-fuelp', EV_LS.fuelp, 1.80],
+    ['ev-chargep', EV_LS.chargep, STATE.price || 0.30], ['ev-tax', EV_LS.tax, 120],
+    ['ev-thg', EV_LS.thg, 60], ['ev-maint', EV_LS.maint, 200]];
+  evFields.forEach(([id, key, def]) => {
+    const el = $(id); if (!el) return;
+    const s = localStorage.getItem(key);
+    el.value = (s !== null && s !== '') ? s : def;
+    el.addEventListener('input', () => { try { localStorage.setItem(key, el.value); } catch (e) {} renderKonzept(); });
+  });
+  const evIncl = $('ev-incl');
+  if (evIncl) {
+    evIncl.checked = (localStorage.getItem(EV_LS.incl) ?? '1') === '1';
+    evIncl.addEventListener('change', () => {
+      try { localStorage.setItem(EV_LS.incl, evIncl.checked ? '1' : '0'); } catch (e) {}
+      renderKonzept();
+    });
+  }
   const tarWp = $('tar-wp'), tarWpRow = $('tar-wp-row');
   if (tarWp) {
     try { tarWp.checked = localStorage.getItem(TAR_LS.wp) === '1'; } catch (e) {}

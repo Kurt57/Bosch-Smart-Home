@@ -721,6 +721,31 @@
       <div id="fin-kpi" style="margin-top:12px"></div>
       <div id="fin-chart" style="margin-top:10px"></div>
       <div class="note" id="fin-note" style="margin-top:8px"></div>
+
+      <hr style="border:none;border-top:1px solid var(--card-bd,#2a2f3a);margin:16px 0">
+      <h3 style="margin:0 0 4px;font-size:15px">🚗 E-Auto-Vorteile</h3>
+      <div class="note" style="margin-bottom:10px">Fahrleistung &amp; Verbrauch kommen aus dem <b>PV</b>-Tab.
+        Hier der Vergleich zum Verbrenner plus Steuer/THG/Wartung.</div>
+      <div class="grid2">
+        <div><label>Verbrenner-Verbrauch (l/100 km)</label>
+          <input id="ev-l100" type="number" min="0" step="0.1" inputmode="decimal" placeholder="z. B. 7"></div>
+        <div><label>Sprit-Preis (€/l)</label>
+          <input id="ev-fuelp" type="number" min="0" step="0.01" inputmode="decimal" placeholder="z. B. 1,80"></div>
+        <div><label>Ladepreis (€/kWh)</label>
+          <input id="ev-chargep" type="number" min="0" step="0.01" inputmode="decimal" placeholder="z. B. 0,30"></div>
+        <div><label>Kfz-Steuer gespart (€/a)</label>
+          <input id="ev-tax" type="number" min="0" step="10" inputmode="numeric" placeholder="z. B. 120"></div>
+        <div><label>THG-Quote (€/a)</label>
+          <input id="ev-thg" type="number" min="0" step="10" inputmode="numeric" placeholder="z. B. 60"></div>
+        <div><label>Wartung gespart (€/a)</label>
+          <input id="ev-maint" type="number" min="0" step="10" inputmode="numeric" placeholder="z. B. 200"></div>
+      </div>
+      <label class="toggle" style="margin-top:10px;display:flex;gap:8px;align-items:flex-start;cursor:pointer">
+        <input type="checkbox" id="ev-incl" style="margin-top:2px">
+        <span>E-Auto-Vorteile in die <b>Amortisation</b> oben einbeziehen (gesamter Vorteil der Elektrifizierung).</span>
+      </label>
+      <div id="ev-kpi" style="margin-top:12px"></div>
+      <div class="note" id="ev-note" style="margin-top:8px"></div>
     </div>
     <div class="card">
       <h2>🔧 Empfehlung für dich</h2>
