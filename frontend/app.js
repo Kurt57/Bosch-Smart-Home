@@ -16,11 +16,8 @@ const FIN_LS = { invest: 'bhe_fin_invest', rate: 'bhe_fin_rate', years: 'bhe_fin
 const EV_LS = { l100: 'bhe_ev_l100', fuelp: 'bhe_ev_fuelp', chargep: 'bhe_ev_chargep',
   tax: 'bhe_ev_tax', thg: 'bhe_ev_thg', maint: 'bhe_ev_maint', incl: 'bhe_ev_incl' };
 // DIY vs. professional PV install cost comparison (Selbstbau vs. Fachfirma)
-const PCOST_LS = { diyKwp: 'bhe_pc_diy_kwp', diyKwh: 'bhe_pc_diy_kwh', diyFix: 'bhe_pc_diy_fix',
-  diyHours: 'bhe_pc_diy_hours', proKwp: 'bhe_pc_pro_kwp', proKwh: 'bhe_pc_pro_kwh',
-  proFix: 'bhe_pc_pro_fix', foerder: 'bhe_pc_foerder' };
-const PCOST_DEF = { diyKwp: 750, diyKwh: 350, diyFix: 900, diyHours: 0,
-  proKwp: 1500, proKwh: 650, proFix: 2500, foerder: 0 };
+const PCOST_LS = { diySet: 'bhe_pc_diy_set', proOffer: 'bhe_pc_pro_offer',
+  foerder: 'bhe_pc_foerder', diyHours: 'bhe_pc_diy_hours' };
 // Annual mobility benefit of driving electric vs. a comparable combustion car:
 // fuel saved (petrol cost − charging cost), plus Kfz-Steuer, THG-Quote, lower
 // maintenance. Fahrleistung/Verbrauch reuse the PV-planner EV inputs.
@@ -89,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-28 · E-Auto: PV-Ladeanteil sichtbar (kein Netzstrom im Sommer), Doppelzaehlung vermieden'
+const APP_VERSION = '2026-09-30 · PV Selbstbau/Fachfirma als 2 Preise + Anteil je Quelle mit Jahres-Hochrechnung'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -180,11 +177,10 @@ const INFO = {
     'Netzbezug × Preis − Einspeisung × Vergütung. Unter der <b>0-€-Linie</b> verdienst du netto. Marker: ' +
     '<span style="color:#4da3ff">Wahl</span> = deine Größe, <span style="color:#f6b93b">Deckung</span> = Ertrag = ' +
     'Verbrauch, <span style="color:#4be0b0">0 €</span> = ab hier deckt die Einspeisung den Netzbezug.',
-  'pv-build': () => 'Vergleicht die <b>Anschaffungskosten</b>: <b>Selbstbau</b> (Hardware im Einkauf pro kWp + ' +
-    'Speicher pro kWh + ein fixer Betrag für den nötigen <b>Elektro-Anschluss durch eine Fachkraft</b>) gegen ' +
-    '<b>Fachfirma</b> (schlüsselfertiger Komplettpreis pro kWp + Speicher + Basiskosten wie Gerüst/Netzanschluss, ' +
-    'minus <b>Förderung</b>). kWp und Speicher kommen aus deiner Planung oben. So siehst du, welche Variante bei ' +
-    'welcher Größe günstiger ist. Eigenleistung (Std.) ist nur Info – dein Zeitaufwand, kein Geld.',
+  'pv-build': () => 'Direkter Preisvergleich: dein <b>Komplett-Set</b> (Selbstbau) gegen das <b>Komplett-Angebot</b> ' +
+    'der Fachfirma, abzüglich <b>Förderung</b>. Einfach beide Zahlen eintragen – ich zeige die Differenz und, wenn ' +
+    'oben eine kWp-Größe steht, den Preis pro kWp. Mit den Buttons übernimmst du den Wert als Investition in die ' +
+    'Amortisation. Eigenleistung (Std.) ist nur Info – dein Zeitaufwand, kein Geld.',
   cophour: () => 'COP je Uhrzeit (erzeugte Wärme ÷ Strom, gemittelt über die importierten Stunden). ' +
     'Zeigt, wann die Wärmepumpe am effizientesten läuft – meist mittags/nachmittags (wärmer). ' +
     'Warmwasser/Heizen dann einplanen spart Strom.',
@@ -229,8 +225,10 @@ const INFO = {
     'Batterie selbst nutzt. Rechter Balken = dein <b>Verbrauch nach Quelle</b> ' +
     `(<b style="color:${COL.sh}">Hausstrom</b>, <b style="color:${COL.hp}">Wärmepumpe</b>, ` +
     `<b style="color:${COL.ev}">E-Auto</b>).`,
-  share: () => 'Anteil je Quelle über die <b>gemessenen</b> Tage im Zeitraum (kumulierte kWh). ' +
-    'Geschätzte Tage zählen hier nicht mit.',
+  share: () => 'Anteil je Quelle über die <b>gemessenen</b> Tage im Zeitraum (kumulierte kWh), rechts die ' +
+    '<b>Hochrechnung pro Jahr</b> (kWh + €) aus dem Tages-Ø × 365. So siehst du, welcher Verbraucher aufs Jahr ' +
+    'ins Gewicht fällt – gut, um unnötige Dauerläufer zu erkennen. Geschätzte Tage zählen nicht mit; kurzer ' +
+    'Zeitraum = grobe Hochrechnung, die Wärmepumpe ist saisonal.',
   behavior: () => 'Aus den <b>Namen</b> deiner Geräte und den Uhrzeiten, zu denen sie am meisten Strom ziehen, ' +
     'liest die App typische Routinen ab (Kochen, Schlafen, Bad …) und leitet konkrete Spar-Ideen ab. ' +
     'Basis: Ø über die gemessenen Tage.',
@@ -2005,23 +2003,37 @@ function renderHistory() {
       `(Wärmepumpe im Winter mehr, im Sommer weniger). Echte Messungen ersetzen die Schätzung automatisch.`;
   }
 
-  // cumulative share over the (measured) window: per Smart-Home device + heat pump
+  // cumulative share over the (measured) window: per Smart-Home device + heat
+  // pump, each with a per-year projection (kWh + €) so unnecessary consumers pop.
   const winKeys = new Set(filled.map(d => d.day));
   const pdd = data.per_device_day || {};
   const names = {}; (data.live.devices || []).forEach(d => names[d.id] = devLabel(d).title);
   const shares = [];
   Object.keys(pdd).forEach(id => {
-    let s = 0; for (const day in pdd[id]) if (winKeys.has(day)) s += pdd[id][day];
-    if (s > 0) shares.push({ label: names[id] || id, kwh: s, color: COL.sh });
+    let s = 0, n = 0; for (const day in pdd[id]) if (winKeys.has(day)) { s += pdd[id][day]; n++; }
+    if (s > 0) shares.push({ label: names[id] || id, kwh: s, days: n, color: COL.sh });
   });
   const hpByDay = {}; ((ov.combined_daily) || []).forEach(d => hpByDay[d.day] = d.heatpump_kwh);
-  let hpWin = 0; winKeys.forEach(k => { if (hpByDay[k]) hpWin += hpByDay[k]; });
-  if (hpWin > 0) shares.push({ label: 'Wärmepumpe', kwh: hpWin, color: COL.hp });
+  let hpWin = 0, hpN = 0; winKeys.forEach(k => { if (hpByDay[k] != null && hpByDay[k] > 0) { hpWin += hpByDay[k]; hpN++; } });
+  if (hpWin > 0) shares.push({ label: 'Wärmepumpe', kwh: hpWin, days: hpN, color: COL.hp, seasonal: true });
   shares.sort((a, b) => b.kwh - a.kwh);
   const totShare = shares.reduce((a, s) => a + s.kwh, 0) || 1;
+  const sharePrice = STATE.price;
   $('h-share').innerHTML = shares.length
-    ? shares.map(s => devRow(s.label, (s.kwh / totShare * 100).toFixed(0) + ' % (gemessen)', kwh(s.kwh, 1), '', s.kwh / totShare * 100, s.color)).join('')
+    ? shares.map(s => {
+        const pct = s.kwh / totShare * 100;
+        const yearK = s.days > 0 ? s.kwh / s.days * 365 : 0;
+        const sub = `${pct.toFixed(0)} % · gemessen ${kwh(s.kwh, 1)}` + (s.seasonal ? ' · saisonal, grob' : '');
+        return devRow(s.label, sub, `~${kwh(yearK, 0)}/Jahr`, money(yearK * sharePrice), pct, s.color);
+      }).join('')
     : '<div class="note">Noch keine gemessenen Daten im Zeitraum.</div>';
+  const shareNote = $('h-share-note');
+  if (shareNote) shareNote.innerHTML = shares.length
+    ? 'Rechts die <b>Hochrechnung pro Jahr</b> (aus dem gemessenen Ø der gewählten Tage × 365). ' +
+      'Große Posten, die dir <b>nicht wichtig</b> sind, lohnt es zu prüfen (Dauerlast, alte Geräte). ' +
+      '<span style="color:var(--muted)">Kurzer Zeitraum = grobe Hochrechnung; die Wärmepumpe ist saisonal, ' +
+      'für ihren Jahreswert ist die <b>Hochrechnung</b>-Karte oben genauer.</span>'
+    : '';
 
   // away detection (Smart Home)
   const A = data.away;
@@ -3270,76 +3282,64 @@ function renderPv() {
 
   renderBuildCompare(p);
 }
-// Selbstbau vs. Fachfirma: anschaffungskosten side by side, driven by the
-// planner's kWp/battery, so the user sees how size + who-builds shift the price.
+// Selbstbau vs. Fachfirma: just two prices – your complete DIY set vs. the
+// turnkey offer (minus subsidy) – so you directly see which is cheaper.
 function renderBuildCompare(p) {
   const card = $('pv-build-card'); if (!card) return;
   const g = (k, d) => { const v = parseFloat(localStorage.getItem(k)); return isFinite(v) ? v : d; };
   const kwp = Math.max(0, p.kwp), bat = Math.max(0, p.batt);
-  const diyKwp = g(PCOST_LS.diyKwp, PCOST_DEF.diyKwp), diyKwh = g(PCOST_LS.diyKwh, PCOST_DEF.diyKwh);
-  const diyFix = g(PCOST_LS.diyFix, PCOST_DEF.diyFix), diyHours = g(PCOST_LS.diyHours, PCOST_DEF.diyHours);
-  const proKwp = g(PCOST_LS.proKwp, PCOST_DEF.proKwp), proKwh = g(PCOST_LS.proKwh, PCOST_DEF.proKwh);
-  const proFix = g(PCOST_LS.proFix, PCOST_DEF.proFix), foerder = Math.max(0, g(PCOST_LS.foerder, PCOST_DEF.foerder));
+  const diyTotal = Math.max(0, g(PCOST_LS.diySet, 0));
+  const proOffer = Math.max(0, g(PCOST_LS.proOffer, 0));
+  const foerder = Math.max(0, g(PCOST_LS.foerder, 0));
+  const proTotal = Math.max(0, proOffer - foerder);
+  const diyHours = g(PCOST_LS.diyHours, 0);
 
-  const diyMod = kwp * diyKwp, diyBat = bat * diyKwh, diyTotal = diyMod + diyBat + diyFix;
-  const proMod = kwp * proKwp, proBat = bat * proKwh, proGross = proMod + proBat + proFix;
-  const proTotal = Math.max(0, proGross - foerder);
+  if (!(diyTotal > 0) && !(proOffer > 0)) {
+    $('pc-kpi').innerHTML = ''; $('pc-bar').innerHTML = '';
+    $('pc-note').innerHTML = 'Trag oben deinen <b>Komplett-Set-Preis</b> (Selbstbau) und das ' +
+      '<b>Komplett-Angebot</b> der Fachfirma ein – dann vergleiche ich beide direkt.';
+    return;
+  }
+  const both = diyTotal > 0 && proTotal > 0;
   const cheaper = diyTotal <= proTotal ? 'diy' : 'pro';
   const diff = Math.abs(proTotal - diyTotal);
   const diffPct = Math.max(diyTotal, proTotal) > 0 ? diff / Math.max(diyTotal, proTotal) * 100 : 0;
 
   // KPIs
   $('pc-kpi').innerHTML =
-    `<div class="grid2"><div class="kpi sm"><div class="v" style="color:${cheaper === 'diy' ? '#4be0b0' : 'inherit'}">${money(diyTotal)}</div><div class="l">Selbstbau gesamt</div></div>` +
-    `<div class="kpi sm"><div class="v" style="color:${cheaper === 'pro' ? '#4be0b0' : 'inherit'}">${money(proTotal)}</div><div class="l">Fachfirma gesamt (netto)</div></div>` +
-    `<div class="kpi sm"><div class="v">${money(diff)}</div><div class="l">${cheaper === 'diy' ? 'Selbstbau spart' : 'Fachfirma günstiger'} · ${fmt(diffPct, 0)} %</div></div>` +
-    `<div class="kpi sm"><div class="v">${fmt(kwp, 1)} kWp · ${fmt(bat, 1)} kWh</div><div class="l">Anlage (aus Planung)</div></div></div>`;
+    `<div class="grid2"><div class="kpi sm"><div class="v" style="color:${both && cheaper === 'diy' ? '#4be0b0' : 'inherit'}">${diyTotal > 0 ? money(diyTotal) : '–'}</div><div class="l">Selbstbau (Set)</div></div>` +
+    `<div class="kpi sm"><div class="v" style="color:${both && cheaper === 'pro' ? '#4be0b0' : 'inherit'}">${proOffer > 0 ? money(proTotal) : '–'}</div><div class="l">Fachfirma (netto)</div></div>` +
+    (both
+      ? `<div class="kpi sm"><div class="v">${money(diff)}</div><div class="l">${cheaper === 'diy' ? 'Selbstbau spart' : 'Fachfirma günstiger'} · ${fmt(diffPct, 0)} %</div></div>`
+      : `<div class="kpi sm"><div class="v">–</div><div class="l">beide Preise eintragen</div></div>`) +
+    (kwp > 0 ? `<div class="kpi sm"><div class="v">${fmt(kwp, 1)} kWp · ${fmt(bat, 1)} kWh</div><div class="l">Anlage (aus Planung)</div></div>` : '') + `</div>`;
 
   // two comparison bars (net totals), scaled to the larger one
   const mx = Math.max(diyTotal, proTotal, 1);
-  const bar = (label, mod, batv, fix, minus, total, win) => {
-    const seg = (v, c) => v > 0 ? `<div title="${money(v)}" style="width:${(v / mx * 100).toFixed(1)}%;background:${c}"></div>` : '';
+  const bar = (label, total, win, minusTxt) => {
+    if (!(total > 0)) return '';
     return `<div style="display:flex;justify-content:space-between;font-size:13px;margin:2px 0">` +
       `<span>${label}${win ? ' <b style="color:#4be0b0">✓ günstiger</b>' : ''}</span><b>${money(total)}</b></div>` +
-      `<div style="display:flex;height:20px;border-radius:6px;overflow:hidden;background:var(--card-bd,#2a2f3a)">` +
-      seg(mod, COL.pv) + seg(batv, COL.batt) + seg(fix, COL.heat) + `</div>` +
-      (minus > 0 ? `<div style="font-size:12px;color:var(--muted);margin-top:2px">brutto ${money(mod + batv + fix)} − Förderung ${money(minus)}</div>` : '');
+      `<div style="height:20px;border-radius:6px;overflow:hidden;background:var(--card-bd,#2a2f3a)">` +
+      `<div style="width:${(total / mx * 100).toFixed(1)}%;height:100%;background:${win ? COL.pv : COL.hp}"></div></div>` +
+      (minusTxt ? `<div style="font-size:12px;color:var(--muted);margin-top:2px">${minusTxt}</div>` : '');
   };
   $('pc-bar').innerHTML =
-    bar('🔧 Selbstbau', diyMod, diyBat, diyFix, 0, diyTotal, cheaper === 'diy') +
-    `<div style="height:8px"></div>` +
-    bar('🏢 Fachfirma', proMod, proBat, proFix, foerder, proTotal, cheaper === 'pro') +
-    `<div class="legend" style="margin-top:8px">` +
-    `<div class="it"><span class="sw" style="background:${COL.pv}"></span>Module/Anlage</div>` +
-    `<div class="it"><span class="sw" style="background:${COL.batt}"></span>Speicher</div>` +
-    `<div class="it"><span class="sw" style="background:${COL.heat}"></span>Fix/Installation</div></div>`;
+    bar('🔧 Selbstbau', diyTotal, both && cheaper === 'diy', '') +
+    (diyTotal > 0 && proTotal > 0 ? `<div style="height:8px"></div>` : '') +
+    bar('🏢 Fachfirma', proTotal, both && cheaper === 'pro',
+      foerder > 0 && proOffer > 0 ? `Angebot ${money(proOffer)} − Förderung ${money(foerder)}` : '');
 
-  // breakdown table
-  const row = (l, a, b) => `<tr><td style="padding:4px 0">${l}</td>` +
-    `<td style="text-align:right;padding:4px 8px">${a}</td><td style="text-align:right;padding:4px 0">${b}</td></tr>`;
-  $('pc-table').innerHTML =
-    `<table style="width:100%;border-collapse:collapse;font-size:14px">` +
-    `<tr style="border-bottom:1px solid var(--card-bd,#2a2f3a);color:var(--muted);font-size:12px">` +
-    `<th style="text-align:left;padding:4px 0">Posten</th><th style="text-align:right;padding:4px 8px">Selbstbau</th><th style="text-align:right;padding:4px 0">Fachfirma</th></tr>` +
-    row(`Module/Anlage (${fmt(kwp, 1)} kWp)`, money(diyMod), money(proMod)) +
-    row(`Speicher (${fmt(bat, 1)} kWh)`, bat > 0 ? money(diyBat) : '–', bat > 0 ? money(proBat) : '–') +
-    row('Installation/Anschluss (fix)', money(diyFix), money(proFix)) +
-    (foerder > 0 ? row('Förderung', '–', '− ' + money(foerder)) : '') +
-    `<tr style="border-top:1px solid var(--card-bd,#2a2f3a);font-weight:600">` +
-    `<td style="padding:6px 0">Gesamt</td><td style="text-align:right;padding:6px 8px">${money(diyTotal)}</td><td style="text-align:right;padding:6px 0">${money(proTotal)}</td></tr>` +
-    `</table>`;
-
-  const perKwpDiy = kwp > 0 ? diyTotal / kwp : 0, perKwpPro = kwp > 0 ? proTotal / kwp : 0;
+  const perKwpDiy = kwp > 0 && diyTotal > 0 ? diyTotal / kwp : 0, perKwpPro = kwp > 0 && proTotal > 0 ? proTotal / kwp : 0;
   $('pc-note').innerHTML =
-    (kwp > 0
-      ? `Bei <b>${fmt(kwp, 1)} kWp</b>${bat > 0 ? ` + <b>${fmt(bat, 1)} kWh</b> Speicher` : ''} ist <b>` +
-        (cheaper === 'diy' ? 'Selbstbau' : 'die Fachfirma') + `</b> rund <b>${money(diff)}</b> günstiger ` +
-        `(${money(perKwpDiy)} vs. ${money(perKwpPro)} pro kWp). `
-      : 'Trag oben eine <b>kWp</b>-Größe ein. ') +
-    (diyHours > 0 ? `Dein Eigenaufwand: ~<b>${fmt(diyHours, 0)} Std.</b> Arbeit (nicht in Geld gerechnet). ` : '') +
-    `<span style="color:var(--muted)">Selbstbau enthält keine eigene Arbeitszeit; der <b>Netzanschluss/die Anmeldung ` +
-    `muss i. d. R. eine Elektrofachkraft</b> machen (Fixkosten). Förderungen setzen oft eine Fachfirma voraus. ` +
-    `Preise sind Richtwerte – trag deine echten Angebote ein.</span>`;
+    (both
+      ? `<b>${cheaper === 'diy' ? 'Selbstbau' : 'Die Fachfirma'}</b> ist rund <b>${money(diff)}</b> günstiger (${fmt(diffPct, 0)} %). `
+      : 'Trag <b>beide</b> Preise ein, dann zeige ich die Differenz. ') +
+    (kwp > 0 && both ? `Das sind ${money(perKwpDiy)} vs. ${money(perKwpPro)} <b>pro kWp</b>. ` : '') +
+    (diyHours > 0 ? `Dein Eigenaufwand: ~<b>${fmt(diyHours, 0)} Std.</b> (nicht in Geld gerechnet). ` : '') +
+    `<span style="color:var(--muted)">Selbstbau = dein Komplett-Set; Netzanschluss/Anmeldung braucht i. d. R. eine ` +
+    `Elektrofachkraft. Fachfirma = schlüsselfertiges Angebot minus Förderung (die oft eine Fachfirma voraussetzt). ` +
+    `Nutz die Buttons, um den Wert als Investition in die Amortisation zu übernehmen.</span>`;
 }
 
 /* --------------------------------------------------------------- settings */
@@ -4102,15 +4102,12 @@ function init() {
       renderKonzept();
     });
   }
-  // Selbstbau-vs-Fachfirma cost inputs (PV tab) with defaults, re-render on edit
-  [['pc-diy-kwp', PCOST_LS.diyKwp, PCOST_DEF.diyKwp], ['pc-diy-kwh', PCOST_LS.diyKwh, PCOST_DEF.diyKwh],
-   ['pc-diy-fix', PCOST_LS.diyFix, PCOST_DEF.diyFix], ['pc-diy-hours', PCOST_LS.diyHours, ''],
-   ['pc-pro-kwp', PCOST_LS.proKwp, PCOST_DEF.proKwp], ['pc-pro-kwh', PCOST_LS.proKwh, PCOST_DEF.proKwh],
-   ['pc-pro-fix', PCOST_LS.proFix, PCOST_DEF.proFix], ['pc-foerder', PCOST_LS.foerder, '']
-  ].forEach(([id, key, def]) => {
+  // Selbstbau-vs-Fachfirma: two prices + Förderung (PV tab), re-render on edit
+  [['pc-diy-set', PCOST_LS.diySet], ['pc-pro-offer', PCOST_LS.proOffer],
+   ['pc-foerder', PCOST_LS.foerder], ['pc-diy-hours', PCOST_LS.diyHours]
+  ].forEach(([id, key]) => {
     const el = $(id); if (!el) return;
-    const s = localStorage.getItem(key);
-    el.value = (s !== null && s !== '') ? s : def;
+    const s = localStorage.getItem(key); if (s !== null && s !== '') el.value = s;
     el.addEventListener('input', () => { try { localStorage.setItem(key, el.value); } catch (e) {} renderPv(); });
   });
   const adoptInvest = (total) => {
@@ -4121,16 +4118,10 @@ function init() {
   };
   const g2 = (k, d) => { const v = parseFloat(localStorage.getItem(k)); return isFinite(v) ? v : d; };
   const useDiy = $('pc-use-diy');
-  if (useDiy) useDiy.addEventListener('click', () => {
-    const p = pvInputs();
-    adoptInvest(p.kwp * g2(PCOST_LS.diyKwp, PCOST_DEF.diyKwp) + p.batt * g2(PCOST_LS.diyKwh, PCOST_DEF.diyKwh) + g2(PCOST_LS.diyFix, PCOST_DEF.diyFix));
-  });
+  if (useDiy) useDiy.addEventListener('click', () => adoptInvest(Math.max(0, g2(PCOST_LS.diySet, 0))));
   const usePro = $('pc-use-pro');
-  if (usePro) usePro.addEventListener('click', () => {
-    const p = pvInputs();
-    const gross = p.kwp * g2(PCOST_LS.proKwp, PCOST_DEF.proKwp) + p.batt * g2(PCOST_LS.proKwh, PCOST_DEF.proKwh) + g2(PCOST_LS.proFix, PCOST_DEF.proFix);
-    adoptInvest(Math.max(0, gross - Math.max(0, g2(PCOST_LS.foerder, PCOST_DEF.foerder))));
-  });
+  if (usePro) usePro.addEventListener('click', () =>
+    adoptInvest(Math.max(0, g2(PCOST_LS.proOffer, 0) - Math.max(0, g2(PCOST_LS.foerder, 0)))));
   const tarWp = $('tar-wp'), tarWpRow = $('tar-wp-row');
   if (tarWp) {
     try { tarWp.checked = localStorage.getItem(TAR_LS.wp) === '1'; } catch (e) {}
