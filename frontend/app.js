@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-30 · PV Selbstbau/Fachfirma als 2 Preise + Anteil je Quelle mit Jahres-Hochrechnung'
+const APP_VERSION = '2026-09-30 · Anteil je Quelle: gemessene Tage exakt, Luecken mit Ø aufgefuellt (Tage-Zaehler)'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -226,9 +226,10 @@ const INFO = {
     `(<b style="color:${COL.sh}">Hausstrom</b>, <b style="color:${COL.hp}">Wärmepumpe</b>, ` +
     `<b style="color:${COL.ev}">E-Auto</b>).`,
   share: () => 'Anteil je Quelle über die <b>gemessenen</b> Tage im Zeitraum (kumulierte kWh), rechts die ' +
-    '<b>Hochrechnung pro Jahr</b> (kWh + €) aus dem Tages-Ø × 365. So siehst du, welcher Verbraucher aufs Jahr ' +
-    'ins Gewicht fällt – gut, um unnötige Dauerläufer zu erkennen. Geschätzte Tage zählen nicht mit; kurzer ' +
-    'Zeitraum = grobe Hochrechnung, die Wärmepumpe ist saisonal.',
+    '<b>Hochrechnung pro Jahr</b> (kWh + €). <b>Gemessene Tage zählen exakt</b>; nur die nicht gemessenen Tage ' +
+    'werden mit dem Tages-Ø aufgefüllt (= dasselbe wie Ø × 365). „(x/y Tage)" zeigt, wie viele Tage real gemessen ' +
+    'sind. So siehst du, welcher Verbraucher aufs Jahr ins Gewicht fällt – gut, um unnötige Dauerläufer zu erkennen. ' +
+    'Kurzer Zeitraum = grobe Hochrechnung, die Wärmepumpe ist saisonal.',
   behavior: () => 'Aus den <b>Namen</b> deiner Geräte und den Uhrzeiten, zu denen sie am meisten Strom ziehen, ' +
     'liest die App typische Routinen ab (Kochen, Schlafen, Bad …) und leitet konkrete Spar-Ideen ab. ' +
     'Basis: Ø über die gemessenen Tage.',
@@ -2019,20 +2020,26 @@ function renderHistory() {
   shares.sort((a, b) => b.kwh - a.kwh);
   const totShare = shares.reduce((a, s) => a + s.kwh, 0) || 1;
   const sharePrice = STATE.price;
+  const winDays = winKeys.size || 1;
   $('h-share').innerHTML = shares.length
     ? shares.map(s => {
         const pct = s.kwh / totShare * 100;
-        const yearK = s.days > 0 ? s.kwh / s.days * 365 : 0;
-        const sub = `${pct.toFixed(0)} % · gemessen ${kwh(s.kwh, 1)}` + (s.seasonal ? ' · saisonal, grob' : '');
+        // exact measured days + average for every not-measured day of the year:
+        //   s.kwh (exact) + (s.kwh/s.days) × (365 − s.days)  ==  s.kwh/s.days × 365
+        const avgDay = s.days > 0 ? s.kwh / s.days : 0;
+        const yearK = avgDay * 365;
+        const sub = `${pct.toFixed(0)} % · gemessen <b>${kwh(s.kwh, 1)}</b> (${s.days}/${winDays} Tage)` +
+          (s.seasonal ? ' · saisonal' : '');
         return devRow(s.label, sub, `~${kwh(yearK, 0)}/Jahr`, money(yearK * sharePrice), pct, s.color);
       }).join('')
     : '<div class="note">Noch keine gemessenen Daten im Zeitraum.</div>';
   const shareNote = $('h-share-note');
   if (shareNote) shareNote.innerHTML = shares.length
-    ? 'Rechts die <b>Hochrechnung pro Jahr</b> (aus dem gemessenen Ø der gewählten Tage × 365). ' +
-      'Große Posten, die dir <b>nicht wichtig</b> sind, lohnt es zu prüfen (Dauerlast, alte Geräte). ' +
-      '<span style="color:var(--muted)">Kurzer Zeitraum = grobe Hochrechnung; die Wärmepumpe ist saisonal, ' +
-      'für ihren Jahreswert ist die <b>Hochrechnung</b>-Karte oben genauer.</span>'
+    ? 'Rechts die <b>Hochrechnung pro Jahr</b> (kWh + €). <b>Gemessene Tage zählen exakt</b> mit ihrem echten Wert; ' +
+      'nur die <b>noch nicht gemessenen</b> Tage (Lücken + der Rest des Jahres) werden mit dem Tages-Ø aufgefüllt – ' +
+      'das ist rechnerisch dasselbe wie Ø × 365. Große Posten, die dir <b>nicht wichtig</b> sind, lohnt es zu prüfen ' +
+      '(Dauerlast, alte Geräte). <span style="color:var(--muted)">Je mehr gemessene Tage, desto genauer; die ' +
+      'Wärmepumpe ist saisonal – für ihren Jahreswert ist die <b>Hochrechnung</b>-Karte oben genauer.</span>'
     : '';
 
   // away detection (Smart Home)
