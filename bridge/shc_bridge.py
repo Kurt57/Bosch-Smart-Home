@@ -1045,9 +1045,12 @@ def compute_analytics(store: Store, days: int, price: float) -> dict:
 def _counter_day_kwh(samples: list[dict], field: str) -> dict:
     """Energy (kWh) per local day from a cumulative kWh counter.
 
-    Attribute each consecutive counter delta to the day of the earlier sample,
-    so energy split across midnight lands on the right day. Guards against
-    counter resets and long offline gaps.
+    Each consecutive counter delta is spread across the local days it spans
+    (proportional to time), so energy split across midnight lands on the right
+    day AND an offline gap is *backfilled* when the heat pump reconnects: the
+    cumulative counter kept counting while we couldn't reach it, so the jump on
+    reconnect is real consumption, not lost. Resets/implausible jumps are
+    filtered by average power, not by a hard time cutoff.
     """
     out: dict[str, float] = {}
     prev = None
@@ -1059,10 +1062,35 @@ def _counter_day_kwh(samples: list[dict], field: str) -> dict:
             pt, pv = prev
             delta = v - pv
             dt_h = (s["ts"] - pt) / 3600.0
-            if 0 < delta < 100 and 0 < dt_h < 24:   # sane step, no reset/gap
-                out[_local_day(pt)] = out.get(_local_day(pt), 0.0) + delta
+            # plausible growth: positive, average power within a heat pump's
+            # range (drops counter resets), gap up to ~31 days so a real offline
+            # stretch is recovered rather than discarded.
+            if delta > 0 and 0 < dt_h <= 24 * 31 and (delta / dt_h) <= 25:
+                _spread_delta_over_days(out, pt, s["ts"], delta)
         prev = (s["ts"], v)
     return out
+
+
+def _spread_delta_over_days(out: dict, pt: int, ts: int, delta: float):
+    """Add `delta` kWh to `out`, split across the local calendar days spanned by
+    [pt, ts] proportional to the time in each day (DST-aware via localtime)."""
+    total = ts - pt
+    if total <= 0:
+        out[_local_day(pt)] = out.get(_local_day(pt), 0.0) + delta
+        return
+    seg_start = pt
+    guard = 0
+    while seg_start < ts and guard < 400:
+        guard += 1
+        lt = time.localtime(seg_start)
+        day0 = int(time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 0, 0, 0, 0, -1)))
+        # next local midnight, recomputed from a point safely inside the next day
+        nlt = time.localtime(day0 + 86400 + 7200)
+        next_mid = int(time.mktime((nlt.tm_year, nlt.tm_mon, nlt.tm_mday, 0, 0, 0, 0, 0, -1)))
+        seg_end = min(next_mid, ts)
+        day = _local_day(seg_start)
+        out[day] = out.get(day, 0.0) + delta * (seg_end - seg_start) / total
+        seg_start = seg_end
 
 
 def _hp_mode_buckets(rows: list[dict], only_day: str | None = None) -> dict:
@@ -2318,6 +2346,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._post_homecom_connect(body)
             if parsed.path == "/api/homecom/import":
                 return self._post_hp_import(body)
+            if parsed.path == "/api/homecom/refresh":
+                return self._post_hp_refresh(body)
             if parsed.path == "/api/electrolux/connect":
                 return self._post_electrolux_connect(body)
             if parsed.path == "/api/electrolux/probe":
@@ -2527,6 +2557,24 @@ class Handler(BaseHTTPRequestHandler):
                                 "total_hours": cnt.get("hours", 0),
                                 "message": f"{len(clean)} Zeilen importiert "
                                            f"({days} Tage, {months} Monate, {hours} Stunden)."})
+
+    def _post_hp_refresh(self, body):
+        """Force an immediate heat-pump poll. Because the HomeCom energy counter
+        is cumulative, one fresh read after an outage recovers all missed kWh:
+        the day-splitter backfills the gap onto the right days."""
+        hp = getattr(self.ctx, "hp", None)
+        if hp is None:
+            return self._send_json({"ok": False,
+                                    "error": "Wärmepumpe nicht verbunden (im Setup koppeln)."}, 200)
+        try:
+            hp._poll()
+        except Exception as exc:
+            return self._send_json({"ok": False,
+                                    "error": f"Wärmepumpe nicht erreichbar: {exc}"}, 200)
+        st = dict(self.ctx.hp_state)
+        return self._send_json({"ok": True, "ts": st.get("ts"),
+                                "energy_kwh": st.get("energy_kwh"),
+                                "message": "Aktueller Zählerstand gelesen – versäumte Verbräuche nachgeladen."})
 
     def _post_electrolux_connect(self, body):
         """Save the AEG/Electrolux API key + refresh token, verify them by

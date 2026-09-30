@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-30 · Anteil je Quelle: Gesamt-Summenzeile oben (kWh + Jahr + €)'
+const APP_VERSION = '2026-09-30 · WP: versaeumte Verbraeuche nachladen (Zaehler-Backfill nach Ausfall)'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -3854,6 +3854,24 @@ function parseHomeComCsv(text) {
   return { rows };
 }
 
+async function doHpRefresh() {
+  const note = $('hp-refresh-note'), btn = $('hp-refresh');
+  if (btn) btn.disabled = true;
+  if (note) note.textContent = 'Lese aktuellen Zählerstand …';
+  try {
+    const r = await postJSON('/api/homecom/refresh', {});
+    if (r && r.ok) {
+      if (note) note.innerHTML = '✓ ' + esc(r.message || 'Nachgeladen.');
+      setTimeout(loadAll, 600);
+    } else if (note) {
+      note.innerHTML = '⚠︎ ' + esc((r && r.error) || 'Konnte nicht nachladen.');
+    }
+  } catch (e) {
+    if (note) note.textContent = 'Nur möglich, wenn die Seite von der Bridge geöffnet ist.';
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
 async function doHpImport(ev) {
   const note = $('hp-import-note'), inp = ev.target;
   const file = inp.files && inp.files[0];
@@ -4044,6 +4062,7 @@ function init() {
   });
   const hpc = $('hp-connect'); if (hpc) hpc.addEventListener('click', doHomecomConnect);
   const hpi = $('hp-import'); if (hpi) hpi.addEventListener('change', doHpImport);
+  const hpr = $('hp-refresh'); if (hpr) hpr.addEventListener('click', doHpRefresh);
   const exp = $('export-csv'); if (exp) exp.addEventListener('click', doExport);
   const aegD = $('aeg-dash');
   if (aegD) aegD.addEventListener('click', () => window.open('https://developer.electrolux.one/dashboard', '_blank'));
