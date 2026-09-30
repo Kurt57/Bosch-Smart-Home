@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-30 · Anteil je Quelle: gemessene Tage exakt, Luecken mit Ø aufgefuellt (Tage-Zaehler)'
+const APP_VERSION = '2026-09-30 · Anteil je Quelle: Gesamt-Summenzeile oben (kWh + Jahr + €)'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -2021,13 +2021,19 @@ function renderHistory() {
   const totShare = shares.reduce((a, s) => a + s.kwh, 0) || 1;
   const sharePrice = STATE.price;
   const winDays = winKeys.size || 1;
+  const yearOf = s => (s.days > 0 ? s.kwh / s.days * 365 : 0);
+  const totYear = shares.reduce((a, s) => a + yearOf(s), 0);
+  const totalRow = shares.length
+    ? `<div class="devrow" style="border-bottom:1px solid var(--card-bd,#2a2f3a);padding-bottom:8px;margin-bottom:4px">` +
+      `<div class="nm"><b>Gesamt (alle gelisteten)</b><small>gemessen <b>${kwh(totShare, 1)}</b> · ${winDays} Tage</small></div>` +
+      `<div class="val"><b>~${kwh(totYear, 0)}/Jahr</b><small>${money(totYear * sharePrice)}</small></div></div>`
+    : '';
   $('h-share').innerHTML = shares.length
-    ? shares.map(s => {
+    ? totalRow + shares.map(s => {
         const pct = s.kwh / totShare * 100;
         // exact measured days + average for every not-measured day of the year:
         //   s.kwh (exact) + (s.kwh/s.days) × (365 − s.days)  ==  s.kwh/s.days × 365
-        const avgDay = s.days > 0 ? s.kwh / s.days : 0;
-        const yearK = avgDay * 365;
+        const yearK = yearOf(s);
         const sub = `${pct.toFixed(0)} % · gemessen <b>${kwh(s.kwh, 1)}</b> (${s.days}/${winDays} Tage)` +
           (s.seasonal ? ' · saisonal' : '');
         return devRow(s.label, sub, `~${kwh(yearK, 0)}/Jahr`, money(yearK * sharePrice), pct, s.color);
