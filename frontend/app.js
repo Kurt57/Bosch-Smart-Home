@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-30 · WP: versaeumte Verbraeuche nachladen (Zaehler-Backfill nach Ausfall)'
+const APP_VERSION = '2026-09-30 · Theorie-vs-Praxis: laufender Monat als hochgerechneter Balken'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -484,6 +484,19 @@ function hpMeasuredByMonth() {
     const m = +r.month.slice(5) - 1, y = +r.month.slice(0, 4);
     if (!byM[m] || y > byM[m].year) byM[m] = { kwh: r.elec_kwh, year: y };
   });
+  // include the current, still-running month too – projected to a full month so
+  // its bar is comparable to Theorie/Erwartet instead of missing entirely.
+  // The imported CSV often ends before the current month, so fall back to the
+  // bridge's live-polled monthly (STATE.hpA.monthly) for the current month.
+  const now = new Date(), cm = now.getMonth();
+  const curKey = `${now.getFullYear()}-${String(cm + 1).padStart(2, '0')}`;
+  const findCur = arr => (arr || []).find(r => r.month === curKey && r.elec_kwh > 0);
+  const curRow = findCur(im.monthly) || findCur(STATE.hpA && STATE.hpA.monthly);
+  if (curRow) {
+    const day = Math.max(1, now.getDate());
+    byM[cm] = { kwh: curRow.elec_kwh * DIM[cm] / day, year: now.getFullYear(),
+      partial: true, actual: curRow.elec_kwh, day };
+  }
   return Object.keys(byM).length ? byM : null;
 }
 // Full-month heat-pump electricity estimate for calendar month m.
@@ -2367,19 +2380,23 @@ function renderHeatDemand() {
     if (measured) {
       let worst = null, sT = 0, sP = 0;
       Object.keys(measured).forEach(mk => {
-        const m = +mk, abs = measured[m].kwh - theoryMonth[m];
+        const m = +mk;
+        if (measured[m].partial) return;           // don't judge the extrapolated current month
+        const abs = measured[m].kwh - theoryMonth[m];
         sT += theoryMonth[m]; sP += measured[m].kwh;
         if (!worst || Math.abs(abs) > Math.abs(worst.abs)) worst = { m, abs };
       });
       const totPct = sT > 0 ? (sP - sT) / sT : 0;
-      const prevMonths = Object.keys(measured).filter(m => measured[m].year < curY).map(m => MON[+m]);
+      const prevMonths = Object.keys(measured).filter(m => measured[m].year < curY && !measured[m].partial).map(m => MON[+m]);
+      const partMonth = Object.keys(measured).find(m => measured[m].partial);
       $('hp-theory-month-note').innerHTML =
         'Drei Reihen je Monat – oben ein-/ausblendbar: <b>Theorie</b> (Gebäudemodell), <b>' + esc(measLabel) +
         '</b> (echte Messung) und <b>Erwartet</b> (dein gemessenes Jahresniveau, saisonal verteilt – auch für noch nicht ' +
         'gemessene Monate wie Nov/Dez). ' +
-        `Über die gemessenen Monate liegt die Praxis <b>${totPct >= 0 ? '+' : ''}${fmt(totPct * 100, 0)} %</b> zur Theorie.` +
+        (sT > 0 ? `Über die voll gemessenen Monate liegt die Praxis <b>${totPct >= 0 ? '+' : ''}${fmt(totPct * 100, 0)} %</b> zur Theorie.` : '') +
         (worst ? ` Größter Unterschied im <b>${MON[worst.m]}</b> (${worst.abs >= 0 ? '+' : '−'}${kwh(Math.abs(worst.abs), 0)}` +
           `${worst.abs > 0 ? ' – mehr als gerechnet' : ' – weniger, z. B. kaum geheizt/effizient'}).` : '') +
+        (partMonth != null ? ` <span style="color:var(--muted)"><b>${MON[+partMonth]}</b> läuft noch – der Balken ist auf den ganzen Monat <b>hochgerechnet</b> (aus ${kwh(measured[+partMonth].actual, 0)} bis Tag ${measured[+partMonth].day}).</span>` : '') +
         (prevMonths.length ? ` <span style="color:var(--muted)">Noch aus dem Vorjahr: ${prevMonths.join(', ')} – dafür zeigt „Erwartet" die aktuelle Prognose.</span>` : '');
     } else {
       $('hp-theory-month-note').innerHTML = 'Zwei Reihen: <b>Theorie</b> (Gebäudemodell) und <b>Erwartet</b> ' +
