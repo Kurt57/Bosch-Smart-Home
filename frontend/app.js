@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-30 · Theorie-vs-Praxis: laufender Monat als hochgerechneter Balken'
+const APP_VERSION = '2026-09-30 · Theorie-vs-Praxis: gemessene Monate ersetzen CSV-Vorjahr automatisch'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -477,26 +477,33 @@ function hpRealMonthMap() {
 // data from previous-year data.
 function hpMeasuredByMonth() {
   const im = STATE.hpA && STATE.hpA.imported;
-  if (!im || !(im.monthly || []).length) return null;
-  const cur = im.latest, byM = {};
-  im.monthly.forEach(r => {
-    if (r.month === cur || !(r.elec_kwh > 0)) return;
+  const polled = (STATE.hpA && STATE.hpA.monthly) || [];   // this-year live-measured months
+  if ((!im || !(im.monthly || []).length) && !polled.length) return null;
+  const now = new Date(), cm = now.getMonth(), cy = now.getFullYear();
+  const curKey = `${cy}-${String(cm + 1).padStart(2, '0')}`;
+  const byM = {};
+  // 1) CSV baseline: most recent year per calendar month (Vorjahr for months we
+  //    haven't measured ourselves yet – e.g. Okt/Nov/Dez). Skip only the current
+  //    calendar month (still partial) – it's handled by the live poll below.
+  ((im && im.monthly) || []).forEach(r => {
+    if (r.month === curKey || !(r.elec_kwh > 0)) return;
     const m = +r.month.slice(5) - 1, y = +r.month.slice(0, 4);
-    if (!byM[m] || y > byM[m].year) byM[m] = { kwh: r.elec_kwh, year: y };
+    if (!byM[m] || y > byM[m].year) byM[m] = { kwh: r.elec_kwh, year: y, source: 'csv' };
   });
-  // include the current, still-running month too – projected to a full month so
-  // its bar is comparable to Theorie/Erwartet instead of missing entirely.
-  // The imported CSV often ends before the current month, so fall back to the
-  // bridge's live-polled monthly (STATE.hpA.monthly) for the current month.
-  const now = new Date(), cm = now.getMonth();
-  const curKey = `${now.getFullYear()}-${String(cm + 1).padStart(2, '0')}`;
-  const findCur = arr => (arr || []).find(r => r.month === curKey && r.elec_kwh > 0);
-  const curRow = findCur(im.monthly) || findCur(STATE.hpA && STATE.hpA.monthly);
-  if (curRow) {
-    const day = Math.max(1, now.getDate());
-    byM[cm] = { kwh: curRow.elec_kwh * DIM[cm] / day, year: now.getFullYear(),
-      partial: true, actual: curRow.elec_kwh, day };
-  }
+  // 2) Overlay THIS YEAR's own measurements: a completed month replaces the CSV
+  //    value; the still-running month is projected to a full month (partial).
+  polled.forEach(r => {
+    if (!(r.elec_kwh > 0) || String(r.month).length < 7) return;
+    const y = +r.month.slice(0, 4), m = +r.month.slice(5) - 1;
+    if (y !== cy) return;                       // only real, current-year measurements
+    if (m < cm) {
+      byM[m] = { kwh: r.elec_kwh, year: y, source: 'measured' };            // month complete → measured wins
+    } else if (m === cm) {
+      const day = Math.max(1, now.getDate());
+      byM[m] = { kwh: r.elec_kwh * DIM[m] / day, year: y, partial: true,    // running → projected
+        actual: r.elec_kwh, day, source: 'measured' };
+    }
+  });
   return Object.keys(byM).length ? byM : null;
 }
 // Full-month heat-pump electricity estimate for calendar month m.
