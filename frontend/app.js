@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-30 · Theorie-vs-Praxis: gemessene Monate ersetzen CSV-Vorjahr automatisch'
+const APP_VERSION = '2026-09-30 · Uebersicht WP-Aufteilung stimmt mit Strom heute ueberein (Rest = Sonstiges)'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -4556,10 +4556,13 @@ function demoOverview(sh, hp) {
   // breakdown today (heat pump split by heating vs hot water)
   const breakdown = [];
   const mt = hp.mode_today || { heating: 0, water: 0, other: 0 };
-  if (mt.heating > 0.01 || mt.water > 0.01) {
-    if (mt.heating > 0.01) breakdown.push({ key: 'hp_heating', label: 'WP · Heizung', kwh: round(mt.heating, 3), color: COL.hp });
-    if (mt.water > 0.01) breakdown.push({ key: 'hp_water', label: 'WP · Warmwasser', kwh: round(mt.water, 3), color: COL.heat });
-    if (mt.other > 0.01) breakdown.push({ key: 'hp_other', label: 'WP · Sonstiges', kwh: round(mt.other, 3), color: '#b07a4d' });
+  const heat_ = round(mt.heating || 0, 3), water_ = round(mt.water || 0, 3);
+  // reconcile: unclassified WP energy → "Sonstiges" so slices sum to hpToday
+  const other_ = round(Math.max(mt.other || 0, (hpToday || 0) - heat_ - water_), 3);
+  if (heat_ > 0.01 || water_ > 0.01 || other_ > 0.01) {
+    if (heat_ > 0.01) breakdown.push({ key: 'hp_heating', label: 'WP · Heizung', kwh: heat_, color: COL.hp });
+    if (water_ > 0.01) breakdown.push({ key: 'hp_water', label: 'WP · Warmwasser', kwh: water_, color: COL.heat });
+    if (other_ > 0.01) breakdown.push({ key: 'hp_other', label: 'WP · Sonstiges', kwh: other_, color: '#b07a4d' });
   } else if (hpToday > 0) {
     breakdown.push({ key: 'heatpump', label: 'Wärmepumpe', kwh: hpToday, color: COL.hp });
   }

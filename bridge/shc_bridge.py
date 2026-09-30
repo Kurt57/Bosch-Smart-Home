@@ -1105,12 +1105,21 @@ def _hp_mode_buckets(rows: list[dict], only_day: str | None = None) -> dict:
         if prev is not None:
             pv, pt, pm, pp = prev
             delta = v - pv
-            if 0 < delta < 100 and 0 < (s["ts"] - pt) < 86400 and (only_day is None or _local_day(pt) == only_day):
+            dt_h = (s["ts"] - pt) / 3600.0
+            # same plausibility as the day-splitter, so the mode split covers the
+            # SAME energy as 'Strom heute' (no undercounting after an outage).
+            if delta > 0 and 0 < dt_h <= 24 * 31 and (delta / dt_h) <= 25:
                 # attribute the interval to the mode that was actually running
                 # (higher power), so an off→on transition counts as the active mode
                 m = pm if (pp or 0) >= (s.get("power_w") or 0) else s.get("mode")
                 key = "heating" if m == "ch" else "water" if m == "dhw" else "other"
-                b[key] += delta
+                if only_day is None:
+                    b[key] += delta
+                else:
+                    # only the share of [pt, ts] that falls on `only_day`
+                    frac = {}
+                    _spread_delta_over_days(frac, pt, s["ts"], 1.0)
+                    b[key] += delta * frac.get(only_day, 0.0)
         prev = (v, s["ts"], s.get("mode"), s.get("power_w"))
     return {k: round(x, 3) for k, x in b.items()}
 
@@ -1440,17 +1449,22 @@ def compute_overview(store: Store, days: int, price: float,
 
     breakdown = []
     mt = hp.get("mode_today", {})
-    if (mt.get("heating", 0) > 0.01 or mt.get("water", 0) > 0.01):
-        # split the heat pump into heating vs hot water ("wofür")
-        if mt.get("heating", 0) > 0.01:
+    heat_ = round(mt.get("heating", 0.0), 3)
+    water_ = round(mt.get("water", 0.0), 3)
+    # reconcile with the authoritative day total ('Strom heute'): energy the mode
+    # split couldn't classify (mode unknown, or recovered after an outage) is
+    # shown as "Sonstiges" so the WP slices SUM to hp_today instead of undercounting.
+    other_ = round(max(mt.get("other", 0.0), (hp_today or 0.0) - heat_ - water_), 3)
+    if heat_ > 0.01 or water_ > 0.01 or other_ > 0.01:
+        if heat_ > 0.01:
             breakdown.append({"key": "hp_heating", "label": "WP · Heizung",
-                              "kwh": round(mt["heating"], 3), "color": "#ef6c4d"})
-        if mt.get("water", 0) > 0.01:
+                              "kwh": heat_, "color": "#ef6c4d"})
+        if water_ > 0.01:
             breakdown.append({"key": "hp_water", "label": "WP · Warmwasser",
-                              "kwh": round(mt["water"], 3), "color": "#f6b93b"})
-        if mt.get("other", 0) > 0.01:
+                              "kwh": water_, "color": "#f6b93b"})
+        if other_ > 0.01:
             breakdown.append({"key": "hp_other", "label": "WP · Sonstiges",
-                              "kwh": round(mt["other"], 3), "color": "#b07a4d"})
+                              "kwh": other_, "color": "#b07a4d"})
     elif hp_today > 0 or (hp_live and hp_live.get("connected")):
         breakdown.append({"key": "heatpump", "label": "Wärmepumpe",
                           "kwh": hp_today, "color": "#ef6c4d"})
