@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-02 · Flaechen-Belegung: Modulzahl/Neigung + Winter-kWh/Tag & Sommer-kWh/Monat'
+const APP_VERSION = '2026-10-02 · Verschattung diffuslicht-bewusst (Jahres-/Monatsertrag inkl. Diffuslicht)'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -190,7 +190,9 @@ const INFO = {
     'autark ist. „Als Anlage übernehmen" rechnet den ganzen PV-Tab (Ertrag, Autarkie, Finanzierung) mit genau dieser ' +
     'Belegung – inkl. der echten, aus deinen Flächen gemischten Monatskurve. Je Fläche steht auch die <b>Belegung</b> ' +
     '(Modulzahl, Neigung) und die erzeugte Energie: <b>kWh/Tag im Winter</b> und <b>kWh/Monat im Sommer</b>. Bei ' +
-    'Flachdach/Freiland zeigt eine Tabelle die Aufständerung – <b>flacher = mehr Module</b>, steiler = mehr je Modul.',
+    'Flachdach/Freiland zeigt eine Tabelle die Aufständerung – <b>flacher = mehr Module</b>, steiler = mehr je Modul. ' +
+    '<b>Diffuslicht</b> ist berücksichtigt: Jahres-/Monatserträge beruhen auf realen Werten (direkt + diffus + reflektiert), ' +
+    'und eine Verschattung kostet entsprechend weniger, weil ein verschattetes Modul weiter Diffuslicht erntet.',
   'pv-build': () => 'Direkter Preisvergleich: dein <b>Komplett-Set</b> (Selbstbau) gegen das <b>Komplett-Angebot</b> ' +
     'der Fachfirma, abzüglich <b>Förderung</b>. Einfach beide Zahlen eintragen – ich zeige die Differenz und, wenn ' +
     'oben eine kWp-Größe steht, den Preis pro kWp. Mit den Buttons übernimmst du den Wert als Investition in die ' +
@@ -3162,11 +3164,20 @@ function genDetail(kwp, tilt, az) {
     summerMonth: (g(5) + g(6) + g(7)) / 3,                // avg Jun/Jul/Aug month
     peakKw: kwp * peakFactorFor(tilt, az) };
 }
+// Diffuse-aware shading: an obstruction blocks the DIRECT beam in proportion,
+// but only part of the DIFFUSE sky light – a shaded module still harvests diffuse
+// radiation (≈ half of the annual irradiation in central Europe). So a 50 %
+// obstruction costs clearly less than 50 % of the yield.
+const DIFFUSE_FRAC = 0.5, SKY_BLOCK = 0.55;
+function shadeFactor(shadePct) {
+  const s = Math.min(90, Math.max(0, shadePct || 0)) / 100;
+  return 1 - s * ((1 - DIFFUSE_FRAC) + SKY_BLOCK * DIFFUSE_FRAC);
+}
 // How to lay out a surface: pitched roofs keep the roof tilt; flat/garden pick
 // the tilt that maximises annual yield over the area (module-count trade-off).
 function surfaceLayout(s) {
   const t = SURF_TYPES[s.type] || SURF_TYPES.gable;
-  const az = +s.az || 0, shade = Math.min(90, Math.max(0, +s.shade || 0)), f = 1 - shade / 100;
+  const az = +s.az || 0, shade = Math.min(90, Math.max(0, +s.shade || 0)), f = shadeFactor(shade);
   const area = Math.max(0, +s.area || 0);
   const flexible = (s.type === 'flat' || s.type === 'garden') && (s.tilt == null || s.tilt === '');
   if (flexible) {
