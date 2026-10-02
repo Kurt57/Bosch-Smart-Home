@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-02 · PV: optimale Ausrichtung & Groesse (Sommer ~100% autark, Winter-optimiert)'
+const APP_VERSION = '2026-10-02 · PV: eigene Flaechen eintragen & optimal belegen (fliesst in Ertrag/Autarkie)'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -183,6 +183,12 @@ const INFO = {
     'Tagesverlauf (morgens/abends) am besten, <b>Süd 35°</b> den höchsten Jahresertrag. Hohe Autarkie braucht einen ' +
     '<b>Speicher</b> (sonst nur Tagesdeckung). <b>Winter 100 % ist mit PV allein nicht möglich</b> – die Zahlen sind ' +
     'Richtwerte für ~50° N; den exakten Standort-Ertrag liefert die PVGIS-Abfrage.',
+  'pv-surf': () => 'Trag deine <b>verfügbaren Flächen</b> ein (Satteldach, Flachdach, Garten, Grenz-/Fassadenwand, ' +
+    'Terrassenüberdachung, Carport) mit m², Neigung, Azimut und Verschattung. Je Fläche wird die installierbare ' +
+    '<b>kWp</b> (Fläche × nutzbarer Anteil × Modul­dichte) und der <b>spezifische Ertrag</b> (aus Neigung/Azimut/Schatten) ' +
+    'berechnet. Die <b>Belegungs-Empfehlung</b> füllt die Flächen winter-gewichtet nach Ertrag, bis der <b>Sommer ~100 %</b> ' +
+    'autark ist. „Als Anlage übernehmen" rechnet den ganzen PV-Tab (Ertrag, Autarkie, Finanzierung) mit genau dieser ' +
+    'Belegung – inkl. der echten, aus deinen Flächen gemischten Monatskurve.',
   'pv-build': () => 'Direkter Preisvergleich: dein <b>Komplett-Set</b> (Selbstbau) gegen das <b>Komplett-Angebot</b> ' +
     'der Fachfirma, abzüglich <b>Förderung</b>. Einfach beide Zahlen eintragen – ich zeige die Differenz und, wenn ' +
     'oben eine kWp-Größe steht, den Preis pro kWp. Mit den Buttons übernimmst du den Wert als Investition in die ' +
@@ -3077,6 +3083,111 @@ function optimizeOrientation() {
   return { results, batt, battSuggested, summerDaily };
 }
 
+// ---- Meine Flächen belegen ----------------------------------------------- #
+// Surface types the user can own, with a typical tilt and the usable fraction
+// of their area (spacing/setbacks/row shading). kWp = area × usable × density.
+const SURF_TYPES = {
+  gable:   { label: 'Satteldach',              tilt: 35, usable: 0.75 },
+  flat:    { label: 'Flachdach',               tilt: 15, usable: 0.55 },
+  garden:  { label: 'Gartenfläche (Freiland)', tilt: 30, usable: 0.50 },
+  wall:    { label: 'Grenz-/Fassadenwand',     tilt: 90, usable: 0.80 },
+  terrace: { label: 'Terrassenüberdachung',    tilt: 10, usable: 0.70 },
+  carport: { label: 'Carport',                 tilt: 10, usable: 0.70 },
+};
+const MOD_DENSITY = 0.19;   // kWp per usable m² (modern modules)
+const YIELD_OPT = 1060;     // kWh/kWp·a at the optimum (≈50° N, tilt 30, south)
+// Relative yield (% of optimum) by tilt (rows) × |azimuth| (cols, 0=S…180=N).
+const Y_TILTS = [0, 15, 30, 45, 60, 90], Y_AZ = [0, 45, 90, 135, 180];
+const Y_GRID = [
+  [88, 88, 88, 88, 88],
+  [95, 93, 87, 78, 72],
+  [100, 96, 87, 73, 63],
+  [99, 94, 83, 66, 55],
+  [93, 87, 75, 58, 47],
+  [70, 65, 55, 42, 33],
+];
+function _interpIdx(arr, x) {
+  if (x <= arr[0]) return { i0: 0, i1: 0, f: 0 };
+  if (x >= arr[arr.length - 1]) return { i0: arr.length - 1, i1: arr.length - 1, f: 0 };
+  for (let i = 0; i < arr.length - 1; i++)
+    if (x >= arr[i] && x <= arr[i + 1]) return { i0: i, i1: i + 1, f: (x - arr[i]) / (arr[i + 1] - arr[i]) };
+  return { i0: 0, i1: 0, f: 0 };
+}
+// Relative yield (% of optimum) for a tilt/azimuth, bilinearly interpolated.
+function relYield(tilt, az) {
+  let a = Math.abs(((az % 360) + 360) % 360); if (a > 180) a = 360 - a;
+  const T = _interpIdx(Y_TILTS, Math.max(0, Math.min(90, tilt)));
+  const A = _interpIdx(Y_AZ, Math.max(0, Math.min(180, a)));
+  const g = (ti, ai) => Y_GRID[ti][ai];
+  const top = g(T.i0, A.i0) * (1 - A.f) + g(T.i0, A.i1) * A.f;
+  const bot = g(T.i1, A.i0) * (1 - A.f) + g(T.i1, A.i1) * A.f;
+  return top * (1 - T.f) + bot * T.f;
+}
+// Monthly production shape for a tilt, blended between the flat/standard/steep
+// anchors (steeper → more winter).
+function monthForTilt(tilt) {
+  const flat = ORIENTATIONS.find(o => o.id === 'eastwest').month;
+  const std = ORIENTATIONS.find(o => o.id === 'south35').month;
+  const steep = ORIENTATIONS.find(o => o.id === 'south65').month;
+  if (tilt <= 15) return normFrac(flat);
+  if (tilt >= 65) return normFrac(steep);
+  const [a, b, t0, t1] = tilt < 35 ? [flat, std, 15, 35] : [std, steep, 35, 65];
+  const f = (tilt - t0) / (t1 - t0);
+  return normFrac(a.map((v, i) => v * (1 - f) + b[i] * f));
+}
+const SURF_LS = 'bhe_pv_surfaces';
+function loadSurfaces() { try { const s = JSON.parse(localStorage.getItem(SURF_LS)); return Array.isArray(s) ? s : []; } catch (e) { return []; } }
+function saveSurfaces(a) { try { localStorage.setItem(SURF_LS, JSON.stringify(a)); } catch (e) {} }
+// Per-surface potential: installable kWp, specific yield, annual kWh, shape.
+function surfaceMetrics(s) {
+  const t = SURF_TYPES[s.type] || SURF_TYPES.gable;
+  const tilt = (s.tilt != null && s.tilt !== '') ? +s.tilt : t.tilt;
+  const az = +s.az || 0, shade = Math.min(90, Math.max(0, +s.shade || 0));
+  const kwp = Math.max(0, (+s.area || 0) * t.usable * MOD_DENSITY);
+  const spec = YIELD_OPT * relYield(tilt, az) / 100 * (1 - shade / 100);
+  return { kwp, spec, tilt, az, shade, month: monthForTilt(tilt), ew: Math.abs(az) >= 60,
+    year: kwp * spec, label: t.label };
+}
+// Combine a set of surface metrics into one array: total kWp, production-weighted
+// monthly shape and effective specific yield.
+function combineSurfaces(ms) {
+  let kwp = 0, year = 0, ewY = 0; const acc = new Array(12).fill(0);
+  ms.forEach(m => { kwp += m.kwp; year += m.year; m.month.forEach((v, i) => acc[i] += m.year * v); if (m.ew) ewY += m.year; });
+  return { kwp, year, spec: kwp > 0 ? year / kwp : 0, shape: year > 0 ? normFrac(acc) : null, ew: year > 0 && ewY / year > 0.5 };
+}
+// Recommend which surfaces to cover: fill best-first (winter-weighted yield)
+// until summer is ~fully self-sufficient; report the resulting system.
+function recommendCoverage() {
+  const surfs = loadSurfaces();
+  if (!surfs.length) return { empty: true };
+  const items = surfs.map((s, i) => ({ i, s, m: surfaceMetrics(s) }));
+  const haveLoad = shAvgDaily() > 0 || hpAvgDaily() > 0;
+  const all = combineSurfaces(items.map(x => x.m));
+  if (!haveLoad) return { items, all, noLoad: true };
+  const base = pvInputs();
+  const probe = simulatePv({ ...base, kwp: 0, batt: 0, v2h: false, cap60: false });
+  const mL = probe.monthly.map(x => x.load);
+  const summerDaily = (mL[5] + mL[6] + mL[7]) / 92;
+  const battSuggested = base.batt <= 0;
+  const batt = base.batt > 0 ? base.batt : Math.max(3, Math.round(summerDaily * 0.6));
+  // winter-weighted score: prefer surfaces that also help in winter
+  items.forEach(it => { const w = it.m.month[11] + it.m.month[0] + it.m.month[1]; it.score = it.m.spec * (1 + 1.5 * w); });
+  const ranked = items.slice().sort((a, b) => b.score - a.score);
+  const SUMMER = [5, 6, 7], target = 0.97;
+  const chosen = []; let reached = false;
+  for (const it of ranked) {
+    chosen.push(it);
+    const c = combineSurfaces(chosen.map(x => x.m));
+    const r = simulatePv({ ...base, kwp: c.kwp, batt, v2h: false, cap60: false, spec: c.spec, pvShareMonth: c.shape, pvHourFn: c.ew ? ewHourFn : null });
+    if (seasonAutarky(r, SUMMER) >= target) { reached = true; break; }
+  }
+  const comb = combineSurfaces(chosen.map(x => x.m));
+  const rF = simulatePv({ ...base, kwp: comb.kwp, batt, v2h: false, cap60: false, spec: comb.spec, pvShareMonth: comb.shape, pvHourFn: comb.ew ? ewHourFn : null });
+  const chosenIds = new Set(chosen.map(x => x.i));
+  return { items, ranked, chosen, chosenIds, reached, comb, all, batt, battSuggested,
+    summerAut: seasonAutarky(rF, SUMMER), winterAut: seasonAutarky(rF, [11, 0, 1]), yearAut: rF.autarky };
+}
+
 // Per month: a stacked PV bar (direct self / battery self / feed-in) next to a
 // consumption bar – shows what the battery shifts from feed-in to self-use.
 // PV chart colours derive from the central palette (single source of truth).
@@ -3388,6 +3499,7 @@ function renderPv() {
 
   renderBuildCompare(p);
   renderPvOrient();
+  renderSurfaces();
 }
 // Render the orientation/sizing recommendation.
 function renderPvOrient() {
@@ -3446,6 +3558,54 @@ function renderPvOrient() {
       `${esc(best.o.label)}-Kurve oben „Ertrag von PVGIS holen" (Neigung/Azimut sind schon eingetragen).</span>`;
       t.hidden = false; clearTimeout(_toastT); _toastT = setTimeout(() => { t.hidden = true; }, 9000); }
   };
+}
+// Render the "Meine Flächen belegen" inventory + coverage recommendation.
+function renderSurfaces() {
+  const card = $('pv-surf-card'); if (!card) return;
+  const rec = recommendCoverage();
+  const list = $('pv-surf-list');
+  // surface list
+  if (rec.empty || !rec.items.length) {
+    list.innerHTML = '<div class="note">Noch keine Fläche eingetragen – unten hinzufügen.</div>';
+  } else {
+    list.innerHTML = rec.items.map(it => {
+      const m = it.m, used = rec.chosenIds && rec.chosenIds.has(it.i);
+      const sub = `${fmt(m.tilt, 0)}° · Azimut ${m.az > 0 ? '+' : ''}${fmt(m.az, 0)}°` +
+        (m.shade > 0 ? ` · ${fmt(m.shade, 0)}% Schatten` : '') + ` · ${fmt(it.s.area || 0, 0)} m²`;
+      return `<div class="devrow" style="align-items:flex-start">` +
+        `<div class="nm"><b>${rec.chosenIds ? (used ? '✓ ' : '○ ') : ''}${esc(m.label)}</b>` +
+        `<small>${sub} · ${fmt(m.spec, 0)} kWh/kWp</small></div>` +
+        `<div class="val"><b>${fmt(m.kwp, 1)} kWp</b><small>~${kwh(m.year, 0)}/Jahr` +
+        ` <button class="linkbtn surf-del" data-idx="${it.i}" style="background:none;border:none;color:#ff6b8a;cursor:pointer;font-size:13px">✕</button></small></div></div>`;
+    }).join('');
+  }
+  // recommendation / totals
+  const resEl = $('pv-surf-result'), noteEl = $('pv-surf-note'), useBtn = $('pv-surf-use');
+  if (rec.empty || !rec.items.length) { resEl.innerHTML = ''; noteEl.innerHTML = ''; if (useBtn) useBtn.hidden = true; return; }
+  const pct = v => `${fmt(Math.min(v * 100, 100), 0)} %`;
+  if (rec.noLoad) {
+    resEl.innerHTML = `<div class="grid2"><div class="kpi sm"><div class="v">${fmt(rec.all.kwp, 1)} kWp</div><div class="l">max. installierbar</div></div>` +
+      `<div class="kpi sm"><div class="v">${kwh(rec.all.year, 0)}</div><div class="l">Potenzial / Jahr</div></div></div>`;
+    noteEl.innerHTML = 'Sobald Verbrauchsdaten da sind, empfehle ich auch die beste <b>Belegung</b> (Sommer-Autarkie).';
+    if (useBtn) { useBtn.hidden = false; }
+  } else {
+    resEl.innerHTML = `<div class="grid2">` +
+      `<div class="kpi sm"><div class="v">${fmt(rec.comb.kwp, 1)} kWp</div><div class="l">empfohlen belegen</div></div>` +
+      `<div class="kpi sm"><div class="v">${fmt(rec.all.kwp, 1)} kWp</div><div class="l">max. möglich</div></div>` +
+      `<div class="kpi sm"><div class="v" style="color:${COL.pv}">${pct(rec.summerAut)}</div><div class="l">Sommer-Autarkie</div></div>` +
+      `<div class="kpi sm"><div class="v" style="color:${COL.hp}">${pct(rec.winterAut)}</div><div class="l">Winter-Autarkie</div></div></div>`;
+    const usedLabels = rec.chosen.map(x => x.m.label);
+    noteEl.innerHTML =
+      `<b>Beste Belegung:</b> ${esc([...new Set(usedLabels)].join(', '))} → ~<b>${fmt(rec.comb.kwp, 1)} kWp</b> ` +
+      `(${fmt(rec.comb.spec, 0)} kWh/kWp)${rec.battSuggested ? `, mit ~<b>${rec.batt} kWh</b> Speicher` : ''}. ` +
+      (rec.reached ? `Damit ist der <b>Sommer praktisch autark</b> (${pct(rec.summerAut)}). `
+        : `Auch voll belegt reicht es im Sommer nur für <b>${pct(rec.summerAut)}</b> – mehr Fläche bräuchte es für 100 %. `) +
+      `Winter: <b>${pct(rec.winterAut)}</b>. ` +
+      `<span style="color:var(--muted)">✓ = für die beste Belegung genutzt, ○ = Reserve (Rest-Dachfläche). Flächen ` +
+      `werden winter-gewichtet nach Ertrag gefüllt. „Als Anlage übernehmen" rechnet den ganzen PV-Tab mit dieser ` +
+      `Belegung (kWp + echte Monatskurve). Richtwerte ~50° N; exakt via PVGIS.</span>`;
+    if (useBtn) useBtn.hidden = false;
+  }
 }
 // Selbstbau vs. Fachfirma: just two prices – your complete DIY set vs. the
 // turnkey offer (minus subsidy) – so you directly see which is cheaper.
@@ -4412,6 +4572,46 @@ function init() {
     el.addEventListener('input', () => { try { localStorage.setItem(key, el.value); } catch (e) {} });
   });
   const pvGis = $('pv-pvgis'); if (pvGis) pvGis.addEventListener('click', doPvgis);
+  // Meine Flächen: add / remove / apply
+  const surfAdd = $('surf-add');
+  if (surfAdd) surfAdd.addEventListener('click', () => {
+    const type = $('surf-type').value;
+    const area = parseFloat($('surf-area').value) || 0;
+    if (!(area > 0)) { $('pv-surf-note').textContent = 'Bitte eine Fläche in m² eintragen.'; return; }
+    const tiltRaw = $('surf-tilt').value, azRaw = $('surf-az').value, shRaw = $('surf-shade').value;
+    const arr = loadSurfaces();
+    arr.push({ type, area, tilt: tiltRaw === '' ? null : parseFloat(tiltRaw),
+      az: azRaw === '' ? 0 : parseFloat(azRaw), shade: shRaw === '' ? 0 : parseFloat(shRaw) });
+    saveSurfaces(arr);
+    $('surf-area').value = ''; $('surf-tilt').value = ''; $('surf-az').value = ''; $('surf-shade').value = '';
+    renderSurfaces();
+  });
+  const surfList = $('pv-surf-list');
+  if (surfList) surfList.addEventListener('click', (e) => {
+    const b = e.target.closest('.surf-del'); if (!b) return;
+    const idx = +b.dataset.idx; const arr = loadSurfaces();
+    if (idx >= 0 && idx < arr.length) { arr.splice(idx, 1); saveSurfaces(arr); renderSurfaces(); }
+  });
+  const surfUse = $('pv-surf-use');
+  if (surfUse) surfUse.addEventListener('click', () => {
+    const rec = recommendCoverage();
+    const comb = (rec && !rec.empty) ? (rec.comb || rec.all) : null;
+    if (!comb || !(comb.kwp > 0)) return;
+    const setLS = (k, v) => { try { localStorage.setItem(k, String(v)); } catch (e) {} };
+    const kwp = Math.round(comb.kwp * 10) / 10;
+    const kEl = $('pv-kwp'); if (kEl) { kEl.value = kwp; setLS(PV_LS.kwp, kwp); }
+    // write the real blended monthly curve into the planner's PV-shape slot
+    if (comb.shape) setLS(PV_LS.pgm, JSON.stringify(comb.shape));
+    const opts = [1000, 950, 880, 800];
+    const near = opts.reduce((a, b) => Math.abs(b - comb.spec) < Math.abs(a - comb.spec) ? b : a);
+    const oEl = $('pv-orient'); if (oEl) { oEl.value = String(near); setLS(PV_LS.orient, near); }
+    if (rec.battSuggested && rec.batt) { const bEl = $('pv-batt'); if (bEl) { bEl.value = rec.batt; setLS(PV_LS.batt, rec.batt); } }
+    renderPv();
+    const t = $('toast');
+    if (t) { t.innerHTML = `Übernommen: <b>${fmt(kwp, 1)} kWp</b> aus deinen Flächen (echte Monatskurve). ` +
+      `<span style="color:var(--muted)">Der ganze PV-Tab rechnet jetzt mit dieser Belegung.</span>`;
+      t.hidden = false; clearTimeout(_toastT); _toastT = setTimeout(() => { t.hidden = true; }, 9000); }
+  });
   const pvWx = $('pv-weather'); if (pvWx) pvWx.addEventListener('click', doWeather);
   const hpWx = $('hp-fc-btn'); if (hpWx) hpWx.addEventListener('click', doHpWeather);
   const pvLoc = $('pv-locate');

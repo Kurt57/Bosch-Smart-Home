@@ -576,6 +576,35 @@
       <div id="pv-orient-body"></div>
       <div class="note" id="pv-orient-note" style="margin-top:10px"></div>
     </div>
+    <div class="card" id="pv-surf-card">
+      <h2><span class="info" data-info="pv-surf" role="button" aria-label="Info">i</span>🏠 Meine Flächen belegen</h2>
+      <div class="note" style="margin-bottom:10px">Trag ein, <b>welche Flächen</b> du hast (Dach, Garten, Wand, Terrasse) –
+        ich sage dir, wie du sie am besten belegst und wie viel sie bringen. Das fließt auch in die Ertrags-/Autarkie-Rechnung oben ein.</div>
+      <div id="pv-surf-list"></div>
+      <div class="grid2" style="margin-top:12px">
+        <div><label>Flächentyp</label>
+          <select id="surf-type">
+            <option value="gable">Satteldach</option>
+            <option value="flat">Flachdach</option>
+            <option value="garden">Gartenfläche (Freiland)</option>
+            <option value="wall">Grenz-/Fassadenwand</option>
+            <option value="terrace">Terrassenüberdachung</option>
+            <option value="carport">Carport</option>
+          </select></div>
+        <div><label>Fläche (m²)</label>
+          <input id="surf-area" type="number" min="0" step="1" inputmode="numeric" placeholder="z. B. 40"></div>
+        <div><label>Neigung (°, leer = Typ-Standard)</label>
+          <input id="surf-tilt" type="number" min="0" max="90" step="1" inputmode="numeric" placeholder="Standard"></div>
+        <div><label>Azimut (0=Süd, −90=Ost, 90=West)</label>
+          <input id="surf-az" type="number" min="-180" max="180" step="5" inputmode="numeric" placeholder="0"></div>
+        <div><label>Verschattung (%)</label>
+          <input id="surf-shade" type="number" min="0" max="90" step="5" inputmode="numeric" placeholder="0"></div>
+      </div>
+      <button class="btn sec" id="surf-add" style="margin-top:10px">+ Fläche hinzufügen</button>
+      <div id="pv-surf-result" style="margin-top:14px"></div>
+      <button class="btn" id="pv-surf-use" style="margin-top:10px" hidden>Als Anlage übernehmen</button>
+      <div class="note" id="pv-surf-note" style="margin-top:8px"></div>
+    </div>
     <div class="card">
       <h2><span class="info" data-info="pv-forecast" role="button" aria-label="Info">i</span>🌤️ Wetter-Prognose · morgen</h2>
       <div class="note" style="margin-bottom:10px">
