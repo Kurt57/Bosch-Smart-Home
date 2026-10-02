@@ -600,9 +600,15 @@
         <div><label>Verschattung (%)</label>
           <input id="surf-shade" type="number" min="0" max="90" step="5" inputmode="numeric" placeholder="0"></div>
       </div>
-      <button class="btn sec" id="surf-add" style="margin-top:10px">+ Fläche hinzufügen</button>
+      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+        <button class="btn sec" id="surf-add" style="flex:1">+ Fläche hinzufügen</button>
+        <button class="btn sec" id="surf-cancel" style="flex:1;display:none">Abbrechen</button>
+      </div>
       <div id="pv-surf-result" style="margin-top:14px"></div>
-      <button class="btn" id="pv-surf-use" style="margin-top:10px" hidden>Als Anlage übernehmen</button>
+      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+        <button class="btn" id="pv-surf-use" style="flex:1" hidden>Empfehlung als Anlage übernehmen</button>
+        <button class="btn sec" id="pv-surf-reset" style="flex:1" hidden>↩︎ Häkchen auf Empfehlung</button>
+      </div>
       <div class="note" id="pv-surf-note" style="margin-top:8px"></div>
     </div>
     <div class="card" id="pv-combo-card" hidden>

@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-03 · Flachdach-Belegungsfaktor neigungsabhaengig (flach laid = dicht); Azimut-Hinweis'
+const APP_VERSION = '2026-10-03 · Flaechen bearbeitbar + duplizierbar; Haekchen auf Empfehlung zuruecksetzen'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -3743,7 +3743,9 @@ function renderSurfaces() {
         (rec2 ? ` <span style="color:${COL.pv};font-size:11px">· empfohlen</span>` : '') +
         `<small>${sub}</small></div>` +
         `<div class="val"><b>${fmt(m.kwp, 1)} kWp</b><small>~${kwh(m.year, 0)}/Jahr` +
-        ` <button class="linkbtn surf-del" data-idx="${it.i}" style="background:none;border:none;color:#ff6b8a;cursor:pointer;font-size:13px">✕</button></small></div></div>`;
+        `<span style="white-space:nowrap"> <button class="linkbtn surf-edit" data-idx="${it.i}" title="Bearbeiten" style="background:none;border:none;color:var(--accent,#4da3ff);cursor:pointer;font-size:14px">✎</button>` +
+        ` <button class="linkbtn surf-dup" data-idx="${it.i}" title="Duplizieren" style="background:none;border:none;color:var(--accent,#4da3ff);cursor:pointer;font-size:14px">⧉</button>` +
+        ` <button class="linkbtn surf-del" data-idx="${it.i}" title="Löschen" style="background:none;border:none;color:#ff6b8a;cursor:pointer;font-size:14px">✕</button></span></small></div></div>`;
       // placement detail
       const place = L.flexible
         ? `Flachdach/Freiland: empfohlene <b>Aufständerung ${fmt(L.tilt, 0)}°</b> → <b>${L.modules} Module</b> (~${fmt(L.kwp, 1)} kWp). ` +
@@ -3790,14 +3792,15 @@ function renderSurfaces() {
     }).join('');
   }
   // recommendation / totals
-  const resEl = $('pv-surf-result'), noteEl = $('pv-surf-note'), useBtn = $('pv-surf-use');
-  if (rec.empty || !rec.items.length) { resEl.innerHTML = ''; noteEl.innerHTML = ''; if (useBtn) useBtn.hidden = true; return; }
+  const resEl = $('pv-surf-result'), noteEl = $('pv-surf-note'), useBtn = $('pv-surf-use'), resetBtn = $('pv-surf-reset');
+  if (rec.empty || !rec.items.length) { resEl.innerHTML = ''; noteEl.innerHTML = ''; if (useBtn) useBtn.hidden = true; if (resetBtn) resetBtn.hidden = true; return; }
   const pct = v => `${fmt(Math.min(v * 100, 100), 0)} %`;
   if (rec.noLoad) {
     resEl.innerHTML = `<div class="grid2"><div class="kpi sm"><div class="v">${fmt(rec.all.kwp, 1)} kWp</div><div class="l">max. installierbar</div></div>` +
       `<div class="kpi sm"><div class="v">${kwh(rec.all.year, 0)}</div><div class="l">Potenzial / Jahr</div></div></div>`;
     noteEl.innerHTML = 'Sobald Verbrauchsdaten da sind, empfehle ich auch die beste <b>Belegung</b> (Sommer-Autarkie).';
     if (useBtn) { useBtn.hidden = false; }
+    if (resetBtn) resetBtn.hidden = true;   // no recommendation without load data
   } else {
     resEl.innerHTML = `<div class="grid2">` +
       `<div class="kpi sm"><div class="v">${fmt(rec.comb.kwp, 1)} kWp</div><div class="l">empfohlen belegen</div></div>` +
@@ -3845,6 +3848,7 @@ function renderSurfaces() {
       `rechnet den ganzen PV-Tab mit dieser Belegung. Richtwerte ~50° N; exakt via PVGIS.</div>`;
     noteEl.innerHTML = why;
     if (useBtn) useBtn.hidden = false;
+    if (resetBtn) resetBtn.hidden = false;
   }
   renderSurfaceCombo();
 }
@@ -4882,24 +4886,55 @@ function init() {
   });
   const pvGis = $('pv-pvgis'); if (pvGis) pvGis.addEventListener('click', doPvgis);
   // Meine Flächen: add / remove / apply
-  const surfAdd = $('surf-add');
+  let _surfEdit = null;   // index being edited, or null (= add mode)
+  const surfAdd = $('surf-add'), surfCancel = $('surf-cancel');
+  const surfFormReset = () => {
+    _surfEdit = null;
+    $('surf-area').value = ''; $('surf-tilt').value = ''; $('surf-az').value = ''; $('surf-shade').value = '';
+    if (surfAdd) surfAdd.textContent = '+ Fläche hinzufügen';
+    if (surfCancel) surfCancel.style.display = 'none';
+  };
+  const surfFormLoad = (s, idx) => {
+    _surfEdit = idx;
+    $('surf-type').value = s.type; $('surf-area').value = s.area != null ? s.area : '';
+    $('surf-tilt').value = (s.tilt == null ? '' : s.tilt); $('surf-az').value = (s.az == null ? '' : s.az);
+    $('surf-shade').value = (s.shade == null ? '' : s.shade);
+    if (surfAdd) surfAdd.textContent = '✓ Änderungen speichern';
+    if (surfCancel) surfCancel.style.display = '';
+    const c = $('pv-surf-card'); if (c && c.scrollIntoView) c.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  };
+  if (surfCancel) surfCancel.addEventListener('click', surfFormReset);
   if (surfAdd) surfAdd.addEventListener('click', () => {
     const type = $('surf-type').value;
     const area = parseFloat($('surf-area').value) || 0;
     if (!(area > 0)) { $('pv-surf-note').textContent = 'Bitte eine Fläche in m² eintragen.'; return; }
     const tiltRaw = $('surf-tilt').value, azRaw = $('surf-az').value, shRaw = $('surf-shade').value;
+    const rec = { type, area, tilt: tiltRaw === '' ? null : parseFloat(tiltRaw),
+      az: azRaw === '' ? 0 : parseFloat(azRaw), shade: shRaw === '' ? 0 : parseFloat(shRaw) };
     const arr = loadSurfaces();
-    arr.push({ type, area, tilt: tiltRaw === '' ? null : parseFloat(tiltRaw),
-      az: azRaw === '' ? 0 : parseFloat(azRaw), shade: shRaw === '' ? 0 : parseFloat(shRaw) });
+    if (_surfEdit != null && arr[_surfEdit]) { rec.use = arr[_surfEdit].use; arr[_surfEdit] = rec; }
+    else { rec.use = true; arr.push(rec); }
     saveSurfaces(arr);
-    $('surf-area').value = ''; $('surf-tilt').value = ''; $('surf-az').value = ''; $('surf-shade').value = '';
+    surfFormReset();
     renderSurfaces();
   });
   const surfList = $('pv-surf-list');
   if (surfList) surfList.addEventListener('click', (e) => {
-    const b = e.target.closest('.surf-del'); if (!b) return;
-    const idx = +b.dataset.idx; const arr = loadSurfaces();
-    if (idx >= 0 && idx < arr.length) { arr.splice(idx, 1); saveSurfaces(arr); renderSurfaces(); }
+    const arr = loadSurfaces();
+    const del = e.target.closest('.surf-del');
+    if (del) { const i = +del.dataset.idx; if (arr[i]) { arr.splice(i, 1); saveSurfaces(arr); if (_surfEdit === i) surfFormReset(); renderSurfaces(); } return; }
+    const dup = e.target.closest('.surf-dup');
+    if (dup) { const i = +dup.dataset.idx; if (arr[i]) { arr.splice(i + 1, 0, { ...arr[i] }); saveSurfaces(arr); renderSurfaces(); } return; }
+    const ed = e.target.closest('.surf-edit');
+    if (ed) { const i = +ed.dataset.idx; if (arr[i]) surfFormLoad(arr[i], i); return; }
+  });
+  const surfReset = $('pv-surf-reset');
+  if (surfReset) surfReset.addEventListener('click', () => {
+    const rec = recommendCoverage();
+    if (!rec || !rec.chosenIds) return;
+    const arr = loadSurfaces();
+    arr.forEach((s, i) => { s.use = rec.chosenIds.has(i); });
+    saveSurfaces(arr); renderSurfaces();
   });
   // checkbox: which surfaces the user actually uses (drives the combined card)
   if (surfList) surfList.addEventListener('change', (e) => {
