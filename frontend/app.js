@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-02 · Verschattung diffuslicht-bewusst (Jahres-/Monatsertrag inkl. Diffuslicht)'
+const APP_VERSION = '2026-10-02 · Flaechen: Ertrag je m² Winter/Sommer + Spannweite, Standort-GPS-Hinweis'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -3161,6 +3161,7 @@ function genDetail(kwp, tilt, az) {
   const g = m => annual * shape[m];
   return { spec, annual,
     winterDay: (g(11) + g(0) + g(1)) / (31 + 31 + 28),   // avg Dez/Jan/Feb day
+    winterMonth: (g(11) + g(0) + g(1)) / 3,              // avg Dez/Jan/Feb month
     summerMonth: (g(5) + g(6) + g(7)) / 3,                // avg Jun/Jul/Aug month
     peakKw: kwp * peakFactorFor(tilt, az) };
 }
@@ -3187,13 +3188,15 @@ function surfaceLayout(s) {
     });
     const best = opts.slice().sort((a, b) => b.annual - a.annual)[0];
     const d = genDetail(best.kwp, best.tilt, az);
-    return { flexible: true, opts, az, shade, tilt: best.tilt, kwp: best.kwp, modules: best.modules,
-      spec: best.spec, annual: best.annual, winterDay: d.winterDay * f, summerMonth: d.summerMonth * f, peakKw: d.peakKw * f };
+    return { flexible: true, opts, az, shade, area, tilt: best.tilt, kwp: best.kwp, modules: best.modules,
+      spec: best.spec, annual: best.annual, winterDay: d.winterDay * f, winterMonth: d.winterMonth * f,
+      summerMonth: d.summerMonth * f, peakKw: d.peakKw * f };
   }
   const tilt = (s.tilt != null && s.tilt !== '') ? +s.tilt : t.tilt;
   const kwp = area * t.usable * MOD_DENSITY, d = genDetail(kwp, tilt, az);
-  return { flexible: false, az, shade, tilt, kwp, modules: Math.round(kwp / MOD_WP),
-    spec: d.spec * f, annual: d.annual * f, winterDay: d.winterDay * f, summerMonth: d.summerMonth * f, peakKw: d.peakKw * f };
+  return { flexible: false, az, shade, area, tilt, kwp, modules: Math.round(kwp / MOD_WP),
+    spec: d.spec * f, annual: d.annual * f, winterDay: d.winterDay * f, winterMonth: d.winterMonth * f,
+    summerMonth: d.summerMonth * f, peakKw: d.peakKw * f };
 }
 // Per-surface potential (for the coverage recommendation), derived from the layout.
 function surfaceMetrics(s) {
@@ -3635,6 +3638,20 @@ function renderSurfaces() {
           `<span style="color:var(--muted)">Flacher = mehr Module (mehr kWp), steiler = mehr Ertrag je Modul aber mit Reihenabstand weniger Module.</span>`
         : `<b>${L.modules} Module</b> (~${fmt(L.kwp, 1)} kWp) in <b>Dachneigung ${fmt(L.tilt, 0)}°</b>.`;
       const gen = `🔆 <b>${kwh(L.winterDay, 1)} kWh/Tag</b> im Winter · <b>${kwh(L.summerMonth, 0)} kWh/Monat</b> im Sommer · Spitze ~<b>${fmt(L.peakKw, 1)} kW</b>.`;
+      // per m² winter vs summer + seasonal spread
+      const area = Math.max(1, +it.s.area || 1);
+      const wM2 = L.winterMonth / area, sM2 = L.summerMonth / area;
+      const ratio = wM2 > 0 ? sM2 / wM2 : 0;
+      const barW = sM2 > 0 ? Math.round(wM2 / sM2 * 100) : 0;
+      const spread = `<div style="margin-top:6px">` +
+        `<div style="font-size:12px;color:var(--muted);margin-bottom:3px">pro m² · Sommer/Winter-Spannweite ~<b style="color:var(--ink)">${fmt(ratio, 1)}×</b></div>` +
+        `<div style="display:flex;align-items:center;gap:6px;margin:1px 0"><span style="width:52px;font-size:11px;color:var(--muted)">❄️ Winter</span>` +
+        `<div style="flex:1;height:9px;background:var(--card-bd,#2a2f3a);border-radius:5px;overflow:hidden"><div style="width:${barW}%;height:100%;background:${COL.hp}"></div></div>` +
+        `<b style="font-size:11px;width:72px;text-align:right">${fmt(wM2, 1)} kWh/m²</b></div>` +
+        `<div style="display:flex;align-items:center;gap:6px;margin:1px 0"><span style="width:52px;font-size:11px;color:var(--muted)">☀️ Sommer</span>` +
+        `<div style="flex:1;height:9px;background:var(--card-bd,#2a2f3a);border-radius:5px;overflow:hidden"><div style="width:100%;height:100%;background:${COL.pv}"></div></div>` +
+        `<b style="font-size:11px;width:72px;text-align:right">${fmt(sM2, 1)} kWh/m²</b></div>` +
+        `<div style="font-size:11px;color:var(--muted);margin-top:2px">kWh je m² Fläche und Monat (Ø Dez–Feb bzw. Jun–Aug)</div></div>`;
       let tbl = '';
       if (L.flexible) {
         tbl = `<table style="width:100%;border-collapse:collapse;font-size:12.5px;margin-top:6px">` +
@@ -3646,7 +3663,7 @@ function renderSurfaces() {
             `<td style="text-align:right">${o.modules}</td><td style="text-align:right">${fmt(o.kwp, 1)}</td>` +
             `<td style="text-align:right">${kwh(o.annual, 0)}</td></tr>`).join('') + `</table>`;
       }
-      return head + `<div class="note" style="margin:-2px 0 12px;line-height:1.55">${place}<br>${gen}${tbl}</div>`;
+      return head + `<div class="note" style="margin:-2px 0 12px;line-height:1.55">${place}<br>${gen}${spread}${tbl}</div>`;
     }).join('');
   }
   // recommendation / totals
@@ -4711,15 +4728,26 @@ function init() {
   const pvLoc = $('pv-locate');
   if (pvLoc) pvLoc.addEventListener('click', () => {
     const note = $('pv-pvgis-note');
-    if (!navigator.geolocation) { note.textContent = 'Standort wird vom Browser nicht unterstützt – Koordinaten manuell eingeben.'; return; }
+    const insecureHint = ' <span style="color:var(--muted)">Tipp: GPS im Browser geht nur über <b>HTTPS</b> oder ' +
+      '<b>localhost</b> – auf <code>http://&lt;Bridge-IP&gt;</code> blockt der Browser das. Koordinaten sonst ' +
+      'manuell eintragen (z. B. aus Google Maps: Rechtsklick → Koordinaten) – der Ertrag wird auch ohne Standort ' +
+      'über das eingebaute Modell geschätzt.</span>';
+    if (!navigator.geolocation) { note.innerHTML = 'Standort wird vom Browser nicht unterstützt.' + insecureHint; return; }
+    if (window.isSecureContext === false) { note.innerHTML = '⚠︎ GPS ist hier gesperrt (keine sichere Verbindung).' + insecureHint; return; }
     note.textContent = 'Ermittle Standort …';
     navigator.geolocation.getCurrentPosition(
       pos => {
         $('pv-lat').value = pos.coords.latitude.toFixed(4); $('pv-lon').value = pos.coords.longitude.toFixed(4);
         try { localStorage.setItem(PV_LS.lat, $('pv-lat').value); localStorage.setItem(PV_LS.lon, $('pv-lon').value); } catch (e) {}
-        note.textContent = 'Standort übernommen – jetzt „Ertrag von PVGIS holen".';
+        note.textContent = 'Standort übernommen – jetzt „Ertrag holen (PVGIS)".';
       },
-      () => { note.textContent = 'Standort nicht verfügbar – bitte Koordinaten manuell eingeben.'; });
+      (err) => {
+        const why = err && err.code === 1 ? 'Zugriff abgelehnt/gesperrt'
+          : err && err.code === 2 ? 'Position nicht verfügbar'
+          : err && err.code === 3 ? 'Zeitüberschreitung' : 'nicht verfügbar';
+        note.innerHTML = `⚠︎ Standort ${why}.` + insecureHint;
+      },
+      { enableHighAccuracy: false, timeout: 10000, maximumAge: 600000 });
   });
   const pvm = $('pv-monthly');
   if (pvm) {
