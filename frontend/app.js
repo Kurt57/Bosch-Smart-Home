@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-04 · Verbrauchs-Tooltip zeigt Monatssumme (z. B. September gesamt); AEG/Electrolux ausgeblendet'
+const APP_VERSION = '2026-10-04 · WP-Hochrechnung realistisch (an echten Messwert gekoppelt statt Bauphasen-CSV); Monatssumme im Tooltip; AEG ausgeblendet'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -450,7 +450,21 @@ function measuredMonths() {
   return [...ms];
 }
 function hpRefFactor() { const ms = measuredMonths(); return ms.length ? (mean(ms.map(hpDayFactor)) || 1) : 1; }
+// Annual heat-pump electricity anchored to the user's REAL measured daily mean,
+// de-seasonalised via the measured months' day-factor so the yearly figure is
+// consistent. This is the finished-house level; it deliberately ignores the
+// imported construction/move-in-phase CSV, whose winter is unrealistically high.
+// Returns null when there is no real live measurement to anchor to.
+function hpAnnualReal() {
+  const mm = hpMeasuredMean();
+  if (!(mm > 0)) return null;
+  const ref = hpRefFactor();
+  return (ref > 0 ? mm / ref : mm) * 365;
+}
 function hpAvgDaily() {
+  // Prefer the real measured level (finished house) over the imported CSV.
+  const real = hpAnnualReal();
+  if (real) return real / 365;
   const iy = hpYearFromMonthly();
   if (iy) return iy / 365;
   const ref = hpRefFactor(); const mm = hpMeasuredMean();
@@ -540,9 +554,20 @@ function hpMeasuredByMonth() {
 // Full-month heat-pump electricity estimate for calendar month m.
 function hpMonthEst(m) {
   const im = STATE.hpA && STATE.hpA.imported;
-  const now = new Date();
+  const now = new Date(), cm = now.getMonth();
+  // When we have REAL live measurements of the finished house, drive the month
+  // from the real level + a clean seasonal shape – NOT the imported construction/
+  // move-in-phase CSV (whose winter is 3–5× too high for the tight, finished
+  // building). A completed THIS-YEAR month that we measured ourselves is exact
+  // and wins; the running month and all others use the real-anchored model.
+  if (hpAnnualReal() != null) {
+    const byM = hpMeasuredByMonth();
+    if (byM && byM[m] && byM[m].source === 'measured' && !byM[m].partial && m !== cm) return byM[m].kwh;
+    return hpAvgDaily() * hpDayFactor(m) * DIM[m];
+  }
+  // No live data → fall back to the imported CSV history (only source we have).
   // current calendar month: scale the still-running partial value to a full month
-  if (im && (im.monthly || []).length && m === now.getMonth()) {
+  if (im && (im.monthly || []).length && m === cm) {
     const key = `${now.getFullYear()}-${String(m + 1).padStart(2, '0')}`;
     const cur = im.monthly.find(x => x.month === key);
     if (cur && cur.elec_kwh > 0) return cur.elec_kwh * DIM[m] / Math.max(1, now.getDate());
