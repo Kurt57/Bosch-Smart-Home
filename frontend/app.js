@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-04 · WP-Hochrechnung realistisch (an echten Messwert gekoppelt statt Bauphasen-CSV); Monatssumme im Tooltip; AEG ausgeblendet'
+const APP_VERSION = '2026-10-04 · Dunkelverbrauch = Zähler − Summe der Einzelgeräte (statt Haushalts-Schätzung); WP realistisch; Monatssumme im Tooltip; AEG aus'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -1719,7 +1719,22 @@ function renderDarkLoad() {
   if (!data || houseDaily == null) { card.hidden = true; return; }
   card.hidden = false;
   const price = STATE.price;
-  const measured = Math.min(shMeteredDaily(), houseDaily);   // measured modules+plugs (capped)
+  // "Individually measured" = the SUM of the per-device daily averages (Bosch
+  // modules + smart plugs), NOT the household counter estimate. The counter
+  // estimate is ~the whole household, which would make the ungemessene Rest look
+  // near zero even with hardly any plugs. The plug sum is what actually shrinks
+  // as you add Smart Plugs – which is the whole point of this card.
+  const pdd = data.per_device_day || {};
+  const names = {}; ((data.live && data.live.devices) || []).forEach(d => names[d.id] = devLabel(d).title);
+  const rows = [];
+  Object.keys(pdd).forEach(id => {
+    const ds = Object.keys(pdd[id]); if (!ds.length) return;
+    let s = 0; ds.forEach(d => s += pdd[id][d]); const avg = s / ds.length;
+    if (avg > 0.01) rows.push({ label: names[id] || id, kwh: avg });
+  });
+  rows.sort((a, b) => b.kwh - a.kwh);
+  const measuredSum = rows.reduce((a, r) => a + r.kwh, 0);
+  const measured = Math.min(measuredSum, houseDaily);   // individually metered (capped)
   const dark = Math.max(0, houseDaily - measured);
   const darkPct = houseDaily > 0 ? dark / houseDaily * 100 : 0;
   const src = (md != null && md > 0) ? 'Zählerablesung' : 'eingetragener Jahreswert';
@@ -1742,15 +1757,6 @@ function renderDarkLoad() {
     `<div class="kpi sm"><div class="v">${kwh(houseDaily * 365, 0)}</div><div class="l">Haushalt gesamt / Jahr (${src})</div></div>`;
 
   // biggest measured devices, so the scale is tangible – plus the dark remainder
-  const pdd = data.per_device_day || {};
-  const names = {}; ((data.live && data.live.devices) || []).forEach(d => names[d.id] = devLabel(d).title);
-  const rows = [];
-  Object.keys(pdd).forEach(id => {
-    const ds = Object.keys(pdd[id]); if (!ds.length) return;
-    let s = 0; ds.forEach(d => s += pdd[id][d]); const avg = s / ds.length;
-    if (avg > 0.01) rows.push({ label: names[id] || id, kwh: avg });
-  });
-  rows.sort((a, b) => b.kwh - a.kwh);
   const scaleMax = Math.max(dark, rows.length ? rows[0].kwh : 0) || 1;
   let html = rows.slice(0, 6).map(r =>
     devRow(r.label, 'gemessen', kwh(r.kwh, 2) + '/Tag', '', r.kwh / scaleMax * 100, COL.sh)).join('');
