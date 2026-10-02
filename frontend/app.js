@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-02 · PV: eigene Flaechen eintragen & optimal belegen (fliesst in Ertrag/Autarkie)'
+const APP_VERSION = '2026-10-02 · PVGIS-Button mit lokalem Fallback (funktioniert auch wenn PVGIS blockiert)'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -3878,31 +3878,55 @@ async function doAegProbe() {
   btn.disabled = false;
 }
 
+// Apply a yield (kWh/kWp) + monthly curve to the planner (shared by the PVGIS
+// fetch and the local-estimate fallback).
+function applyPvYield(yieldKwp, monthly, label) {
+  const sel = $('pv-orient');
+  if (sel && yieldKwp) {
+    let opt = [...sel.options].find(o => o.dataset.pvgis);
+    if (!opt) { opt = document.createElement('option'); opt.dataset.pvgis = '1'; sel.appendChild(opt); }
+    opt.value = Math.round(yieldKwp); opt.textContent = `${label}: ${Math.round(yieldKwp)} kWh/kWp`;
+    sel.value = opt.value;
+    try { localStorage.setItem(PV_LS.orient, opt.value); } catch (e) {}
+  }
+  if (Array.isArray(monthly) && monthly.length === 12 && monthly.every(v => v > 0)) {
+    try { localStorage.setItem(PV_LS.pgm, JSON.stringify(monthly)); } catch (e) {}
+  }
+  renderPv(); renderKonzept();
+}
+// Built-in estimate from tilt/azimuth (no network, ~50° N) – used as a fallback
+// when the PVGIS request can't be reached (e.g. desktop Safari blocking it).
+function localYieldEstimate(tilt, az) {
+  return { yield: YIELD_OPT * relYield(tilt, az) / 100, monthly: monthForTilt(tilt) };
+}
 async function doPvgis() {
   const note = $('pv-pvgis-note'), btn = $('pv-pvgis');
   const lat = parseFloat($('pv-lat').value), lon = parseFloat($('pv-lon').value);
-  if (!isFinite(lat) || !isFinite(lon)) { note.textContent = 'Bitte Breiten- und Längengrad eingeben (oder „Mein Standort").'; return; }
   const tilt = parseFloat($('pv-tilt').value) || 35, az = parseFloat($('pv-az').value) || 0;
-  btn.disabled = true; note.textContent = 'Frage PVGIS für deinen Standort …';
+  const fallback = (reason) => {
+    const est = localYieldEstimate(tilt, az);
+    applyPvYield(est.yield, est.monthly, 'Schätzung');
+    note.innerHTML = `✅ <b>${Math.round(est.yield)} kWh/kWp</b> + Monatskurve aus dem <b>eingebauten Modell</b> ` +
+      `(Neigung ${fmt(tilt, 0)}°, Azimut ${az > 0 ? '+' : ''}${fmt(az, 0)}°). ` +
+      `<span style="color:var(--muted)">${esc(reason)} Richtwert für ~50° N – für den exakten Standortwert PVGIS direkt von der Bridge aufrufen.</span>`;
+  };
+  btn.disabled = true;
   try {
-    const r = await api(`/api/pvgis?lat=${lat}&lon=${lon}&tilt=${tilt}&az=${az}`);
-    if (!r || r.ok === false) { note.textContent = '⚠︎ ' + ((r && r.error) || 'PVGIS-Abruf fehlgeschlagen.'); btn.disabled = false; return; }
-    if (r.yield) {
-      // add/replace a PVGIS option in the yield dropdown and select it
-      const sel = $('pv-orient');
-      let opt = [...sel.options].find(o => o.dataset.pvgis);
-      if (!opt) { opt = document.createElement('option'); opt.dataset.pvgis = '1'; sel.appendChild(opt); }
-      opt.value = Math.round(r.yield); opt.textContent = `PVGIS Standort: ${Math.round(r.yield)} kWh/kWp`;
-      sel.value = opt.value;
-      try { localStorage.setItem(PV_LS.orient, opt.value); } catch (e) {}
-    }
-    if (Array.isArray(r.monthly) && r.monthly.every(v => v > 0)) {
-      try { localStorage.setItem(PV_LS.pgm, JSON.stringify(r.monthly)); } catch (e) {}
-    }
+    if (!isFinite(lat) || !isFinite(lon)) { fallback('PVGIS braucht Koordinaten – daher lokal geschätzt.'); btn.disabled = false; return; }
+    note.textContent = 'Frage PVGIS für deinen Standort …';
+    // race a timeout so a silently-hanging request (some desktop browsers block
+    // local requests without erroring) still falls back instead of spinning.
+    const r = await Promise.race([
+      api(`/api/pvgis?lat=${lat}&lon=${lon}&tilt=${tilt}&az=${az}`),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 12000)),
+    ]);
+    if (!r || r.ok === false || !r.yield) { fallback('PVGIS nicht erreichbar – lokal geschätzt.'); btn.disabled = false; return; }
+    applyPvYield(r.yield, r.monthly, 'PVGIS Standort');
     note.innerHTML = `✅ Übernommen: <b>${Math.round(r.yield)} kWh/kWp</b> und die Monatskurve für deinen Standort` +
       (r.demo ? ' <span style="color:var(--muted)">(Demo)</span>' : '') + '.';
-    renderPv(); renderKonzept();
-  } catch (e) { note.textContent = 'Nur möglich, wenn die Seite von der Bridge geöffnet ist.'; }
+  } catch (e) {
+    fallback('PVGIS nicht erreichbar (Netz/Browser) – lokal geschätzt.');
+  }
   btn.disabled = false;
 }
 
