@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-04 · Dunkelverbrauch = Zähler − Summe der Einzelgeräte (statt Haushalts-Schätzung); WP realistisch; Monatssumme im Tooltip; AEG aus'
+const APP_VERSION = '2026-10-04 · Wärme-Prognose auf echten Messwert kalibriert (konsistent mit Verlauf/Übersicht); Dunkelverbrauch = Zähler − Einzelgeräte; WP realistisch; AEG aus'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -4329,6 +4329,14 @@ function hpForecastDays(w) {
   const b = buildData(), ua = buildUA(b);
   const copHeat = b.cop_heat || 2.6, gain = b.gain, tIndoor = 20;
   const dhwElec = (b.dhw / (b.cop_dhw || 2.7)) / 8760;
+  // Calibrate the building-model forecast to the user's REAL measured WP level,
+  // so the Wärme tab stays consistent with the overview/Verlauf figures. The
+  // pure heat-loss model tends to run high for the finished house; we keep its
+  // weather-driven day-to-day shape and only rescale the absolute height to the
+  // real annual (hpAnnualReal). Falls back to 1 (raw theory) without real data.
+  const rHeat = computeHeat(b);
+  const realAnnual = hpAnnualReal() || hpYearFromMonthly() || null;
+  const cal = (realAnnual && rHeat.eTotal > 0) ? realAnnual / rHeat.eTotal : 1;
   const dayMap = new Map();
   (w.hourly || []).forEach(h => {
     const d = new Date(h.ts * 1000), key = d.getFullYear() * 10000 + d.getMonth() * 100 + d.getDate();
@@ -4346,6 +4354,7 @@ function hpForecastDays(w) {
       }
     });
     const d = new Date(rows[0].ts * 1000);
+    elec *= cal; heat *= cal;   // anchor the building-model level to reality
     return { key: k, elec, heat, tmin, tmax, partial: rows.length < 20,
       label: k === todayKey ? 'heute' : ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'][d.getDay()] };
   });
@@ -4371,8 +4380,11 @@ function renderHpForecast() {
     `<div class="it"><span class="sw" style="background:${COL.hp}"></span>Strom (kWh)</div>` +
     `<div class="it"><span class="sw" style="background:${COL.heat}"></span>Wärme (kWh)</div>`;
   const total = days.reduce((a, d) => a + d.elec, 0);
+  const calNote = (hpAnnualReal() || hpYearFromMonthly())
+    ? ' <b>auf deinen echten Messwert kalibriert</b> (Wetter gibt den Tagesverlauf, dein gemessenes WP-Niveau die Höhe)'
+    : ' (Gebäudemodell, noch ohne Messwert-Kalibrierung)';
   $('hp-fc-note').innerHTML = `Quelle: <b>Open-Meteo</b>${w.tz === 'demo' ? ' <span style="color:var(--muted)">(Demo)</span>' : ''}. ` +
-    `Summe der ${days.length} Tage: <b>${kwh(total, 0)}</b> (~${money(total * price)}). Grobe Schätzung aus deinem Gebäudemodell.`;
+    `Summe der ${days.length} Tage: <b>${kwh(total, 0)}</b> (~${money(total * price)}).` + calNote + '.';
 }
 
 async function doHpWeather() {
