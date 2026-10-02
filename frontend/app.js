@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-02 · PVGIS-Button mit lokalem Fallback (funktioniert auch wenn PVGIS blockiert)'
+const APP_VERSION = '2026-10-02 · Flaechen-Belegung: Modulzahl/Neigung + Winter-kWh/Tag & Sommer-kWh/Monat'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -188,7 +188,9 @@ const INFO = {
     '<b>kWp</b> (Fläche × nutzbarer Anteil × Modul­dichte) und der <b>spezifische Ertrag</b> (aus Neigung/Azimut/Schatten) ' +
     'berechnet. Die <b>Belegungs-Empfehlung</b> füllt die Flächen winter-gewichtet nach Ertrag, bis der <b>Sommer ~100 %</b> ' +
     'autark ist. „Als Anlage übernehmen" rechnet den ganzen PV-Tab (Ertrag, Autarkie, Finanzierung) mit genau dieser ' +
-    'Belegung – inkl. der echten, aus deinen Flächen gemischten Monatskurve.',
+    'Belegung – inkl. der echten, aus deinen Flächen gemischten Monatskurve. Je Fläche steht auch die <b>Belegung</b> ' +
+    '(Modulzahl, Neigung) und die erzeugte Energie: <b>kWh/Tag im Winter</b> und <b>kWh/Monat im Sommer</b>. Bei ' +
+    'Flachdach/Freiland zeigt eine Tabelle die Aufständerung – <b>flacher = mehr Module</b>, steiler = mehr je Modul.',
   'pv-build': () => 'Direkter Preisvergleich: dein <b>Komplett-Set</b> (Selbstbau) gegen das <b>Komplett-Angebot</b> ' +
     'der Fachfirma, abzüglich <b>Förderung</b>. Einfach beide Zahlen eintragen – ich zeige die Differenz und, wenn ' +
     'oben eine kWp-Größe steht, den Preis pro kWp. Mit den Buttons übernimmst du den Wert als Investition in die ' +
@@ -3138,15 +3140,55 @@ function monthForTilt(tilt) {
 const SURF_LS = 'bhe_pv_surfaces';
 function loadSurfaces() { try { const s = JSON.parse(localStorage.getItem(SURF_LS)); return Array.isArray(s) ? s : []; } catch (e) { return []; } }
 function saveSurfaces(a) { try { localStorage.setItem(SURF_LS, JSON.stringify(a)); } catch (e) {} }
-// Per-surface potential: installable kWp, specific yield, annual kWh, shape.
-function surfaceMetrics(s) {
+const MOD_WP = 0.43;    // kWp per module (~1.7 m²)
+// Flat/ground roofs: steeper rows need more spacing, so the usable share of the
+// area drops with tilt (self-shading) – more tilt ⇒ fewer modules fit.
+function flatUsable(tilt) { return Math.max(0.35, Math.min(0.90, 0.95 - 0.012 * tilt)); }
+// Clear-day peak as a share of kWp: south-pitched peaks highest, flat/east-west
+// spread it out, a vertical wall lowest.
+function peakFactorFor(tilt, az) {
+  const a = Math.abs(az);
+  if (tilt <= 5) return 0.70;
+  if (tilt >= 85) return 0.50;
+  if (a >= 60) return 0.62;
+  return 0.82;
+}
+// Generation detail for kWp at a tilt/azimuth (before shading).
+function genDetail(kwp, tilt, az) {
+  const spec = YIELD_OPT * relYield(tilt, az) / 100, annual = kwp * spec, shape = monthForTilt(tilt);
+  const g = m => annual * shape[m];
+  return { spec, annual,
+    winterDay: (g(11) + g(0) + g(1)) / (31 + 31 + 28),   // avg Dez/Jan/Feb day
+    summerMonth: (g(5) + g(6) + g(7)) / 3,                // avg Jun/Jul/Aug month
+    peakKw: kwp * peakFactorFor(tilt, az) };
+}
+// How to lay out a surface: pitched roofs keep the roof tilt; flat/garden pick
+// the tilt that maximises annual yield over the area (module-count trade-off).
+function surfaceLayout(s) {
   const t = SURF_TYPES[s.type] || SURF_TYPES.gable;
+  const az = +s.az || 0, shade = Math.min(90, Math.max(0, +s.shade || 0)), f = 1 - shade / 100;
+  const area = Math.max(0, +s.area || 0);
+  const flexible = (s.type === 'flat' || s.type === 'garden') && (s.tilt == null || s.tilt === '');
+  if (flexible) {
+    const opts = [10, 15, 20, 30].map(tl => {
+      const kwp = area * flatUsable(tl) * MOD_DENSITY, d = genDetail(kwp, tl, az);
+      return { tilt: tl, kwp, modules: Math.round(kwp / MOD_WP), spec: d.spec * f, annual: d.annual * f };
+    });
+    const best = opts.slice().sort((a, b) => b.annual - a.annual)[0];
+    const d = genDetail(best.kwp, best.tilt, az);
+    return { flexible: true, opts, az, shade, tilt: best.tilt, kwp: best.kwp, modules: best.modules,
+      spec: best.spec, annual: best.annual, winterDay: d.winterDay * f, summerMonth: d.summerMonth * f, peakKw: d.peakKw * f };
+  }
   const tilt = (s.tilt != null && s.tilt !== '') ? +s.tilt : t.tilt;
-  const az = +s.az || 0, shade = Math.min(90, Math.max(0, +s.shade || 0));
-  const kwp = Math.max(0, (+s.area || 0) * t.usable * MOD_DENSITY);
-  const spec = YIELD_OPT * relYield(tilt, az) / 100 * (1 - shade / 100);
-  return { kwp, spec, tilt, az, shade, month: monthForTilt(tilt), ew: Math.abs(az) >= 60,
-    year: kwp * spec, label: t.label };
+  const kwp = area * t.usable * MOD_DENSITY, d = genDetail(kwp, tilt, az);
+  return { flexible: false, az, shade, tilt, kwp, modules: Math.round(kwp / MOD_WP),
+    spec: d.spec * f, annual: d.annual * f, winterDay: d.winterDay * f, summerMonth: d.summerMonth * f, peakKw: d.peakKw * f };
+}
+// Per-surface potential (for the coverage recommendation), derived from the layout.
+function surfaceMetrics(s) {
+  const lay = surfaceLayout(s), t = SURF_TYPES[s.type] || SURF_TYPES.gable;
+  return { kwp: lay.kwp, spec: lay.spec, tilt: lay.tilt, az: lay.az, shade: lay.shade,
+    month: monthForTilt(lay.tilt), ew: Math.abs(lay.az) >= 60, year: lay.annual, label: t.label, layout: lay };
 }
 // Combine a set of surface metrics into one array: total kWp, production-weighted
 // monthly shape and effective specific yield.
@@ -3569,14 +3611,31 @@ function renderSurfaces() {
     list.innerHTML = '<div class="note">Noch keine Fläche eingetragen – unten hinzufügen.</div>';
   } else {
     list.innerHTML = rec.items.map(it => {
-      const m = it.m, used = rec.chosenIds && rec.chosenIds.has(it.i);
-      const sub = `${fmt(m.tilt, 0)}° · Azimut ${m.az > 0 ? '+' : ''}${fmt(m.az, 0)}°` +
-        (m.shade > 0 ? ` · ${fmt(m.shade, 0)}% Schatten` : '') + ` · ${fmt(it.s.area || 0, 0)} m²`;
-      return `<div class="devrow" style="align-items:flex-start">` +
-        `<div class="nm"><b>${rec.chosenIds ? (used ? '✓ ' : '○ ') : ''}${esc(m.label)}</b>` +
-        `<small>${sub} · ${fmt(m.spec, 0)} kWh/kWp</small></div>` +
+      const m = it.m, L = m.layout, used = rec.chosenIds && rec.chosenIds.has(it.i);
+      const sub = `${fmt(it.s.area || 0, 0)} m² · Azimut ${m.az > 0 ? '+' : ''}${fmt(m.az, 0)}°` +
+        (m.shade > 0 ? ` · ${fmt(m.shade, 0)}% Schatten` : '');
+      const head = `<div class="devrow" style="align-items:flex-start">` +
+        `<div class="nm"><b>${rec.chosenIds ? (used ? '✓ ' : '○ ') : ''}${esc(m.label)}</b><small>${sub}</small></div>` +
         `<div class="val"><b>${fmt(m.kwp, 1)} kWp</b><small>~${kwh(m.year, 0)}/Jahr` +
         ` <button class="linkbtn surf-del" data-idx="${it.i}" style="background:none;border:none;color:#ff6b8a;cursor:pointer;font-size:13px">✕</button></small></div></div>`;
+      // placement detail
+      const place = L.flexible
+        ? `Flachdach/Freiland: empfohlene <b>Aufständerung ${fmt(L.tilt, 0)}°</b> → <b>${L.modules} Module</b> (~${fmt(L.kwp, 1)} kWp). ` +
+          `<span style="color:var(--muted)">Flacher = mehr Module (mehr kWp), steiler = mehr Ertrag je Modul aber mit Reihenabstand weniger Module.</span>`
+        : `<b>${L.modules} Module</b> (~${fmt(L.kwp, 1)} kWp) in <b>Dachneigung ${fmt(L.tilt, 0)}°</b>.`;
+      const gen = `🔆 <b>${kwh(L.winterDay, 1)} kWh/Tag</b> im Winter · <b>${kwh(L.summerMonth, 0)} kWh/Monat</b> im Sommer · Spitze ~<b>${fmt(L.peakKw, 1)} kW</b>.`;
+      let tbl = '';
+      if (L.flexible) {
+        tbl = `<table style="width:100%;border-collapse:collapse;font-size:12.5px;margin-top:6px">` +
+          `<tr style="color:var(--muted)"><th style="text-align:left;font-weight:400">Neigung</th>` +
+          `<th style="text-align:right;font-weight:400">Module</th><th style="text-align:right;font-weight:400">kWp</th>` +
+          `<th style="text-align:right;font-weight:400">kWh/Jahr</th></tr>` +
+          L.opts.map(o => `<tr style="${o.tilt === L.tilt ? 'font-weight:600;color:' + COL.pv : ''}">` +
+            `<td style="text-align:left">${o.tilt === L.tilt ? '★ ' : ''}${fmt(o.tilt, 0)}°</td>` +
+            `<td style="text-align:right">${o.modules}</td><td style="text-align:right">${fmt(o.kwp, 1)}</td>` +
+            `<td style="text-align:right">${kwh(o.annual, 0)}</td></tr>`).join('') + `</table>`;
+      }
+      return head + `<div class="note" style="margin:-2px 0 12px;line-height:1.55">${place}<br>${gen}${tbl}</div>`;
     }).join('');
   }
   // recommendation / totals
