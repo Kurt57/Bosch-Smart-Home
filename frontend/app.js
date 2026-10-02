@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-02 · Flaechen: Ertrag je m² Winter/Sommer + Spannweite, Standort-GPS-Hinweis'
+const APP_VERSION = '2026-10-02 · Flaechen-Belegung nutzt Stunden-Verbrauch (Direkt-Eigenverbrauch) + Tages-Deckung'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -192,7 +192,10 @@ const INFO = {
     '(Modulzahl, Neigung) und die erzeugte Energie: <b>kWh/Tag im Winter</b> und <b>kWh/Monat im Sommer</b>. Bei ' +
     'Flachdach/Freiland zeigt eine Tabelle die Aufständerung – <b>flacher = mehr Module</b>, steiler = mehr je Modul. ' +
     '<b>Diffuslicht</b> ist berücksichtigt: Jahres-/Monatserträge beruhen auf realen Werten (direkt + diffus + reflektiert), ' +
-    'und eine Verschattung kostet entsprechend weniger, weil ein verschattetes Modul weiter Diffuslicht erntet.',
+    'und eine Verschattung kostet entsprechend weniger, weil ein verschattetes Modul weiter Diffuslicht erntet. ' +
+    'Die Belegungs-Reihenfolge nutzt deinen <b>Stunden-Verbrauch</b> (Tagesprofil + WP/Auto): bevorzugt werden Flächen, ' +
+    'deren Ertrag zeitlich zu deinem Verbrauch passt (höchster direkt selbst genutzter Strom). Je Fläche zeigt die ' +
+    '<b>Tages-Deckung</b>, wie gut die Ausrichtung zu deinen Verbrauchszeiten passt.',
   'pv-build': () => 'Direkter Preisvergleich: dein <b>Komplett-Set</b> (Selbstbau) gegen das <b>Komplett-Angebot</b> ' +
     'der Fachfirma, abzüglich <b>Förderung</b>. Einfach beide Zahlen eintragen – ich zeige die Differenz und, wenn ' +
     'oben eine kWp-Größe steht, den Preis pro kWp. Mit den Buttons übernimmst du den Wert als Investition in die ' +
@@ -3204,6 +3207,30 @@ function surfaceMetrics(s) {
   return { kwp: lay.kwp, spec: lay.spec, tilt: lay.tilt, az: lay.az, shade: lay.shade,
     month: monthForTilt(lay.tilt), ew: Math.abs(lay.az) >= 60, year: lay.annual, label: t.label, layout: lay };
 }
+// Your average daily load shape over 24 h, weighted by each consumer's daily
+// energy (household profile + heat pump + EV + A/C) – the real "when do I use it".
+function loadHourShape() {
+  const shShape = normFrac((STATE.data && STATE.data.hourly_profile || []).map(h => h.avg_w));
+  const hpProf = (STATE.hpA && STATE.hpA.hourly_profile) || [];
+  const hpShape = hpProf.length && hpProf.some(h => h.avg_w > 0) ? normFrac(hpProf.map(h => h.avg_w)) : new Array(24).fill(1 / 24);
+  const p = pvInputs();
+  const shD = shAvgDaily(), hpD = hpAvgDaily(), evD = p.evAnnual / 365, acD = p.acAnnual / 365;
+  const raw = new Array(24).fill(0);
+  for (let h = 0; h < 24; h++) raw[h] = shD * shShape[h] + hpD * hpShape[h] + evD * EV_SHAPE[h] + acD * AC_SHAPE[h];
+  return normFrac(raw);
+}
+// How well a surface's production timing overlaps your daily load (0..1):
+// Σ min(pvFrac[h], loadFrac[h]) of the two normalised 24 h shapes. High = the
+// sun shines when you actually consume (good direct self-use even without battery).
+function surfaceMatch(s) {
+  const lay = surfaceLayout(s), load = loadHourShape();
+  const pvFn = lay.ew ? ewHourFn : pvHourFractions;
+  const acc = new Array(24).fill(0);
+  for (let m = 0; m < 12; m++) { const f = pvFn(m); for (let h = 0; h < 24; h++) acc[h] += f[h]; }
+  const pv = normFrac(acc);
+  let ov = 0; for (let h = 0; h < 24; h++) ov += Math.min(pv[h], load[h]);
+  return ov;
+}
 // Combine a set of surface metrics into one array: total kWp, production-weighted
 // monthly shape and effective specific yield.
 function combineSurfaces(ms) {
@@ -3226,21 +3253,30 @@ function recommendCoverage() {
   const summerDaily = (mL[5] + mL[6] + mL[7]) / 92;
   const battSuggested = base.batt <= 0;
   const batt = base.batt > 0 ? base.batt : Math.max(3, Math.round(summerDaily * 0.6));
-  // winter-weighted score: prefer surfaces that also help in winter
-  items.forEach(it => { const w = it.m.month[11] + it.m.month[0] + it.m.month[1]; it.score = it.m.spec * (1 + 1.5 * w); });
-  const ranked = items.slice().sort((a, b) => b.score - a.score);
+  // per-surface day-match with the hourly load (for display + tie-break)
+  items.forEach(it => { it.match = surfaceMatch(it.s); });
+  const simSet = set => { const c = combineSurfaces(set.map(x => x.m));
+    return { c, r: simulatePv({ ...base, kwp: c.kwp, batt, v2h: false, cap60: false, spec: c.spec, pvShareMonth: c.shape, pvHourFn: c.ew ? ewHourFn : null }) }; };
+  // Greedy, LOAD-AWARE: at each step add the surface that raises actually
+  // SELF-USED energy the most (uses your hourly consumption via simulatePv),
+  // so orientations that match when you consume are preferred – winter share as
+  // a gentle tie-break. Stop once summer is ~fully self-sufficient.
   const SUMMER = [5, 6, 7], target = 0.97;
-  const chosen = []; let reached = false;
-  for (const it of ranked) {
-    chosen.push(it);
-    const c = combineSurfaces(chosen.map(x => x.m));
-    const r = simulatePv({ ...base, kwp: c.kwp, batt, v2h: false, cap60: false, spec: c.spec, pvShareMonth: c.shape, pvHourFn: c.ew ? ewHourFn : null });
-    if (seasonAutarky(r, SUMMER) >= target) { reached = true; break; }
+  const remaining = items.slice(); const chosen = []; let reached = false, prevSelf = 0;
+  while (remaining.length) {
+    let best = null, bestScore = -1, bestR = null;
+    for (const cand of remaining) {
+      const { r } = simSet([...chosen, cand]);
+      const w = cand.m.month[11] + cand.m.month[0] + cand.m.month[1];
+      const score = (r.self_kwh - prevSelf) * (1 + 0.4 * w);   // marginal self-use, winter-biased
+      if (score > bestScore) { bestScore = score; best = cand; bestR = r; }
+    }
+    chosen.push(best); remaining.splice(remaining.indexOf(best), 1); prevSelf = bestR.self_kwh;
+    if (seasonAutarky(bestR, SUMMER) >= target) { reached = true; break; }
   }
-  const comb = combineSurfaces(chosen.map(x => x.m));
-  const rF = simulatePv({ ...base, kwp: comb.kwp, batt, v2h: false, cap60: false, spec: comb.spec, pvShareMonth: comb.shape, pvHourFn: comb.ew ? ewHourFn : null });
+  const { c: comb, r: rF } = simSet(chosen);
   const chosenIds = new Set(chosen.map(x => x.i));
-  return { items, ranked, chosen, chosenIds, reached, comb, all, batt, battSuggested,
+  return { items, chosen, chosenIds, reached, comb, all, batt, battSuggested,
     summerAut: seasonAutarky(rF, SUMMER), winterAut: seasonAutarky(rF, [11, 0, 1]), yearAut: rF.autarky };
 }
 
@@ -3663,7 +3699,14 @@ function renderSurfaces() {
             `<td style="text-align:right">${o.modules}</td><td style="text-align:right">${fmt(o.kwp, 1)}</td>` +
             `<td style="text-align:right">${kwh(o.annual, 0)}</td></tr>`).join('') + `</table>`;
       }
-      return head + `<div class="note" style="margin:-2px 0 12px;line-height:1.55">${place}<br>${gen}${spread}${tbl}</div>`;
+      // day-match with the user's hourly load
+      let matchHtml = '';
+      if (it.match != null) {
+        const mp = Math.round(it.match * 100);
+        const q = it.match >= 0.55 ? 'passt gut' : it.match >= 0.42 ? 'passt mittel' : 'passt wenig';
+        matchHtml = `<br>🕑 <b>Tages-Deckung ${mp}/100</b> – ${q} zu deinem Stundenverbrauch (je höher, desto mehr PV kannst du direkt nutzen).`;
+      }
+      return head + `<div class="note" style="margin:-2px 0 12px;line-height:1.55">${place}<br>${gen}${matchHtml}${spread}${tbl}</div>`;
     }).join('');
   }
   // recommendation / totals
@@ -3688,9 +3731,10 @@ function renderSurfaces() {
       (rec.reached ? `Damit ist der <b>Sommer praktisch autark</b> (${pct(rec.summerAut)}). `
         : `Auch voll belegt reicht es im Sommer nur für <b>${pct(rec.summerAut)}</b> – mehr Fläche bräuchte es für 100 %. `) +
       `Winter: <b>${pct(rec.winterAut)}</b>. ` +
-      `<span style="color:var(--muted)">✓ = für die beste Belegung genutzt, ○ = Reserve (Rest-Dachfläche). Flächen ` +
-      `werden winter-gewichtet nach Ertrag gefüllt. „Als Anlage übernehmen" rechnet den ganzen PV-Tab mit dieser ` +
-      `Belegung (kWp + echte Monatskurve). Richtwerte ~50° N; exakt via PVGIS.</span>`;
+      `<span style="color:var(--muted)">✓ = für die beste Belegung genutzt, ○ = Reserve (Rest-Dachfläche). Die Reihenfolge ` +
+      `richtet sich danach, welche Fläche am meisten <b>direkt selbst genutzten</b> Strom bringt – das nutzt deinen ` +
+      `<b>Stunden-Verbrauch</b> (Tagesprofil + Wärmepumpe/Auto), nicht nur den Ertrag. „Als Anlage übernehmen" rechnet ` +
+      `den ganzen PV-Tab mit dieser Belegung (kWp + echte Monatskurve). Richtwerte ~50° N; exakt via PVGIS.</span>`;
     if (useBtn) useBtn.hidden = false;
   }
 }
