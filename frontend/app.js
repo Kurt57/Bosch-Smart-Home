@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-02 · Flaeche: Jahres-Diagramm Ertrag vs. Verbrauch (365 Tage, Hover-Details)'
+const APP_VERSION = '2026-10-03 · Flaechen-Auswahl per Haekchen + Kombi-Card; EV/Klima-Doppelzaehlung behoben'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -371,6 +371,23 @@ function shAvgDaily() {
   return shMeteredDaily();
 }
 function houseManual() { return parseFloat(localStorage.getItem(LS.house) || '0') || 0; }
+// Household daily WITHOUT EV + A/C, for building the load where EV/A/C are added
+// back as separate (time-shaped) components. When the household comes from a
+// FULL source (whole-house meter or a manual annual value) it already contains
+// EV/A/C, so we carve them out to avoid double-counting. With only module
+// measurements, the modules don't see the EV/A/C, so they stay genuine extras.
+function householdBaseDaily() {
+  let shD = shAvgDaily();
+  const full = (meterHouseholdDaily() != null && meterHouseholdDaily() > 0) || houseManual() > 0;
+  if (full) {
+    const km = Math.max(0, parseFloat($('pv-ev-km') && $('pv-ev-km').value) || 0);
+    const per100 = Math.max(0, parseFloat($('pv-ev-kwh') && $('pv-ev-kwh').value) || 18);
+    const evD = km * per100 / 100 / 365;
+    const acD = Math.max(0, parseFloat($('pv-ac') && $('pv-ac').value) || 0) / 365;
+    shD = Math.max(0, shD - evD - acD);
+  }
+  return shD;
+}
 // Whole-house meter readings → real total daily average and the months spanned.
 function meterStats() {
   const r = (STATE.meter || []).filter(x => x && x.kwh != null && x.ts).slice().sort((a, b) => a.ts - b.ts);
@@ -1550,7 +1567,7 @@ function renderEvBenefit(ev) {
 function renderKonzept() {
   if (!$('konzept-nopv')) return;
   const tar = tariffData(), price = STATE.price;
-  const hhKwh = shAvgDaily() * 365;                       // household (incl. unmetered)
+  const hhKwh = householdBaseDaily() * 365;               // household w/o EV/AC (added separately below)
   const wpKwh = hpYearFromMonthly() || hpAvgDaily() * 365;
   const p = pvInputs();
   const evKwh = p.evAnnual, acKwh = p.acAnnual;
@@ -2929,7 +2946,7 @@ function simulatePv(p) {
   const hpProf = (STATE.hpA && STATE.hpA.hourly_profile) || [];
   const hpShape = hpProf.length && hpProf.some(h => h.avg_w > 0)
     ? normFrac(hpProf.map(h => h.avg_w)) : new Array(24).fill(1 / 24);
-  const shDaily = shAvgDaily();
+  const shDaily = householdBaseDaily();
   const hpDaily = hpAvgDaily();
   const hpAnnual = hpDaily * 365;
   const pvShare = p.pvShareMonth || pvMonth(), hpSeas = normFrac(HP_SEASON);
@@ -3004,7 +3021,7 @@ function curtailEstimate(p) {
   const shShape = normFrac((STATE.data && STATE.data.hourly_profile || []).map(h => h.avg_w));
   const hpProf = (STATE.hpA && STATE.hpA.hourly_profile) || [];
   const hpShape = hpProf.length && hpProf.some(h => h.avg_w > 0) ? normFrac(hpProf.map(h => h.avg_w)) : new Array(24).fill(1 / 24);
-  const shDaily = shAvgDaily(), hpDaily = hpAvgDaily(), hpAnnual = hpDaily * 365;
+  const shDaily = householdBaseDaily(), hpDaily = hpAvgDaily(), hpAnnual = hpDaily * 365;
   const pvShare = pvMonth(), hpSeas = normFrac(HP_SEASON), acShare = normFrac(AC_MONTH);
   const useReal = !!hpRealMonthMap(), evDayBase = p.evAnnual / 365;
   let C = 0;
@@ -3251,7 +3268,7 @@ function interpYear(md) {
 function buildSurfaceYear(layout) {
   const yShare = monthForTilt(layout.tilt);
   const yMD = yShare.map((s, m) => layout.annual * s / DIM[m]);
-  const p = pvInputs(), shD = shAvgDaily(), hpAnnual = hpAvgDaily() * 365;
+  const p = pvInputs(), shD = householdBaseDaily(), hpAnnual = hpAvgDaily() * 365;
   const useReal = !!hpRealMonthMap(), hpSeas = normFrac(HP_SEASON), acShare = normFrac(AC_MONTH);
   const evDayBase = p.evAnnual / 365;
   const loadMD = [];
@@ -3717,8 +3734,11 @@ function renderSurfaces() {
       const m = it.m, L = m.layout, used = rec.chosenIds && rec.chosenIds.has(it.i);
       const sub = `${fmt(it.s.area || 0, 0)} m² · Azimut ${m.az > 0 ? '+' : ''}${fmt(m.az, 0)}°` +
         (m.shade > 0 ? ` · ${fmt(m.shade, 0)}% Schatten` : '');
+      const rec2 = rec.chosenIds && rec.chosenIds.has(it.i);
       const head = `<div class="devrow" style="align-items:flex-start">` +
-        `<div class="nm"><b>${rec.chosenIds ? (used ? '✓ ' : '○ ') : ''}${esc(m.label)}</b><small>${sub}</small></div>` +
+        `<div class="nm"><b><label style="cursor:pointer"><input type="checkbox" class="surf-use" data-idx="${it.i}" ${it.s.use !== false ? 'checked' : ''} style="margin-right:7px;vertical-align:middle">${esc(m.label)}</label></b>` +
+        (rec2 ? ` <span style="color:${COL.pv};font-size:11px">· empfohlen</span>` : '') +
+        `<small>${sub}</small></div>` +
         `<div class="val"><b>${fmt(m.kwp, 1)} kWp</b><small>~${kwh(m.year, 0)}/Jahr` +
         ` <button class="linkbtn surf-del" data-idx="${it.i}" style="background:none;border:none;color:#ff6b8a;cursor:pointer;font-size:13px">✕</button></small></div></div>`;
       // placement detail
@@ -3726,7 +3746,7 @@ function renderSurfaces() {
         ? `Flachdach/Freiland: empfohlene <b>Aufständerung ${fmt(L.tilt, 0)}°</b> → <b>${L.modules} Module</b> (~${fmt(L.kwp, 1)} kWp). ` +
           `<span style="color:var(--muted)">Flacher = mehr Module (mehr kWp), steiler = mehr Ertrag je Modul aber mit Reihenabstand weniger Module.</span>`
         : `<b>${L.modules} Module</b> (~${fmt(L.kwp, 1)} kWp) in <b>Dachneigung ${fmt(L.tilt, 0)}°</b>.`;
-      const gen = `🔆 <b>${kwh(L.winterDay, 1)} kWh/Tag</b> im Winter · <b>${kwh(L.summerMonth, 0)} kWh/Monat</b> im Sommer · Spitze ~<b>${fmt(L.peakKw, 1)} kW</b>.`;
+      const gen = `🔆 <b>${fmt(L.winterDay, 1)} kWh/Tag</b> im Winter · <b>${fmt(L.summerMonth, 0)} kWh/Monat</b> im Sommer · Spitze ~<b>${fmt(L.peakKw, 1)} kW</b>.`;
       // per m² winter vs summer + seasonal spread
       const area = Math.max(1, +it.s.area || 1);
       const wM2 = L.winterMonth / area, sM2 = L.summerMonth / area;
@@ -3821,6 +3841,51 @@ function renderSurfaces() {
     noteEl.innerHTML = why;
     if (useBtn) useBtn.hidden = false;
   }
+  renderSurfaceCombo();
+}
+// Combined card for the surfaces the user ticked: cumulative year chart + totals.
+function renderSurfaceCombo() {
+  const card = $('pv-combo-card'); if (!card) return;
+  const surfs = loadSurfaces();
+  if (!surfs.length) { card.hidden = true; return; }
+  card.hidden = false;
+  const sel = surfs.map((s, i) => ({ i, s })).filter(x => x.s.use !== false);
+  const body = $('pv-combo-body'), chart = $('pv-combo-chart'), note = $('pv-combo-note'), useBtn = $('pv-combo-use');
+  if (!sel.length) {
+    body.innerHTML = '<div class="note">Keine Fläche ausgewählt – oben Häkchen setzen.</div>';
+    chart.innerHTML = ''; note.innerHTML = ''; if (useBtn) useBtn.hidden = true; return;
+  }
+  const ms = sel.map(x => surfaceMetrics(x.s)), comb = combineSurfaces(ms);
+  const area = sel.reduce((a, x) => a + (+x.s.area || 0), 0);
+  const sum = f => ms.reduce((a, m) => a + m.layout[f], 0);
+  const winterDay = sum('winterDay'), summerMonth = sum('summerMonth'), winterMonth = sum('winterMonth');
+  const peak = sum('peakKw'), modules = ms.reduce((a, m) => a + m.layout.modules, 0);
+  // cumulative daily series
+  const yld = new Array(365).fill(0); let load = null;
+  ms.forEach(m => { const sy = buildSurfaceYear(m.layout); for (let d = 0; d < 365; d++) yld[d] += sy.yld[d]; if (!load) load = sy.load; });
+  _surfYear.combo = { yld, load };
+  // autarky (if load known) + suggested battery
+  let autHtml = '', batt = 0, battSuggested = false;
+  if (shAvgDaily() > 0 || hpAvgDaily() > 0) {
+    const base = pvInputs();
+    const probe = simulatePv({ ...base, kwp: 0, batt: 0, v2h: false, cap60: false });
+    const mL = probe.monthly.map(x => x.load), summerDaily = (mL[5] + mL[6] + mL[7]) / 92;
+    battSuggested = base.batt <= 0; batt = base.batt > 0 ? base.batt : Math.max(3, Math.round(summerDaily * 0.6));
+    const r = simulatePv({ ...base, kwp: comb.kwp, batt, v2h: false, cap60: false, spec: comb.spec, pvShareMonth: comb.shape, pvHourFn: comb.ew ? ewHourFn : null });
+    const pc = v => `${fmt(Math.min(v * 100, 100), 0)} %`;
+    autHtml = `<div class="kpi sm"><div class="v" style="color:${COL.pv}">${pc(seasonAutarky(r, [5, 6, 7]))}</div><div class="l">Sommer-Autarkie</div></div>` +
+      `<div class="kpi sm"><div class="v" style="color:${COL.hp}">${pc(seasonAutarky(r, [11, 0, 1]))}</div><div class="l">Winter-Autarkie</div></div>`;
+  }
+  body.innerHTML = `<div class="grid2">` +
+    `<div class="kpi sm"><div class="v">${modules} · ${fmt(comb.kwp, 1)} kWp</div><div class="l">Module · Leistung</div></div>` +
+    `<div class="kpi sm"><div class="v">${kwh(comb.year, 0)}</div><div class="l">Ertrag/Jahr · ${fmt(comb.spec, 0)} kWh/kWp</div></div>` +
+    autHtml + `</div>` +
+    `<div class="note" style="margin-top:8px">🔆 <b>${fmt(winterDay, 1)} kWh/Tag</b> im Winter · <b>${fmt(summerMonth, 0)} kWh/Monat</b> im Sommer · Spitze ~<b>${fmt(peak, 1)} kW</b> (Summe). ` +
+    `Pro m²: Winter ${fmt(winterMonth / Math.max(1, area), 1)} · Sommer ${fmt(summerMonth / Math.max(1, area), 1)} kWh/m²·Mon · Spannweite ~${fmt(summerMonth / Math.max(0.001, winterMonth), 1)}×.</div>`;
+  chart.innerHTML = yearChart(yld, load, 'combo');
+  note.innerHTML = `Kumuliert über deine <b>${sel.length}</b> ausgewählte(n) Fläche(n): ${esc([...new Set(ms.map(m => m.label))].join(', '))}. ` +
+    `Häkchen oben ändern die Auswahl. Grün = Summe der Erträge, blau = Hausverbrauch.`;
+  if (useBtn) { useBtn.hidden = false; useBtn._combo = { comb, batt, battSuggested }; }
 }
 // Selbstbau vs. Fachfirma: just two prices – your complete DIY set vs. the
 // turnkey offer (minus subsidy) – so you directly see which is cheaper.
@@ -4831,33 +4896,53 @@ function init() {
     const idx = +b.dataset.idx; const arr = loadSurfaces();
     if (idx >= 0 && idx < arr.length) { arr.splice(idx, 1); saveSurfaces(arr); renderSurfaces(); }
   });
-  // hover/tap on a per-surface year chart → show day, yield, consumption
-  if (surfList) {
-    const onYear = (e) => {
-      const hit = e.target.closest && e.target.closest('.syhit'); if (!hit) return;
-      const idx = +hit.dataset.idx, ser = _surfYear[idx]; if (!ser) return;
-      const svgEl = hit.querySelector('svg'); if (!svgEl) return;
-      const rect = svgEl.getBoundingClientRect();
-      const cx = (e.touches && e.touches[0] ? e.touches[0].clientX : e.clientX);
-      const fx = Math.min(1, Math.max(0, (cx - rect.left) / (rect.width || 1)));
-      const left = 2, right = CW - 2;
-      let di = Math.round((fx * CW - left) / (right - left) * 364);
-      di = Math.min(364, Math.max(0, di));
-      const d = new Date(new Date().getFullYear(), 0, 1 + di);
-      const t = $('toast');
-      if (t) {
-        t.innerHTML = `<b>${d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' })}</b> · ` +
-          `☀️ Ertrag <b>${kwh(ser.yld[di], 1)}</b> · 🏠 Verbrauch <b>${kwh(ser.load[di], 1)}</b>` +
-          `<div class="note" style="margin-top:2px;color:var(--muted)">${ser.yld[di] >= ser.load[di] ? 'Überschuss ' + kwh(ser.yld[di] - ser.load[di], 1) + ' (einspeisen/laden)' : 'Rest ' + kwh(ser.load[di] - ser.yld[di], 1) + ' aus Netz/Speicher'}</div>`;
-        t.hidden = false; clearTimeout(_toastT); _toastT = setTimeout(() => { t.hidden = true; }, 5000);
-      }
-      const ln = svgEl.querySelector('.syc');
-      if (ln) { const lx = (left + (right - left) * di / 364).toFixed(1); ln.setAttribute('x1', lx); ln.setAttribute('x2', lx); ln.setAttribute('opacity', '0.7'); }
-      e.stopPropagation();
-    };
-    surfList.addEventListener('pointermove', onYear);
-    surfList.addEventListener('pointerdown', onYear);
-  }
+  // checkbox: which surfaces the user actually uses (drives the combined card)
+  if (surfList) surfList.addEventListener('change', (e) => {
+    const cb = e.target.closest('.surf-use'); if (!cb) return;
+    const idx = +cb.dataset.idx, arr = loadSurfaces();
+    if (arr[idx]) { arr[idx].use = cb.checked; saveSurfaces(arr); renderSurfaces(); }
+  });
+  // hover/tap on a year chart → show day, yield, consumption (per surface + combo)
+  const onYear = (e) => {
+    const hit = e.target.closest && e.target.closest('.syhit'); if (!hit) return;
+    const idx = hit.dataset.idx, ser = _surfYear[idx]; if (!ser) return;
+    const svgEl = hit.querySelector('svg'); if (!svgEl) return;
+    const rect = svgEl.getBoundingClientRect();
+    const cx = (e.touches && e.touches[0] ? e.touches[0].clientX : e.clientX);
+    const fx = Math.min(1, Math.max(0, (cx - rect.left) / (rect.width || 1)));
+    const left = 2, right = CW - 2;
+    let di = Math.round((fx * CW - left) / (right - left) * 364);
+    di = Math.min(364, Math.max(0, di));
+    const d = new Date(new Date().getFullYear(), 0, 1 + di);
+    const t = $('toast');
+    if (t) {
+      t.innerHTML = `<b>${d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' })}</b> · ` +
+        `☀️ Ertrag <b>${kwh(ser.yld[di], 1)}</b> · 🏠 Verbrauch <b>${kwh(ser.load[di], 1)}</b>` +
+        `<div class="note" style="margin-top:2px;color:var(--muted)">${ser.yld[di] >= ser.load[di] ? 'Überschuss ' + kwh(ser.yld[di] - ser.load[di], 1) + ' (einspeisen/laden)' : 'Rest ' + kwh(ser.load[di] - ser.yld[di], 1) + ' aus Netz/Speicher'}</div>`;
+      t.hidden = false; clearTimeout(_toastT); _toastT = setTimeout(() => { t.hidden = true; }, 5000);
+    }
+    const ln = svgEl.querySelector('.syc');
+    if (ln) { const lx = (left + (right - left) * di / 364).toFixed(1); ln.setAttribute('x1', lx); ln.setAttribute('x2', lx); ln.setAttribute('opacity', '0.7'); }
+    e.stopPropagation();
+  };
+  if (surfList) { surfList.addEventListener('pointermove', onYear); surfList.addEventListener('pointerdown', onYear); }
+  const comboCard = $('pv-combo-card');
+  if (comboCard) { comboCard.addEventListener('pointermove', onYear); comboCard.addEventListener('pointerdown', onYear); }
+  const comboUse = $('pv-combo-use');
+  if (comboUse) comboUse.addEventListener('click', () => {
+    const c = comboUse._combo; if (!c || !(c.comb.kwp > 0)) return;
+    const setLS = (k, v) => { try { localStorage.setItem(k, String(v)); } catch (e) {} };
+    const kwp = Math.round(c.comb.kwp * 10) / 10;
+    const kEl = $('pv-kwp'); if (kEl) { kEl.value = kwp; setLS(PV_LS.kwp, kwp); }
+    if (c.comb.shape) setLS(PV_LS.pgm, JSON.stringify(c.comb.shape));
+    const opts = [1000, 950, 880, 800];
+    const near = opts.reduce((a, b) => Math.abs(b - c.comb.spec) < Math.abs(a - c.comb.spec) ? b : a);
+    const oEl = $('pv-orient'); if (oEl) { oEl.value = String(near); setLS(PV_LS.orient, near); }
+    if (c.battSuggested && c.batt) { const bEl = $('pv-batt'); if (bEl) { bEl.value = c.batt; setLS(PV_LS.batt, c.batt); } }
+    renderPv();
+    const t = $('toast');
+    if (t) { t.innerHTML = `Übernommen: <b>${fmt(kwp, 1)} kWp</b> aus deiner Flächen-Auswahl.`; t.hidden = false; clearTimeout(_toastT); _toastT = setTimeout(() => { t.hidden = true; }, 7000); }
+  });
   const surfUse = $('pv-surf-use');
   if (surfUse) surfUse.addEventListener('click', () => {
     const rec = recommendCoverage();
