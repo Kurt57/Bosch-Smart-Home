@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-03 · Flaechen bearbeitbar + duplizierbar; Haekchen auf Empfehlung zuruecksetzen'
+const APP_VERSION = '2026-10-03 · Verlauf-Verbrauchskurve (Haus+WP); EV/Klima sind geplante Zusatzlast (nur PV)'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -183,6 +183,12 @@ const INFO = {
     'Tagesverlauf (morgens/abends) am besten, <b>Süd 35°</b> den höchsten Jahresertrag. Hohe Autarkie braucht einen ' +
     '<b>Speicher</b> (sonst nur Tagesdeckung). <b>Winter 100 % ist mit PV allein nicht möglich</b> – die Zahlen sind ' +
     'Richtwerte für ~50° N; den exakten Standort-Ertrag liefert die PVGIS-Abfrage.',
+  'consum-year': () => 'Erwarteter <b>Tagesverbrauch</b> über 365 Tage, gestapelt in <b>Hausstrom</b> (flach, blau) und ' +
+    '<b>Wärmepumpe</b> (saisonal, orange). Baut auf demselben Modell wie der PV-Tab auf: Hausstrom aus deinem ' +
+    '<b>Zähler</b> (falls eingetragen, inkl. E-Auto/Klima), die Wärmepumpe aus importierter/geschätzter Monatskurve. ' +
+    'Es zeigt den <b>tatsächlichen</b> Verbrauch – <b>ohne</b> geplantes E-Auto/Klima aus dem PV-Tab. Die Verbrauchs-Kurve ' +
+    'im PV-Tab ist deshalb identisch, solange dort E-Auto & Klima 0 sind; mit geplanten Werten liegt die PV-Kurve höher. ' +
+    'Tippen/fahren zeigt Tag, Hausstrom, WP und Summe.',
   'pv-surf': () => 'Trag deine <b>verfügbaren Flächen</b> ein (Satteldach, Flachdach, Garten, Grenz-/Fassadenwand, ' +
     'Terrassenüberdachung, Carport) mit m², Neigung, Azimut und Verschattung. Je Fläche wird die installierbare ' +
     '<b>kWp</b> (Fläche × nutzbarer Anteil × Modul­dichte) und der <b>spezifische Ertrag</b> (aus Neigung/Azimut/Schatten) ' +
@@ -371,23 +377,12 @@ function shAvgDaily() {
   return shMeteredDaily();
 }
 function houseManual() { return parseFloat(localStorage.getItem(LS.house) || '0') || 0; }
-// Household daily WITHOUT EV + A/C, for building the load where EV/A/C are added
-// back as separate (time-shaped) components. When the household comes from a
-// FULL source (whole-house meter or a manual annual value) it already contains
-// EV/A/C, so we carve them out to avoid double-counting. With only module
-// measurements, the modules don't see the EV/A/C, so they stay genuine extras.
-function householdBaseDaily() {
-  let shD = shAvgDaily();
-  const full = (meterHouseholdDaily() != null && meterHouseholdDaily() > 0) || houseManual() > 0;
-  if (full) {
-    const km = Math.max(0, parseFloat($('pv-ev-km') && $('pv-ev-km').value) || 0);
-    const per100 = Math.max(0, parseFloat($('pv-ev-kwh') && $('pv-ev-kwh').value) || 18);
-    const evD = km * per100 / 100 / 365;
-    const acD = Math.max(0, parseFloat($('pv-ac') && $('pv-ac').value) || 0) / 365;
-    shD = Math.max(0, shD - evD - acD);
-  }
-  return shD;
-}
+// Household daily for the PV load. The EV/A/C inputs in the PV planner are
+// treated as ADDITIONAL / planned loads (e.g. a car you don't own yet) that are
+// added on top for sizing – so here we return the plain household (meter total
+// minus heat pump, or manual/modules) and the caller adds EV/A/C separately.
+// (Verlauf shows only the actual meter household + heat pump, without these.)
+function householdBaseDaily() { return shAvgDaily(); }
 // Whole-house meter readings → real total daily average and the months spanned.
 function meterStats() {
   const r = (STATE.meter || []).filter(x => x && x.kwh != null && x.ts).slice().sort((a, b) => a.ts - b.ts);
@@ -2144,6 +2139,7 @@ function renderHistory() {
   rows.push(['Vermutete Abwesenheit', `${A.count} Tage · ~${money(A.count * (S.day_avg_cost || 0))}`]);
   $('h-insights').innerHTML = rows.map(([k, v]) => statusRow(k, v)).join('');
   renderForecastBasis(fc);
+  renderConsumYear();
   renderTibberCons();
 }
 
@@ -3302,6 +3298,61 @@ function yearChart(yld, load, idx) {
     `<div class="legend" style="margin-top:2px"><div class="it"><span class="sw" style="background:${COL.pv}"></span>Ertrag (Fläche)</div>` +
     `<div class="it"><span class="sw" style="background:${COL.sh}"></span>Hausverbrauch</div>` +
     `<span style="color:var(--muted);font-size:11px;margin-left:6px">kWh/Tag übers Jahr – tippen/fahren für Details</span></div>`;
+}
+// Expected daily consumption over the year, split Hausstrom vs Wärmepumpe –
+// SAME composition as the PV-tab load (household base + EV + A/C, and the heat
+// pump per month), so the Verlauf curve matches the PV curve.
+function buildConsumptionYear() {
+  // Verlauf = ACTUAL consumption: household (meter total − WP, already incl. all
+  // real appliances) + heat pump. No planned EV/A/C from the PV planner, so it
+  // matches the PV load exactly when those are 0 and stays put otherwise.
+  const shBase = shAvgDaily(), hpAnnual = hpAvgDaily() * 365;
+  const useReal = !!hpRealMonthMap(), hpSeas = normFrac(HP_SEASON);
+  const hausMD = [], wpMD = [];
+  for (let m = 0; m < 12; m++) {
+    wpMD[m] = (useReal ? hpMonthEst(m) : hpAnnual * (0.35 * (DIM[m] / 365) + 0.65 * hpSeas[m])) / DIM[m];
+    hausMD[m] = shBase;
+  }
+  return { haus: interpYear(hausMD), wp: interpYear(wpMD) };
+}
+let _consumYear = null;
+// Stacked 365-day consumption chart: Hausstrom (bottom) + Wärmepumpe (top).
+function renderConsumYear() {
+  const el = $('h-consum-chart'); if (!el) return;
+  if (!(shAvgDaily() > 0 || hpAvgDaily() > 0)) { el.innerHTML = '<div class="note">Noch keine Verbrauchsdaten.</div>'; $('h-consum-note').innerHTML = ''; return; }
+  const s = buildConsumptionYear(); _consumYear = s;
+  const h = 130, top = 8, base = h - 16, left = 2, right = CW - 2, plotW = right - left;
+  const tot = s.haus.map((v, i) => v + s.wp[i]);
+  const max = Math.max(0.001, ...tot);
+  const X = i => left + i / 364 * plotW, Y = v => base - (v / max) * (base - top);
+  const areaUp = (arr) => `M${X(0).toFixed(1)} ${base} ` + arr.map((v, i) => 'L' + X(i).toFixed(1) + ' ' + Y(v).toFixed(1)).join(' ') + ` L${X(364).toFixed(1)} ${base} Z`;
+  const bandTop = (hausArr, totArr) => { // band between haus and tot (the WP layer)
+    let d = `M${X(0).toFixed(1)} ${Y(hausArr[0]).toFixed(1)} `;
+    for (let i = 1; i < 365; i++) d += 'L' + X(i).toFixed(1) + ' ' + Y(hausArr[i]).toFixed(1) + ' ';
+    for (let i = 364; i >= 0; i--) d += 'L' + X(i).toFixed(1) + ' ' + Y(totArr[i]).toFixed(1) + ' ';
+    return d + 'Z';
+  };
+  const MON3 = ['J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D'];
+  let ticks = '', cum = 0;
+  for (let m = 0; m < 12; m++) { ticks += `<text class="axis" x="${X(cum + DIM[m] / 2).toFixed(1)}" y="${h - 3}" text-anchor="middle" style="font-size:9px">${MON3[m]}</text>`; cum += DIM[m]; }
+  const line = arr => arr.map((v, i) => (i ? 'L' : 'M') + X(i).toFixed(1) + ' ' + Y(v).toFixed(1)).join(' ');
+  const inner = `<path d="${areaUp(s.haus)}" fill="${COL.sh}" opacity="0.5"/>` +
+    `<path d="${bandTop(s.haus, tot)}" fill="${COL.hp}" opacity="0.5"/>` +
+    `<path d="${line(tot)}" fill="none" stroke="${COL.hp}" stroke-width="1.3"/>` +
+    `<path d="${line(s.haus)}" fill="none" stroke="${COL.sh}" stroke-width="1.3"/>` +
+    `<line class="syc" x1="0" y1="${top}" x2="0" y2="${base}" stroke="var(--ink)" stroke-width="1" opacity="0"/>` + ticks;
+  el.innerHTML = `<div class="cyhit" style="touch-action:none">${svg(h, inner)}</div>` +
+    `<div class="legend" style="margin-top:2px"><div class="it"><span class="sw" style="background:${COL.sh}"></span>Hausstrom</div>` +
+    `<div class="it"><span class="sw" style="background:${COL.hp}"></span>Wärmepumpe</div>` +
+    `<span style="color:var(--muted);font-size:11px;margin-left:6px">kWh/Tag – tippen/fahren für Details</span></div>`;
+  const avg = tot.reduce((a, b) => a + b, 0) / 365;
+  const now = new Date().getMonth(), cumD = DIM.slice(0, now).reduce((a, b) => a + b, 0) + 14;
+  $('h-consum-note').innerHTML =
+    `Ø <b>${kwh(avg, 1)}/Tag</b> übers Jahr · aktuell (${MON[now]}) ~<b>${kwh(tot[cumD], 1)}/Tag</b> ` +
+    `(Hausstrom ${kwh(s.haus[cumD], 1)} + WP ${kwh(s.wp[cumD], 1)}). ` +
+    `<span style="color:var(--muted)">Das ist dein <b>tatsächlicher</b> Verbrauch (Zähler-Hausstrom + WP), <b>ohne</b> ` +
+    `geplantes E-Auto/Klima. Die Verbrauchs-Kurve im PV-Tab ist <b>identisch, solange E-Auto & Klima dort 0 sind</b> – ` +
+    `trägst du dort geplante Werte ein, liegt die PV-Kurve entsprechend höher (Planung), diese hier bleibt gleich.</span>`;
 }
 // Combine a set of surface metrics into one array: total kWp, production-weighted
 // monthly shape and effective specific yield.
@@ -5034,6 +5085,31 @@ function init() {
     const onMove = e => { const r = e.target.closest && e.target.closest('.pvhit'); if (r) { e.stopPropagation(); showPvTip(+r.dataset.mi); } };
     pvm.addEventListener('pointermove', onMove);
     pvm.addEventListener('pointerdown', onMove);
+  }
+  const consum = $('h-consum-chart');
+  if (consum) {
+    const onC = e => {
+      const hit = e.target.closest && e.target.closest('.cyhit'); if (!hit || !_consumYear) return;
+      const svgEl = hit.querySelector('svg'); if (!svgEl) return;
+      const rect = svgEl.getBoundingClientRect();
+      const cx = (e.touches && e.touches[0] ? e.touches[0].clientX : e.clientX);
+      const fx = Math.min(1, Math.max(0, (cx - rect.left) / (rect.width || 1)));
+      const left = 2, right = CW - 2;
+      let di = Math.round((fx * CW - left) / (right - left) * 364); di = Math.min(364, Math.max(0, di));
+      const haus = _consumYear.haus[di], wp = _consumYear.wp[di], d = new Date(new Date().getFullYear(), 0, 1 + di);
+      const t = $('toast');
+      if (t) {
+        t.innerHTML = `<b>${d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' })}</b> · ` +
+          `🏠 Hausstrom <b>${kwh(haus, 1)}</b> · 🔥 WP <b>${kwh(wp, 1)}</b>` +
+          `<div class="note" style="margin-top:2px;color:var(--muted)">Gesamt <b>${kwh(haus + wp, 1)}/Tag</b></div>`;
+        t.hidden = false; clearTimeout(_toastT); _toastT = setTimeout(() => { t.hidden = true; }, 5000);
+      }
+      const ln = svgEl.querySelector('.syc');
+      if (ln) { const lx = (left + (right - left) * di / 364).toFixed(1); ln.setAttribute('x1', lx); ln.setAttribute('x2', lx); ln.setAttribute('opacity', '0.7'); }
+      e.stopPropagation();
+    };
+    consum.addEventListener('pointermove', onC);
+    consum.addEventListener('pointerdown', onC);
   }
   const gf = $('pv-gridfree');
   if (gf) {
