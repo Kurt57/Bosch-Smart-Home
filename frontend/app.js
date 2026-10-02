@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-09-30 · Uebersicht WP-Aufteilung stimmt mit Strom heute ueberein (Rest = Sonstiges)'
+const APP_VERSION = '2026-10-02 · PV: optimale Ausrichtung & Groesse (Sommer ~100% autark, Winter-optimiert)'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -177,6 +177,12 @@ const INFO = {
     'Netzbezug × Preis − Einspeisung × Vergütung. Unter der <b>0-€-Linie</b> verdienst du netto. Marker: ' +
     '<span style="color:#4da3ff">Wahl</span> = deine Größe, <span style="color:#f6b93b">Deckung</span> = Ertrag = ' +
     'Verbrauch, <span style="color:#4be0b0">0 €</span> = ab hier deckt die Einspeisung den Netzbezug.',
+  'pv-orient-opt': () => 'Sucht aus deinem <b>Verbrauch</b> und dessen <b>Tagesverlauf</b> die beste Dachausrichtung ' +
+    'und Größe: für jede Ausrichtung wird die kWp so gewählt, dass der <b>Sommer ~100 % autark</b> ist, und dann ' +
+    'die <b>Winter-Autarkie</b> verglichen. <b>Süd steil</b> holt im Winter am meisten, <b>Ost-West</b> deckt den ' +
+    'Tagesverlauf (morgens/abends) am besten, <b>Süd 35°</b> den höchsten Jahresertrag. Hohe Autarkie braucht einen ' +
+    '<b>Speicher</b> (sonst nur Tagesdeckung). <b>Winter 100 % ist mit PV allein nicht möglich</b> – die Zahlen sind ' +
+    'Richtwerte für ~50° N; den exakten Standort-Ertrag liefert die PVGIS-Abfrage.',
   'pv-build': () => 'Direkter Preisvergleich: dein <b>Komplett-Set</b> (Selbstbau) gegen das <b>Komplett-Angebot</b> ' +
     'der Fachfirma, abzüglich <b>Förderung</b>. Einfach beide Zahlen eintragen – ich zeige die Differenz und, wenn ' +
     'oben eine kWp-Größe steht, den Preis pro kWp. Mit den Buttons übernimmst du den Wert als Investition in die ' +
@@ -2913,7 +2919,8 @@ function simulatePv(p) {
   const shDaily = shAvgDaily();
   const hpDaily = hpAvgDaily();
   const hpAnnual = hpDaily * 365;
-  const pvShare = pvMonth(), hpSeas = normFrac(HP_SEASON);
+  const pvShare = p.pvShareMonth || pvMonth(), hpSeas = normFrac(HP_SEASON);
+  const pvHourFn = p.pvHourFn || pvHourFractions;
   let Y = 0, S = 0, F = 0, G = 0, L = 0, repDay = null;
   const monthly = [];
   const evDayBase = p.evAnnual / 365;
@@ -2926,7 +2933,7 @@ function simulatePv(p) {
     const dayHp = (useReal ? hpMonthEst(m) : hpAnnual * (0.35 * (days / 365) + 0.65 * hpSeas[m])) / days;
     const dayEv = evDayBase * (1 + 0.12 * Math.cos(2 * Math.PI * m / 12)); // a bit more in winter
     const dayAc = (p.acAnnual * acShare[m]) / days;
-    const pvH = pvHourFractions(m);
+    const pvH = pvHourFn(m);
     const carCap = p.v2h ? p.carKwh : 0;
     let battery = 0, carBatt = 0, mDirect = 0, mBatt = 0, mFeed = 0, mGrid = 0, mPv = 0, mLoad = 0;
     let mSh = 0, mHp = 0, mEv = 0, mAc = 0;
@@ -3006,6 +3013,68 @@ function curtailEstimate(p) {
     }
   }
   return C;
+}
+
+// ---- Optimale Ausrichtung ------------------------------------------------ #
+// Representative central-European monthly PRODUCTION profiles per orientation
+// (relative, normalised at use) + annual specific yield (kWh/kWp·a). Steeper
+// tilt shifts yield into winter at the cost of annual total; low tilt east/west
+// spreads it over the day (morning+evening) which matches household load.
+const ORIENTATIONS = [
+  { id: 'south35', label: 'Süd, 30–35°', hint: 'Höchster Jahresertrag, Mittagsspitze',
+    spec: 1000, tilt: 35, az: 0,
+    month: [0.028, 0.048, 0.083, 0.112, 0.128, 0.128, 0.130, 0.114, 0.088, 0.063, 0.037, 0.024] },
+  { id: 'south65', label: 'Süd, steil 60–70°', hint: 'Winter-optimiert (mehr Dez/Jan)',
+    spec: 900, tilt: 65, az: 0,
+    month: [0.050, 0.068, 0.092, 0.102, 0.104, 0.102, 0.104, 0.103, 0.092, 0.074, 0.056, 0.045] },
+  { id: 'eastwest', label: 'Ost-West, flach 15°', hint: 'Breite Tagesdeckung (früh+abends)',
+    spec: 950, tilt: 15, az: 0, ew: true,
+    month: [0.022, 0.042, 0.080, 0.115, 0.135, 0.135, 0.137, 0.117, 0.086, 0.058, 0.030, 0.020] },
+];
+// East-west daily shape: two humps (morning + afternoon) → broader than a south
+// midday bell, so more PV meets the morning/evening household load directly.
+function ewHourFn(m) {
+  const pm = pvMonth();
+  const seasonal = (pm[m] - Math.min(...pm)) / (Math.max(...pm) - Math.min(...pm) || 1);
+  const s = 2.0 + 1.2 * seasonal;
+  const raw = [];
+  for (let h = 0; h < 24; h++)
+    raw.push(Math.exp(-((h + 0.5 - 10) ** 2) / (2 * s * s)) + Math.exp(-((h + 0.5 - 16) ** 2) / (2 * s * s)));
+  return normFrac(raw);
+}
+// Self-sufficiency (self ÷ load) over a set of month indices.
+function seasonAutarky(r, months) {
+  let self = 0, load = 0;
+  months.forEach(m => { const x = r.monthly[m]; if (x) { self += x.direct + x.batt; load += x.load; } });
+  return load > 0 ? self / load : 0;
+}
+// Recommend kWp + orientation: size each orientation so SUMMER is ~fully
+// self-sufficient (≥ target), then report winter/annual autarky. A battery is
+// required for high autarky; use the user's, else suggest one.
+function optimizeOrientation() {
+  const base = pvInputs();
+  if (!(shAvgDaily() > 0 || hpAvgDaily() > 0)) return null;
+  // load is independent of PV → get the summer daily load from a zero-PV probe
+  const probe = simulatePv({ ...base, kwp: 0, batt: 0, v2h: false, cap60: false });
+  const mL = probe.monthly.map(x => x.load);
+  const summerDaily = (mL[5] + mL[6] + mL[7]) / (30 + 31 + 31);
+  const battSuggested = base.batt <= 0;
+  const batt = base.batt > 0 ? base.batt : Math.max(3, Math.round(summerDaily * 0.6));
+  const SUMMER = [5, 6, 7], WINTER = [11, 0, 1], target = 0.97;   // ≈ „100 %" praktisch
+  const sim = (o, kwp) => simulatePv({ ...base, kwp, batt, v2h: false, cap60: false,
+    spec: o.spec, pvShareMonth: normFrac(o.month), pvHourFn: o.ew ? ewHourFn : null });
+  const results = ORIENTATIONS.map(o => {
+    let kwp = null, r = null;
+    for (let k = 1; k <= 30; k += 0.5) {
+      r = sim(o, k);
+      if (seasonAutarky(r, SUMMER) >= target) { kwp = k; break; }
+    }
+    const capped = kwp == null;
+    if (capped) { kwp = 30; r = sim(o, 30); }
+    return { o, kwp, capped, summerAut: seasonAutarky(r, SUMMER),
+      winterAut: seasonAutarky(r, WINTER), yearAut: r.autarky, yield_kwh: r.yield_kwh };
+  });
+  return { results, batt, battSuggested, summerDaily };
 }
 
 // Per month: a stacked PV bar (direct self / battery self / feed-in) next to a
@@ -3318,6 +3387,65 @@ function renderPv() {
     (v2hNote ? `<div class="note" style="margin-top:10px;line-height:1.5">${v2hNote}</div>` : '');
 
   renderBuildCompare(p);
+  renderPvOrient();
+}
+// Render the orientation/sizing recommendation.
+function renderPvOrient() {
+  const card = $('pv-orient-card'); if (!card) return;
+  const opt = optimizeOrientation();
+  if (!opt) { $('pv-orient-body').innerHTML = '<div class="note">Noch keine Verbrauchsdaten – sobald die Bridge misst, rechne ich die beste Ausrichtung.</div>'; return; }
+  const { results, batt, battSuggested, summerDaily } = opt;
+  // winter-optimised pick = highest winter autarky (reaching the summer goal)
+  const feasible = results.filter(r => !r.capped);
+  const pool = feasible.length ? feasible : results;
+  const best = pool.slice().sort((a, b) => b.winterAut - a.winterAut)[0];
+  const pct = v => `${fmt(Math.min(v * 100, 100), 0)} %`;
+  const rowsHtml = results.map(r => {
+    const isBest = r.o.id === best.o.id;
+    return `<tr style="${isBest ? 'font-weight:600' : ''}">` +
+      `<td style="padding:5px 0">${isBest ? '★ ' : ''}${esc(r.o.label)}<br><span style="color:var(--muted);font-weight:400;font-size:12px">${esc(r.o.hint)}</span></td>` +
+      `<td style="text-align:right;padding:5px 6px">${fmt(r.kwp, 1)}${r.capped ? '+' : ''} kWp</td>` +
+      `<td style="text-align:right;padding:5px 6px;color:${COL.pv}">${pct(r.summerAut)}</td>` +
+      `<td style="text-align:right;padding:5px 6px;color:${COL.hp}">${pct(r.winterAut)}</td>` +
+      `<td style="text-align:right;padding:5px 0">${pct(r.yearAut)}</td></tr>`;
+  }).join('');
+  $('pv-orient-body').innerHTML =
+    `<table style="width:100%;border-collapse:collapse;font-size:14px">` +
+    `<tr style="color:var(--muted);font-size:12px;border-bottom:1px solid var(--card-bd,#2a2f3a)">` +
+    `<th style="text-align:left;padding:4px 0">Ausrichtung</th><th style="text-align:right;padding:4px 6px">kWp</th>` +
+    `<th style="text-align:right;padding:4px 6px">Sommer</th><th style="text-align:right;padding:4px 6px">Winter</th>` +
+    `<th style="text-align:right;padding:4px 0">Jahr</th></tr>${rowsHtml}</table>` +
+    `<div style="display:flex;gap:8px;margin-top:12px">` +
+    `<button class="btn sec" id="pv-orient-use" style="flex:1">★ Empfehlung übernehmen</button></div>`;
+  $('pv-orient-note').innerHTML =
+    `<b>Empfehlung:</b> <b>${esc(best.o.label)}</b> mit ~<b>${fmt(best.kwp, 1)} kWp</b>${battSuggested ? ` und ~<b>${batt} kWh</b> Speicher` : ''}. ` +
+    `Damit ist der <b>Sommer praktisch autark</b> (${pct(best.summerAut)}) und der <b>Winter</b> so gut es geht gedeckt ` +
+    `(<b>${pct(best.winterAut)}</b>). ` +
+    `<span style="color:var(--muted)">Die kWp-Zahl ist jeweils so gewählt, dass der Sommer ~100 % erreicht. ` +
+    `<b>Winter 100 % ist mit PV allein nicht möglich</b> (kurze Tage, flache Sonne) – dafür bräuchte es ein Vielfaches an ` +
+    `Fläche; wirtschaftlich deckt man den Winter besser über Netz/dynamischen Tarif. Steile Südausrichtung holt im ` +
+    `Winter am meisten heraus, Ost-West deckt den <b>Tagesverlauf</b> (morgens/abends) am besten. ` +
+    (battSuggested ? `Ohne Speicher ist hohe Autarkie nicht erreichbar – daher mit ${batt} kWh gerechnet. ` : `Gerechnet mit deinem ${batt} kWh Speicher. `) +
+    `Richtwerte für ~50° N; genaue Zahlen über die PVGIS-Abfrage im Setup.</span>`;
+  const btn = $('pv-orient-use');
+  if (btn) btn.onclick = () => {
+    const setLS = (k, v) => { try { localStorage.setItem(k, String(v)); } catch (e) {} };
+    const kEl = $('pv-kwp'); if (kEl) { kEl.value = best.kwp; setLS(PV_LS.kwp, best.kwp); }
+    // the orientation dropdown only carries an annual yield → pick the nearest option
+    const opts = [1000, 950, 880, 800];
+    const near = opts.reduce((a, b) => Math.abs(b - best.o.spec) < Math.abs(a - best.o.spec) ? b : a);
+    const oEl = $('pv-orient'); if (oEl) { oEl.value = String(near); setLS(PV_LS.orient, near); }
+    if (battSuggested) { const bEl = $('pv-batt'); if (bEl) { bEl.value = batt; setLS(PV_LS.batt, batt); } }
+    // prefill the PVGIS tilt/azimuth so the user can fetch the exact (winter) curve
+    const tEl = $('pv-tilt'); if (tEl) { tEl.value = best.o.tilt; setLS(PV_LS.tilt, best.o.tilt); }
+    const aEl = $('pv-az'); if (aEl) { aEl.value = best.o.az; setLS(PV_LS.az, best.o.az); }
+    renderPv();
+    const t = $('toast');
+    if (t) { t.innerHTML = `Übernommen: <b>${fmt(best.kwp, 1)} kWp</b>, ${esc(best.o.label)}` +
+      `${battSuggested ? `, ${batt} kWh Speicher` : ''}. <span style="color:var(--muted)">Für die exakte ` +
+      `${esc(best.o.label)}-Kurve oben „Ertrag von PVGIS holen" (Neigung/Azimut sind schon eingetragen).</span>`;
+      t.hidden = false; clearTimeout(_toastT); _toastT = setTimeout(() => { t.hidden = true; }, 9000); }
+  };
 }
 // Selbstbau vs. Fachfirma: just two prices – your complete DIY set vs. the
 // turnkey offer (minus subsidy) – so you directly see which is cheaper.
