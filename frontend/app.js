@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-03 · Flaechen-Auswahl per Haekchen + Kombi-Card; EV/Klima-Doppelzaehlung behoben'
+const APP_VERSION = '2026-10-03 · Flachdach-Belegungsfaktor neigungsabhaengig (flach laid = dicht); Azimut-Hinweis'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -3213,7 +3213,10 @@ function surfaceLayout(s) {
       summerMonth: d.summerMonth * f, peakKw: d.peakKw * f };
   }
   const tilt = (s.tilt != null && s.tilt !== '') ? +s.tilt : t.tilt;
-  const kwp = area * t.usable * MOD_DENSITY, d = genDetail(kwp, tilt, az);
+  // flat/garden pack tilt-dependently (dense when laid flat, sparser when
+  // aufgeständert); pitched roofs/terraces/walls use their fixed structural share
+  const usable = (s.type === 'flat' || s.type === 'garden') ? flatUsable(tilt) : t.usable;
+  const kwp = area * usable * MOD_DENSITY, d = genDetail(kwp, tilt, az);
   return { flexible: false, az, shade, area, tilt, kwp, modules: Math.round(kwp / MOD_WP),
     spec: d.spec * f, annual: d.annual * f, winterDay: d.winterDay * f, winterMonth: d.winterMonth * f,
     summerMonth: d.summerMonth * f, peakKw: d.peakKw * f };
@@ -3745,7 +3748,9 @@ function renderSurfaces() {
       const place = L.flexible
         ? `Flachdach/Freiland: empfohlene <b>Aufständerung ${fmt(L.tilt, 0)}°</b> → <b>${L.modules} Module</b> (~${fmt(L.kwp, 1)} kWp). ` +
           `<span style="color:var(--muted)">Flacher = mehr Module (mehr kWp), steiler = mehr Ertrag je Modul aber mit Reihenabstand weniger Module.</span>`
-        : `<b>${L.modules} Module</b> (~${fmt(L.kwp, 1)} kWp) in <b>Dachneigung ${fmt(L.tilt, 0)}°</b>.`;
+        : `<b>${L.modules} Module</b> (~${fmt(L.kwp, 1)} kWp) in <b>Neigung ${fmt(L.tilt, 0)}°</b>.`;
+      const flatAz = L.tilt <= 10 && Math.abs(L.az) >= 45
+        ? ` <span style="color:var(--muted)">Bei so flacher Neigung spielt die Himmelsrichtung kaum eine Rolle – das Modul schaut fast senkrecht nach oben, nicht „nach Norden".</span>` : '';
       const gen = `🔆 <b>${fmt(L.winterDay, 1)} kWh/Tag</b> im Winter · <b>${fmt(L.summerMonth, 0)} kWh/Monat</b> im Sommer · Spitze ~<b>${fmt(L.peakKw, 1)} kW</b>.`;
       // per m² winter vs summer + seasonal spread
       const area = Math.max(1, +it.s.area || 1);
@@ -3781,7 +3786,7 @@ function renderSurfaces() {
       }
       _surfYear[it.i] = buildSurfaceYear(L);
       const chart = yearChart(_surfYear[it.i].yld, _surfYear[it.i].load, it.i);
-      return head + `<div class="note" style="margin:-2px 0 12px;line-height:1.55">${place}<br>${gen}${matchHtml}${spread}${tbl}${chart}</div>`;
+      return head + `<div class="note" style="margin:-2px 0 12px;line-height:1.55">${place}${flatAz}<br>${gen}${matchHtml}${spread}${tbl}${chart}</div>`;
     }).join('');
   }
   // recommendation / totals
