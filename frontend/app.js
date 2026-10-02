@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-02 · Flaechen-Belegung nutzt Stunden-Verbrauch (Direkt-Eigenverbrauch) + Tages-Deckung'
+const APP_VERSION = '2026-10-02 · Belegung erklaert sich (warum nicht alles/Winter/Fassade) in Klartext'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -3725,16 +3725,45 @@ function renderSurfaces() {
       `<div class="kpi sm"><div class="v" style="color:${COL.pv}">${pct(rec.summerAut)}</div><div class="l">Sommer-Autarkie</div></div>` +
       `<div class="kpi sm"><div class="v" style="color:${COL.hp}">${pct(rec.winterAut)}</div><div class="l">Winter-Autarkie</div></div></div>`;
     const usedLabels = rec.chosen.map(x => x.m.label);
-    noteEl.innerHTML =
-      `<b>Beste Belegung:</b> ${esc([...new Set(usedLabels)].join(', '))} → ~<b>${fmt(rec.comb.kwp, 1)} kWp</b> ` +
+    const reserveKwp = Math.max(0, rec.all.kwp - rec.comb.kwp);
+    const steepReserve = rec.items.find(it => !rec.chosenIds.has(it.i) && it.m.tilt >= 60);
+    // headline
+    let why = `<b>Beste Belegung:</b> ${esc([...new Set(usedLabels)].join(', '))} → ~<b>${fmt(rec.comb.kwp, 1)} kWp</b> ` +
       `(${fmt(rec.comb.spec, 0)} kWh/kWp)${rec.battSuggested ? `, mit ~<b>${rec.batt} kWh</b> Speicher` : ''}. ` +
-      (rec.reached ? `Damit ist der <b>Sommer praktisch autark</b> (${pct(rec.summerAut)}). `
-        : `Auch voll belegt reicht es im Sommer nur für <b>${pct(rec.summerAut)}</b> – mehr Fläche bräuchte es für 100 %. `) +
-      `Winter: <b>${pct(rec.winterAut)}</b>. ` +
-      `<span style="color:var(--muted)">✓ = für die beste Belegung genutzt, ○ = Reserve (Rest-Dachfläche). Die Reihenfolge ` +
-      `richtet sich danach, welche Fläche am meisten <b>direkt selbst genutzten</b> Strom bringt – das nutzt deinen ` +
-      `<b>Stunden-Verbrauch</b> (Tagesprofil + Wärmepumpe/Auto), nicht nur den Ertrag. „Als Anlage übernehmen" rechnet ` +
-      `den ganzen PV-Tab mit dieser Belegung (kWp + echte Monatskurve). Richtwerte ~50° N; exakt via PVGIS.</span>`;
+      (rec.reached ? `Sommer praktisch autark (<b>${pct(rec.summerAut)}</b>), Winter <b>${pct(rec.winterAut)}</b>.`
+        : `Sommer <b>${pct(rec.summerAut)}</b>, Winter <b>${pct(rec.winterAut)}</b> – für 100 % im Sommer fehlt Fläche.`);
+    // Warum diese Belegung?
+    why += `<div style="margin-top:10px"><b>Warum so?</b></div><ul style="margin:4px 0 0;padding-left:18px;line-height:1.5">`;
+    why += `<li><b>Ziel = Sommer selbst nutzen:</b> Ich belege so viel, dass im Sommer fast dein ganzer Strom aus eigener ` +
+      `PV kommt. Entscheidend ist der <b>direkt selbst genutzte</b> Strom (dein Stunden-Verbrauch) – nicht der höchste Ertrag.</li>`;
+    if (rec.reached && reserveKwp > 0.3) {
+      why += `<li><b>Warum nicht alles?</b> Die restlichen ~${fmt(reserveKwp, 1)} kWp (○ Reserve) würden im Sommer kaum mehr ` +
+        `Eigenverbrauch bringen – der Überschuss ginge fast nur <b>ins Netz</b> (geringe Vergütung). Sie lohnen erst, wenn dein ` +
+        `Verbrauch steigt (Auto/Wärmepumpe) oder ein <b>größerer Speicher</b> dazukommt.</li>`;
+    } else if (!rec.reached) {
+      why += `<li><b>Warum alles?</b> Selbst voll belegt wird der Sommer nicht ganz autark – deshalb nutze ich jede Fläche.</li>`;
+    }
+    why += `<li><b>Warum nicht weniger?</b> Mit weniger kWp wäre der Sommer nicht mehr voll gedeckt – du müsstest auch im ` +
+      `Sommer Strom zukaufen.</li>`;
+    why += `<li><b>Warum „vernachlässigen" wir den Winter?</b> Nicht aus Desinteresse: im Dezember/Januar ist die Sonne ` +
+      `kurz und flach – <b>100 % Winter-Autarkie ist mit PV praktisch unmöglich</b>. Dafür bräuchte es ein Vielfaches an ` +
+      `Fläche, deren riesiger <b>Sommer-Überschuss</b> dann ungenutzt ins Netz ginge (teuer, unwirtschaftlich). Den ` +
+      `Winter-Rest deckst du günstiger über <b>Netz/dynamischen Tarif</b>. Trotzdem fließt der Winter in die Auswahl ein ` +
+      `(als Gewichtung) – er ist nur nicht das Abbruch-Ziel.</li>`;
+    if (steepReserve) {
+      why += `<li><b>Warum nicht die ${esc(steepReserve.m.label)} (${fmt(steepReserve.m.tilt, 0)}°)?</b> Stimmt – ihre ` +
+        `Sommer/Winter-<b>Spannweite</b> ist kleiner (gleichmäßiger). Aber sie liefert <b>absolut viel weniger</b> ` +
+        `(senkrecht ~70 % vom Optimum, ${fmt(steepReserve.m.spec, 0)} statt ${fmt(rec.comb.spec, 0)} kWh/kWp): ihr Winter-Plus ` +
+        `ist in kWh klein und ändert nichts daran, dass der Winter &lt;100 % bleibt – fürs Sommer-Ziel bringen die ` +
+        `ertragstärkeren Flächen mehr. Ist dir <b>Winterertrag wichtiger als Wirtschaftlichkeit</b>, nimm sie bewusst dazu ` +
+        `(sie steht als ○ Reserve bereit).</li>`;
+    }
+    why += `</ul>`;
+    why += `<div class="note" style="margin-top:8px;color:var(--muted)">✓ = genutzt, ○ = Reserve. Reihenfolge nach ` +
+      `höchstem <b>Selbstverbrauch</b> (dein Stunden-Profil). Der Button „💡 kWp &amp; Speicher vorschlagen" oben zielt dagegen ` +
+      `auf <b>Jahresdeckung</b> (Ertrag ≈ Jahresverbrauch) – darum kann dessen kWp-Zahl abweichen. „Als Anlage übernehmen" ` +
+      `rechnet den ganzen PV-Tab mit dieser Belegung. Richtwerte ~50° N; exakt via PVGIS.</div>`;
+    noteEl.innerHTML = why;
     if (useBtn) useBtn.hidden = false;
   }
 }
