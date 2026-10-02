@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-03 · Verlauf-Verbrauchskurve (Haus+WP); EV/Klima sind geplante Zusatzlast (nur PV)'
+const APP_VERSION = '2026-10-04 · Verbrauchs-Tooltip zeigt Monatssumme (z. B. September gesamt); AEG/Electrolux ausgeblendet'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -944,6 +944,10 @@ function aegBestStart(kwh) {
 
 function renderAppliances() {
   const card = $('ov-aeg-card'); if (!card) return;
+  // AEG/Electrolux integration is currently hidden (brings no value for this
+  // setup). Code + bridge stay intact so it can be re-enabled later; for now
+  // the overview card never appears.
+  card.hidden = true; return;
   const list = (STATE.appliances && STATE.appliances.appliances) || [];
   if (!list.length) { card.hidden = true; return; }
   card.hidden = false;
@@ -5097,11 +5101,19 @@ function init() {
       const left = 2, right = CW - 2;
       let di = Math.round((fx * CW - left) / (right - left) * 364); di = Math.min(364, Math.max(0, di));
       const haus = _consumYear.haus[di], wp = _consumYear.wp[di], d = new Date(new Date().getFullYear(), 0, 1 + di);
+      // sum the whole calendar month the hovered day belongs to, so it can be
+      // checked against the meter (e.g. ~485 kWh for September)
+      const mo = d.getMonth();
+      let mStart = 0; for (let k = 0; k < mo; k++) mStart += DIM[k];
+      let mHaus = 0, mWp = 0;
+      for (let k = mStart; k < mStart + DIM[mo] && k < 365; k++) { mHaus += _consumYear.haus[k]; mWp += _consumYear.wp[k]; }
       const t = $('toast');
       if (t) {
         t.innerHTML = `<b>${d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' })}</b> · ` +
           `🏠 Hausstrom <b>${kwh(haus, 1)}</b> · 🔥 WP <b>${kwh(wp, 1)}</b>` +
-          `<div class="note" style="margin-top:2px;color:var(--muted)">Gesamt <b>${kwh(haus + wp, 1)}/Tag</b></div>`;
+          `<div class="note" style="margin-top:2px;color:var(--muted)">Gesamt <b>${kwh(haus + wp, 1)}/Tag</b></div>` +
+          `<div class="note" style="margin-top:2px"><b>${MON[mo]}</b> gesamt <b>${kwh(mHaus + mWp, 0)}</b> ` +
+          `<span style="color:var(--muted)">(🏠 ${kwh(mHaus, 0)} + 🔥 ${kwh(mWp, 0)})</span></div>`;
         t.hidden = false; clearTimeout(_toastT); _toastT = setTimeout(() => { t.hidden = true; }, 5000);
       }
       const ln = svgEl.querySelector('.syc');
