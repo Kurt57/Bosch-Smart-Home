@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-02 · Belegung erklaert sich (warum nicht alles/Winter/Fassade) in Klartext'
+const APP_VERSION = '2026-10-02 · Flaeche: Jahres-Diagramm Ertrag vs. Verbrauch (365 Tage, Hover-Details)'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -3231,6 +3231,58 @@ function surfaceMatch(s) {
   let ov = 0; for (let h = 0; h < 24; h++) ov += Math.min(pv[h], load[h]);
   return ov;
 }
+// Smooth a 12-month daily-average series into 365 daily values (linear between
+// month centres) – a clean climatological curve.
+function interpYear(md) {
+  const centers = []; let cum = 0;
+  for (let m = 0; m < 12; m++) { centers.push([cum + DIM[m] / 2, md[m]]); cum += DIM[m]; }
+  const out = [];
+  for (let d = 0; d < 365; d++) {
+    if (d <= centers[0][0]) { out.push(centers[0][1]); continue; }
+    if (d >= centers[11][0]) { out.push(centers[11][1]); continue; }
+    let i = 0; while (i < 11 && centers[i + 1][0] < d) i++;
+    const [x0, y0] = centers[i], [x1, y1] = centers[i + 1];
+    out.push(y0 + (y1 - y0) * (d - x0) / (x1 - x0));
+  }
+  return out;
+}
+// Per-surface year series: expected daily yield (this surface) and expected
+// daily whole-house consumption, as 365-value climatological curves.
+function buildSurfaceYear(layout) {
+  const yShare = monthForTilt(layout.tilt);
+  const yMD = yShare.map((s, m) => layout.annual * s / DIM[m]);
+  const p = pvInputs(), shD = shAvgDaily(), hpAnnual = hpAvgDaily() * 365;
+  const useReal = !!hpRealMonthMap(), hpSeas = normFrac(HP_SEASON), acShare = normFrac(AC_MONTH);
+  const evDayBase = p.evAnnual / 365;
+  const loadMD = [];
+  for (let m = 0; m < 12; m++) {
+    const dayHp = (useReal ? hpMonthEst(m) : hpAnnual * (0.35 * (DIM[m] / 365) + 0.65 * hpSeas[m])) / DIM[m];
+    const dayEv = evDayBase * (1 + 0.12 * Math.cos(2 * Math.PI * m / 12));
+    const dayAc = p.acAnnual * acShare[m] / DIM[m];
+    loadMD[m] = shD + dayHp + dayEv + dayAc;
+  }
+  return { yld: interpYear(yMD), load: interpYear(loadMD) };
+}
+let _surfYear = {};
+// 365-day chart: yield (green area/line) vs. whole-house load (blue line).
+function yearChart(yld, load, idx) {
+  const h = 118, top = 8, base = h - 16, left = 2, right = CW - 2, plotW = right - left;
+  const max = Math.max(0.001, ...yld, ...load);
+  const X = i => left + i / 364 * plotW, Y = v => base - (v / max) * (base - top);
+  const line = arr => arr.map((v, i) => (i ? 'L' : 'M') + X(i).toFixed(1) + ' ' + Y(v).toFixed(1)).join(' ');
+  const area = `M${X(0).toFixed(1)} ${base} ` + yld.map((v, i) => 'L' + X(i).toFixed(1) + ' ' + Y(v).toFixed(1)).join(' ') + ` L${X(364).toFixed(1)} ${base} Z`;
+  const MON3 = ['J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D'];
+  let ticks = '', cum = 0;
+  for (let m = 0; m < 12; m++) { ticks += `<text class="axis" x="${X(cum + DIM[m] / 2).toFixed(1)}" y="${h - 3}" text-anchor="middle" style="font-size:9px">${MON3[m]}</text>`; cum += DIM[m]; }
+  const inner = `<path d="${area}" fill="${COL.pv}" opacity="0.26"/>` +
+    `<path d="${line(yld)}" fill="none" stroke="${COL.pv}" stroke-width="1.5"/>` +
+    `<path d="${line(load)}" fill="none" stroke="${COL.sh}" stroke-width="1.5"/>` +
+    `<line class="syc" x1="0" y1="${top}" x2="0" y2="${base}" stroke="var(--ink)" stroke-width="1" opacity="0"/>` + ticks;
+  return `<div class="syhit" data-idx="${idx}" style="touch-action:none;margin-top:6px">${svg(h, inner)}</div>` +
+    `<div class="legend" style="margin-top:2px"><div class="it"><span class="sw" style="background:${COL.pv}"></span>Ertrag (Fläche)</div>` +
+    `<div class="it"><span class="sw" style="background:${COL.sh}"></span>Hausverbrauch</div>` +
+    `<span style="color:var(--muted);font-size:11px;margin-left:6px">kWh/Tag übers Jahr – tippen/fahren für Details</span></div>`;
+}
 // Combine a set of surface metrics into one array: total kWp, production-weighted
 // monthly shape and effective specific yield.
 function combineSurfaces(ms) {
@@ -3660,6 +3712,7 @@ function renderSurfaces() {
   if (rec.empty || !rec.items.length) {
     list.innerHTML = '<div class="note">Noch keine Fläche eingetragen – unten hinzufügen.</div>';
   } else {
+    _surfYear = {};
     list.innerHTML = rec.items.map(it => {
       const m = it.m, L = m.layout, used = rec.chosenIds && rec.chosenIds.has(it.i);
       const sub = `${fmt(it.s.area || 0, 0)} m² · Azimut ${m.az > 0 ? '+' : ''}${fmt(m.az, 0)}°` +
@@ -3706,7 +3759,9 @@ function renderSurfaces() {
         const q = it.match >= 0.55 ? 'passt gut' : it.match >= 0.42 ? 'passt mittel' : 'passt wenig';
         matchHtml = `<br>🕑 <b>Tages-Deckung ${mp}/100</b> – ${q} zu deinem Stundenverbrauch (je höher, desto mehr PV kannst du direkt nutzen).`;
       }
-      return head + `<div class="note" style="margin:-2px 0 12px;line-height:1.55">${place}<br>${gen}${matchHtml}${spread}${tbl}</div>`;
+      _surfYear[it.i] = buildSurfaceYear(L);
+      const chart = yearChart(_surfYear[it.i].yld, _surfYear[it.i].load, it.i);
+      return head + `<div class="note" style="margin:-2px 0 12px;line-height:1.55">${place}<br>${gen}${matchHtml}${spread}${tbl}${chart}</div>`;
     }).join('');
   }
   // recommendation / totals
@@ -4776,6 +4831,33 @@ function init() {
     const idx = +b.dataset.idx; const arr = loadSurfaces();
     if (idx >= 0 && idx < arr.length) { arr.splice(idx, 1); saveSurfaces(arr); renderSurfaces(); }
   });
+  // hover/tap on a per-surface year chart → show day, yield, consumption
+  if (surfList) {
+    const onYear = (e) => {
+      const hit = e.target.closest && e.target.closest('.syhit'); if (!hit) return;
+      const idx = +hit.dataset.idx, ser = _surfYear[idx]; if (!ser) return;
+      const svgEl = hit.querySelector('svg'); if (!svgEl) return;
+      const rect = svgEl.getBoundingClientRect();
+      const cx = (e.touches && e.touches[0] ? e.touches[0].clientX : e.clientX);
+      const fx = Math.min(1, Math.max(0, (cx - rect.left) / (rect.width || 1)));
+      const left = 2, right = CW - 2;
+      let di = Math.round((fx * CW - left) / (right - left) * 364);
+      di = Math.min(364, Math.max(0, di));
+      const d = new Date(new Date().getFullYear(), 0, 1 + di);
+      const t = $('toast');
+      if (t) {
+        t.innerHTML = `<b>${d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' })}</b> · ` +
+          `☀️ Ertrag <b>${kwh(ser.yld[di], 1)}</b> · 🏠 Verbrauch <b>${kwh(ser.load[di], 1)}</b>` +
+          `<div class="note" style="margin-top:2px;color:var(--muted)">${ser.yld[di] >= ser.load[di] ? 'Überschuss ' + kwh(ser.yld[di] - ser.load[di], 1) + ' (einspeisen/laden)' : 'Rest ' + kwh(ser.load[di] - ser.yld[di], 1) + ' aus Netz/Speicher'}</div>`;
+        t.hidden = false; clearTimeout(_toastT); _toastT = setTimeout(() => { t.hidden = true; }, 5000);
+      }
+      const ln = svgEl.querySelector('.syc');
+      if (ln) { const lx = (left + (right - left) * di / 364).toFixed(1); ln.setAttribute('x1', lx); ln.setAttribute('x2', lx); ln.setAttribute('opacity', '0.7'); }
+      e.stopPropagation();
+    };
+    surfList.addEventListener('pointermove', onYear);
+    surfList.addEventListener('pointerdown', onYear);
+  }
   const surfUse = $('pv-surf-use');
   if (surfUse) surfUse.addEventListener('click', () => {
     const rec = recommendCoverage();
