@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-05 · Verbrauch übers Jahr: gemessene Tage nutzen echte Werte (gemessen + Ø Rest) statt nur Durchschnitt; Wärme-Prognose kalibriert; AEG aus'
+const APP_VERSION = '2026-10-05 · gemessene Tage auch im PV-Verbrauch; kalte Monate (Okt–Dez) über Außentemperatur/Gebäudemodell realistischer; Wärme-Prognose kalibriert'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -492,6 +492,32 @@ function hpTheoryMonth(m) {
   const r = computeHeat(buildData()), hs = normFrac(HP_SEASON);
   return r.eHeat * hs[m] + r.eDhw * DIM[m] / 365;
 }
+// Temperature/physics-anchored winter estimate: calibrate the building model to
+// the REAL measured level using the months we've actually measured (overlap),
+// then read the cold months off that. The building model splits heating (very
+// seasonal) from hot water (flat) using the house's own heat demand, so Okt–Dez
+// come out higher than just scaling the mild autumn average by a generic share –
+// which is what made them look "too low". Needs ≥1 completed, self-measured
+// month; self-corrects once real winter months are measured (they then win).
+const HP_PHYS_W = 0.5; // weight of the physics estimate for not-yet-measured months
+function hpPhysicsCal() {
+  const byM = hpMeasuredByMonth(); if (!byM) return null;
+  const cm = new Date().getMonth();
+  let realS = 0, thS = 0;
+  Object.keys(byM).forEach(k => {
+    const m = +k, e = byM[m];
+    if (!e || e.source !== 'measured' || e.partial || m === cm) return; // completed self-measured only
+    const th = hpTheoryMonth(m);
+    if (th > 0 && e.kwh > 0) { realS += e.kwh; thS += th; }
+  });
+  if (thS <= 0) return null;
+  return Math.min(2.5, Math.max(0.4, realS / thS)); // bounded: a noisy single month can't explode winter
+}
+function hpMonthPhysics(m) {
+  const k = hpPhysicsCal(); if (k == null) return null;
+  const th = hpTheoryMonth(m);
+  return th > 0 ? th * k : null;
+}
 // Measured/estimated month for m, with the Bauphase excess dampened toward
 // theory when the correction is on.
 function hpMonthCorrected(m) {
@@ -563,7 +589,14 @@ function hpMonthEst(m) {
   if (hpAnnualReal() != null) {
     const byM = hpMeasuredByMonth();
     if (byM && byM[m] && byM[m].source === 'measured' && !byM[m].partial && m !== cm) return byM[m].kwh;
-    return hpAvgDaily() * hpDayFactor(m) * DIM[m];
+    const seasonal = hpAvgDaily() * hpDayFactor(m) * DIM[m];
+    // For not-yet-measured months, lean the colder ones toward the temperature-
+    // driven building model (calibrated to our real months) – more realistic for
+    // Okt–Dez than scaling the mild autumn by a generic share. Only ever raises
+    // a month above the real-anchored baseline (summer stays put).
+    const phys = hpMonthPhysics(m);
+    if (phys != null) return seasonal * (1 - HP_PHYS_W) + Math.max(seasonal, phys) * HP_PHYS_W;
+    return seasonal;
   }
   // No live data → fall back to the imported CSV history (only source we have).
   // current calendar month: scale the still-running partial value to a full month
@@ -3305,14 +3338,20 @@ function buildSurfaceYear(layout) {
   const p = pvInputs(), shD = householdBaseDaily(), hpAnnual = hpAvgDaily() * 365;
   const useReal = !!hpRealMonthMap(), hpSeas = normFrac(HP_SEASON), acShare = normFrac(AC_MONTH);
   const evDayBase = p.evAnnual / 365;
-  const loadMD = [];
+  // Build household + WP separately so we can overlay the real measured days
+  // (same logic as the Verlauf curve); the planned EV/A/C stays a smooth add-on.
+  const hausMD = [], wpMD = [], extraMD = [];
   for (let m = 0; m < 12; m++) {
-    const dayHp = (useReal ? hpMonthEst(m) : hpAnnual * (0.35 * (DIM[m] / 365) + 0.65 * hpSeas[m])) / DIM[m];
+    hausMD[m] = shD;
+    wpMD[m] = (useReal ? hpMonthEst(m) : hpAnnual * (0.35 * (DIM[m] / 365) + 0.65 * hpSeas[m])) / DIM[m];
     const dayEv = evDayBase * (1 + 0.12 * Math.cos(2 * Math.PI * m / 12));
     const dayAc = p.acAnnual * acShare[m] / DIM[m];
-    loadMD[m] = shD + dayHp + dayEv + dayAc;
+    extraMD[m] = dayEv + dayAc;
   }
-  return { yld: interpYear(yMD), load: interpYear(loadMD) };
+  const haus = interpYear(hausMD), wp = interpYear(wpMD), extra = interpYear(extraMD);
+  overlayMeasuredDays(haus, wp, shD);          // real values on measured days
+  const load = haus.map((v, i) => v + wp[i] + extra[i]);
+  return { yld: interpYear(yMD), load };
 }
 let _surfYear = {};
 // 365-day chart: yield (green area/line) vs. whole-house load (blue line).
@@ -3337,24 +3376,13 @@ function yearChart(yld, load, idx) {
 // Expected daily consumption over the year, split Hausstrom vs Wärmepumpe –
 // SAME composition as the PV-tab load (household base + EV + A/C, and the heat
 // pump per month), so the Verlauf curve matches the PV curve.
-function buildConsumptionYear() {
-  // Verlauf = ACTUAL consumption: household (meter total − WP, already incl. all
-  // real appliances) + heat pump. No planned EV/A/C from the PV planner, so it
-  // matches the PV load exactly when those are 0 and stays put otherwise.
-  const shBase = shAvgDaily(), hpAnnual = hpAvgDaily() * 365;
-  const useReal = !!hpRealMonthMap(), hpSeas = normFrac(HP_SEASON);
-  const hausMD = [], wpMD = [];
-  for (let m = 0; m < 12; m++) {
-    wpMD[m] = (useReal ? hpMonthEst(m) : hpAnnual * (0.35 * (DIM[m] / 365) + 0.65 * hpSeas[m])) / DIM[m];
-    hausMD[m] = shBase;
-  }
-  const haus = interpYear(hausMD), wp = interpYear(wpMD);
-  // Overlay REALLY measured days onto the smooth model. The Bosch modules only
-  // measure PART of the household (smarthome_kwh), so on a measured day we use
-  // that day's real module reading PLUS the AVERAGE of the not-individually-
-  // measured rest ("dark" load). Unmeasured/future days keep the flat average.
-  //   household(measured day) = gemessen(Tag) + (Ø Haushalt − Ø gemessen)
-  // The annual mean stays shBase, but measured days show the real variation.
+// Overlay REALLY measured days onto the smooth model curves (mutates haus & wp).
+// The Bosch modules only measure PART of the household (smarthome_kwh), so on a
+// measured day we use that day's real module reading PLUS the AVERAGE of the
+// not-individually-measured rest ("dark" load); the WP uses its real day value.
+// Unmeasured/future days keep the smooth model, so the annual mean is preserved.
+//   household(measured day) = gemessen(Tag) + (Ø Haushalt − Ø gemessen)
+function overlayMeasuredDays(haus, wp, shBase) {
   const days = (STATE.ov && STATE.ov.combined_daily) || [];
   const shVals = days.map(d => d.smarthome_kwh).filter(v => v != null && v >= 0);
   const avgMod = shVals.length ? shVals.reduce((a, b) => a + b, 0) / shVals.length : 0;
@@ -3367,9 +3395,24 @@ function buildConsumptionYear() {
     const doy = Math.round((new Date(yr, +p[1] - 1, +p[2]) - new Date(yr, 0, 1)) / 86400000);
     if (doy < 0 || doy > 364) return;
     if (d.smarthome_kwh != null) { haus[doy] = d.smarthome_kwh + avgDark; measured.push(doy); }
-    if (d.heatpump_kwh != null && d.heatpump_kwh > 0) wp[doy] = d.heatpump_kwh;  // real WP that day
+    if (wp && d.heatpump_kwh != null && d.heatpump_kwh > 0) wp[doy] = d.heatpump_kwh;
   });
-  return { haus, wp, measured, avgDark, avgMod };
+  return { measured, avgDark, avgMod };
+}
+function buildConsumptionYear() {
+  // Verlauf = ACTUAL consumption: household (meter total − WP, already incl. all
+  // real appliances) + heat pump. No planned EV/A/C from the PV planner, so it
+  // matches the PV load exactly when those are 0 and stays put otherwise.
+  const shBase = shAvgDaily(), hpAnnual = hpAvgDaily() * 365;
+  const useReal = !!hpRealMonthMap(), hpSeas = normFrac(HP_SEASON);
+  const hausMD = [], wpMD = [];
+  for (let m = 0; m < 12; m++) {
+    wpMD[m] = (useReal ? hpMonthEst(m) : hpAnnual * (0.35 * (DIM[m] / 365) + 0.65 * hpSeas[m])) / DIM[m];
+    hausMD[m] = shBase;
+  }
+  const haus = interpYear(hausMD), wp = interpYear(wpMD);
+  const ov = overlayMeasuredDays(haus, wp, shBase);
+  return { haus, wp, measured: ov.measured, avgDark: ov.avgDark, avgMod: ov.avgMod };
 }
 let _consumYear = null;
 // Stacked 365-day consumption chart: Hausstrom (bottom) + Wärmepumpe (top).
@@ -3412,8 +3455,8 @@ function renderConsumYear() {
     `Ø <b>${kwh(avg, 1)}/Tag</b> übers Jahr · aktuell (${MON[now]}) ~<b>${kwh(tot[cumD], 1)}/Tag</b> ` +
     `(Hausstrom ${kwh(s.haus[cumD], 1)} + WP ${kwh(s.wp[cumD], 1)}). ` + measNote +
     `<span style="color:var(--muted)">Das ist dein <b>tatsächlicher</b> Verbrauch (Zähler-Hausstrom + WP), <b>ohne</b> ` +
-    `geplantes E-Auto/Klima. Die PV-Kurve ist an gemessenen Tagen leicht abweichend (dort glatt), ` +
-    `sonst <b>identisch, solange E-Auto & Klima dort 0 sind</b>.</span>`;
+    `geplantes E-Auto/Klima. Die Verbrauchs-Kurve im PV-Tab nutzt jetzt dieselben gemessenen Tage und ist ` +
+    `<b>identisch, solange E-Auto & Klima dort 0 sind</b>.</span>`;
 }
 // Combine a set of surface metrics into one array: total kWp, production-weighted
 // monthly shape and effective specific yield.
