@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-04 · Wärme-Prognose auf echten Messwert kalibriert (konsistent mit Verlauf/Übersicht); Dunkelverbrauch = Zähler − Einzelgeräte; WP realistisch; AEG aus'
+const APP_VERSION = '2026-10-05 · Verbrauch übers Jahr: gemessene Tage nutzen echte Werte (gemessen + Ø Rest) statt nur Durchschnitt; Wärme-Prognose kalibriert; AEG aus'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -3348,7 +3348,28 @@ function buildConsumptionYear() {
     wpMD[m] = (useReal ? hpMonthEst(m) : hpAnnual * (0.35 * (DIM[m] / 365) + 0.65 * hpSeas[m])) / DIM[m];
     hausMD[m] = shBase;
   }
-  return { haus: interpYear(hausMD), wp: interpYear(wpMD) };
+  const haus = interpYear(hausMD), wp = interpYear(wpMD);
+  // Overlay REALLY measured days onto the smooth model. The Bosch modules only
+  // measure PART of the household (smarthome_kwh), so on a measured day we use
+  // that day's real module reading PLUS the AVERAGE of the not-individually-
+  // measured rest ("dark" load). Unmeasured/future days keep the flat average.
+  //   household(measured day) = gemessen(Tag) + (Ø Haushalt − Ø gemessen)
+  // The annual mean stays shBase, but measured days show the real variation.
+  const days = (STATE.ov && STATE.ov.combined_daily) || [];
+  const shVals = days.map(d => d.smarthome_kwh).filter(v => v != null && v >= 0);
+  const avgMod = shVals.length ? shVals.reduce((a, b) => a + b, 0) / shVals.length : 0;
+  const avgDark = Math.max(0, shBase - avgMod);
+  const now = new Date(), yr = now.getFullYear(), todayKey = localKey(now);
+  const measured = [];
+  days.forEach(d => {
+    if (!d.day || d.day === todayKey) return;                 // skip today (still partial)
+    const p = d.day.split('-'); if (p.length !== 3 || +p[0] !== yr) return;
+    const doy = Math.round((new Date(yr, +p[1] - 1, +p[2]) - new Date(yr, 0, 1)) / 86400000);
+    if (doy < 0 || doy > 364) return;
+    if (d.smarthome_kwh != null) { haus[doy] = d.smarthome_kwh + avgDark; measured.push(doy); }
+    if (d.heatpump_kwh != null && d.heatpump_kwh > 0) wp[doy] = d.heatpump_kwh;  // real WP that day
+  });
+  return { haus, wp, measured, avgDark, avgMod };
 }
 let _consumYear = null;
 // Stacked 365-day consumption chart: Hausstrom (bottom) + Wärmepumpe (top).
@@ -3382,12 +3403,17 @@ function renderConsumYear() {
     `<span style="color:var(--muted);font-size:11px;margin-left:6px">kWh/Tag – tippen/fahren für Details</span></div>`;
   const avg = tot.reduce((a, b) => a + b, 0) / 365;
   const now = new Date().getMonth(), cumD = DIM.slice(0, now).reduce((a, b) => a + b, 0) + 14;
+  const nMeas = (s.measured || []).length;
+  const measNote = nMeas
+    ? `<b>${nMeas} gemessene Tage</b> nutzen die echten Werte: gemessene Geräte des Tages <b>+ Ø des (noch) nicht gemessenen Rests</b> ` +
+      `(${kwh(s.avgDark, 1)}/Tag); übrige/künftige Tage den Tages-Ø. `
+    : '';
   $('h-consum-note').innerHTML =
     `Ø <b>${kwh(avg, 1)}/Tag</b> übers Jahr · aktuell (${MON[now]}) ~<b>${kwh(tot[cumD], 1)}/Tag</b> ` +
-    `(Hausstrom ${kwh(s.haus[cumD], 1)} + WP ${kwh(s.wp[cumD], 1)}). ` +
+    `(Hausstrom ${kwh(s.haus[cumD], 1)} + WP ${kwh(s.wp[cumD], 1)}). ` + measNote +
     `<span style="color:var(--muted)">Das ist dein <b>tatsächlicher</b> Verbrauch (Zähler-Hausstrom + WP), <b>ohne</b> ` +
-    `geplantes E-Auto/Klima. Die Verbrauchs-Kurve im PV-Tab ist <b>identisch, solange E-Auto & Klima dort 0 sind</b> – ` +
-    `trägst du dort geplante Werte ein, liegt die PV-Kurve entsprechend höher (Planung), diese hier bleibt gleich.</span>`;
+    `geplantes E-Auto/Klima. Die PV-Kurve ist an gemessenen Tagen leicht abweichend (dort glatt), ` +
+    `sonst <b>identisch, solange E-Auto & Klima dort 0 sind</b>.</span>`;
 }
 // Combine a set of surface metrics into one array: total kWp, production-weighted
 // monthly shape and effective specific yield.
