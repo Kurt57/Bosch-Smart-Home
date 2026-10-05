@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-05 · gemessene Tage auch im PV-Verbrauch; kalte Monate (Okt–Dez) über Außentemperatur/Gebäudemodell realistischer; Wärme-Prognose kalibriert'
+const APP_VERSION = '2026-10-05 · Nachtverbrauch & Speichergröße (Sonnenuntergang→-aufgang); netzfreie Monate aus Tagen (anteilig); Winter-Tagesprofil im PV-Tab'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -183,6 +183,11 @@ const INFO = {
     'Tagesverlauf (morgens/abends) am besten, <b>Süd 35°</b> den höchsten Jahresertrag. Hohe Autarkie braucht einen ' +
     '<b>Speicher</b> (sonst nur Tagesdeckung). <b>Winter 100 % ist mit PV allein nicht möglich</b> – die Zahlen sind ' +
     'Richtwerte für ~50° N; den exakten Standort-Ertrag liefert die PVGIS-Abfrage.',
+  'pv-night': () => 'Zeigt, wie viel Strom du von <b>Sonnenuntergang bis Sonnenaufgang</b> verbrauchst – genau die Menge, ' +
+    'die ein <b>Speicher</b> aus dem Tags-Überschuss überbrücken muss. Sonnenauf-/-untergang werden aus deinem <b>Standort</b> ' +
+    '(PV-Tab) und dem Datum berechnet, der nächtliche Verbrauch aus deinem <b>echten Stundenprofil</b> (Haushalt + Wärmepumpe). ' +
+    'Die <b>Übergangszeit</b> (Frühjahr/Herbst) ist der sinnvolle Auslegungspunkt: lange Nächte, die die PV aber noch füllen kann. ' +
+    'Die <b>Winternacht</b> ist am längsten, aber dann liefert die PV zu wenig, um den Speicher zu laden – größer dimensionieren lohnt dafür nicht.',
   'consum-year': () => 'Erwarteter <b>Tagesverbrauch</b> über 365 Tage, gestapelt in <b>Hausstrom</b> (flach, blau) und ' +
     '<b>Wärmepumpe</b> (saisonal, orange). Baut auf demselben Modell wie der PV-Tab auf: Hausstrom aus deinem ' +
     '<b>Zähler</b> (falls eingetragen, inkl. E-Auto/Klima), die Wärmepumpe aus importierter/geschätzter Monatskurve. ' +
@@ -3015,7 +3020,7 @@ function simulatePv(p) {
   const hpAnnual = hpDaily * 365;
   const pvShare = p.pvShareMonth || pvMonth(), hpSeas = normFrac(HP_SEASON);
   const pvHourFn = p.pvHourFn || pvHourFractions;
-  let Y = 0, S = 0, F = 0, G = 0, L = 0, repDay = null;
+  let Y = 0, S = 0, F = 0, G = 0, L = 0, repDay = null, repDayW = null;
   const monthly = [];
   const evDayBase = p.evAnnual / 365;
   const useReal = !!hpRealMonthMap();
@@ -3053,7 +3058,7 @@ function simulatePv(p) {
         if (av > 0) { carDis = Math.min(deficit, carBatt) * av; carBatt -= carDis; deficit -= carDis; }
         const grid = deficit;
         mDirect += direct; mBatt += dis + carDis; mFeed += feed; mGrid += grid; mPv += pv; mLoad += load;
-        if (m === 6 && d === Math.floor(days / 2)) { capturePv.push(pv); captureLoad.push(load); }
+        if ((m === 6 || m === 0) && d === Math.floor(days / 2)) { capturePv.push(pv); captureLoad.push(load); }
       }
       if (capturePv.length) { dPv = capturePv; dLoad = captureLoad; }
     }
@@ -3061,7 +3066,7 @@ function simulatePv(p) {
     Y += mPv; S += mSelf; F += mFeed; G += mGrid; L += mLoad;
     monthly.push({ m, pv: mPv, load: mLoad, self: mSelf, direct: mDirect, batt: mBatt, feed: mFeed, grid: mGrid,
       loadSh: mSh, loadHp: mHp, loadEv: mEv, loadAc: mAc });
-    if (dPv) repDay = { pv: dPv, load: dLoad };
+    if (dPv) { if (m === 6) repDay = { pv: dPv, load: dLoad }; else if (m === 0) repDayW = { pv: dPv, load: dLoad }; }
   }
   // 60 % feed-in cap: curtailment only occurs on CLEAR days (peak > 0.6·kWp),
   // which the average-day balance above smooths away – so estimate it separately.
@@ -3072,7 +3077,7 @@ function simulatePv(p) {
     curtail_kwh: C, curtail_loss: C * p.feedin,
     self_rate: Y > 0 ? S / Y : 0, autarky: L > 0 ? S / L : 0,
     savings: S * STATE.price, feed_rev: feedFinal * p.feedin, benefit: S * STATE.price + feedFinal * p.feedin,
-    monthly, repDay,
+    monthly, repDay, repDayW,
   };
 }
 
@@ -3661,7 +3666,7 @@ function gridFreeSweepChart(data, cur) {
     const bh = d.count / max * (base - top);
     const x = pad + i * gw + (gw - iw) / 2, y = base - bh, isCur = d.kwp === cur;
     bars += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${iw.toFixed(1)}" height="${Math.max(0, bh).toFixed(1)}" rx="2.5" fill="${isCur ? 'url(#g1)' : COL.sh}"/>`;
-    if (d.count > 0) vlab += `<text x="${(x + iw / 2).toFixed(1)}" y="${(y - 4).toFixed(1)}" text-anchor="middle" style="font-size:11px;font-weight:700;fill:var(--ink)">${d.count}</text>`;
+    if (d.count > 0) vlab += `<text x="${(x + iw / 2).toFixed(1)}" y="${(y - 4).toFixed(1)}" text-anchor="middle" style="font-size:11px;font-weight:700;fill:var(--ink)">${fmt(d.count, 1)}</text>`;
     labels += `<text class="axis" x="${(x + iw / 2).toFixed(1)}" y="${h - 8}" text-anchor="middle"${isCur ? ' style="fill:#4da3ff;font-weight:700"' : ''}>${d.kwp}${isCur ? '★' : ''}</text>`;
     hits += `<rect class="gfhit" data-kwp="${d.kwp}" data-count="${d.count}" x="${(pad + i * gw).toFixed(1)}" y="${top}" width="${gw.toFixed(1)}" height="${(base - top).toFixed(1)}" fill="#000" opacity="0" pointer-events="all"/>`;
   });
@@ -3669,47 +3674,222 @@ function gridFreeSweepChart(data, cur) {
 }
 function showGfTip(kwp, count) {
   const t = $('toast'); if (!t) return;
-  t.innerHTML = `<b>${kwp} kWp</b> → <b style="color:${count >= 5 ? '#4be0b0' : count >= 2 ? '#f6b93b' : '#ef6c4d'}">${count} von 12 Monaten</b> ohne Netzbezug`;
+  t.innerHTML = `<b>${kwp} kWp</b> → <b style="color:${count >= 5 ? '#4be0b0' : count >= 2 ? '#f6b93b' : '#ef6c4d'}">${fmt(count, 1)} von 12 Monaten</b> ohne Netzbezug (aus Tagen)`;
   t.hidden = false; clearTimeout(_toastT); _toastT = setTimeout(() => { t.hidden = true; }, 6000);
+}
+// Typical residential household hourly share (fallback when no measured profile
+// is available). Low overnight, a morning bump and a broad evening peak.
+const HOME_SHAPE_DEFAULT = normFrac(
+  [0.6, 0.5, 0.45, 0.45, 0.5, 0.7, 1.1, 1.4, 1.2, 1.0, 1.0, 1.05,
+   1.1, 1.0, 0.95, 1.0, 1.15, 1.5, 1.9, 2.0, 1.8, 1.5, 1.1, 0.8]);
+// Sunrise/sunset as LOCAL clock decimal hours for a lat/lon and date. Standard
+// solar-geometry approximation (declination + equation of time); good to a few
+// minutes – plenty for sizing. Returns nulls on polar day/night.
+function sunTimes(lat, lon, date) {
+  const rad = Math.PI / 180;
+  const start = new Date(date.getFullYear(), 0, 0);
+  const N = Math.round((date - start) / 86400000);                      // day of year
+  const decl = -23.45 * rad * Math.cos(2 * Math.PI * (N + 10) / 365);   // solar declination
+  const cosH = -Math.tan(lat * rad) * Math.tan(decl);
+  if (cosH >= 1) return { sunrise: null, sunset: null, dayLen: 0, polar: 'night' };
+  if (cosH <= -1) return { sunrise: null, sunset: null, dayLen: 24, polar: 'day' };
+  const H = Math.acos(cosH) / rad, dayLen = 2 * H / 15;
+  const B = 2 * Math.PI * (N - 81) / 364;
+  const EoT = 9.87 * Math.sin(2 * B) - 7.53 * Math.cos(B) - 1.5 * Math.sin(B); // minutes
+  const tz = -date.getTimezoneOffset() / 60;                            // local UTC offset incl. DST
+  const TC = 4 * (lon - 15 * tz) + EoT;                                 // time correction, minutes
+  const noon = 12 - TC / 60;
+  return { sunrise: noon - dayLen / 2, sunset: noon + dayLen / 2, dayLen, polar: null };
+}
+// Representative hourly consumption (kWh/h) for a calendar month, split into
+// household (+WP) and the planned EV/AC, from the real measured hourly profiles.
+function hourlyLoadKwh(monthIdx) {
+  let shShape = normFrac((STATE.data && STATE.data.hourly_profile || []).map(h => h.avg_w));
+  if (shShape.length !== 24) shShape = HOME_SHAPE_DEFAULT;
+  const hpProf = (STATE.hpA && STATE.hpA.hourly_profile) || [];
+  const hpShape = (hpProf.length === 24 && hpProf.some(h => h.avg_w > 0))
+    ? normFrac(hpProf.map(h => h.avg_w)) : new Array(24).fill(1 / 24);
+  const shD = shAvgDaily();
+  const hpD = (monthIdx == null) ? hpAvgDaily() : hpMonthEst(monthIdx) / DIM[monthIdx];
+  const p = pvInputs(), evD = p.evAnnual / 365, acD = p.acAnnual / 365;
+  const hw = [], ev = [], ac = [];
+  for (let h = 0; h < 24; h++) {
+    hw[h] = shD * shShape[h] + hpD * hpShape[h];
+    ev[h] = evD * EV_SHAPE[h]; ac[h] = acD * AC_SHAPE[h];
+  }
+  return { hw, ev, ac };
+}
+// Sum of hourly values that fall OUTSIDE the daylight window [sunrise,sunset]
+// (i.e. from sunset to the next sunrise), with fractional hours at the edges.
+function nightSum(arr, st) {
+  if (!st || st.sunrise == null) return arr.reduce((a, b) => a + b, 0); // polar night → all night
+  let s = 0;
+  for (let h = 0; h < 24; h++) {
+    const dayPart = Math.max(0, Math.min(h + 1, st.sunset) - Math.max(h, st.sunrise));
+    s += arr[h] * (1 - Math.min(1, dayPart));
+  }
+  return s;
+}
+const _hhm = x => { const h = Math.floor(x), m = Math.round((x - h) * 60); return `${String((h + 24) % 24).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`; };
+// 24 h consumption bars, night hours highlighted, with sunrise/sunset markers.
+function nightChart(hw, st) {
+  const h = 108, top = 10, base = h - 18, left = 2, right = CW - 2, w = right - left, bw = w / 24;
+  const max = Math.max(0.001, ...hw);
+  let bars = '';
+  for (let i = 0; i < 24; i++) {
+    const bh = (hw[i] / max) * (base - top);
+    const dayPart = st.sunrise == null ? 0 : Math.max(0, Math.min(i + 1, st.sunset) - Math.max(i, st.sunrise));
+    const night = (1 - Math.min(1, dayPart)) > 0.5;
+    bars += `<rect x="${(left + i * bw + 0.6).toFixed(1)}" y="${(base - bh).toFixed(1)}" width="${(bw - 1.2).toFixed(1)}" ` +
+      `height="${Math.max(0, bh).toFixed(1)}" rx="1" fill="${night ? COL.hp : '#f6b93b'}" opacity="0.85"/>`;
+  }
+  let marks = '';
+  if (st.sunrise != null) [st.sunrise, st.sunset].forEach(x => {
+    const mx = left + (x / 24) * w;
+    marks += `<line x1="${mx.toFixed(1)}" y1="${top}" x2="${mx.toFixed(1)}" y2="${base}" stroke="var(--muted)" stroke-width="1" stroke-dasharray="2 2"/>`;
+  });
+  let ticks = '';
+  [0, 6, 12, 18, 23].forEach(hh => { ticks += `<text class="axis" x="${(left + (hh + 0.5) * bw).toFixed(1)}" y="${h - 4}" text-anchor="middle" style="font-size:9px">${hh}</text>`; });
+  return svg(h, bars + marks + ticks);
+}
+// Representative-day chart with a summer/winter toggle.
+let _pvRep = { summer: null, winter: null };
+let _pvDaySeason = 'summer';
+function renderPvDay() {
+  const el = $('pv-day'); if (!el) return;
+  const sel = _pvDaySeason === 'winter' ? _pvRep.winter : _pvRep.summer;
+  el.innerHTML = sel ? pvDayChart(sel.pv, sel.load) : '<div class="note">Kein Tagesprofil verfügbar.</div>';
+  const sB = $('pv-day-summer'), wB = $('pv-day-winter');
+  if (sB && wB) { sB.className = _pvDaySeason === 'winter' ? 'btn sec' : 'btn'; wB.className = _pvDaySeason === 'winter' ? 'btn' : 'btn sec'; }
+  const note = $('pv-day-note');
+  if (note) note.innerHTML = _pvDaySeason === 'winter'
+    ? '❄︎ <b>Winter</b> (Mitte Januar): wenig Sonne, hoher Verbrauch (Wärmepumpe) – die Erzeugung deckt nur einen kleinen Teil, der Rest kommt aus dem Netz.'
+    : '☀︎ <b>Sommer</b> (Mitte Juli): viel Sonne – der Mittags-Überschuss übersteigt den Verbrauch deutlich und lädt Speicher / wird eingespeist.';
+}
+// How much you consume from sunset to sunrise, per season, to size a PV battery.
+function renderPvNight() {
+  const card = $('pv-night-card'); if (!card) return;
+  if (!(shAvgDaily() > 0 || hpAvgDaily() > 0)) { card.hidden = true; return; }
+  card.hidden = false;
+  const loc = getLatLon();
+  const lat = loc ? loc.lat : 51, lon = loc ? loc.lon : 10;    // fallback: centre of Germany
+  const price = STATE.price, p = pvInputs();
+  const now = new Date(), yr = now.getFullYear();
+  const seasons = [
+    { label: '☀︎ Sommer', date: new Date(yr, 5, 21), m: 5 },
+    { label: '🍂 Frühjahr/Herbst', date: new Date(yr, 8, 23), m: 8 },
+    { label: '❄︎ Winter', date: new Date(yr, 11, 21), m: 11 },
+  ].map(se => {
+    const st = sunTimes(lat, lon, se.date), l = hourlyLoadKwh(se.m);
+    const night = nightSum(l.hw, st), nEv = nightSum(l.ev, st), nAc = nightSum(l.ac, st);
+    const nightLen = st.sunrise == null ? 24 : 24 - st.dayLen;
+    return { ...se, st, night, nEv, nAc, nightLen };
+  });
+  // today
+  const stTod = sunTimes(lat, lon, now), lTod = hourlyLoadKwh(now.getMonth());
+  const nTod = nightSum(lTod.hw, stTod);
+  const winTxt = stTod.sunrise == null ? '—' : `${_hhm(stTod.sunset)} → ${_hhm(stTod.sunrise)}`;
+  $('pv-night-body').innerHTML =
+    `<div class="grid2"><div class="kpi"><div class="v">${kwh(nTod, 1)}</div>` +
+    `<div class="l">heute Nacht (Haushalt+WP) · ${money(nTod * price)}</div></div>` +
+    `<div class="kpi sm"><div class="v" style="font-size:19px">${winTxt}</div>` +
+    `<div class="l">Sonnenuntergang → -aufgang (${fmt(24 - (stTod.dayLen || 0), 1)} h Nacht)</div></div></div>` +
+    `<div style="overflow-x:auto;margin-top:8px"><table style="width:100%;border-collapse:collapse;font-size:13px">` +
+    `<tr style="color:var(--muted);text-align:left"><th style="padding:4px 6px">Jahreszeit</th><th>Nacht</th><th style="text-align:right;padding:4px 6px">Verbrauch Nacht</th></tr>` +
+    seasons.map(s => `<tr style="border-top:1px solid var(--line)"><td style="padding:6px">${s.label}</td>` +
+      `<td style="color:var(--muted)">${s.st.sunrise == null ? '—' : _hhm(s.st.sunset) + '→' + _hhm(s.st.sunrise)}<br><small>${fmt(s.nightLen, 1)} h</small></td>` +
+      `<td style="text-align:right;padding:6px"><b>${kwh(s.night, 1)}</b>` +
+      ((s.nEv + s.nAc) > 0.05 ? `<br><small style="color:var(--muted)">+${kwh(s.nEv + s.nAc, 1)} EV/Klima</small>` : '') + `</td></tr>`).join('') +
+    `</table></div>`;
+  $('pv-night-chart').innerHTML = nightChart(lTod.hw, stTod) +
+    `<div class="legend" style="margin-top:2px"><div class="it"><span class="sw" style="background:${COL.hp}"></span>Nacht</div>` +
+    `<div class="it"><span class="sw" style="background:#f6b93b"></span>Tag</div>` +
+    `<span style="color:var(--muted);font-size:11px;margin-left:6px">Verbrauch je Stunde – heute</span></div>`;
+  // battery recommendation: the shoulder season (spring/autumn) is the longest
+  // night the PV can still realistically recharge for → good sizing target.
+  const shoulder = seasons[1].night, summer = seasons[0].night, winter = seasons[2].night;
+  const target = shoulder, dod = 0.9, nominal = target / dod;
+  const roundHalf = v => Math.max(0.5, Math.round(v * 2) / 2);
+  const recNom = roundHalf(nominal);
+  const hasBatt = p.batt > 0;
+  let battTxt = '';
+  if (hasBatt) {
+    const coverS = summer > 0 ? Math.min(1, p.batt * dod / summer) : 1;
+    const coverSh = shoulder > 0 ? Math.min(1, p.batt * dod / shoulder) : 1;
+    battTxt = `Dein geplanter Speicher <b>${kwh(p.batt, 0)}</b> (~${kwh(p.batt * dod, 1)} nutzbar) deckt die Nacht ` +
+      `im Sommer zu <b>${fmt(coverS * 100, 0)} %</b>, in der Übergangszeit zu <b>${fmt(coverSh * 100, 0)} %</b>. `;
+  }
+  $('pv-night-note').innerHTML =
+    `Für <b>volle Nacht-Autarkie im PV-Halbjahr</b> (Frühjahr–Herbst) brauchst du ~<b>${kwh(target, 1)}</b> nutzbar, ` +
+    `also einen Speicher von ~<b>${kwh(recNom, 0)}</b> (bei ~90 % Entladetiefe). ` + battTxt +
+    `<span style="color:var(--muted)">Sommer-Nacht ~${kwh(summer, 1)}, Winter-Nacht ~${kwh(winter, 1)} – ` +
+    `aber im <b>Winter füllt die PV den Speicher kaum</b>, darum lohnt es nicht, ihn auf die lange Winternacht auszulegen. ` +
+    `Nachts laufende Dauerverbraucher (WP-Warmwasser, Standby) treiben den Wert – die lassen sich teils in den Tag schieben.` +
+    (loc ? '' : ' <b>Hinweis:</b> ohne deinen Standort (PV-Tab) rechne ich mit der Mitte Deutschlands.') + `</span>`;
 }
 // In which months could you run entirely without grid power – and how does
 // that change with a bigger PV array?
 function renderPvGridFree(p) {
   const el = $('pv-gridfree'); if (!el) return;
   const cur = Math.max(1, Math.round(p.kwp || 0));
-  const gridFreeMonths = kwp =>            // month indices with ~zero grid import
-    simulatePv({ ...p, kwp }).monthly.filter(mm => mm.grid <= Math.max(2, mm.load * 0.01)).map(mm => mm.m);
+  // Night load per calendar month (for the battery gate), once – depends on the
+  // load, not the array size, so it is constant across the sweep.
+  const loc = getLatLon(), lat = loc ? loc.lat : 51, lon = loc ? loc.lon : 10, yr = new Date().getFullYear();
+  const nightByMonth = [];
+  for (let m = 0; m < 12; m++) nightByMonth[m] = nightSum(hourlyLoadKwh(m).hw, sunTimes(lat, lon, new Date(yr, m, 15)));
+  const usable = p.batt * 0.9;
+  // Fraction of DAYS in a month that need ~no grid. The monthly model is a flat
+  // average day, so we add day-to-day weather variability: a day is grid-free if
+  // its PV covers the day's load (lognormal clearness around the month mean) AND
+  // the battery can bridge that month's night. Partial months therefore count
+  // proportionally (½ March + ½ October ≈ 1 full month).
+  const dayFrac = mm => {
+    const d = DIM[mm.m], dayLoad = mm.load / d;
+    if (dayLoad <= 0) return 0;
+    const ratio = (mm.pv / d) / dayLoad;
+    const z = Math.log(Math.max(ratio, 1e-3)) / 0.5;           // σ≈0.5 (daily weather spread)
+    const pClear = 1 / (1 + Math.exp(-1.702 * z));             // ≈ normal CDF
+    const nightCover = nightByMonth[mm.m] > 0 ? Math.min(1, usable / nightByMonth[mm.m]) : 1;
+    return Math.max(0, Math.min(1, pClear * nightCover));
+  };
+  const monthsPerDay = 12 / 365;
+  const evalKwp = kwp => {
+    const mo = simulatePv({ ...p, kwp }).monthly;
+    const frac = mo.map(dayFrac);
+    const days = mo.reduce((a, mm, i) => a + frac[i] * DIM[mm.m], 0);
+    return { days, months: days * monthsPerDay, frac };
+  };
 
   // --- headline + 12-month strip for the CURRENT array ---
-  const curSet = new Set(gridFreeMonths(cur));
-  const n = curSet.size;
+  const curRes = evalKwp(cur), em = curRes.months;
   $('pv-gridfree-kpi').innerHTML =
-    `<div class="kpi"><div class="v" style="color:${n >= 5 ? '#4be0b0' : n >= 2 ? '#f6b93b' : '#ef6c4d'}">` +
-    `${n} <span style="font-size:16px;color:var(--muted)">von 12</span></div>` +
-    `<div class="l">Monaten deckst du dich <b>komplett selbst</b> (${fmt(cur, 0)} kWp · ${kwh(p.batt, 0)} Speicher)</div></div>`;
+    `<div class="kpi"><div class="v" style="color:${em >= 5 ? '#4be0b0' : em >= 2 ? '#f6b93b' : '#ef6c4d'}">` +
+    `${fmt(em, 1)} <span style="font-size:16px;color:var(--muted)">von 12</span></div>` +
+    `<div class="l">Monate <b>komplett netzfrei</b> (aus Tagen gerechnet · ${fmt(cur, 0)} kWp · ${kwh(p.batt, 0)} Speicher)</div></div>`;
   $('pv-gridfree-strip').innerHTML = '<div style="display:flex; gap:3px">' + MON.map((mn, m) => {
-    const on = curSet.has(m);
-    return `<div style="flex:1; text-align:center; padding:7px 0; border-radius:6px; font-size:11px; font-weight:600;` +
-      `background:${on ? 'rgba(75,224,176,.22)' : 'var(--bg2)'}; color:${on ? '#4be0b0' : 'var(--muted)'}">${mn[0]}</div>`;
+    const f = curRes.frac[m], a = (0.1 + 0.82 * f).toFixed(2);
+    return `<div title="${mn}: ${fmt(f * 100, 0)} % der Tage netzfrei" style="flex:1; text-align:center; padding:7px 0; border-radius:6px; font-size:11px; font-weight:600;` +
+      `background:rgba(75,224,176,${a}); color:${f > 0.5 ? '#07271f' : 'var(--muted)'}">${mn[0]}</div>`;
   }).join('') + '</div>';
-  $('pv-gridfree-strip-note').innerHTML = n
-    ? `<span style="color:#4be0b0">Grün</span> = kein Netzstrom nötig (${[...curSet].map(m => MON[m]).join(', ')}). ` +
-      `Grau = du beziehst noch etwas Netzstrom.`
-    : 'In allen Monaten brauchst du noch etwas Netzstrom. Die grünen Sommermonate erreichst du mit mehr kWp/Speicher.';
+  $('pv-gridfree-strip-note').innerHTML =
+    `Je grüner, desto <b>mehr Tage</b> dieses Monats sind netzfrei. Summe ≈ <b>${fmt(em, 1)} von 12 Monaten</b> ` +
+    `(~${fmt(curRes.days, 0)} Tage/Jahr ohne Netzbezug). <span style="color:var(--muted)">Teildeckung zählt anteilig – ` +
+    `z. B. halber März + halber Oktober = 1 Monat.</span>`;
 
-  // --- sweep: netzfreie Monate je Anlagengröße ---
+  // --- sweep: netzfreie Monate (aus Tagen) je Anlagengröße ---
   const maxK = Math.max(12, cur + 6);
   const step = Math.max(1, Math.ceil(maxK / 15));
   const kwps = [];
   for (let k = step; k <= maxK; k += step) kwps.push(k);
   if (!kwps.includes(cur) && cur <= maxK) { kwps.push(cur); kwps.sort((a, b) => a - b); }
-  const data = kwps.map(k => ({ kwp: k, count: gridFreeMonths(k).length }));
+  const data = kwps.map(k => ({ kwp: k, count: evalKwp(k).months }));
   el.innerHTML = gridFreeSweepChart(data, cur);
   const maxAch = Math.max(...data.map(d => d.count));
-  const satK = (data.find(d => d.count >= maxAch) || {}).kwp;
+  const satK = (data.find(d => d.count >= maxAch * 0.98) || {}).kwp;
   $('pv-gridfree-note').innerHTML =
-    `Balkenhöhe = netzfreie Monate, X-Achse = Anlagengröße in kWp (★ = deine ${fmt(cur, 0)} kWp). ` +
-    (maxAch > n ? `Mit ~<b>${fmt(satK, 0)} kWp</b> wären es bis zu <b>${maxAch} Monate</b>. ` : '') +
+    `Balkenhöhe = netzfreie Monate (aus Tagen, anteilig), X-Achse = kWp (★ = deine ${fmt(cur, 0)} kWp). ` +
+    (maxAch > em + 0.3 ? `Mit ~<b>${fmt(satK, 0)} kWp</b> wären es bis zu <b>${fmt(maxAch, 1)} Monate</b>. ` : '') +
+    (usable <= 0 ? `<b>Ohne Speicher</b> bleibst du nie eine ganze Nacht netzfrei – ein Speicher hebt diesen Wert stark. ` : '') +
     `Mehr bringt es kaum: die dunklen <b>Wintermonate</b> bekommst du mit PV allein nie netzfrei ` +
     `(zu wenig Sonne). Dort hilft nur Netzbezug – idealerweise günstig über einen <b>Börsentarif</b>.`;
 }
@@ -3776,9 +3956,10 @@ function renderPv() {
 
   renderPvEcon(p);
   renderPvGridFree(p);
+  renderPvNight();
 
-  $('pv-day').innerHTML = r.repDay ? pvDayChart(r.repDay.pv, r.repDay.load)
-    : '<div class="note">Kein Tagesprofil verfügbar.</div>';
+  _pvRep = { summer: r.repDay, winter: r.repDayW };
+  renderPvDay();
 
   const rows = [
     ['Eigenverbrauch', `${kwh(r.self_kwh, 0)} · spart ${money(r.savings)}`],
@@ -5031,6 +5212,9 @@ function init() {
     });
   }
   const pvSug = $('pv-suggest'); if (pvSug) pvSug.addEventListener('click', doPvSuggest);
+  const pvDS = $('pv-day-summer'), pvDW = $('pv-day-winter');
+  if (pvDS) pvDS.addEventListener('click', () => { _pvDaySeason = 'summer'; renderPvDay(); });
+  if (pvDW) pvDW.addEventListener('click', () => { _pvDaySeason = 'winter'; renderPvDay(); });
   // Monthly-budget inputs (persist + re-render on change)
   [['ov-budget', 'bhe_budget'], ['ov-budget-unit', 'bhe_budget_unit']].forEach(([id, key]) => {
     const el = $(id); if (!el) return;

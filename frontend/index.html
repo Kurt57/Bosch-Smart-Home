@@ -682,13 +682,18 @@
       <div class="note" id="pv-gridfree-note" style="margin-top:8px"></div>
     </div>
     <div class="card">
-      <h2>Typischer Sommertag · Erzeugung & Verbrauch</h2>
+      <h2>Typischer Tag · Erzeugung & Verbrauch</h2>
+      <div style="display:flex; gap:6px; margin-bottom:8px">
+        <button class="btn sec" id="pv-day-summer" style="flex:1; padding:8px">☀︎ Sommer</button>
+        <button class="btn sec" id="pv-day-winter" style="flex:1; padding:8px">❄︎ Winter</button>
+      </div>
       <div id="pv-day"></div>
       <div class="legend">
         <div class="it"><span class="sw" style="background:var(--heat)"></span>PV-Erzeugung</div>
         <div class="it"><span class="sw" style="background:var(--sh)"></span>Verbrauch</div>
         <div class="it"><span class="sw" style="background:var(--accent2)"></span>Eigenverbrauch</div>
       </div>
+      <div class="note" id="pv-day-note" style="margin-top:8px"></div>
     </div>
     <div class="card">
       <h2>Wirtschaftlichkeit</h2>
@@ -699,6 +704,14 @@
         Tagesprofil geschätzt – je besser Verbrauch und Sonne zusammenpassen
         (z. B. Wärmepumpe/Warmwasser tagsüber, Batterie), desto höher.
       </div>
+    </div>
+    <div class="card" id="pv-night-card">
+      <h2><span class="info" data-info="pv-night" role="button" aria-label="Info">i</span>🌙 Nachtverbrauch &amp; Speichergröße</h2>
+      <div class="note" style="margin-bottom:10px">Wie viel Strom du von <b>Sonnenuntergang bis Sonnenaufgang</b> brauchst –
+        das muss der <b>Speicher</b> aus dem Tags-Überschuss überbrücken. Daraus ergibt sich die sinnvolle Speichergröße.</div>
+      <div id="pv-night-body"></div>
+      <div id="pv-night-chart" style="margin-top:10px"></div>
+      <div class="note" id="pv-night-note" style="margin-top:10px"></div>
     </div>
   </section>
 
