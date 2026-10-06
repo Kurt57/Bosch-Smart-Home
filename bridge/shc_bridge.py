@@ -591,6 +591,12 @@ class Store:
             hh = self.conn.execute("SELECT COUNT(*) c FROM hp_history WHERE period='hour'").fetchone()["c"]
             return {"days": d, "months": m, "hours": hh}
 
+    def hp_history_clear(self) -> int:
+        """Remove ALL imported heat-pump history (CSV). Returns rows deleted."""
+        with self.lock, self.conn:
+            cur = self.conn.execute("DELETE FROM hp_history")
+            return cur.rowcount or 0
+
     # -- AEG / Electrolux appliances ------------------------------------- #
     def aeg_upsert_appliance(self, a: dict):
         with self.lock, self.conn:
@@ -2360,6 +2366,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._post_homecom_connect(body)
             if parsed.path == "/api/homecom/import":
                 return self._post_hp_import(body)
+            if parsed.path == "/api/homecom/import/clear":
+                return self._post_hp_import_clear(body)
             if parsed.path == "/api/homecom/refresh":
                 return self._post_hp_refresh(body)
             if parsed.path == "/api/electrolux/connect":
@@ -2571,6 +2579,13 @@ class Handler(BaseHTTPRequestHandler):
                                 "total_hours": cnt.get("hours", 0),
                                 "message": f"{len(clean)} Zeilen importiert "
                                            f"({days} Tage, {months} Monate, {hours} Stunden)."})
+
+    def _post_hp_import_clear(self, body):
+        """Delete ALL imported heat-pump history (the CSV the user uploaded).
+        Live polling data is kept; only the imported rows are removed."""
+        n = self.store.hp_history_clear()
+        return self._send_json({"ok": True, "cleared": n,
+                                "message": f"{n} importierte Zeilen gelöscht."})
 
     def _post_hp_refresh(self, body):
         """Force an immediate heat-pump poll. Because the HomeCom energy counter

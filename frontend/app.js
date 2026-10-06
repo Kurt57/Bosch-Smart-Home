@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-06 · Gemessen pro Monat: nur teilweise erfasste Monate werden auf den vollen Monat hochgerechnet (deckt sich mit HomeCom); Monats-kWh antippbar'
+const APP_VERSION = '2026-10-06 · Importierte HomeCom-CSV-Historie im Setup löschbar; Gemessen/Monat hochgerechnet bei Teilabdeckung'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -4906,6 +4906,17 @@ async function doHpImport(ev) {
   inp.value = '';
 }
 
+async function doHpImportClear() {
+  const note = $('hp-import-clear-note');
+  if (!window.confirm('Importierte HomeCom-Historie (CSV) wirklich löschen?\n\nDeine laufenden Live-Messungen der Bridge bleiben erhalten – nur die hochgeladenen CSV-Daten (z. B. die alte Bauphasen-Historie) werden entfernt.')) return;
+  note.textContent = 'Lösche importierte Historie …';
+  try {
+    const r = await postJSON('/api/homecom/import/clear', {});
+    if (r.ok) { note.innerHTML = '✅ ' + esc(r.message || 'Importierte Historie gelöscht.'); setTimeout(loadAll, 800); }
+    else note.innerHTML = '⚠︎ ' + esc(r.error || 'Löschen fehlgeschlagen.');
+  } catch (e) { note.textContent = 'Fehler: ' + e.message + ' – Seite von der Bridge geöffnet?'; }
+}
+
 async function doExport() {
   const note = $('export-note');
   const days = ($('export-days') && $('export-days').value) || '365';
@@ -5126,6 +5137,7 @@ function init() {
   });
   const hpc = $('hp-connect'); if (hpc) hpc.addEventListener('click', doHomecomConnect);
   const hpi = $('hp-import'); if (hpi) hpi.addEventListener('change', doHpImport);
+  const hic = $('hp-import-clear'); if (hic) hic.addEventListener('click', doHpImportClear);
   const hpr = $('hp-refresh'); if (hpr) hpr.addEventListener('click', doHpRefresh);
   const exp = $('export-csv'); if (exp) exp.addEventListener('click', doExport);
   const aegD = $('aeg-dash');
