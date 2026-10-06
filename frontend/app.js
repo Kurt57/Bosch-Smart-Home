@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-06 · Theorie/Gemessen/Erwartet pro Monat als Overlay; Verlauf 7-Tage-Ansicht + Tageswerte antippbar'
+const APP_VERSION = '2026-10-06 · Theorie/Gemessen/Erwartet pro Monat: Balken nebeneinander + kWh je Balken antippbar; Verlauf 7-Tage + Tageswerte antippbar'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -319,12 +319,11 @@ const INFO = {
     'Electrolux-Cloud. Angezeigt werden Betriebszustand, <b>Strom pro Waschgang</b> und der ' +
     '<b>Gesamtzähler</b>. „Heute" ist der Zuwachs des Gesamtzählers seit Mitternacht. Verbinden ' +
     'im Setup mit API-Key + Refresh-Token von developer.electrolux.one.',
-  'theory-month': () => 'Drei Werte je Monat <b>übereinander gelegt</b> (Overlay), oben per Häkchen <b>ein-/ausblendbar</b>: ' +
+  'theory-month': () => 'Drei Balken je Monat (nebeneinander), oben per Häkchen <b>ein-/ausblendbar</b>: ' +
     '<b>Theorie</b> (aus dem Gebäudemodell, Heizsaison-verteilt + Warmwasser), <b>Gemessen</b> (deine echten Monatswerte; ' +
     'stammt ein Monat noch aus dem <b>Vorjahr</b>, steht das dran) und <b>Erwartet</b> (unser bestes Monatsmodell: dein ' +
     '<b>gemessenes Niveau</b> × Saison-Form inkl. Temperatur-/Gebäude-Korrektur für die kalten Monate – auch für noch nicht ' +
-    'gemessene Monate wie Nov/Dez). Der größte Balken steht hinten, kleinere davor – so siehst du pro Monat direkt, wie ' +
-    'Gemessen zu Erwartet und Theorie steht.',
+    'gemessene Monate wie Nov/Dez). <b>Tippe/fahre über einen Monat</b>, um die <b>kWh jedes Balkens</b> abzulesen.',
   'theory-class': () => 'Der <b>spezifische Heizwärmebedarf</b> (kWh je m² und Jahr, nur Heizung) ordnet dein Haus ' +
     'zwischen Passivhaus und unsaniertem Altbau ein. Er kommt aus dem U·A-Modell geteilt durch die beheizte Fläche – ' +
     'ein guter Vergleichsmaßstab, unabhängig von der Hausgröße.',
@@ -871,29 +870,6 @@ function groupedBar(rows, series, opts = {}) {
     });
     if (r.label && (n <= 16 || i % Math.ceil(n / 12) === 0))
       labels += `<text class="axis" x="${(gx + series.length * iw / 2).toFixed(1)}" y="${h - 8}" text-anchor="middle">${r.label}</text>`;
-  });
-  return svg(h, gridLines(h, top, base, pad, max) + bars + labels);
-}
-// Like groupedBar, but the series are OVERLAID at the same x per category
-// (concentric bars) instead of side-by-side – so per month you compare the
-// values directly on one spot. Per category the largest value is drawn widest
-// and furthest back, smaller ones narrower in front, so none is hidden.
-function overlayBar(rows, series, opts = {}) {
-  const h = opts.h || 200, pad = 26, top = 12, base = h - 22;
-  const n = rows.length || 1;
-  const max = Math.max(0.0001, ...rows.map(r => Math.max(...series.map(s => r.values[s.key] || 0))));
-  const gw = (CW - pad * 2) / n, maxW = Math.max(3, gw * 0.76);
-  let bars = '', labels = '';
-  rows.forEach((r, i) => {
-    const cx = pad + i * gw + gw / 2;
-    const ordered = series.map(s => ({ s, v: Math.max(0, r.values[s.key] || 0) })).sort((a, b) => b.v - a.v);
-    ordered.forEach((o, k) => {
-      const bh = o.v / max * (base - top), y = base - bh, wk = maxW * (1 - k * 0.3);
-      bars += `<rect x="${(cx - wk / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${wk.toFixed(1)}" height="${Math.max(0, bh).toFixed(1)}" ` +
-        `rx="1.5" fill="${o.s.color}" fill-opacity="0.55" stroke="${o.s.color}" stroke-width="1.1"/>`;
-    });
-    if (r.label && (n <= 16 || i % Math.ceil(n / 12) === 0))
-      labels += `<text class="axis" x="${cx.toFixed(1)}" y="${h - 8}" text-anchor="middle">${r.label}</text>`;
   });
   return svg(h, gridLines(h, top, base, pad, max) + bars + labels);
 }
@@ -2383,6 +2359,7 @@ function buildClass(spec) {
   if (spec <= 140) return ['typischer sanierter Altbau', '#f39c12'];
   return ['wenig gedämmter Altbau', '#ef6c4d'];
 }
+let _thmHit = null;
 function renderHeatDemand() {
   const card = $('hp-theory-card'); if (!card) return;
   const b = buildData(), r = computeHeat(b), price = STATE.price;
@@ -2505,13 +2482,16 @@ function renderHeatDemand() {
         e: expectedMonth[m],
       } }));
     $('hp-theory-month').innerHTML = series.length
-      ? overlayBar(rows, series, { h: 190 })
+      ? `<div class="tmhit" style="touch-action:none">${groupedBar(rows, series, { h: 190 })}</div>`
       : '<div class="note">Alle Reihen ausgeblendet – oben wieder anhaken.</div>';
+    // data for the tap/hover tooltip (kWh per bar, only enabled series)
+    _thmHit = { rows, series: series.map(s => ({ key: s.key, color: s.color,
+      label: s.key === 't' ? 'Theorie' : s.key === 'p' ? measLabel : 'Erwartet' })) };
     $('hp-theory-month-legend').innerHTML = legendHtml([
       on('thm-t') ? { color: COLT, label: 'Theorie' } : null,
       pOn ? { color: COLP, label: measLabel } : null,
       on('thm-e') ? { color: COLE, label: 'Erwartet (Erfahrung)' } : null,
-    ].filter(Boolean));
+    ].filter(Boolean)) + `<span style="color:var(--muted);font-size:11px;margin-left:6px">tippen für kWh je Monat</span>`;
     // Gesamtverbrauch je Kategorie (Jahressumme), respektiert die Häkchen
     const price = STATE.price;
     const theoTot = theoryMonth.reduce((a, b) => a + b, 0);
@@ -5052,6 +5032,30 @@ function init() {
     const s = localStorage.getItem(key); if (s !== null) el.checked = s === '1';
     el.addEventListener('change', () => { try { localStorage.setItem(key, el.checked ? '1' : '0'); } catch (e) {} renderHeatDemand(); });
   });
+  // tap/hover a month to read the kWh of each bar (Theorie/Gemessen/Erwartet)
+  const tm = $('hp-theory-month');
+  if (tm) {
+    const onTm = e => {
+      const hit = e.target.closest && e.target.closest('.tmhit'); if (!hit || !_thmHit) return;
+      const svgEl = hit.querySelector('svg'); if (!svgEl) return;
+      const rect = svgEl.getBoundingClientRect();
+      const cx = (e.touches && e.touches[0] ? e.touches[0].clientX : e.clientX);
+      const fx = Math.min(1, Math.max(0, (cx - rect.left) / (rect.width || 1)));
+      const pad = 26, n = 12, gw = (CW - pad * 2) / n;
+      let i = Math.floor((fx * CW - pad) / gw); i = Math.min(n - 1, Math.max(0, i));
+      const r = _thmHit.rows[i]; if (!r) return;
+      const t = $('toast');
+      if (t) {
+        const parts = _thmHit.series.map(s =>
+          `<span style="color:${s.color}">●</span> ${esc(s.label)} <b>${kwh(r.values[s.key] || 0, 0)}</b>`);
+        t.innerHTML = `<b>${esc(r.label)}</b><div class="note" style="margin-top:2px">${parts.join(' · ')}</div>`;
+        t.hidden = false; clearTimeout(_toastT); _toastT = setTimeout(() => { t.hidden = true; }, 5000);
+      }
+      e.stopPropagation();
+    };
+    tm.addEventListener('pointermove', onTm);
+    tm.addEventListener('pointerdown', onTm);
+  }
   // Bauphase-Dämpfung: keep measurements but tame the inflated move-in winter peaks
   (() => {
     const el = $('h-baukorr'); if (!el) return;
