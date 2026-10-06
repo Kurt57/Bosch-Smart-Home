@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-05 · Nachtverbrauch & Speichergröße (Sonnenuntergang→-aufgang); netzfreie Monate aus Tagen (anteilig); Winter-Tagesprofil im PV-Tab'
+const APP_VERSION = '2026-10-06 · Theorie/Gemessen/Erwartet pro Monat als Overlay; Verlauf 7-Tage-Ansicht + Tageswerte antippbar'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -319,11 +319,12 @@ const INFO = {
     'Electrolux-Cloud. Angezeigt werden Betriebszustand, <b>Strom pro Waschgang</b> und der ' +
     '<b>Gesamtzähler</b>. „Heute" ist der Zuwachs des Gesamtzählers seit Mitternacht. Verbinden ' +
     'im Setup mit API-Key + Refresh-Token von developer.electrolux.one.',
-  'theory-month': () => 'Drei Balken je Monat, oben per Häkchen <b>ein-/ausblendbar</b>: <b>Theorie</b> (aus dem ' +
-    'Gebäudemodell, Heizsaison-verteilt + Warmwasser), <b>Gemessen</b> (deine echten Monatswerte aus der HomeCom-CSV; ' +
-    'stammt ein Monat noch aus dem <b>Vorjahr</b>, steht das dran) und <b>Erwartet</b> (dein <b>gemessenes Jahresniveau</b>, ' +
-    'saisonal verteilt – so haben auch noch nicht gemessene Monate wie Nov/Dez eine echte Prognose statt des Vorjahreswerts). ' +
-    'Große Unterschiede zeigen z. B. Nachtabsenkung, Vorlauftemperatur oder Wetter.',
+  'theory-month': () => 'Drei Werte je Monat <b>übereinander gelegt</b> (Overlay), oben per Häkchen <b>ein-/ausblendbar</b>: ' +
+    '<b>Theorie</b> (aus dem Gebäudemodell, Heizsaison-verteilt + Warmwasser), <b>Gemessen</b> (deine echten Monatswerte; ' +
+    'stammt ein Monat noch aus dem <b>Vorjahr</b>, steht das dran) und <b>Erwartet</b> (unser bestes Monatsmodell: dein ' +
+    '<b>gemessenes Niveau</b> × Saison-Form inkl. Temperatur-/Gebäude-Korrektur für die kalten Monate – auch für noch nicht ' +
+    'gemessene Monate wie Nov/Dez). Der größte Balken steht hinten, kleinere davor – so siehst du pro Monat direkt, wie ' +
+    'Gemessen zu Erwartet und Theorie steht.',
   'theory-class': () => 'Der <b>spezifische Heizwärmebedarf</b> (kWh je m² und Jahr, nur Heizung) ordnet dein Haus ' +
     'zwischen Passivhaus und unsaniertem Altbau ein. Er kommt aus dem U·A-Modell geteilt durch die beheizte Fläche – ' +
     'ein guter Vergleichsmaßstab, unabhängig von der Hausgröße.',
@@ -870,6 +871,29 @@ function groupedBar(rows, series, opts = {}) {
     });
     if (r.label && (n <= 16 || i % Math.ceil(n / 12) === 0))
       labels += `<text class="axis" x="${(gx + series.length * iw / 2).toFixed(1)}" y="${h - 8}" text-anchor="middle">${r.label}</text>`;
+  });
+  return svg(h, gridLines(h, top, base, pad, max) + bars + labels);
+}
+// Like groupedBar, but the series are OVERLAID at the same x per category
+// (concentric bars) instead of side-by-side – so per month you compare the
+// values directly on one spot. Per category the largest value is drawn widest
+// and furthest back, smaller ones narrower in front, so none is hidden.
+function overlayBar(rows, series, opts = {}) {
+  const h = opts.h || 200, pad = 26, top = 12, base = h - 22;
+  const n = rows.length || 1;
+  const max = Math.max(0.0001, ...rows.map(r => Math.max(...series.map(s => r.values[s.key] || 0))));
+  const gw = (CW - pad * 2) / n, maxW = Math.max(3, gw * 0.76);
+  let bars = '', labels = '';
+  rows.forEach((r, i) => {
+    const cx = pad + i * gw + gw / 2;
+    const ordered = series.map(s => ({ s, v: Math.max(0, r.values[s.key] || 0) })).sort((a, b) => b.v - a.v);
+    ordered.forEach((o, k) => {
+      const bh = o.v / max * (base - top), y = base - bh, wk = maxW * (1 - k * 0.3);
+      bars += `<rect x="${(cx - wk / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${wk.toFixed(1)}" height="${Math.max(0, bh).toFixed(1)}" ` +
+        `rx="1.5" fill="${o.s.color}" fill-opacity="0.55" stroke="${o.s.color}" stroke-width="1.1"/>`;
+    });
+    if (r.label && (n <= 16 || i % Math.ceil(n / 12) === 0))
+      labels += `<text class="axis" x="${cx.toFixed(1)}" y="${h - 8}" text-anchor="middle">${r.label}</text>`;
   });
   return svg(h, gridLines(h, top, base, pad, max) + bars + labels);
 }
@@ -2093,6 +2117,7 @@ function historyWindow() {
   return { from: new Date(now.getTime() - (d - 1) * 86400000), to: now, mode: 'day', title: 'Strom pro Tag' };
 }
 
+let _histHit = null;
 function renderHistory() {
   const ov = STATE.ov, data = STATE.data; if (!ov || !data) return;
   const shHex = COL.sh, hpHex = COL.hp;
@@ -2101,20 +2126,25 @@ function renderHistory() {
   const anyEst = filled.some(d => d.estimated);
   $('h-daily-legend').innerHTML = legendHtml([
     { label: 'Smart Home', color: shHex }, { label: 'Wärmepumpe', color: hpHex }]
-    .concat(anyEst ? [{ label: 'geschätzt (Ø, saisonal)', color: 'rgba(147,162,196,.5)' }] : []));
+    .concat(anyEst ? [{ label: 'geschätzt (Ø, saisonal)', color: 'rgba(147,162,196,.5)' }] : [])) +
+    `<span style="color:var(--muted);font-size:11px;margin-left:6px">tippen/fahren für Tageswerte</span>`;
 
   if (win.mode === 'month') {
     const months = aggregateMonths(filled);
-    $('h-daily').innerHTML = stackedBar(
+    $('h-daily').innerHTML = `<div class="dhit" style="touch-action:none">` + stackedBar(
       months.map(m => ({ label: m.label, estimated: m.estimated, values: { sh: m.sh, hp: m.hp } })),
-      [{ key: 'sh', color: shHex }, { key: 'hp', color: hpHex }], { h: 210 });
+      [{ key: 'sh', color: shHex }, { key: 'hp', color: hpHex }], { h: 210 }) + `</div>`;
+    _histHit = { mode: 'month', rows: months.map(m => ({ tip: m.label, sh: m.sh, hp: m.hp, total: m.total, estimated: m.estimated })) };
     const tot = months.map(m => m.total);
     $('h-avg').innerHTML = kwh(mean(months.map(m => m.total / 30.4)), 2);
     $('h-max').innerHTML = kwh(Math.max(0, ...tot), 0); $('h-max-l').textContent = 'Stärkster Monat';
   } else {
-    $('h-daily').innerHTML = stackedBar(
+    $('h-daily').innerHTML = `<div class="dhit" style="touch-action:none">` + stackedBar(
       filled.map(d => ({ label: shortDay(d.day), estimated: d.estimated, values: { sh: d.sh, hp: d.hp } })),
-      [{ key: 'sh', color: shHex }, { key: 'hp', color: hpHex }], { h: 210 });
+      [{ key: 'sh', color: shHex }, { key: 'hp', color: hpHex }], { h: 210 }) + `</div>`;
+    _histHit = { mode: 'day', rows: filled.map(d => ({
+      tip: new Date(d.day + 'T12:00').toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' }),
+      sh: d.sh, hp: d.hp, total: d.total, estimated: d.estimated })) };
     const tot = filled.map(d => d.total);
     $('h-avg').innerHTML = kwh(mean(tot), 2);
     $('h-max').innerHTML = kwh(Math.max(0, ...tot), 2); $('h-max-l').textContent = 'Höchster Tag';
@@ -2441,8 +2471,14 @@ function renderHeatDemand() {
     //               annual level × the seasonal shape), so unmeasured months (Nov/Dec)
     //               show a proper forecast bar instead of borrowing last year's number.
     const measured = hpMeasuredByMonth();
-    const annualExp = hpYearFromMonthly() || (hpAvgDaily() * 365);
-    const expectedMonth = MON.map((_, m) => annualExp * hpSeasShare[m]);
+    // "Erwartet" = our best per-month model (real level × seasonal shape, with the
+    // temperature/building-physics winter blend) for EVERY month – NOT substituting
+    // the measured value, so you can compare expectation vs. reality side by side.
+    const expectedMonth = MON.map((_, m) => {
+      const seasonal = hpAvgDaily() * hpDayFactor(m) * DIM[m];
+      const phys = (typeof hpMonthPhysics === 'function') ? hpMonthPhysics(m) : null;
+      return phys != null ? seasonal * (1 - HP_PHYS_W) + Math.max(seasonal, phys) * HP_PHYS_W : seasonal;
+    });
     // year handling for the "measured" series label
     const years = measured ? [...new Set(Object.values(measured).map(v => v.year))] : [];
     const curY = new Date().getFullYear();
@@ -2469,7 +2505,7 @@ function renderHeatDemand() {
         e: expectedMonth[m],
       } }));
     $('hp-theory-month').innerHTML = series.length
-      ? groupedBar(rows, series, { h: 190 })
+      ? overlayBar(rows, series, { h: 190 })
       : '<div class="note">Alle Reihen ausgeblendet – oben wieder anhaken.</div>';
     $('hp-theory-month-legend').innerHTML = legendHtml([
       on('thm-t') ? { color: COLT, label: 'Theorie' } : null,
@@ -4985,6 +5021,30 @@ function init() {
     renderHistory();
   });
   ['hist-from', 'hist-to'].forEach(id => { const el = $(id); if (el) el.addEventListener('change', renderHistory); });
+  // tap/hover a day (or month) bar to read its exact values
+  const hd = $('h-daily');
+  if (hd) {
+    const onH = e => {
+      const hit = e.target.closest && e.target.closest('.dhit'); if (!hit || !_histHit) return;
+      const svgEl = hit.querySelector('svg'); if (!svgEl) return;
+      const rect = svgEl.getBoundingClientRect();
+      const cx = (e.touches && e.touches[0] ? e.touches[0].clientX : e.clientX);
+      const fx = Math.min(1, Math.max(0, (cx - rect.left) / (rect.width || 1)));
+      const rows = _histHit.rows, n = rows.length, pad = 26, bw = (CW - pad * 2) / Math.max(1, n);
+      let i = Math.floor((fx * CW - pad) / bw); i = Math.min(n - 1, Math.max(0, i));
+      const r = rows[i]; if (!r) return;
+      const t = $('toast');
+      if (t) {
+        t.innerHTML = `<b>${esc(r.tip)}</b> · 🏠 <b>${kwh(r.sh, 1)}</b> · 🔥 <b>${kwh(r.hp, 1)}</b>` +
+          `<div class="note" style="margin-top:2px;color:var(--muted)">Σ <b>${kwh(r.total, 1)}</b>${_histHit.mode === 'month' ? '/Monat' : '/Tag'} · ` +
+          `${money(r.total * STATE.price)}${r.estimated ? ' · <i>geschätzt</i>' : ''}</div>`;
+        t.hidden = false; clearTimeout(_toastT); _toastT = setTimeout(() => { t.hidden = true; }, 5000);
+      }
+      e.stopPropagation();
+    };
+    hd.addEventListener('pointermove', onH);
+    hd.addEventListener('pointerdown', onH);
+  }
   const hm = $('hp-heat-month'); if (hm) hm.addEventListener('change', renderHeatpump);
   // Theorie/Gemessen/Erwartet series toggles (persisted)
   [['thm-t', 'bhe_thm_t'], ['thm-p', 'bhe_thm_p'], ['thm-e', 'bhe_thm_e']].forEach(([id, key]) => {
