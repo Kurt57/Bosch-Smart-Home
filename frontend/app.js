@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-06 · Theorie/Gemessen/Erwartet pro Monat: Balken nebeneinander + kWh je Balken antippbar; Verlauf 7-Tage + Tageswerte antippbar'
+const APP_VERSION = '2026-10-06 · Gemessen pro Monat: nur teilweise erfasste Monate werden auf den vollen Monat hochgerechnet (deckt sich mit HomeCom); Monats-kWh antippbar'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -566,20 +566,42 @@ function hpMeasuredByMonth() {
     const m = +r.month.slice(5) - 1, y = +r.month.slice(0, 4);
     if (!byM[m] || y > byM[m].year) byM[m] = { kwh: r.elec_kwh, year: y, source: 'csv' };
   });
-  // 2) Overlay THIS YEAR's own measurements: a completed month replaces the CSV
-  //    value; the still-running month is projected to a full month (partial).
-  polled.forEach(r => {
-    if (!(r.elec_kwh > 0) || String(r.month).length < 7) return;
-    const y = +r.month.slice(0, 4), m = +r.month.slice(5) - 1;
-    if (y !== cy) return;                       // only real, current-year measurements
-    if (m < cm) {
-      byM[m] = { kwh: r.elec_kwh, year: y, source: 'measured' };            // month complete → measured wins
-    } else if (m === cm) {
-      const day = Math.max(1, now.getDate());
-      byM[m] = { kwh: r.elec_kwh * DIM[m] / day, year: y, partial: true,    // running → projected
-        actual: r.elec_kwh, day, source: 'measured' };
-    }
+  // 2) Overlay THIS YEAR's own measurements, aggregated from the real DAILY
+  //    series so we know the day-coverage: a month we only polled partially
+  //    (e.g. the bridge started mid-month) is projected to a full month from the
+  //    recorded days' average instead of showing a too-low partial sum. Months
+  //    with (almost) full coverage use the real sum; the running month projects
+  //    from elapsed days; months with too little data are left to CSV/model.
+  const dailies = (STATE.hpA && STATE.hpA.daily) || [];
+  const agg = {};                                   // m → { sum, days }
+  dailies.forEach(d => {
+    if (!d || !d.day || !(d.elec_kwh > 0)) return;
+    const p = String(d.day).split('-'); if (p.length < 3 || +p[0] !== cy) return;
+    const m = +p[1] - 1, a = agg[m] || (agg[m] = { sum: 0, days: 0 });
+    a.sum += d.elec_kwh; a.days++;
   });
+  // fall back to the bridge's monthly sums when no daily series is available
+  if (!Object.keys(agg).length) {
+    polled.forEach(r => {
+      if (!(r.elec_kwh > 0) || String(r.month).length < 7) return;
+      const y = +r.month.slice(0, 4), m = +r.month.slice(5) - 1;
+      if (y !== cy) return;
+      if (m < cm) byM[m] = { kwh: r.elec_kwh, year: y, source: 'measured' };
+      else if (m === cm) { const day = Math.max(1, now.getDate()); byM[m] = { kwh: r.elec_kwh * DIM[m] / day, year: y, partial: true, actual: r.elec_kwh, source: 'measured' }; }
+    });
+  } else {
+    Object.keys(agg).forEach(k => {
+      const m = +k, a = agg[m]; if (a.days < 1) return;
+      const covFrac = a.days / DIM[m], perDay = a.sum / a.days;
+      if (m === cm) {
+        byM[m] = { kwh: perDay * DIM[m], year: cy, partial: true, actual: a.sum, days: a.days, source: 'measured' };
+      } else if (m < cm) {
+        if (covFrac >= 0.85) byM[m] = { kwh: a.sum, year: cy, source: 'measured', cov: covFrac };
+        else if (a.days >= 4) byM[m] = { kwh: perDay * DIM[m], year: cy, source: 'measured', projected: true, cov: covFrac, days: a.days };
+        // else: too few days to trust – leave the CSV/model value in place
+      }
+    });
+  }
   return Object.keys(byM).length ? byM : null;
 }
 // Full-month heat-pump electricity estimate for calendar month m.
@@ -2485,7 +2507,7 @@ function renderHeatDemand() {
       ? `<div class="tmhit" style="touch-action:none">${groupedBar(rows, series, { h: 190 })}</div>`
       : '<div class="note">Alle Reihen ausgeblendet – oben wieder anhaken.</div>';
     // data for the tap/hover tooltip (kWh per bar, only enabled series)
-    _thmHit = { rows, series: series.map(s => ({ key: s.key, color: s.color,
+    _thmHit = { rows, meas: measured, series: series.map(s => ({ key: s.key, color: s.color,
       label: s.key === 't' ? 'Theorie' : s.key === 'p' ? measLabel : 'Erwartet' })) };
     $('hp-theory-month-legend').innerHTML = legendHtml([
       on('thm-t') ? { color: COLT, label: 'Theorie' } : null,
@@ -2517,14 +2539,16 @@ function renderHeatDemand() {
       const totPct = sT > 0 ? (sP - sT) / sT : 0;
       const prevMonths = Object.keys(measured).filter(m => measured[m].year < curY && !measured[m].partial).map(m => MON[+m]);
       const partMonth = Object.keys(measured).find(m => measured[m].partial);
+      const projMonths = Object.keys(measured).filter(m => measured[m].projected).map(m => MON[+m]);
       $('hp-theory-month-note').innerHTML =
         'Drei Reihen je Monat – oben ein-/ausblendbar: <b>Theorie</b> (Gebäudemodell), <b>' + esc(measLabel) +
-        '</b> (echte Messung) und <b>Erwartet</b> (dein gemessenes Jahresniveau, saisonal verteilt – auch für noch nicht ' +
-        'gemessene Monate wie Nov/Dez). ' +
+        '</b> (echte Messung) und <b>Erwartet</b> (unser bestes Monatsmodell: gemessenes Niveau × Saison-Form inkl. ' +
+        'Temperatur-/Winterkorrektur – auch für noch nicht gemessene Monate wie Nov/Dez). ' +
         (sT > 0 ? `Über die voll gemessenen Monate liegt die Praxis <b>${totPct >= 0 ? '+' : ''}${fmt(totPct * 100, 0)} %</b> zur Theorie.` : '') +
         (worst ? ` Größter Unterschied im <b>${MON[worst.m]}</b> (${worst.abs >= 0 ? '+' : '−'}${kwh(Math.abs(worst.abs), 0)}` +
           `${worst.abs > 0 ? ' – mehr als gerechnet' : ' – weniger, z. B. kaum geheizt/effizient'}).` : '') +
-        (partMonth != null ? ` <span style="color:var(--muted)"><b>${MON[+partMonth]}</b> läuft noch – der Balken ist auf den ganzen Monat <b>hochgerechnet</b> (aus ${kwh(measured[+partMonth].actual, 0)} bis Tag ${measured[+partMonth].day}).</span>` : '') +
+        (partMonth != null ? ` <span style="color:var(--muted)"><b>${MON[+partMonth]}</b> läuft noch – auf den ganzen Monat <b>hochgerechnet</b> (bisher ${kwh(measured[+partMonth].actual || 0, 0)}).</span>` : '') +
+        (projMonths.length ? ` <span style="color:var(--muted)">Nur teilweise gemessen und auf den vollen Monat <b>hochgerechnet</b> (die Bridge lief erst einen Teil des Monats): ${projMonths.join(', ')}.</span>` : '') +
         (prevMonths.length ? ` <span style="color:var(--muted)">Noch aus dem Vorjahr: ${prevMonths.join(', ')} – dafür zeigt „Erwartet" die aktuelle Prognose.</span>` : '');
     } else {
       $('hp-theory-month-note').innerHTML = 'Zwei Reihen: <b>Theorie</b> (Gebäudemodell) und <b>Erwartet</b> ' +
@@ -5046,8 +5070,11 @@ function init() {
       const r = _thmHit.rows[i]; if (!r) return;
       const t = $('toast');
       if (t) {
-        const parts = _thmHit.series.map(s =>
-          `<span style="color:${s.color}">●</span> ${esc(s.label)} <b>${kwh(r.values[s.key] || 0, 0)}</b>`);
+        const parts = _thmHit.series.map(s => {
+          const mInfo = s.key === 'p' && _thmHit.meas ? _thmHit.meas[i] : null;
+          const mark = mInfo && (mInfo.projected || mInfo.partial) ? ' <span style="color:var(--muted)">(hochger.)</span>' : '';
+          return `<span style="color:${s.color}">●</span> ${esc(s.label)} <b>${kwh(r.values[s.key] || 0, 0)}</b>${mark}`;
+        });
         t.innerHTML = `<b>${esc(r.label)}</b><div class="note" style="margin-top:2px">${parts.join(' · ')}</div>`;
         t.hidden = false; clearTimeout(_toastT); _toastT = setTimeout(() => { t.hidden = true; }, 5000);
       }
