@@ -437,6 +437,47 @@ class SHCClient:
             "energy_start": _parse_start_date(st.get("energyConsumptionStartDate")),
         }
 
+    def read_switch(self, device_id: str) -> str | None:
+        """Current PowerSwitch state ('ON'/'OFF') for a switchable device, or None."""
+        try:
+            state = self.get(f"/smarthome/devices/{device_id}/services/PowerSwitch")
+        except Exception:
+            return None
+        if not state:
+            return None
+        st = state.get("state", state)
+        return st.get("switchState")
+
+    def set_switch(self, device_id: str, on: bool) -> str:
+        """Switch a device's PowerSwitch ON/OFF. Returns the new state on success."""
+        body = json.dumps({"@type": "powerSwitchState",
+                           "switchState": "ON" if on else "OFF"}).encode("utf-8")
+        status, data = self._request(
+            "PUT", 8444,
+            f"/smarthome/devices/{device_id}/services/PowerSwitch/state", body=body)
+        if status not in (200, 204):
+            raise RuntimeError(f"PUT PowerSwitch {device_id} -> HTTP {status}: {data[:200]!r}")
+        return "ON" if on else "OFF"
+
+    def list_switchables(self, name_filter: list[str] | None = None) -> list[dict]:
+        """Switchable devices (PowerSwitch service) with their current state.
+        Reuses list_power_devices' naming/room logic for a consistent label."""
+        meter = {d["id"]: d for d in self.list_power_devices(name_filter)}
+        devices = self.get("/smarthome/devices") or []
+        out = []
+        for dev in devices:
+            if "PowerSwitch" not in (dev.get("deviceServiceIds") or []):
+                continue
+            dev_id = dev.get("id")
+            info = meter.get(dev_id)              # nice name/room if it's also a meter
+            name = (info or {}).get("name") or dev.get("name") or dev_id
+            room = (info or {}).get("room") or ""
+            out.append({"id": dev_id, "name": name, "room": room,
+                        "model": dev.get("deviceModel") or "",
+                        "state": self.read_switch(dev_id)})
+        out.sort(key=lambda d: (d["room"], d["name"]))
+        return out
+
 
 # --------------------------------------------------------------------------- #
 # Storage
@@ -2368,6 +2409,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._post_hp_import(body)
             if parsed.path == "/api/homecom/import/clear":
                 return self._post_hp_import_clear(body)
+            if parsed.path == "/api/switch":
+                return self._post_switch(body)
             if parsed.path == "/api/homecom/refresh":
                 return self._post_hp_refresh(body)
             if parsed.path == "/api/electrolux/connect":
@@ -2587,6 +2630,24 @@ class Handler(BaseHTTPRequestHandler):
         return self._send_json({"ok": True, "cleared": n,
                                 "message": f"{n} importierte Zeilen gelöscht."})
 
+    def _post_switch(self, body):
+        """Switch a Bosch device (Smart Plug+ etc.) ON/OFF. User-initiated only."""
+        dev_id = str(body.get("device_id") or "").strip()
+        on = bool(body.get("on"))
+        if not dev_id:
+            return self._send_json({"ok": False, "error": "device_id fehlt."}, 200)
+        if self.ctx.mode == "demo":
+            return self._send_json({"ok": True, "demo": True, "id": dev_id,
+                                    "state": "ON" if on else "OFF"})
+        if self.ctx.mode != "live":
+            return self._send_json({"ok": False, "error": "nur im Live-Modus verfügbar"}, 200)
+        try:
+            client = SHCClient(self.cfg.get("shc_ip", ""), self.cfg["cert"], self.cfg["key"])
+            state = client.set_switch(dev_id, on)
+            return self._send_json({"ok": True, "id": dev_id, "state": state})
+        except Exception as exc:
+            return self._send_json({"ok": False, "error": str(exc)}, 200)
+
     def _post_hp_refresh(self, body):
         """Force an immediate heat-pump poll. Because the HomeCom energy counter
         is cumulative, one fresh read after an outage recovers all missed kWh:
@@ -2792,6 +2853,21 @@ class Handler(BaseHTTPRequestHandler):
                 })
             if path == "/api/devices":
                 return self._send_json({"devices": self.store.devices()})
+            if path == "/api/switches":
+                # switchable devices (Bosch Smart Plug+ etc.) with current state
+                if self.ctx.mode == "demo":
+                    return self._send_json({"ok": True, "demo": True, "switches": [
+                        {"id": "demo-plug-1", "name": "Waschmaschine", "room": "Hauswirtschaft", "state": "OFF"},
+                        {"id": "demo-plug-2", "name": "Trockner", "room": "Hauswirtschaft", "state": "ON"},
+                        {"id": "demo-plug-3", "name": "Kaffeemaschine", "room": "Küche", "state": "OFF"}]})
+                if self.ctx.mode != "live":
+                    return self._send_json({"ok": False, "error": "nur im Live-Modus verfügbar"}, 400)
+                try:
+                    client = SHCClient(self.cfg.get("shc_ip", ""), self.cfg["cert"], self.cfg["key"])
+                    sw = client.list_switchables(self.cfg.get("device_filter") or None)
+                    return self._send_json({"ok": True, "switches": sw})
+                except Exception as exc:
+                    return self._send_json({"ok": False, "error": str(exc)}, 200)
             if path == "/api/heatpump":
                 st = dict(self.ctx.hp_state)
                 st["available"] = bool(st) and st.get("energy_kwh") is not None or bool(st.get("last_poll"))

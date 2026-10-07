@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-06 · Importierte HomeCom-CSV-Historie im Setup löschbar; Gemessen/Monat hochgerechnet bei Teilabdeckung'
+const APP_VERSION = '2026-10-07 · NEU: Geräte schalten – Bosch Smart Plug+ direkt aus der App an/aus (Übersicht, nur manuell mit Rückfrage)'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -183,6 +183,10 @@ const INFO = {
     'Tagesverlauf (morgens/abends) am besten, <b>Süd 35°</b> den höchsten Jahresertrag. Hohe Autarkie braucht einen ' +
     '<b>Speicher</b> (sonst nur Tagesdeckung). <b>Winter 100 % ist mit PV allein nicht möglich</b> – die Zahlen sind ' +
     'Richtwerte für ~50° N; den exakten Standort-Ertrag liefert die PVGIS-Abfrage.',
+  'switch': () => 'Schaltet deine <b>Bosch Smart Plug+</b> (und andere schaltbare Bosch-Geräte) direkt aus der App – ' +
+    'praktisch, um einen Verbraucher gezielt in ein <b>günstiges/PV-starkes Fenster</b> zu legen (siehe Börse/Smart-Timer). ' +
+    'Es wird <b>nur manuell</b> geschaltet (mit Rückfrage) – nichts läuft automatisch. ⚠︎ Schalte keine Dauerverbraucher wie ' +
+    '<b>Kühl-/Gefrierschrank, Router/Server</b> versehentlich ab. Mit ↻ aktualisierst du den Status.',
   'pv-night': () => 'Zeigt, wie viel Strom du von <b>Sonnenuntergang bis Sonnenaufgang</b> verbrauchst – genau die Menge, ' +
     'die ein <b>Speicher</b> aus dem Tags-Überschuss überbrücken muss. Sonnenauf-/-untergang werden aus deinem <b>Standort</b> ' +
     '(PV-Tab) und dem Datum berechnet, der nächtliche Verbrauch aus deinem <b>echten Stundenprofil</b> (Haushalt + Wärmepumpe). ' +
@@ -1764,8 +1768,59 @@ function devRow(title, sub, valTop, valBot, pct, col) {
 
 /* --------------------------------------------------------------- rendering */
 function renderAll() {
-  renderOverview(); renderToday(); renderHistory(); renderHeatpump(); renderProfile(); renderPv(); renderSettings(); renderAppliances(); renderMeter(); renderBorse(); renderCarbon(); renderSmart(); renderKonzept(); renderHa(); renderDarkLoad();
+  renderOverview(); renderToday(); renderHistory(); renderHeatpump(); renderProfile(); renderPv(); renderSettings(); renderAppliances(); renderMeter(); renderBorse(); renderCarbon(); renderSmart(); renderKonzept(); renderHa(); renderDarkLoad(); renderSwitches();
 }
+
+// Device control: switch Bosch Smart Plug+ (and other PowerSwitch devices) on/off.
+// Lazy-loaded (one fetch, then cached) so the 30 s overview poll stays cheap;
+// manual only – nothing is ever switched automatically.
+let _switches = null, _switchesBusy = false;
+async function fetchSwitches(force) {
+  if (_switchesBusy) return;
+  if (_switches && !force) { renderSwitchList(); return; }
+  _switchesBusy = true;
+  const body = $('ov-switch-body');
+  if (force && body) body.innerHTML = '<div class="note">Lade schaltbare Geräte …</div>';
+  try {
+    const r = await api('/api/switches');
+    if (r && r.ok) { _switches = r.switches || []; _switches._demo = !!r.demo; renderSwitchList(); }
+    else if (force && body) { $('ov-switch-card').hidden = false; body.innerHTML = `<div class="note">⚠︎ ${esc((r && r.error) || 'Konnte Geräte nicht laden.')}</div>`; }
+    else { const c = $('ov-switch-card'); if (c) c.hidden = true; }     // stay quiet on the overview
+  } catch (e) {
+    const c = $('ov-switch-card');
+    if (force && body) { c.hidden = false; body.innerHTML = '<div class="note">Nur möglich, wenn die Seite von der Bridge geöffnet ist.</div>'; }
+    else if (c) c.hidden = true;
+  } finally { _switchesBusy = false; }
+}
+function renderSwitchList() {
+  const card = $('ov-switch-card'), body = $('ov-switch-body'); if (!card || !body) return;
+  const list = _switches || [];
+  if (!list.length) { card.hidden = true; return; }     // no switchable devices → hide the card
+  card.hidden = false;
+  body.innerHTML = list.map(s => {
+    const on = String(s.state).toUpperCase() === 'ON', unk = s.state == null;
+    const label = unk ? '?' : (on ? 'AN' : 'AUS');
+    return `<div class="devrow"><div class="nm"><b>${esc(s.name || s.id)}</b>` +
+      `<small>${esc(s.room || '')}${unk ? ' · Status unbekannt' : ''}</small></div>` +
+      `<div class="val"><button class="btn ${on ? '' : 'sec'}" data-sw="${esc(s.id)}" data-on="${on ? '0' : '1'}" ` +
+      `data-nm="${esc(s.name || s.id)}" style="width:auto; padding:8px 16px; min-width:68px">${label}</button></div></div>`;
+  }).join('');
+  $('ov-switch-note').innerHTML = (list._demo ? '<b>Demo-Modus</b> – schaltet keine echten Geräte. ' : '') +
+    'Schaltet die <b>Bosch Smart Plug+</b> (und andere schaltbare Bosch-Geräte) direkt. <b>Nur manuell</b> – es wird nichts automatisch geschaltet.';
+}
+async function doSwitch(id, on, name) {
+  if (!window.confirm(`„${name}" wirklich ${on ? 'EINSCHALTEN' : 'AUSSCHALTEN'}?`)) return;
+  const note = $('ov-switch-note'); if (note) note.textContent = `Schalte „${name}" ${on ? 'ein' : 'aus'} …`;
+  try {
+    const r = await postJSON('/api/switch', { device_id: id, on });
+    if (r && r.ok) {
+      const s = (_switches || []).find(x => x.id === id); if (s) s.state = r.state;
+      renderSwitchList();
+      if (note) note.innerHTML = `✅ „${esc(name)}" ist jetzt <b>${r.state === 'ON' ? 'AN' : 'AUS'}</b>.`;
+    } else if (note) note.innerHTML = '⚠︎ ' + esc((r && r.error) || 'Schalten fehlgeschlagen.');
+  } catch (e) { if (note) note.textContent = 'Fehler: ' + e.message + ' – Seite von der Bridge geöffnet?'; }
+}
+function renderSwitches() { fetchSwitches(false); }
 
 // "Noch nicht gemessen": whole-house household load (meter/manual, minus heat
 // pump) vs. what the Bosch modules + smart plugs actually measure. The gap is
@@ -5138,6 +5193,12 @@ function init() {
   const hpc = $('hp-connect'); if (hpc) hpc.addEventListener('click', doHomecomConnect);
   const hpi = $('hp-import'); if (hpi) hpi.addEventListener('change', doHpImport);
   const hic = $('hp-import-clear'); if (hic) hic.addEventListener('click', doHpImportClear);
+  const swRef = $('ov-switch-refresh'); if (swRef) swRef.addEventListener('click', () => fetchSwitches(true));
+  const swBody = $('ov-switch-body');
+  if (swBody) swBody.addEventListener('click', e => {
+    const b = e.target.closest('button[data-sw]'); if (!b) return;
+    doSwitch(b.dataset.sw, b.dataset.on === '1', b.dataset.nm || 'Gerät');
+  });
   const hpr = $('hp-refresh'); if (hpr) hpr.addEventListener('click', doHpRefresh);
   const exp = $('export-csv'); if (exp) exp.addEventListener('click', doExport);
   const aegD = $('aeg-dash');
