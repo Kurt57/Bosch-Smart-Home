@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-08 · PV: Komponenten elektrisch korrekt (MPPT/Spannungen/DC-AC/Strings); Rechenbasis-WP = Summe Monatsmodell (konsistent mit Verlauf/Wärme)'
+const APP_VERSION = '2026-10-08 · PV-Komponenten: zukunftssicheres AIKO-Neostar-Modul (ABC) als Standard, elektrische String-Auslegung; Rechenbasis-WP konsistent'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -191,10 +191,11 @@ const INFO = {
     '(jede selbst genutzte kWh = voller Strompreis). Je größer die Anlage, desto mehr Überschuss wandert in die (billige) ' +
     '<b>Einspeisung</b> → der Zugewinn sinkt. Wo die Balken unter die <b>Kostengrenze</b> (rote Linie) fallen, lohnt Ausbau ' +
     'kaum noch. Ein <b>Speicher</b> oder geplanter Mehrverbrauch (E-Auto) schiebt den Sweet-Spot nach oben.',
-  'pv-product': () => 'Konkreter Komponenten-Vorschlag zu deiner Planung. <b>Fronius GEN24 Plus</b> ist ein Hybrid-Wechselrichter ' +
-    '(batteriefähig, ausbaufähig). Ich lege ihn <b>mit Reserve</b> aus, damit du später Module ergänzen kannst, ohne ihn zu tauschen. ' +
-    'Der <b>Speicher</b> (BYD Battery-Box, modular stapelbar) lässt sich Stück für Stück aufstocken. So bleibst du flexibel, falls du ' +
-    'in einigen Jahren mehr Strom brauchst (E-Auto, Klima). Links führen zur Herstellerseite.',
+  'pv-product': () => 'Konkreter Komponenten-Vorschlag zu deiner Planung. Modul: <b>AIKO Neostar (ABC-Rückkontakt)</b> – zukunftssicher ' +
+    '(hoher Wirkungsgrad, top bei Verschattung, mehr kWp/m²). <b>Fronius GEN24 Plus</b> ist ein Hybrid-Wechselrichter ' +
+    '(batteriefähig, ausbaufähig), den ich <b>mit Reserve</b> auslege, damit du später Module ergänzen kannst, ohne ihn zu tauschen. ' +
+    'Die <b>String-Auslegung</b> (Module in Reihe) kommt aus den Spannungen (Kalt-Voc &lt; 1000 V, MPP-Fenster) und den 2 MPP-Trackern. ' +
+    'Der <b>Speicher</b> (BYD Battery-Box, modular) lässt sich aufstocken. Links führen zur Herstellerseite.',
   'pv-night': () => 'Zeigt, wie viel Strom du von <b>Sonnenuntergang bis Sonnenaufgang</b> verbrauchst – genau die Menge, ' +
     'die ein <b>Speicher</b> aus dem Tags-Überschuss überbrücken muss. Sonnenauf-/-untergang werden aus deinem <b>Standort</b> ' +
     '(PV-Tab) und dem Datum berechnet, der nächtliche Verbrauch aus deinem <b>echten Stundenprofil</b> (Haushalt + Wärmepumpe). ' +
@@ -4079,6 +4080,7 @@ function renderPvMargin() {
 const FRONIUS_URL = 'https://www.fronius.com/de-de/germany/solarenergie';
 const BYD_URL = 'https://www.bydbatterybox.com/';
 const LG_URL = 'https://www.lgessbattery.com/';
+const AIKO_URL = 'https://www.aikosolar.com/';
 function froniusInverter(kwp) {
   // GEN24 Plus hybrid, representative specs (im Datenblatt prüfen): 2 MPP-Tracker,
   // max. Systemspannung 1000 V, ~25 A je MPP-Tracker, max. DC ~1,5× AC.
@@ -4091,9 +4093,10 @@ function froniusInverter(kwp) {
   const kw = [6, 8, 10].find(x => x >= need) || 10;
   return Object.assign({ name: `Fronius Symo GEN24 ${kw.toFixed(1)} Plus`, kw, phase: '3-phasig', family: 'Symo GEN24 Plus' }, spec);
 }
-// Average module electricals derived from its Wp (typical 182 mm half-cell).
+// Average module electricals derived from its Wp. Defaults suit AIKO Neostar
+// (N-type ABC back-contact): higher voltage, excellent low-light/shading.
 function moduleSpec(wp) {
-  const Imp = 13.5, Vmp = wp / Imp, Voc = Vmp * 1.185, VocCold = Voc * 1.0875; // -10 °C
+  const Imp = 13.6, Vmp = wp / Imp, Voc = Vmp * 1.19, VocCold = Voc * 1.0875; // -10 °C
   return { wp, Imp, Vmp, Voc, VocCold };
 }
 // String layout for a kWp target with this inverter + module: how many modules
@@ -4126,7 +4129,7 @@ function renderPvProduct() {
   card.hidden = false;
   const p = pvInputs();
   const kwpNow = Math.max(1, p.kwp || 0);
-  const modWp = Math.max(200, Math.min(700, parseFloat($('pv-mod-wp') && $('pv-mod-wp').value) || 440));
+  const modWp = Math.max(200, Math.min(700, parseFloat($('pv-mod-wp') && $('pv-mod-wp').value) || 460));
   if ($('pv-product-head')) $('pv-product-head').textContent = `${fmt(kwpNow, 1)} kWp · ${fmt(p.batt, 1)} kWh`;
   // future-proof: size the inverter for a plausible future (e.g. +E-Auto → a few
   // kWp more) so modules can be added later without swapping the inverter.
@@ -4146,8 +4149,9 @@ function renderPvProduct() {
     row('🔗', 'Verschaltung', `${sz.strings}× String ${sz.strings >= 2 ? '(je 1 MPP-Tracker)' : ''} · <b>${sz.per.join(' + ')} Module in Reihe</b> · ` +
       `Betrieb ~${sz.vOper} V (MPP ab ${inv.mppMin} V) · Leerlauf kalt ~${sz.vColdMax} V ${sz.voltOk ? '<b style="color:#4be0b0">✓ &lt; 1000 V</b>' : '<b style="color:#ef6c4d">⚠︎ &gt; 1000 V – kürzere Strings!</b>'} · Strom ~${fmt(ms.Imp, 1)} A/String ✓`) +
     row('⚡', 'Eingang / Ausgang', `DC-Eingang <b>${fmt(sz.dcKwp, 1)} kWp</b> an Modulen · AC-Ausgang <b>${inv.kw.toFixed(1)} kW</b> · DC/AC <b>${fmt(sz.dcac, 2)}</b> (${dcacTxt})`) +
-    row('☀︎', `${sz.total} Module à ~${modWp} Wp`, `Ø Modul: Vmp ~${fmt(ms.Vmp, 0)} V · Voc ~${fmt(ms.Voc, 0)} V · Imp ~${fmt(ms.Imp, 1)} A (typische Werte) · ` +
-      `am WR noch Platz für ~<b>${sz.headroom}</b> weitere Module (bis ${fmt(inv.kw * inv.dcFactor, 1)} kWp DC)`) +
+    row('☀︎', `${sz.total}× AIKO Neostar (ABC) ~${modWp} Wp`, `Zukunftssicher: <b>Rückkontakt-Zellen</b> (ABC), ~23–24 % Wirkungsgrad, ` +
+      `sehr gut bei <b>Verschattung/Schwachlicht</b> & mehr kWp/m² · Ø Modul: Vmp ~${fmt(ms.Vmp, 0)} V · Voc ~${fmt(ms.Voc, 0)} V · Imp ~${fmt(ms.Imp, 1)} A (typisch) · ` +
+      `am WR noch Platz für ~<b>${sz.headroom}</b> Module (bis ${fmt(inv.kw * inv.dcFactor, 1)} kWp DC) · ${a(AIKO_URL, 'AIKO')}`) +
     row('🔋', esc(bat.name), `${bat.modules}× 2,56 kWh = <b>${fmt(bat.nom, 1)} kWh</b> · <b>modular</b> stapelbar ${bat.min}–${bat.max} kWh, später aufstocken · Fronius-kompatibel (HV) · ${a(BYD_URL, 'BYD Battery-Box')}`) +
     row('↔︎', 'Alternative Speicher', `${a(LG_URL, 'LG')} (RESU – Verfügbarkeit prüfen, LG hat sich aus Heimspeichern teils zurückgezogen) · BYD ist aktuell die ausbaufähigste Fronius-Kombi`);
   $('pv-product-note').innerHTML =
