@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-08 · PV: DC/AC bis 1,5 = gewollte Überbelegung (nicht rot); größerer WR erst > 1,5 – mit Erklärung, warum kein WR-Sprung bei 1,49'
+const APP_VERSION = '2026-10-08 · Neu: 🔧 Heizungs-Check (Wärme-Tab) – findet Einstellungsfehler & Effizienz-Verluste aus Raumthermostaten + Vorlauf/Rücklauf'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -187,6 +187,13 @@ const INFO = {
     'praktisch, um einen Verbraucher gezielt in ein <b>günstiges/PV-starkes Fenster</b> zu legen (siehe Börse/Smart-Timer). ' +
     'Es wird <b>nur manuell</b> geschaltet (mit Rückfrage) – nichts läuft automatisch. ⚠︎ Schalte keine Dauerverbraucher wie ' +
     '<b>Kühl-/Gefrierschrank, Router/Server</b> versehentlich ab. Mit ↻ aktualisierst du den Status.',
+  'heating-diag': () => 'Sucht typische <b>Einstellungsfehler &amp; Effizienz-Verluste</b> deiner Heizung. Grundprinzip einer ' +
+    'Wärmepumpe: <b>möglichst niedriger Vorlauf</b> (jedes +1 K ≈ −2–3 % Effizienz), <b>Heizflächen weit offen</b> ' +
+    '(die Heizkurve regelt, nicht die Raumthermostate), <b>Spreizung Vorlauf−Rücklauf 5–8 K</b> und <b>wenig Takten</b> ' +
+    '(lange Laufzeiten). Geprüft wird aus deinen <b>Raumthermostaten</b> (Soll/Ist/Ventilstellung) und dem <b>Vorlauf/Rücklauf</b> ' +
+    'der WP. <b>Betriebswerte</b> (Vorlauf, Spreizung, Takt) sind eine <b>Momentaufnahme</b> – am aussagekräftigsten an einem kalten ' +
+    'Heiztag; <b>Einstellungen</b> (Ventile, Sollwerte, Modi) gelten dauerhaft. Es sind <b>Heuristiken</b> als Entscheidungshilfe, ' +
+    'keine amtliche Diagnose.',
   'pv-margin': () => 'Hier steht der <b>Ertrag der Kosten gegenüber</b>. Oben drei editierbare Annahmen (€/kWp, €/kWh Speicher, Grundkosten). ' +
     'Oberes Diagramm: <b>Ertrag über 20 Jahre</b> (Linie) vs. <b>Investition</b> (gestrichelt) – der Abstand ist dein Gewinn. ' +
     'Unteres Diagramm: <b>Grenznutzen</b> (€/Jahr je +1 kWp) gegen die <b>Kostengrenze</b>. Das <b>wirtschaftliche Optimum</b> ist das größte ' +
@@ -1873,6 +1880,112 @@ async function doSwitch(id, on, name) {
   } catch (e) { if (note) note.textContent = 'Fehler: ' + e.message + ' – Seite von der Bridge geöffnet?'; }
 }
 function renderSwitches() { fetchSwitches(false); }
+
+/* ---- Heizungs-Check: thermostat settings + flow/return efficiency -------- */
+const HD_SEV = {
+  high: { c: '#ff6b8a', ic: '⛔', lbl: 'wichtig' },
+  warn: { c: '#ffb64d', ic: '⚠︎', lbl: 'Hinweis' },
+  info: { c: '#3ba9ff', ic: 'ℹ︎', lbl: 'Info' },
+  ok:   { c: '#4be0b0', ic: '✓', lbl: 'ok' },
+};
+const HD_MODE = { ch: 'Heizen', heating: 'Heizen', heat: 'Heizen', dhw: 'Warmwasser', off: 'Standby' };
+let _hdData = null, _hdBusy = false;
+async function renderHeatingDiag(force) {
+  const card = $('hd-card'); if (!card) return;
+  if (_hdData && !force) { paintHeatingDiag(_hdData); return; }
+  if (_hdBusy) return;
+  _hdBusy = true;
+  if (force) { const h = $('hd-head'); if (h) h.innerHTML = '<span style="color:var(--muted);font-weight:400">lädt …</span>'; }
+  try {
+    const r = await api('/api/heating/diag');
+    if (r && r.ok) { _hdData = r; paintHeatingDiag(r); }
+    else { hdMessage((r && r.error) || 'Keine Thermostat-Daten gefunden.'); }
+  } catch (e) {
+    hdMessage('Nur mit laufender Bridge &amp; gekoppelten Bosch-Thermostaten verfügbar.');
+  } finally { _hdBusy = false; }
+}
+function hdMessage(msg) {
+  const head = $('hd-head'); if (head) head.textContent = '';
+  const k = $('hd-kpi'), f = $('hd-findings'), ro = $('hd-rooms'), n = $('hd-note');
+  if (k) k.innerHTML = ''; if (ro) ro.innerHTML = ''; if (n) n.textContent = '';
+  if (f) f.innerHTML = `<div class="note">${msg}</div>`;
+}
+function paintHeatingDiag(r) {
+  const K = r.kpis || {}, F = r.findings || [], rooms = r.rooms || [];
+  // header counts
+  const badge = (sev, n) => n ? `<span style="color:${HD_SEV[sev].c};margin-left:8px;white-space:nowrap">${HD_SEV[sev].ic} ${n}</span>` : '';
+  const head = $('hd-head');
+  if (head) head.innerHTML = badge('high', K.n_high) + badge('warn', K.n_warn) + badge('info', K.n_info) + badge('ok', K.n_ok);
+  // operating-point tiles + verdict
+  const tile = (l, v, col) => `<div style="background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:8px 10px;text-align:center">` +
+    `<div style="font-size:18px;font-weight:700;color:${col || 'var(--ink)'}">${v}</div><div style="font-size:11px;color:var(--muted)">${l}</div></div>`;
+  const u = (x, s, d = 0) => (x == null ? '–' : fmt(x, d) + ' ' + s);
+  const modeTxt = HD_MODE[(K.mode || '').toLowerCase()] || (K.mode || '–');
+  const spreadCol = K.spread_k == null ? '' : (K.spread_k < 3 || K.spread_k > 10 ? '#ffb64d' : '#4be0b0');
+  const flowCol = (K.supply_c != null && K.ideal_flow_c != null)
+    ? (K.supply_c - K.ideal_flow_c >= 8 ? '#ff6b8a' : K.supply_c - K.ideal_flow_c >= 4 ? '#ffb64d' : '#4be0b0') : '';
+  const verdictCol = K.n_high ? '#ff6b8a' : K.n_warn ? '#ffb64d' : '#4be0b0';
+  $('hd-kpi').innerHTML =
+    `<div style="font-weight:700;color:${verdictCol};margin-bottom:10px">${esc(r.verdict || '')}</div>` +
+    `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(84px,1fr));gap:8px">` +
+    tile('Außen', u(K.outdoor_c, '°C'), '') +
+    tile('Vorlauf', u(K.supply_c, '°C'), flowCol) +
+    tile('Rücklauf', u(K.return_c, '°C'), '') +
+    tile('Spreizung', u(K.spread_k, 'K', 1), spreadCol) +
+    tile('Modus', modeTxt, '') +
+    tile('Ø Takt', K.cycle_min != null ? fmt(K.cycle_min, 0) + ' min' : '–', '') +
+    `</div>`;
+  // findings (high/warn/info as cards, ok as a compact green line)
+  const main = F.filter(f => f.severity !== 'ok');
+  const oks = F.filter(f => f.severity === 'ok');
+  const fx = main.map(f => {
+    const m = HD_SEV[f.severity] || HD_SEV.info;
+    const val = f.value ? `<span style="font-size:12px;color:var(--muted);white-space:nowrap">${esc(f.value)}` +
+      (f.target ? ` → <b style="color:var(--ink)">${esc(f.target)}</b>` : '') + `</span>` : '';
+    return `<div style="border-left:3px solid ${m.c};background:var(--card2);border-radius:8px;padding:10px 12px;margin-bottom:8px">` +
+      `<div style="display:flex;justify-content:space-between;gap:10px;align-items:baseline;flex-wrap:wrap">` +
+      `<b style="color:${m.c}">${m.ic} ${esc(f.title)}</b>${val}</div>` +
+      `<div style="font-size:13px;margin-top:4px;line-height:1.45">${esc(f.detail)}</div>` +
+      (f.fix ? `<div style="font-size:13px;margin-top:6px;color:var(--accent2)">→ ${esc(f.fix)}</div>` : '') +
+      `</div>`;
+  }).join('');
+  const okLine = oks.length ? `<div style="font-size:12px;color:var(--muted);margin-top:2px">✓ ` +
+    oks.map(f => esc(f.title.replace(/ im .*|unauffällig|im sinnvollen Bereich|im Zielbereich/i, '').trim()) || esc(f.title)).join(' · ') + `</div>` : '';
+  $('hd-findings').innerHTML = (fx || '<div class="note">Keine auffälligen Punkte gefunden. 👍</div>') + okLine;
+  // room table
+  if (rooms.length) {
+    const hit = new Set();
+    F.forEach(f => (f.rooms || []).forEach(n => hit.add(n)));
+    const modeOf = rm => rm.summerMode ? 'Sommer' : (String(rm.roomControlMode).toUpperCase() === 'OFF' ? 'Aus'
+      : (String(rm.operationMode).toUpperCase() === 'MANUAL' ? 'Manuell' : 'Auto'));
+    const vbar = v => {
+      if (v == null) return '<span style="color:var(--muted)">–</span>';
+      const col = v < 50 ? '#ff6b8a' : v < 80 ? '#ffb64d' : '#4be0b0';
+      return `<span style="display:inline-flex;align-items:center;gap:6px"><span style="display:inline-block;width:38px;height:6px;border-radius:3px;background:var(--line);position:relative">` +
+        `<span style="position:absolute;left:0;top:0;height:6px;border-radius:3px;width:${Math.max(4, v)}%;background:${col}"></span></span>${v}%</span>`;
+    };
+    const rowsHtml = rooms.map(rm => {
+      const cold = rm.setpoint != null && rm.temp != null && rm.temp <= rm.setpoint - 1.5;
+      const flag = hit.has(rm.room) ? 'border-left:3px solid #ffb64d' : 'border-left:3px solid transparent';
+      const istCol = cold ? '#ffb64d' : 'var(--ink)';
+      return `<tr style="${flag}"><td style="padding:6px 8px">${esc(rm.room)}</td>` +
+        `<td style="padding:6px 8px;text-align:right">${rm.setpoint != null ? fmt(rm.setpoint, 0) + '°' : '–'}</td>` +
+        `<td style="padding:6px 8px;text-align:right;color:${istCol}">${rm.temp != null ? fmt(rm.temp, 1) + '°' : '–'}</td>` +
+        `<td style="padding:6px 8px;text-align:right">${vbar(rm.valve)}</td>` +
+        `<td style="padding:6px 8px;text-align:right;color:var(--muted)">${modeOf(rm)}</td></tr>`;
+    }).join('');
+    $('hd-rooms').innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px">` +
+      `<thead><tr style="color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.3px">` +
+      `<th style="text-align:left;padding:4px 8px;font-weight:600">Raum</th><th style="text-align:right;padding:4px 8px;font-weight:600">Soll</th>` +
+      `<th style="text-align:right;padding:4px 8px;font-weight:600">Ist</th><th style="text-align:right;padding:4px 8px;font-weight:600">Ventil</th>` +
+      `<th style="text-align:right;padding:4px 8px;font-weight:600">Modus</th></tr></thead><tbody>${rowsHtml}</tbody></table>`;
+  } else {
+    $('hd-rooms').innerHTML = '<div class="note">Keine Raumthermostate gefunden.</div>';
+  }
+  const note = $('hd-note');
+  if (note) note.innerHTML = (r.demo ? '<b>Demo-Daten</b> (Beispielräume). ' : '') +
+    'Betriebswerte sind eine Momentaufnahme – am aussagekräftigsten an einem kalten Heiztag. Einstellungen gelten dauerhaft.';
+}
 
 // "Noch nicht gemessen": whole-house household load (meter/manual, minus heat
 // pump) vs. what the Bosch modules + smart plugs actually measure. The gap is
@@ -5346,6 +5459,8 @@ function switchView(v) {
   document.querySelectorAll('.view').forEach(s => s.classList.toggle('on', s.id === 'v-' + v));
   document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
   window.scrollTo({ top: 0, behavior: 'instant' in window ? 'instant' : 'auto' });
+  // lazily load the heating-check when the Wärme tab is opened
+  if (v === 'heatpump' && typeof renderHeatingDiag === 'function') renderHeatingDiag(false);
 }
 
 function init() {
@@ -5496,6 +5611,7 @@ function init() {
     doSwitch(b.dataset.sw, b.dataset.on === '1', b.dataset.nm || 'Gerät');
   });
   const hpr = $('hp-refresh'); if (hpr) hpr.addEventListener('click', doHpRefresh);
+  const hdr = $('hd-refresh'); if (hdr) hdr.addEventListener('click', () => renderHeatingDiag(true));
   const exp = $('export-csv'); if (exp) exp.addEventListener('click', doExport);
   const aegD = $('aeg-dash');
   if (aegD) aegD.addEventListener('click', () => window.open('https://developer.electrolux.one/dashboard', '_blank'));
@@ -5939,6 +6055,13 @@ function init() {
   loadAll();
   setInterval(refreshLive, 30000);
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  // deep-link: #heatpump etc. opens that tab on load (also keeps the tab on reload)
+  const openFromHash = () => {
+    const h = (location.hash || '').replace(/^#/, '');
+    if (h && document.getElementById('v-' + h)) switchView(h);
+  };
+  openFromHash();
+  window.addEventListener('hashchange', openFromHash);
 }
 
 async function refreshLive() {

@@ -346,6 +346,17 @@
       <div class="note" id="hp-refresh-note" style="margin-top:8px">War die Wärmepumpe zwischendurch nicht erreichbar?
         Der Zählerstand zählt trotzdem weiter – hiermit liest die App ihn frisch und holt versäumte kWh nach.</div>
     </div>
+    <div class="card" id="hd-card">
+      <h2><span class="info" data-info="heating-diag" role="button" aria-label="Info">i</span>🔧 Heizungs-Check <span class="r" id="hd-head"></span></h2>
+      <div class="note" style="margin-bottom:10px">Prüft deine <b>Raumthermostate</b> (Soll/Ist/Ventil) zusammen mit
+        <b>Vorlauf/Rücklauf</b> der Wärmepumpe auf typische <b>Einstellungsfehler &amp; Effizienz-Verluste</b>.
+        Betriebswerte sind eine Momentaufnahme, Einstellungen gelten dauerhaft.</div>
+      <div id="hd-kpi"></div>
+      <div id="hd-findings" style="margin-top:12px"></div>
+      <div id="hd-rooms" style="margin-top:12px"></div>
+      <button class="btn sec" id="hd-refresh" style="margin-top:10px">🔄 Heizungs-Check aktualisieren</button>
+      <div class="note" id="hd-note" style="margin-top:8px"></div>
+    </div>
     <div class="grid2">
       <div class="kpi sm"><div class="v" id="hp-today-e">–</div><div class="l">Strom heute</div></div>
       <div class="kpi sm"><div class="v" id="hp-today-h">–</div><div class="l">Wärme heute</div></div>

@@ -478,6 +478,124 @@ class SHCClient:
         out.sort(key=lambda d: (d["room"], d["name"]))
         return out
 
+    def list_climate(self) -> list[dict]:
+        """Per-room climate/thermostat snapshot for the heating diagnostics.
+
+        Combines the virtual per-room ``RoomClimateControl`` (setpoint, mode) with
+        the physical radiator thermostats' ``ValveTappet`` (valve %), measured
+        ``TemperatureLevel`` and ``TemperatureOffset`` – grouped by room. Reads all
+        service states in one bulk call where supported, else per device.
+        """
+        devices = self.get("/smarthome/devices") or []
+        rooms = {}
+        try:
+            raw = self.get("/smarthome/rooms") or []
+            if isinstance(raw, dict):
+                raw = raw.get("rooms") or raw.get("items") or []
+            for r in raw:
+                if isinstance(r, dict):
+                    rooms[r.get("id")] = r.get("name")
+        except Exception:
+            pass
+
+        # serviceId -> state, keyed by deviceId. Prefer the bulk endpoint.
+        svc = {}
+        bulk = None
+        try:
+            bulk = self.get("/smarthome/services")
+        except Exception:
+            bulk = None
+        if isinstance(bulk, list):
+            for s in bulk:
+                if not isinstance(s, dict):
+                    continue
+                did, sid = s.get("deviceId"), s.get("id")
+                if did and sid:
+                    svc.setdefault(did, {})[sid] = s.get("state") or {}
+        else:
+            # fall back to one GET per climate service per device
+            wanted = {"RoomClimateControl", "TemperatureLevel", "ValveTappet",
+                      "TemperatureOffset", "Thermostat", "ChildLock"}
+            for dev in devices:
+                did = dev.get("id")
+                for sid in (dev.get("deviceServiceIds") or []):
+                    if sid not in wanted:
+                        continue
+                    try:
+                        st = self.get(f"/smarthome/devices/{did}/services/{sid}")
+                    except Exception:
+                        continue
+                    if isinstance(st, dict):
+                        svc.setdefault(did, {})[sid] = st.get("state", st) or {}
+
+        def num(d, *keys):
+            for k in keys:
+                v = (d or {}).get(k)
+                if isinstance(v, (int, float)):
+                    return float(v)
+            return None
+
+        by_room = {}
+
+        def room_rec(room_id):
+            name = rooms.get(room_id) or room_id or "—"
+            return by_room.setdefault(room_id or name, {
+                "room": name, "setpoint": None, "temp": None, "valve": None,
+                "valves": [], "operationMode": None, "roomControlMode": None,
+                "boost": False, "summerMode": False, "low": False, "offset": None,
+                "childLock": False, "faults": [], "devices": 0})
+
+        for dev in devices:
+            did = dev.get("id")
+            sids = dev.get("deviceServiceIds") or []
+            climate_sids = {"RoomClimateControl", "ValveTappet", "Thermostat"}
+            if not (climate_sids & set(sids)) and "TemperatureLevel" not in sids:
+                continue
+            # a device with only TemperatureLevel and nothing climate-y (e.g. a
+            # twinguard) is skipped unless it also controls climate
+            if not (climate_sids & set(sids)):
+                continue
+            rid = dev.get("roomId")
+            rec = room_rec(rid)
+            rec["devices"] += 1
+            st = svc.get(did, {})
+            rcc = st.get("RoomClimateControl") or {}
+            if rcc:
+                sp = num(rcc, "setpointTemperature")
+                if sp is not None:
+                    rec["setpoint"] = sp
+                rec["operationMode"] = rcc.get("operationMode") or rec["operationMode"]
+                rec["roomControlMode"] = rcc.get("roomControlMode") or rec["roomControlMode"]
+                rec["boost"] = bool(rcc.get("boostMode")) or rec["boost"]
+                rec["summerMode"] = bool(rcc.get("summerMode")) or rec["summerMode"]
+                rec["low"] = bool(rcc.get("low")) or rec["low"]
+            tl = num(st.get("TemperatureLevel") or {}, "temperature")
+            if tl is not None:
+                # prefer the room-control device's reading; else take any
+                if rec["temp"] is None or "RoomClimateControl" in st:
+                    rec["temp"] = tl
+            vt = num(st.get("ValveTappet") or {}, "position", "value")
+            if vt is not None:
+                rec["valves"].append(int(round(vt)))
+            off = num(st.get("TemperatureOffset") or {}, "offset")
+            if off is not None and abs(off) > abs(rec["offset"] or 0):
+                rec["offset"] = off
+            cl = st.get("ChildLock") or {}
+            if (cl.get("childLock") or cl.get("childLockState")) in ("ON", True, "on"):
+                rec["childLock"] = True
+            for f in (dev.get("faults") or []):
+                fs = f.get("type") if isinstance(f, dict) else str(f)
+                if fs and fs not in rec["faults"]:
+                    rec["faults"].append(fs)
+
+        out = []
+        for rec in by_room.values():
+            if rec["valves"]:
+                rec["valve"] = max(rec["valves"])   # the most-open valve drives flow demand
+            out.append(rec)
+        out.sort(key=lambda r: r["room"])
+        return out
+
 
 # --------------------------------------------------------------------------- #
 # Storage
@@ -1422,6 +1540,230 @@ def compute_hp_analytics(store: Store, days: int, price: float,
     }
 
 
+def compute_heating_diag(climate: list[dict], hp: dict | None) -> dict:
+    """Turn room thermostats + the heat-pump flow/return snapshot into concrete
+    'Einstellungsfehler / Effizienz' findings.
+
+    Two kinds of finding: SETTINGS (time-independent configuration issues –
+    throttled valves, setpoint spread, wrong modes, offsets) and OPERATING (the
+    momentary flow temperature, spread and cycling). Each finding carries a
+    severity, the measured value, a target and a concrete fix. Pure heuristics –
+    labelled as guidance, not gospel.
+    """
+    hp = hp or {}
+    rooms = [r for r in (climate or []) if isinstance(r, dict)]
+    F = []   # findings
+
+    def add(sev, cat, title, detail, value=None, target=None, fix=None, rooms_hit=None):
+        F.append({"severity": sev, "cat": cat, "title": title, "detail": detail,
+                  "value": value, "target": target, "fix": fix,
+                  "rooms": rooms_hit or []})
+
+    supply = hp.get("supply_c")
+    ret = hp.get("return_c")
+    outdoor = hp.get("outdoor_c")
+    mode = (hp.get("mode") or "").lower()
+    modulation = hp.get("modulation")
+    starts = hp.get("starts")
+    working_h = hp.get("working_h")
+    heating_now = mode in ("ch", "heating", "heat") and (modulation or 0) > 0
+    compressor_on = (modulation or 0) > 0
+
+    # ---- OPERATING: flow temperature vs. outside (heat-curve too steep) ----- #
+    # A heat pump wants the LOWEST flow temp that still heats the house; each +1 K
+    # costs ~2.5 % efficiency. Target band derived from outdoor temp (underfloor
+    # friendly). Only meaningful while the compressor heats the house.
+    ideal_flow = None
+    if outdoor is not None:
+        ideal_flow = round(max(28.0, min(45.0, 30.0 + (18.0 - outdoor) * 0.45)), 1)
+    if heating_now and supply is not None and ideal_flow is not None:
+        over = round(supply - ideal_flow, 1)
+        if over >= 8:
+            add("high", "flow", "Vorlauftemperatur deutlich zu hoch",
+                f"Vorlauf {supply:.0f} °C bei {outdoor:.0f} °C außen – für eine Wärmepumpe "
+                f"rund {over:.0f} K über dem sinnvollen Zielband (~{ideal_flow:.0f} °C). "
+                f"Jedes +1 K Vorlauf kostet ~2–3 % Effizienz (JAZ).",
+                value=f"{supply:.0f} °C", target=f"≈ {ideal_flow:.0f} °C",
+                fix="Heizkurve (Steilheit/Niveau) absenken: schrittweise je 2–3 K, bis Räume "
+                    "gerade noch warm werden. Ziel: niedrigster Vorlauf, der die Wohnung hält.")
+        elif over >= 4:
+            add("warn", "flow", "Vorlauftemperatur etwas hoch",
+                f"Vorlauf {supply:.0f} °C bei {outdoor:.0f} °C außen, ~{over:.0f} K über dem "
+                f"Zielband (~{ideal_flow:.0f} °C). Spielraum, die Heizkurve flacher zu stellen.",
+                value=f"{supply:.0f} °C", target=f"≈ {ideal_flow:.0f} °C",
+                fix="Heizkurve leicht absenken und beobachten, ob alle Räume noch warm werden.")
+        else:
+            add("ok", "flow", "Vorlauftemperatur im sinnvollen Bereich",
+                f"Vorlauf {supply:.0f} °C bei {outdoor:.0f} °C außen passt zum WP-freundlichen "
+                f"Zielband (~{ideal_flow:.0f} °C).",
+                value=f"{supply:.0f} °C", target=f"≈ {ideal_flow:.0f} °C")
+
+    # ---- OPERATING: spread Vorlauf − Rücklauf ------------------------------- #
+    if compressor_on and supply is not None and ret is not None:
+        dt = round(supply - ret, 1)
+        if dt < 3:
+            add("warn", "spread", "Spreizung zu klein (Vorlauf−Rücklauf)",
+                f"ΔT nur {dt:.1f} K. Zu kleine Spreizung heißt: die Umwälzpumpe fördert zu "
+                f"viel – oder ein Überströmventil / zu viele offene Kreise mischen zurück. "
+                f"Das senkt die Effizienz und begünstigt Takten.",
+                value=f"{dt:.1f} K", target="5–8 K",
+                fix="Pumpendrehzahl/Volumenstrom reduzieren bis ΔT ≈ 5–7 K; Überströmventil prüfen.")
+        elif dt > 10:
+            add("warn", "spread", "Spreizung zu groß (Vorlauf−Rücklauf)",
+                f"ΔT {dt:.1f} K. Zu große Spreizung deutet auf zu wenig Durchfluss – gedrosselte "
+                f"Thermostate, verschmutzter Filter/Sieb oder zu langsame Pumpe.",
+                value=f"{dt:.1f} K", target="5–8 K",
+                fix="Mehr Heizkreise öffnen, Schmutzfilter reinigen, Pumpenleistung erhöhen.")
+        else:
+            add("ok", "spread", "Spreizung im Zielbereich",
+                f"Vorlauf−Rücklauf ΔT {dt:.1f} K – passt (Zielband 5–8 K).",
+                value=f"{dt:.1f} K", target="5–8 K")
+
+    # ---- OPERATING: cycling (short cycles) ---------------------------------- #
+    if starts and working_h and starts > 0:
+        cyc_min = round(working_h * 60.0 / starts, 0)
+        if cyc_min < 10:
+            add("high", "cycle", "Wärmepumpe taktet zu häufig",
+                f"Ø Laufzeit nur ~{cyc_min:.0f} min pro Start ({int(starts)} Starts / "
+                f"{int(working_h)} h). Kurze Takte verschleißen den Verdichter und senken die "
+                f"Jahresarbeitszahl – meist durch zu hohen Vorlauf oder zu wenig offene Heizfläche.",
+                value=f"~{cyc_min:.0f} min/Takt", target="> 15 min",
+                fix="Vorlauf/Heizkurve senken, mehr Heizkreise offen lassen, ggf. Hysterese erhöhen.")
+        elif cyc_min < 15:
+            add("warn", "cycle", "Taktung grenzwertig",
+                f"Ø ~{cyc_min:.0f} min pro Start. Etwas kurz – mehr offene Heizfläche / niedrigerer "
+                f"Vorlauf verlängert die Takte.",
+                value=f"~{cyc_min:.0f} min/Takt", target="> 15 min",
+                fix="Thermostate weiter öffnen, Heizkurve flacher stellen.")
+        else:
+            add("ok", "cycle", "Taktung unauffällig",
+                f"Ø ~{cyc_min:.0f} min pro Start (Lebensdauer-Mittel) – ruhiger Lauf.",
+                value=f"~{cyc_min:.0f} min/Takt", target="> 15 min")
+
+    # ---- SETTINGS: thermostats throttling the heat pump --------------------- #
+    heat_rooms = [r for r in rooms
+                  if (r.get("roomControlMode") or "HEATING").upper() != "OFF"
+                  and not r.get("summerMode")]
+    valved = [r for r in heat_rooms if isinstance(r.get("valve"), (int, float))]
+    throttled = [r for r in valved if r["valve"] < 80]
+    hard = [r for r in valved if r["valve"] < 50]
+    if valved and len(throttled) / len(valved) >= 0.4:
+        names = [r["room"] for r in sorted(throttled, key=lambda x: x["valve"])]
+        sev = "high" if (len(hard) >= 2 or len(throttled) / len(valved) >= 0.6) else "warn"
+        add(sev, "valves", "Einzelraumregelung arbeitet gegen die Wärmepumpe",
+            f"{len(throttled)} von {len(valved)} Räumen sind angedrosselt (Ventil < 80 %"
+            f"{', davon ' + str(len(hard)) + ' unter 50 %' if hard else ''}). Gedrosselte Ventile "
+            f"verkleinern die aktive Heizfläche – die WP muss den Vorlauf anheben und taktet. "
+            f"Bei Flächenheizung ist die Heizkurve der bessere Regler als die Raumthermostate.",
+            value=f"{len(throttled)}/{len(valved)} gedrosselt", target="Ventile möglichst offen",
+            fix="Thermostate in den Haupträumen voll öffnen und die Temperatur über die Heizkurve "
+                "regeln; Feinverteilung über hydraulischen Abgleich statt Zudrosseln.",
+            rooms_hit=names)
+    elif valved:
+        add("ok", "valves", "Heizflächen weit offen",
+            f"{len(valved) - len(throttled)} von {len(valved)} Räumen haben die Ventile weit offen "
+            f"– gut für einen niedrigen Vorlauf.",
+            value=f"{len(throttled)}/{len(valved)} gedrosselt", target="Ventile möglichst offen")
+
+    # ---- SETTINGS: setpoint spread between rooms ---------------------------- #
+    sps = [(r["room"], r["setpoint"]) for r in heat_rooms
+           if isinstance(r.get("setpoint"), (int, float))]
+    if len(sps) >= 2:
+        lo = min(sps, key=lambda x: x[1]); hi = max(sps, key=lambda x: x[1])
+        spread = round(hi[1] - lo[1], 1)
+        if spread >= 4:
+            add("warn", "spread_room", "Große Soll-Unterschiede zwischen Räumen",
+                f"Von {lo[0]} ({lo[1]:.0f} °C) bis {hi[0]} ({hi[1]:.0f} °C) – {spread:.0f} K "
+                f"Unterschied. Der wärmste Raum zwingt den Vorlauf hoch, die kühleren drosseln dann "
+                f"ab: genau das, was die WP ineffizient macht.",
+                value=f"{spread:.0f} K Spreizung", target="≤ 3 K",
+                fix="Solltemperaturen angleichen (z. B. alle 20–22 °C) und selten genutzte Räume "
+                    "eher über Lüftung/Türen temperieren als mit stark abweichendem Sollwert.")
+
+    # ---- SETTINGS: absolute setpoint high ----------------------------------- #
+    hot = [r for r in heat_rooms if isinstance(r.get("setpoint"), (int, float)) and r["setpoint"] >= 23]
+    if hot:
+        hot_lst = ", ".join(f"{r['room']} ({r['setpoint']:.0f} °C)" for r in hot)
+        add("info", "high_set", "Hohe Solltemperaturen",
+            f"{hot_lst}. Jedes +1 °C Raumtemperatur kostet grob ~6 % Heizenergie.",
+            value=f"{len(hot)} Raum/Räume ≥ 23 °C", target="20–22 °C üblich",
+            fix="Prüfen, ob 23 °C+ wirklich nötig sind – 1 °C weniger spart spürbar.")
+
+    # ---- SETTINGS: control-off / summer-mode in heating season -------------- #
+    cold_outside = outdoor is not None and outdoor < 15
+    off_rooms = [r for r in rooms if (r.get("roomControlMode") or "").upper() == "OFF"
+                 and isinstance(r.get("temp"), (int, float)) and r["temp"] < 18]
+    if cold_outside and off_rooms:
+        add("warn", "mode_off", "Raumregelung aus, obwohl es kühl ist",
+            f"{', '.join(r['room'] for r in off_rooms)} steht auf AUS und ist unter 18 °C. "
+            f"Gewollt (ungenutzter Raum) oder vergessen?",
+            value=f"{len(off_rooms)} Raum/Räume AUS", target=None,
+            fix="Wenn der Raum genutzt wird: Regelung wieder auf Heizen stellen.")
+    summer_rooms = [r for r in rooms if r.get("summerMode")]
+    if cold_outside and summer_rooms:
+        add("warn", "summer", "Sommerbetrieb trotz Kälte aktiv",
+            f"{', '.join(r['room'] for r in summer_rooms)} im Sommerbetrieb, draußen {outdoor:.0f} °C. "
+            f"Dann heizt der Raum nicht.",
+            value=f"{len(summer_rooms)} Raum/Räume", target=None,
+            fix="Sommerbetrieb beenden, wenn geheizt werden soll.")
+
+    # ---- SETTINGS: control deviation per room (Soll vs. Ist) ---------------- #
+    cold = [r for r in heat_rooms
+            if isinstance(r.get("setpoint"), (int, float)) and isinstance(r.get("temp"), (int, float))
+            and r["temp"] <= r["setpoint"] - 1.5 and (r.get("valve") is None or r["valve"] >= 90)]
+    if cold:
+        names = [f"{r['room']} ({r['temp']:.0f}/{r['setpoint']:.0f} °C)" for r in cold]
+        add("warn", "undersupply", "Räume werden trotz offenem Ventil nicht warm",
+            f"{', '.join(names)}: Ist liegt ≥ 1,5 K unter Soll, Ventil (fast) offen. Heizfläche zu "
+            f"klein, Vorlauf zu niedrig für diesen Raum, hydraulischer Abgleich – oder Fenster offen.",
+            value=f"{len(cold)} Raum/Räume unterversorgt", target="Ist ≈ Soll",
+            fix="Diesen Raum beim hydraulischen Abgleich bevorzugen; prüfen, ob er den Vorlauf limitiert.")
+
+    # ---- SETTINGS: measured-temperature offset ------------------------------ #
+    offs = [r for r in rooms if isinstance(r.get("offset"), (int, float)) and abs(r["offset"]) >= 2]
+    if offs:
+        off_lst = ", ".join(f"{r['room']} ({r['offset']:+.0f} K)" for r in offs)
+        add("info", "offset", "Großer Temperatur-Offset gesetzt",
+            f"{off_lst}. Ein großer Offset verstellt die gemessene Raumtemperatur – leicht Quelle "
+            f"für dauerhaftes Über-/Unterheizen.",
+            value=f"{len(offs)} Raum/Räume", target="≈ 0 K",
+            fix="Offset nur zum Kalibrieren gegen ein geprüftes Thermometer nutzen, nicht zum 'Mogeln'.")
+
+    # ---- SETTINGS: device faults (battery etc.) ----------------------------- #
+    faulty = [(r["room"], r["faults"]) for r in rooms if r.get("faults")]
+    if faulty:
+        txt = "; ".join(f"{rm}: {', '.join(fs)}" for rm, fs in faulty)
+        add("warn", "fault", "Thermostat meldet einen Fehler",
+            f"{txt}. Z. B. schwache Batterie verfälscht die Regelung.",
+            value=f"{len(faulty)} Gerät(e)", target=None,
+            fix="Gemeldete Fehler beheben (meist Batterie wechseln).")
+
+    # ---- KPIs / headline ---------------------------------------------------- #
+    order = {"high": 0, "warn": 1, "info": 2, "ok": 3}
+    F.sort(key=lambda f: order.get(f["severity"], 9))
+    n_high = sum(1 for f in F if f["severity"] == "high")
+    n_warn = sum(1 for f in F if f["severity"] == "warn")
+    if n_high:
+        verdict = "Deutliches Sparpotenzial – Einstellungen anpassen."
+    elif n_warn:
+        verdict = "Kleinere Stellhebel vorhanden."
+    else:
+        verdict = "Heizung läuft sauber eingestellt."
+    dt = (round(supply - ret, 1) if (supply is not None and ret is not None) else None)
+    cyc = (round(working_h * 60.0 / starts, 0) if (starts and working_h and starts > 0) else None)
+    kpis = {
+        "supply_c": supply, "return_c": ret, "outdoor_c": outdoor,
+        "spread_k": dt, "modulation": modulation, "mode": hp.get("mode"),
+        "ideal_flow_c": ideal_flow, "cycle_min": cyc,
+        "rooms": len(rooms), "heating_now": heating_now,
+        "n_high": n_high, "n_warn": n_warn,
+        "n_info": sum(1 for f in F if f["severity"] == "info"),
+        "n_ok": sum(1 for f in F if f["severity"] == "ok"),
+    }
+    return {"ok": True, "verdict": verdict, "kpis": kpis,
+            "findings": F, "rooms": rooms}
+
+
 def compute_overview(store: Store, days: int, price: float,
                      hp_live: dict | None = None) -> dict:
     """One combined snapshot for the dashboard: Smart Home + heat pump together,
@@ -1670,6 +2012,28 @@ def _demo_hp(dt: datetime) -> dict:
     return {"elec_w": round(max(0.0, elec), 1), "heat_w": round(max(0.0, heat), 1),
             "outdoor_c": outdoor, "modulation": modulation, "mode": mode,
             "supply_c": supply, "return_c": round(supply - (heat / 6000.0) * 5.0, 1)}
+
+
+def _demo_climate() -> list[dict]:
+    """Synthetic per-room thermostat snapshot for the heating diagnostics demo –
+    deliberately seeded with a few typical misconfigurations so the check has
+    something to flag (throttled valves, setpoint spread, a cold room, an offset)."""
+    def rec(room, setpoint, temp, valve, **kw):
+        d = {"room": room, "setpoint": setpoint, "temp": temp, "valve": valve,
+             "valves": [valve], "operationMode": "AUTOMATIC", "roomControlMode": "HEATING",
+             "boost": False, "summerMode": False, "low": False, "offset": None,
+             "childLock": False, "faults": [], "devices": 1}
+        d.update(kw)
+        return d
+    return [
+        rec("Wohnzimmer", 22.0, 21.7, 95),
+        rec("Küche", 21.0, 21.2, 85),
+        rec("Bad", 24.0, 23.1, 100, offset=0.0),            # setpoint spread driver
+        rec("Schlafzimmer", 18.0, 19.0, 25),                # throttled valve
+        rec("Arbeitszimmer", 20.0, 18.2, 100),              # cold despite open valve
+        rec("Gäste-WC", 19.0, 20.5, 20, offset=2.0),        # throttled + offset
+        rec("Flur", 19.0, 19.5, 40),                        # throttled
+    ]
 
 
 def seed_demo(store: Store, days: int = 90):
@@ -2868,6 +3232,22 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send_json({"ok": True, "switches": sw})
                 except Exception as exc:
                     return self._send_json({"ok": False, "error": str(exc)}, 200)
+            if path == "/api/heating/diag":
+                # heating efficiency / thermostat-settings diagnostics:
+                # room thermostats (SHC) + heat-pump flow/return snapshot (HomeCom)
+                hp = self._hp_live()
+                if self.ctx.mode == "demo":
+                    return self._send_json({"demo": True,
+                        **compute_heating_diag(_demo_climate(), hp)})
+                if self.ctx.mode != "live":
+                    return self._send_json({"ok": False, "error": "nur im Live-Modus verfügbar"}, 400)
+                try:
+                    client = SHCClient(self.cfg.get("shc_ip", ""), self.cfg["cert"], self.cfg["key"])
+                    climate = client.list_climate()
+                except Exception as exc:
+                    return self._send_json({"ok": False, "error": str(exc)}, 200)
+                return self._send_json({"demo": False,
+                    **compute_heating_diag(climate, hp)})
             if path == "/api/heatpump":
                 st = dict(self.ctx.hp_state)
                 st["available"] = bool(st) and st.get("energy_kwh") is not None or bool(st.get("last_poll"))
