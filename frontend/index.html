@@ -583,6 +583,7 @@
       <div class="kpi"><div class="v" id="pv-self">–</div><div class="l">Eigenverbrauchsquote</div></div>
       <div class="kpi"><div class="v" id="pv-benefit">–</div><div class="l">Ersparnis / Jahr</div></div>
     </div>
+    <div class="note" id="pv-basis" style="margin-top:4px"></div>
     <div class="card" id="pv-orient-card">
       <h2><span class="info" data-info="pv-orient-opt" role="button" aria-label="Info">i</span>🧭 Optimale Ausrichtung &amp; Größe</h2>
       <div class="note" style="margin-bottom:10px">Aus deinem Verbrauch und den Uhrzeiten: wie viel kWp in welcher Ausrichtung,
@@ -719,6 +720,24 @@
       <div id="pv-night-body"></div>
       <div id="pv-night-chart" style="margin-top:10px"></div>
       <div class="note" id="pv-night-note" style="margin-top:10px"></div>
+    </div>
+    <div class="card" id="pv-margin-card">
+      <h2><span class="info" data-info="pv-margin" role="button" aria-label="Info">i</span>📈 Ab wann lohnt mehr kWp?</h2>
+      <div class="note" style="margin-bottom:10px">Aus deinem Verbrauch &amp; Profil: wie viel <b>€/Jahr</b> jedes zusätzliche kWp bringt –
+        und ab wann der <b>Grenznutzen</b> unter die Kosten fällt. Darunter lohnt Ausbau kaum noch (außer du planst Mehrverbrauch).</div>
+      <div id="pv-margin-kpi"></div>
+      <div id="pv-margin-chart" style="margin-top:8px"></div>
+      <div class="legend" id="pv-margin-legend" style="margin-top:2px"></div>
+      <div id="pv-margin-chart2" style="margin-top:12px"></div>
+      <div class="legend" id="pv-margin-legend2" style="margin-top:2px"></div>
+      <div class="note" id="pv-margin-note" style="margin-top:10px"></div>
+    </div>
+    <div class="card" id="pv-product-card">
+      <h2><span class="info" data-info="pv-product" role="button" aria-label="Info">i</span>🧩 Konkrete Komponenten (Fronius + Speicher)</h2>
+      <div class="note" style="margin-bottom:10px">Vorschlag für deine aktuelle Planung (<b id="pv-product-head">– kWp</b>) – <b>ausbaufähig</b>:
+        Wechselrichter mit Reserve, Module jetzt, Speicher modular.</div>
+      <div id="pv-product-body"></div>
+      <div class="note" id="pv-product-note" style="margin-top:10px"></div>
     </div>
   </section>
 
