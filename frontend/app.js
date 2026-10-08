@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-08 · PV-Komponenten: zukunftssicheres AIKO-Neostar-Modul (ABC) als Standard, elektrische String-Auslegung; Rechenbasis-WP konsistent'
+const APP_VERSION = '2026-10-08 · PV: Kosten einbezogen (Ertrag vs. Investition, Amortisation, editierbare €/kWp·€/kWh); große Anlagen → mehrere Wechselrichter, DC/AC farbig'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -187,10 +187,11 @@ const INFO = {
     'praktisch, um einen Verbraucher gezielt in ein <b>günstiges/PV-starkes Fenster</b> zu legen (siehe Börse/Smart-Timer). ' +
     'Es wird <b>nur manuell</b> geschaltet (mit Rückfrage) – nichts läuft automatisch. ⚠︎ Schalte keine Dauerverbraucher wie ' +
     '<b>Kühl-/Gefrierschrank, Router/Server</b> versehentlich ab. Mit ↻ aktualisierst du den Status.',
-  'pv-margin': () => 'Der <b>Grenznutzen</b>: wie viel € pro Jahr jedes zusätzliche kWp bringt. Die ersten kWp sparen am meisten ' +
-    '(jede selbst genutzte kWh = voller Strompreis). Je größer die Anlage, desto mehr Überschuss wandert in die (billige) ' +
-    '<b>Einspeisung</b> → der Zugewinn sinkt. Wo die Balken unter die <b>Kostengrenze</b> (rote Linie) fallen, lohnt Ausbau ' +
-    'kaum noch. Ein <b>Speicher</b> oder geplanter Mehrverbrauch (E-Auto) schiebt den Sweet-Spot nach oben.',
+  'pv-margin': () => 'Hier steht der <b>Ertrag der Kosten gegenüber</b>. Oben drei editierbare Annahmen (€/kWp, €/kWh Speicher, Grundkosten). ' +
+    'Oberes Diagramm: <b>Ertrag über 20 Jahre</b> (Linie) vs. <b>Investition</b> (gestrichelt) – der Abstand ist dein Gewinn. ' +
+    'Unteres Diagramm: <b>Grenznutzen</b> (€/Jahr je +1 kWp) gegen die <b>Kostengrenze</b>. Das <b>wirtschaftliche Optimum</b> ist das größte ' +
+    'kWp, dessen letztes kWp noch seine Kosten einspielt; darüber geht der Überschuss nur noch billig ins Netz. Speicher und geplanter ' +
+    'Mehrverbrauch (E-Auto) schieben das Optimum nach oben.',
   'pv-product': () => 'Konkreter Komponenten-Vorschlag zu deiner Planung. Modul: <b>AIKO Neostar (ABC-Rückkontakt)</b> – zukunftssicher ' +
     '(hoher Wirkungsgrad, top bei Verschattung, mehr kWp/m²). <b>Fronius GEN24 Plus</b> ist ein Hybrid-Wechselrichter ' +
     '(batteriefähig, ausbaufähig), den ich <b>mit Reserve</b> auslege, damit du später Module ergänzen kannst, ohne ihn zu tauschen. ' +
@@ -3987,20 +3988,22 @@ function renderPvBasis() {
 }
 // Cost per kWp (turnkey) to judge whether an extra kWp still pays. Prefers the
 // user's own DIY set price; else a sensible German default.
-function pvCostPerKwp(p) {
-  try {
-    const diy = parseFloat(localStorage.getItem(PCOST_LS.diySet));
-    if (isFinite(diy) && diy > 0 && p.kwp > 0) return diy / p.kwp;
-  } catch (e) {}
-  return 1300; // €/kWp schlüsselfertig (Module+WR+Montage), grobe Annahme
+function pvCosts() {
+  const num = (id, d) => { const v = parseFloat($(id) && $(id).value); return isFinite(v) && v >= 0 ? v : d; };
+  return { kwp: num('pv-cost-kwp', 1400), kwh: num('pv-cost-kwh', 700), base: num('pv-cost-base', 2000) };
 }
+// Turnkey investment for a given array + battery (€). Base = scaffolding,
+// electrician, grid registration, meter; plus €/kWp (modules+inverter+mounting)
+// and €/kWh (storage incl. hybrid surcharge).
+function pvInvest(kwp, batt, c) { c = c || pvCosts(); return c.base + Math.max(0, kwp) * c.kwp + Math.max(0, batt) * c.kwh; }
+function pvCostPerKwp() { return pvCosts().kwp; }
 // kWp-sweep chart: line or bars over kWp, with an optional cost threshold line
 // and vertical markers (e.g. your current size, the sweet spot).
 function pvKwpChart(ks, vals, opts = {}) {
   const h = opts.h || 148, pad = 30, top = 16, base = h - 22, left = pad, right = CW - 8, plotW = right - left;
   const n = ks.length, kmin = ks[0], kmax = ks[n - 1];
   const X = k => left + (kmax > kmin ? (k - kmin) / (kmax - kmin) : 0) * plotW;
-  const max = Math.max(0.0001, ...vals, opts.threshold || 0);
+  const max = Math.max(0.0001, ...vals, opts.threshold || 0, ...(opts.line2 || []));
   const Y = v => base - Math.max(0, v) / max * (base - top);
   let body = '';
   if (opts.type === 'bars') {
@@ -4012,6 +4015,9 @@ function pvKwpChart(ks, vals, opts = {}) {
     });
   } else {
     body += `<path d="${vals.map((v, i) => (i ? 'L' : 'M') + X(ks[i]).toFixed(1) + ' ' + Y(v).toFixed(1)).join(' ')}" fill="none" stroke="${opts.color || COL.pv}" stroke-width="2"/>`;
+  }
+  if (opts.line2) {
+    body += `<path d="${opts.line2.map((v, i) => (i ? 'L' : 'M') + X(ks[i]).toFixed(1) + ' ' + Y(v).toFixed(1)).join(' ')}" fill="none" stroke="${opts.line2Color || '#8b93a7'}" stroke-width="1.6" stroke-dasharray="${opts.line2Dash || '5 3'}"/>`;
   }
   if (opts.threshold != null) {
     const ty = Y(opts.threshold);
@@ -4033,46 +4039,46 @@ function renderPvMargin() {
   const card = $('pv-margin-card'); if (!card) return;
   if (!(shAvgDaily() > 0 || hpAvgDaily() > 0)) { card.hidden = true; return; }
   card.hidden = false;
-  const p = pvInputs(), price = STATE.price;
+  const p = pvInputs(), price = STATE.price, c = pvCosts(), LIFE = 20;
   const cur = Math.max(1, Math.round(p.kwp || 0));
   const maxK = Math.max(14, Math.ceil(cur * 1.8));
   const ks = []; for (let k = 1; k <= maxK; k++) ks.push(k);
   const runs = ks.map(k => simulatePv({ ...p, kwp: k }));
-  const benefit = runs.map(r => r.benefit);
+  const benefit = runs.map(r => r.benefit);                               // €/yr (Ersparnis + Einspeisung)
   const autk = runs.map(r => r.autarky * 100);
+  const invest = ks.map(k => pvInvest(k, p.batt, c));                     // € turnkey
+  const yield20 = benefit.map(b => b * LIFE);                             // € Ertrag über 20 J (grob, ohne Preissteigerung/Degradation)
   const marg = benefit.map((b, i) => i === 0 ? b : b - benefit[i - 1]);   // €/yr per +1 kWp
-  const annCost = pvCostPerKwp(p) / 20;                                   // €/kWp·a over 20 yr
+  const annCost = c.kwp / LIFE;                                           // €/kWp·a (Grenzkosten)
   let sweet = 1; for (let i = 0; i < ks.length; i++) if (marg[i] >= annCost) sweet = ks[i];
-  // future: today's load + a planned EV (if none entered yet) – coarse sweep
-  const addEv = p.evAnnual > 0 ? 0 : 3000;
-  let sweetF = sweet;
-  if (addEv > 0) {
-    let prevB = null, prevK = 0;
-    for (let k = 1; k <= maxK; k += 2) {
-      const b = simulatePv({ ...p, kwp: k, evAnnual: p.evAnnual + addEv }).benefit;
-      if (prevB != null) { const mF = (b - prevB) / (k - prevK); if (mF >= annCost) sweetF = k; }
-      prevB = b; prevK = k;
-    }
-  }
   const autAt = k => autk[Math.min(autk.length - 1, Math.max(0, k - 1))];
   const benAt = k => benefit[Math.min(benefit.length - 1, Math.max(0, k - 1))];
+  const investCur = pvInvest(cur, p.batt, c), benCur = benAt(cur);
+  const payback = benCur > 0 ? investCur / benCur : 0;
+  const net20 = benCur * LIFE - investCur;
+  // is the battery worth it? benefit with vs without
+  const benNoBatt = simulatePv({ ...p, batt: 0 }).benefit;
+  const battVal = Math.max(0, benCur - benNoBatt), battCost = p.batt * c.kwh;
+  const battPay = battVal > 0 ? battCost / battVal : 0;
   $('pv-margin-kpi').innerHTML = '<div class="grid3">' +
-    `<div class="kpi sm"><div class="v" style="color:#4be0b0">${fmt(sweet, 0)} kWp</div><div class="l">wirtschaftl. Sweet-Spot · Autarkie ~${fmt(autAt(sweet), 0)} %</div></div>` +
-    `<div class="kpi sm"><div class="v">${money(benAt(cur))}</div><div class="l">Nutzen/Jahr bei deinen ${fmt(cur, 0)} kWp</div></div>` +
-    `<div class="kpi sm"><div class="v">${money(Math.max(0, marg[Math.min(marg.length - 1, cur)] || 0))}</div><div class="l">+1 kWp bringt dir noch</div></div></div>`;
+    `<div class="kpi sm"><div class="v" style="color:#4be0b0">${fmt(sweet, 0)} kWp</div><div class="l">wirtschaftl. Optimum · Autarkie ~${fmt(autAt(sweet), 0)} %</div></div>` +
+    `<div class="kpi sm"><div class="v">${money(investCur)}</div><div class="l">Investition bei ${fmt(cur, 0)} kWp + ${fmt(p.batt, 0)} kWh</div></div>` +
+    `<div class="kpi sm"><div class="v">${payback > 0 ? '~' + fmt(payback, 1) + ' J.' : '–'}</div><div class="l">Amortisation · Netto 20 J. ${money(net20)}</div></div></div>`;
   const mkCur = { k: cur, label: '★ du', color: '#4da3ff' };
-  const mkSweet = { k: sweet, label: 'Sweet-Spot', color: '#4be0b0' };
-  $('pv-margin-chart').innerHTML = pvKwpChart(ks, benefit, { color: COL.pv, markers: [mkCur, mkSweet], h: 150 });
-  $('pv-margin-legend').innerHTML = `<span style="color:var(--muted);font-size:11px">Gesamt-Nutzen €/Jahr (Ersparnis + Einspeisung) je Anlagengröße</span>`;
+  const mkSweet = { k: sweet, label: 'Optimum', color: '#4be0b0' };
+  $('pv-margin-chart').innerHTML = pvKwpChart(ks, yield20, { color: COL.pv, line2: invest, line2Color: '#ef6c4d',
+    markers: [mkCur, mkSweet], h: 150 });
+  $('pv-margin-legend').innerHTML = `<span style="font-size:11px"><span style="color:${COL.pv}">▬</span> Ertrag über 20 J. · ` +
+    `<span style="color:#ef6c4d">▬ ▬</span> Investition. <span style="color:var(--muted)">Abstand = Gewinn; läuft der Abstand nicht mehr auseinander, lohnt mehr kWp nicht.</span></span>`;
   $('pv-margin-chart2').innerHTML = pvKwpChart(ks, marg, { type: 'bars', color: COL.heat,
     threshold: annCost, thresholdLabel: `Kostengrenze ~${money(annCost)}/kWp·a`, markers: [mkCur, mkSweet], h: 140 });
-  $('pv-margin-legend2').innerHTML = `<span style="color:var(--muted);font-size:11px">Grenznutzen: €/Jahr pro +1 kWp. Graue Balken unter der roten Linie lohnen sich kaum (< Kosten).</span>`;
+  $('pv-margin-legend2').innerHTML = `<span style="color:var(--muted);font-size:11px">Grenznutzen: €/Jahr pro +1 kWp. Graue Balken unter der roten Linie kosten mehr als sie bringen.</span>`;
   $('pv-margin-note').innerHTML =
-    `Die <b>steilsten Gewinne</b> machst du bei den <b>ersten kWp</b> (jede selbst genutzte kWh spart vollen Strompreis). ` +
-    `Ab ~<b>${fmt(sweet, 0)} kWp</b> fällt der Zugewinn unter die Kosten (${money(pvCostPerKwp(p))}/kWp, auf 20 J.) – ` +
-    `der Überschuss landet dann nur noch in der <b>Einspeisung</b> (${money(p.feedin)}/kWh). ` +
-    `Mit <b>Speicher</b> verschiebt sich der Punkt nach oben (mehr Eigenverbrauch).` +
-    (addEv > 0 ? ` <span style="color:var(--muted)">Planst du später ein <b>E-Auto</b> (~${kwh(addEv, 0)}/Jahr), verschiebt sich der Sweet-Spot auf ~<b>${fmt(sweetF, 0)} kWp</b> – dann lohnt größer.</span>` : '');
+    `So rechne ich: <b>Nutzen/Jahr = Ersparnis (Eigenverbrauch × ${money(price)}) + Einspeisung (× ${money(p.feedin)})</b>, dem gegenüber steht die ` +
+    `<b>Investition</b> (${money(c.base)} Grund + ${money(c.kwp)}/kWp + ${money(c.kwh)}/kWh Speicher – oben editierbar). ` +
+    `Wirtschaftlich optimal sind ~<b>${fmt(sweet, 0)} kWp</b>: dort bringt das letzte kWp gerade noch seine Kosten rein; darüber geht der Überschuss nur noch billig ins Netz. ` +
+    (p.batt > 0 ? `<br><span style="color:var(--muted)">Dein <b>Speicher</b> (${fmt(p.batt, 0)} kWh ≈ ${money(battCost)}) bringt ~${money(battVal)}/Jahr mehr Eigenverbrauch → Amortisation ~${battPay > 0 ? fmt(battPay, 0) + ' J.' : '–'}.</span>` : '') +
+    ` <span style="color:var(--muted)">Grob: ohne Strompreissteigerung (konservativ) und ohne Modul-Degradation/Speichertausch (optimistisch) – beides hebt sich näherungsweise auf.</span>`;
 }
 // Concrete components: a Fronius GEN24 Plus hybrid inverter (battery-ready,
 // expandable) sized with headroom, plus a modular BYD/LG battery – now with the
@@ -4085,13 +4091,23 @@ function froniusInverter(kwp) {
   // GEN24 Plus hybrid, representative specs (im Datenblatt prüfen): 2 MPP-Tracker,
   // max. Systemspannung 1000 V, ~25 A je MPP-Tracker, max. DC ~1,5× AC.
   const spec = { maxSysV: 1000, mppt: 2, maxImpA: 25, dcFactor: 1.5, mppMin: 150 };
-  const need = kwp * 0.9;   // AC ≈ 90 % der DC-Spitze (DC/AC ~1,1)
-  if (kwp < 4) {
-    const kw = [3, 4, 5, 6].find(x => x >= need) || 6;
-    return Object.assign({ name: `Fronius Primo GEN24 ${kw.toFixed(1)} Plus`, kw, phase: '1-phasig', family: 'Primo GEN24 Plus' }, spec);
+  const need = kwp * 0.9;          // Ziel-AC (DC/AC ~1,1)
+  const SINGLE_MAX = 10;           // größter Hybrid-Einzel-WR (Symo GEN24 10.0)
+  if (need <= SINGLE_MAX) {
+    if (kwp < 4) {
+      const kw = [3, 4, 5, 6].find(x => x >= need) || 6;
+      return Object.assign({ name: `Fronius Primo GEN24 ${kw.toFixed(1)} Plus`, kw, count: 1, totalKw: kw,
+        phase: '1-phasig', family: 'Primo GEN24 Plus' }, spec);
+    }
+    const kw = [6, 8, 10].find(x => x >= need) || 10;
+    return Object.assign({ name: `Fronius Symo GEN24 ${kw.toFixed(1)} Plus`, kw, count: 1, totalKw: kw,
+      phase: '3-phasig', family: 'Symo GEN24 Plus' }, spec);
   }
-  const kw = [6, 8, 10].find(x => x >= need) || 10;
-  return Object.assign({ name: `Fronius Symo GEN24 ${kw.toFixed(1)} Plus`, kw, phase: '3-phasig', family: 'Symo GEN24 Plus' }, spec);
+  // große Anlage: ein einzelner Hybrid-WR reicht nicht → mehrere Geräte
+  const count = Math.ceil(need / SINGLE_MAX);
+  const kw = [6, 8, 10].find(x => x >= need / count) || 10;
+  return Object.assign({ name: `${count}× Fronius Symo GEN24 ${kw.toFixed(1)} Plus`, kw, count, totalKw: kw * count,
+    phase: '3-phasig', family: 'Symo GEN24 Plus', multi: true }, spec);
 }
 // Average module electricals derived from its Wp. Defaults suit AIKO Neostar
 // (N-type ABC back-contact): higher voltage, excellent low-light/shading.
@@ -4106,15 +4122,21 @@ function pvStringSizing(kwp, inv, ms) {
   const total = Math.max(1, Math.round(kwp * 1000 / ms.wp));
   const maxSeries = Math.max(1, Math.floor(inv.maxSysV / ms.VocCold));   // Spannungsgrenze
   const minSeries = Math.max(4, Math.ceil(inv.mppMin / ms.Vmp));
-  let strings, per;
-  if (total >= 2 * minSeries && inv.mppt >= 2) { const a = Math.ceil(total / 2); strings = 2; per = [a, total - a]; }
-  else { strings = 1; per = [total]; }
+  const mpptTotal = inv.mppt * (inv.count || 1);
+  // use as many MPP trackers as make sense (each string ≥ minSeries), capped by
+  // the voltage limit per string
+  let strings = Math.max(1, Math.min(mpptTotal, Math.floor(total / minSeries) || 1));
+  if (Math.ceil(total / strings) > maxSeries) strings = Math.ceil(total / maxSeries);
+  const b = Math.floor(total / strings), rem = total % strings;
+  const per = Array.from({ length: strings }, (_, i) => b + (i < rem ? 1 : 0));
   const perMax = Math.max(...per), perMin = Math.min(...per);
-  const dcKwp = total * ms.wp / 1000, maxDcKwp = inv.kw * inv.dcFactor, dcac = dcKwp / inv.kw;
-  return { total, strings, per, maxSeries, minSeries,
+  const ac = inv.totalKw || inv.kw;
+  const dcKwp = total * ms.wp / 1000, maxDcKwp = ac * inv.dcFactor, dcac = dcKwp / ac;
+  return { total, strings, per, maxSeries, minSeries, mpptTotal,
     vOper: Math.round(ms.Vmp * per[0]), vColdMax: Math.round(ms.VocCold * perMax),
     voltOk: ms.VocCold * perMax < inv.maxSysV, mppOk: ms.Vmp * perMin >= inv.mppMin, seriesOk: perMax <= maxSeries,
-    dcKwp, maxDcKwp, dcac, headroom: Math.max(0, Math.floor(maxDcKwp * 1000 / ms.wp) - total),
+    dcKwp, maxDcKwp, dcac, overDc: dcac > inv.dcFactor,
+    headroom: Math.max(0, Math.floor(maxDcKwp * 1000 / ms.wp) - total),
     ImpOk: ms.Imp <= inv.maxImpA };
 }
 function bydBattery(usableKwh) {
@@ -4141,20 +4163,26 @@ function renderPvProduct() {
   const batTarget = p.batt > 0 ? p.batt : Math.max(5, nightSum(hourlyLoadKwh(8).hw, sunTimes(lat, lon, new Date(yr, 8, 23))));
   const bat = bydBattery(batTarget);
   const dcacTxt = sz.dcac < 1.05 ? 'WR mit Reserve' : sz.dcac <= 1.25 ? 'ideal' : sz.dcac <= 1.4 ? 'leicht überbelegt' : 'überbelegt – Mittagskappung';
+  const dcacCol = sz.dcac > 1.4 ? '#ef6c4d' : sz.dcac > 1.25 ? '#f6b93b' : '#4be0b0';
+  const acKw = inv.totalKw || inv.kw, mpptTot = inv.mppt * (inv.count || 1);
   const a = (href, txt) => `<a href="${href}" target="_blank" rel="noopener" style="color:var(--accent)">${esc(txt)} ↗</a>`;
   const row = (icon, title, sub) => `<div class="devrow"><div class="nm"><b>${icon} ${title}</b><small>${sub}</small></div></div>`;
   $('pv-product-body').innerHTML =
-    row('🔌', esc(inv.name), `Hybrid, ${inv.phase}, <b>batteriefähig</b> · <b>${inv.kw.toFixed(1)} kW AC</b> · ` +
-      `${inv.mppt} MPP-Tracker · max ${inv.maxSysV} V · ~${inv.maxImpA} A/MPP · max DC ~${fmt(inv.kw * inv.dcFactor, 1)} kWp · ${a(FRONIUS_URL, 'Fronius')}`) +
-    row('🔗', 'Verschaltung', `${sz.strings}× String ${sz.strings >= 2 ? '(je 1 MPP-Tracker)' : ''} · <b>${sz.per.join(' + ')} Module in Reihe</b> · ` +
+    row('🔌', esc(inv.name), `Hybrid, ${inv.phase}, <b>batteriefähig</b> · <b>${acKw.toFixed(1)} kW AC</b>${inv.count > 1 ? ` (${inv.count}× ${inv.kw.toFixed(1)} kW)` : ''} · ` +
+      `${mpptTot} MPP-Tracker · max ${inv.maxSysV} V · ~${inv.maxImpA} A/MPP · max DC ~${fmt(acKw * inv.dcFactor, 1)} kWp · ${a(FRONIUS_URL, 'Fronius')}`) +
+    row('🔗', 'Verschaltung', `${sz.strings} Strings über ${mpptTot} MPP-Tracker · <b>${sz.per.join(' + ')} Module in Reihe</b> · ` +
       `Betrieb ~${sz.vOper} V (MPP ab ${inv.mppMin} V) · Leerlauf kalt ~${sz.vColdMax} V ${sz.voltOk ? '<b style="color:#4be0b0">✓ &lt; 1000 V</b>' : '<b style="color:#ef6c4d">⚠︎ &gt; 1000 V – kürzere Strings!</b>'} · Strom ~${fmt(ms.Imp, 1)} A/String ✓`) +
-    row('⚡', 'Eingang / Ausgang', `DC-Eingang <b>${fmt(sz.dcKwp, 1)} kWp</b> an Modulen · AC-Ausgang <b>${inv.kw.toFixed(1)} kW</b> · DC/AC <b>${fmt(sz.dcac, 2)}</b> (${dcacTxt})`) +
+    row('⚡', 'Eingang / Ausgang', `DC-Eingang <b>${fmt(sz.dcKwp, 1)} kWp</b> an Modulen · AC-Ausgang <b>${acKw.toFixed(1)} kW</b> · ` +
+      `DC/AC <b style="color:${dcacCol}">${fmt(sz.dcac, 2)}</b> <span style="color:${dcacCol}">(${dcacTxt})</span>` +
+      (sz.overDc ? ` <b style="color:#ef6c4d">⚠︎ über WR-Grenze (${fmt(inv.dcFactor, 2)}) – größerer/zweiter WR!</b>` : '')) +
     row('☀︎', `${sz.total}× AIKO Neostar (ABC) ~${modWp} Wp`, `Zukunftssicher: <b>Rückkontakt-Zellen</b> (ABC), ~23–24 % Wirkungsgrad, ` +
       `sehr gut bei <b>Verschattung/Schwachlicht</b> & mehr kWp/m² · Ø Modul: Vmp ~${fmt(ms.Vmp, 0)} V · Voc ~${fmt(ms.Voc, 0)} V · Imp ~${fmt(ms.Imp, 1)} A (typisch) · ` +
-      `am WR noch Platz für ~<b>${sz.headroom}</b> Module (bis ${fmt(inv.kw * inv.dcFactor, 1)} kWp DC) · ${a(AIKO_URL, 'AIKO')}`) +
+      `am WR noch Platz für ~<b>${sz.headroom}</b> Module (bis ${fmt(acKw * inv.dcFactor, 1)} kWp DC) · ${a(AIKO_URL, 'AIKO')}`) +
     row('🔋', esc(bat.name), `${bat.modules}× 2,56 kWh = <b>${fmt(bat.nom, 1)} kWh</b> · <b>modular</b> stapelbar ${bat.min}–${bat.max} kWh, später aufstocken · Fronius-kompatibel (HV) · ${a(BYD_URL, 'BYD Battery-Box')}`) +
     row('↔︎', 'Alternative Speicher', `${a(LG_URL, 'LG')} (RESU – Verfügbarkeit prüfen, LG hat sich aus Heimspeichern teils zurückgezogen) · BYD ist aktuell die ausbaufähigste Fronius-Kombi`);
   $('pv-product-note').innerHTML =
+    `<b>Geschätzter Gesamtpreis schlüsselfertig:</b> ~<b>${money(pvInvest(kwpNow, p.batt))}</b> ` +
+    `<span style="color:var(--muted)">(${fmt(kwpNow, 1)} kWp + ${fmt(p.batt, 1)} kWh, Kosten-Annahmen editierbar im Grenznutzen-Card). </span>` +
     (!sz.voltOk ? `<b style="color:#ef6c4d">Achtung:</b> mit ${modWp} Wp-Modulen wird die Reihe zu lang für 1000 V – kürzere Strings / mehr Strings wählen. ` : '') +
     `<b>Ausbaufähig gedacht:</b> teuer & schwer tauschbar sind <b>Wechselrichter</b> und <b>Speicher-Grundgerät</b> – Module ergänzt du jederzeit ` +
     `(der WR hat noch ~${sz.headroom} Module Reserve). Darum WR <b>eine Nummer größer</b> (${esc(inv.family)}, battery-ready), Speicher <b>modular</b>. ` +
@@ -5627,6 +5655,14 @@ function init() {
   }
   const pvSug = $('pv-suggest'); if (pvSug) pvSug.addEventListener('click', doPvSuggest);
   const pvMod = $('pv-mod-wp'); if (pvMod) pvMod.addEventListener('input', renderPvProduct);
+  ['pv-cost-kwp', 'pv-cost-kwh', 'pv-cost-base'].forEach(id => {
+    const el = $(id); if (!el) return;
+    try { const s = localStorage.getItem('bhe_' + id); if (s !== null && s !== '') el.value = s; } catch (e) {}
+    el.addEventListener('input', () => {
+      try { localStorage.setItem('bhe_' + id, el.value); } catch (e) {}
+      renderPvMargin(); renderPvProduct();
+    });
+  });
   const pvDS = $('pv-day-summer'), pvDW = $('pv-day-winter');
   if (pvDS) pvDS.addEventListener('click', () => { _pvDaySeason = 'summer'; renderPvDay(); });
   if (pvDW) pvDW.addEventListener('click', () => { _pvDaySeason = 'winter'; renderPvDay(); });

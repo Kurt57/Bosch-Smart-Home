@@ -725,6 +725,11 @@
       <h2><span class="info" data-info="pv-margin" role="button" aria-label="Info">i</span>📈 Ab wann lohnt mehr kWp?</h2>
       <div class="note" style="margin-bottom:10px">Aus deinem Verbrauch &amp; Profil: wie viel <b>€/Jahr</b> jedes zusätzliche kWp bringt –
         und ab wann der <b>Grenznutzen</b> unter die Kosten fällt. Darunter lohnt Ausbau kaum noch (außer du planst Mehrverbrauch).</div>
+      <div class="grid3" style="margin-bottom:8px">
+        <div><label>PV €/kWp</label><input id="pv-cost-kwp" type="number" min="0" step="50" inputmode="numeric" value="1400"></div>
+        <div><label>Speicher €/kWh</label><input id="pv-cost-kwh" type="number" min="0" step="50" inputmode="numeric" value="700"></div>
+        <div><label>Grundkosten €</label><input id="pv-cost-base" type="number" min="0" step="100" inputmode="numeric" value="2000"></div>
+      </div>
       <div id="pv-margin-kpi"></div>
       <div id="pv-margin-chart" style="margin-top:8px"></div>
       <div class="legend" id="pv-margin-legend" style="margin-top:2px"></div>
