@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-07 · NEU: Geräte schalten – Bosch Smart Plug+ direkt aus der App an/aus (Übersicht, nur manuell mit Rückfrage)'
+const APP_VERSION = '2026-10-08 · Bauphasen-Ende (Setup): CSV davor ignoriert; Erwartet nutzt für Nov–Feb die Theorie bis echter Winter gemessen ist (dann Selbstkalibrierung)'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -324,10 +324,11 @@ const INFO = {
     '<b>Gesamtzähler</b>. „Heute" ist der Zuwachs des Gesamtzählers seit Mitternacht. Verbinden ' +
     'im Setup mit API-Key + Refresh-Token von developer.electrolux.one.',
   'theory-month': () => 'Drei Balken je Monat (nebeneinander), oben per Häkchen <b>ein-/ausblendbar</b>: ' +
-    '<b>Theorie</b> (aus dem Gebäudemodell, Heizsaison-verteilt + Warmwasser), <b>Gemessen</b> (deine echten Monatswerte; ' +
-    'stammt ein Monat noch aus dem <b>Vorjahr</b>, steht das dran) und <b>Erwartet</b> (unser bestes Monatsmodell: dein ' +
-    '<b>gemessenes Niveau</b> × Saison-Form inkl. Temperatur-/Gebäude-Korrektur für die kalten Monate – auch für noch nicht ' +
-    'gemessene Monate wie Nov/Dez). <b>Tippe/fahre über einen Monat</b>, um die <b>kWh jedes Balkens</b> abzulesen.',
+    '<b>Theorie</b> (Gebäudemodell, Heizsaison-verteilt + Warmwasser), <b>Gemessen</b> (deine echten Monatswerte; ' +
+    'CSV-Monate <b>vor dem Bauphasen-Ende</b> im Setup gelten als Rohbau/Trocknung und werden ausgeblendet) und ' +
+    '<b>Erwartet</b> (unser Modell: für Frühjahr–Herbst dein <b>gemessenes Niveau</b> × Saison-Form, für die kalten, ' +
+    'noch nicht seriös gemessenen Monate Nov–Feb die <b>Theorie</b>). Sobald du einen echten Winter misst, ersetzt der ' +
+    'den Theorie-Wert automatisch und kalibriert die übrigen kalten Monate. <b>Tippe/fahre über einen Monat</b> für die kWh.',
   'theory-class': () => 'Der <b>spezifische Heizwärmebedarf</b> (kWh je m² und Jahr, nur Heizung) ordnet dein Haus ' +
     'zwischen Passivhaus und unsaniertem Altbau ein. Er kommt aus dem U·A-Modell geteilt durch die beheizte Fläche – ' +
     'ein guter Vergleichsmaßstab, unabhängig von der Hausgröße.',
@@ -487,6 +488,46 @@ function hpYearFromMonthly() {
   return s;
 }
 
+// Bauphasen-Ende: everything the WP "measured" BEFORE this date belongs to the
+// construction/move-in phase (Estrich-/Bautrocknung, undichte Haustür, offene
+// Lüftungslöcher, Heizstab) and is unrealistically high for the finished house.
+// CSV months before it are ignored for the forecast; default 15 Feb 2026, and
+// the user can change it in the Setup. Returns a Date.
+const BAU_END_DEFAULT = '2026-02-15';
+function buildPhaseEnd() {
+  let s = BAU_END_DEFAULT;
+  try { s = localStorage.getItem('bhe_bau_end') || BAU_END_DEFAULT; } catch (e) {}
+  const d = new Date(s + 'T00:00');
+  return isNaN(d) ? new Date(BAU_END_DEFAULT + 'T00:00') : d;
+}
+// Heating-season months (Nov, Dec, Jan, Feb): for these, the mild-autumn
+// extrapolation is too low, so – as long as we have no representative (post-
+// construction) measurement yet – we use the engineering/building model.
+function isHeatMonth(m) { return m === 10 || m === 11 || m === 0 || m === 1; }
+// Do we already have a real, representative winter measurement to learn from?
+function hasMeasuredHeatMonth() {
+  const byM = hpMeasuredByMonth(); if (!byM) return false;
+  return Object.keys(byM).some(k => isHeatMonth(+k) && byM[k].source === 'measured' && !byM[k].partial);
+}
+// Our best model value for a calendar month (NO substitution of real months –
+// that happens in hpMonthEst). Shoulder/summer: real-anchored level × seasonal
+// shape. Cold months without representative winter data: the building model
+// (theory), optionally calibrated to real winter once we have it. Never below
+// the real-anchored baseline.
+function hpModelMonth(m) {
+  const seasonal = hpAvgDaily() * hpDayFactor(m) * DIM[m];
+  if (isHeatMonth(m)) {
+    const theory = hpTheoryMonth(m);
+    const phys = hpMonthPhysics(m);                 // theory calibrated to measured months
+    // Before any real winter is measured, use raw theory (conservative, higher).
+    // Once a real winter month exists, the calibration includes it → use phys.
+    const cold = (hasMeasuredHeatMonth() && phys != null) ? phys : (theory > 0 ? theory : seasonal);
+    return Math.max(seasonal, cold);
+  }
+  const phys = hpMonthPhysics(m);
+  return phys != null ? seasonal * (1 - HP_PHYS_W) + Math.max(seasonal, phys) * HP_PHYS_W : seasonal;
+}
+
 // Bauphase-Dämpfung: the first heating season was the move-in/construction
 // phase (Rohbau, undichte Baulücken, WP im Dauerbetrieb), so the measured
 // winter months are unrealistically high for the finished, tight house. Instead
@@ -563,11 +604,14 @@ function hpMeasuredByMonth() {
   const curKey = `${cy}-${String(cm + 1).padStart(2, '0')}`;
   const byM = {};
   // 1) CSV baseline: most recent year per calendar month (Vorjahr for months we
-  //    haven't measured ourselves yet – e.g. Okt/Nov/Dez). Skip only the current
-  //    calendar month (still partial) – it's handled by the live poll below.
+  //    haven't measured ourselves yet). Skip the current month (partial) AND any
+  //    month that lies in the CONSTRUCTION phase (before Bauphasen-Ende) – that
+  //    data is unrealistically high and must not seed the forecast.
+  const bauEnd = buildPhaseEnd();
   ((im && im.monthly) || []).forEach(r => {
     if (r.month === curKey || !(r.elec_kwh > 0)) return;
     const m = +r.month.slice(5) - 1, y = +r.month.slice(0, 4);
+    if (new Date(y, m, 1) < bauEnd) return;           // construction phase → ignore CSV month
     if (!byM[m] || y > byM[m].year) byM[m] = { kwh: r.elec_kwh, year: y, source: 'csv' };
   });
   // 2) Overlay THIS YEAR's own measurements, aggregated from the real DAILY
@@ -620,14 +664,10 @@ function hpMonthEst(m) {
   if (hpAnnualReal() != null) {
     const byM = hpMeasuredByMonth();
     if (byM && byM[m] && byM[m].source === 'measured' && !byM[m].partial && m !== cm) return byM[m].kwh;
-    const seasonal = hpAvgDaily() * hpDayFactor(m) * DIM[m];
-    // For not-yet-measured months, lean the colder ones toward the temperature-
-    // driven building model (calibrated to our real months) – more realistic for
-    // Okt–Dez than scaling the mild autumn by a generic share. Only ever raises
-    // a month above the real-anchored baseline (summer stays put).
-    const phys = hpMonthPhysics(m);
-    if (phys != null) return seasonal * (1 - HP_PHYS_W) + Math.max(seasonal, phys) * HP_PHYS_W;
-    return seasonal;
+    // Not (yet) measured this month → our best model: real-anchored for the
+    // shoulder, building-model (theory) for the cold months. Self-corrects once
+    // real winter data arrives (then the measured month above wins).
+    return hpModelMonth(m);
   }
   // No live data → fall back to the imported CSV history (only source we have).
   // current calendar month: scale the still-running partial value to a full month
@@ -2525,14 +2565,11 @@ function renderHeatDemand() {
     //               annual level × the seasonal shape), so unmeasured months (Nov/Dec)
     //               show a proper forecast bar instead of borrowing last year's number.
     const measured = hpMeasuredByMonth();
-    // "Erwartet" = our best per-month model (real level × seasonal shape, with the
-    // temperature/building-physics winter blend) for EVERY month – NOT substituting
-    // the measured value, so you can compare expectation vs. reality side by side.
-    const expectedMonth = MON.map((_, m) => {
-      const seasonal = hpAvgDaily() * hpDayFactor(m) * DIM[m];
-      const phys = (typeof hpMonthPhysics === 'function') ? hpMonthPhysics(m) : null;
-      return phys != null ? seasonal * (1 - HP_PHYS_W) + Math.max(seasonal, phys) * HP_PHYS_W : seasonal;
-    });
+    // "Erwartet" = our best per-month model (hpModelMonth) for EVERY month – real-
+    // anchored for the shoulder, building-model (theory) for the cold months that
+    // have no representative measurement yet. NOT substituting the measured value,
+    // so you can compare expectation vs. reality side by side.
+    const expectedMonth = MON.map((_, m) => hpModelMonth(m));
     // year handling for the "measured" series label
     const years = measured ? [...new Set(Object.values(measured).map(v => v.year))] : [];
     const curY = new Date().getFullYear();
@@ -2597,14 +2634,15 @@ function renderHeatDemand() {
       const projMonths = Object.keys(measured).filter(m => measured[m].projected).map(m => MON[+m]);
       $('hp-theory-month-note').innerHTML =
         'Drei Reihen je Monat – oben ein-/ausblendbar: <b>Theorie</b> (Gebäudemodell), <b>' + esc(measLabel) +
-        '</b> (echte Messung) und <b>Erwartet</b> (unser bestes Monatsmodell: gemessenes Niveau × Saison-Form inkl. ' +
-        'Temperatur-/Winterkorrektur – auch für noch nicht gemessene Monate wie Nov/Dez). ' +
+        '</b> (echte Messung, Bauphase vor dem im Setup gesetzten Bauphasen-Ende ausgeblendet) und <b>Erwartet</b> ' +
+        '(Frühjahr–Herbst: dein gemessenes Niveau × Saison-Form; <b>Nov–Feb: Theorie</b>, solange kein echter Winter gemessen ist). ' +
         (sT > 0 ? `Über die voll gemessenen Monate liegt die Praxis <b>${totPct >= 0 ? '+' : ''}${fmt(totPct * 100, 0)} %</b> zur Theorie.` : '') +
         (worst ? ` Größter Unterschied im <b>${MON[worst.m]}</b> (${worst.abs >= 0 ? '+' : '−'}${kwh(Math.abs(worst.abs), 0)}` +
           `${worst.abs > 0 ? ' – mehr als gerechnet' : ' – weniger, z. B. kaum geheizt/effizient'}).` : '') +
         (partMonth != null ? ` <span style="color:var(--muted)"><b>${MON[+partMonth]}</b> läuft noch – auf den ganzen Monat <b>hochgerechnet</b> (bisher ${kwh(measured[+partMonth].actual || 0, 0)}).</span>` : '') +
         (projMonths.length ? ` <span style="color:var(--muted)">Nur teilweise gemessen und auf den vollen Monat <b>hochgerechnet</b> (die Bridge lief erst einen Teil des Monats): ${projMonths.join(', ')}.</span>` : '') +
-        (prevMonths.length ? ` <span style="color:var(--muted)">Noch aus dem Vorjahr: ${prevMonths.join(', ')} – dafür zeigt „Erwartet" die aktuelle Prognose.</span>` : '');
+        (prevMonths.length ? ` <span style="color:var(--muted)">Echte Messung aus dem Vorjahr (nach Bauphasen-Ende): ${prevMonths.join(', ')}.</span>` : '') +
+        ` <span style="color:var(--muted)">Sobald du Nov/Dez bzw. Jan/Feb echt misst, ersetzt das die Theorie automatisch.</span>`;
     } else {
       $('hp-theory-month-note').innerHTML = 'Zwei Reihen: <b>Theorie</b> (Gebäudemodell) und <b>Erwartet</b> ' +
         '(aus deinem gemessenen Niveau, saisonal verteilt). Für echte Monatsmesswerte importiere im Setup eine ' +
@@ -5193,6 +5231,14 @@ function init() {
   const hpc = $('hp-connect'); if (hpc) hpc.addEventListener('click', doHomecomConnect);
   const hpi = $('hp-import'); if (hpi) hpi.addEventListener('change', doHpImport);
   const hic = $('hp-import-clear'); if (hic) hic.addEventListener('click', doHpImportClear);
+  const bau = $('hp-bau-end');
+  if (bau) {
+    try { const s = localStorage.getItem('bhe_bau_end'); if (s) bau.value = s; } catch (e) {}
+    bau.addEventListener('change', () => {
+      try { if (bau.value) localStorage.setItem('bhe_bau_end', bau.value); } catch (e) {}
+      renderAll();
+    });
+  }
   const swRef = $('ov-switch-refresh'); if (swRef) swRef.addEventListener('click', () => fetchSwitches(true));
   const swBody = $('ov-switch-body');
   if (swBody) swBody.addEventListener('click', e => {
