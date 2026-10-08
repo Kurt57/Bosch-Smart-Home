@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-08 · PV: Wechselrichter wird für die AKTUELLE Anlage ausgelegt (1 WR bis 15 kWp DC, mehrere erst darüber); MPP-Tracker korrekt „2 je WR"'
+const APP_VERSION = '2026-10-08 · PV: DC/AC bis 1,5 = gewollte Überbelegung (nicht rot); größerer WR erst > 1,5 – mit Erklärung, warum kein WR-Sprung bei 1,49'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -196,6 +196,8 @@ const INFO = {
     '(hoher Wirkungsgrad, top bei Verschattung, mehr kWp/m²). <b>Fronius GEN24 Plus</b> ist ein Hybrid-Wechselrichter ' +
     '(batteriefähig, ausbaufähig), den ich <b>mit Reserve</b> auslege, damit du später Module ergänzen kannst, ohne ihn zu tauschen. ' +
     'Die <b>String-Auslegung</b> (Module in Reihe) kommt aus den Spannungen (Kalt-Voc &lt; 1000 V, MPP-Fenster) und den 2 MPP-Trackern. ' +
+    '<b>DC/AC</b> = Modulleistung ÷ WR-Leistung: über 1 heißt „überbelegt" und ist bis zur WR-Grenze (GEN24: 1,5) <b>gewollt</b> – mehr Ertrag ' +
+    'früh/abends &amp; im Winter, nur kurze Mittagskappung (die der Speicher auffängt). Erst <b>über 1,5</b> empfiehlt die App automatisch einen größeren/zweiten WR. ' +
     'Der <b>Speicher</b> (BYD Battery-Box, modular) lässt sich aufstocken. Links führen zur Herstellerseite.',
   'pv-night': () => 'Zeigt, wie viel Strom du von <b>Sonnenuntergang bis Sonnenaufgang</b> verbrauchst – genau die Menge, ' +
     'die ein <b>Speicher</b> aus dem Tags-Überschuss überbrücken muss. Sonnenauf-/-untergang werden aus deinem <b>Standort</b> ' +
@@ -4164,8 +4166,15 @@ function renderPvProduct() {
   const loc = getLatLon(), lat = loc ? loc.lat : 51, lon = loc ? loc.lon : 10, yr = new Date().getFullYear();
   const batTarget = p.batt > 0 ? p.batt : Math.max(5, nightSum(hourlyLoadKwh(8).hw, sunTimes(lat, lon, new Date(yr, 8, 23))));
   const bat = bydBattery(batTarget);
-  const dcacTxt = sz.dcac < 1.05 ? 'WR mit Reserve' : sz.dcac <= 1.25 ? 'ideal' : sz.dcac <= 1.4 ? 'leicht überbelegt' : 'überbelegt – Mittagskappung';
-  const dcacCol = sz.dcac > 1.4 ? '#ef6c4d' : sz.dcac > 1.25 ? '#f6b93b' : '#4be0b0';
+  // The GEN24's hard DC limit is inv.dcFactor (1,5). Up to there, a DC/AC > 1 is
+  // DELIBERATE overpaneling – it lifts morning/evening/winter yield and, with a
+  // battery, is usually the better economics; only ABOVE 1,5 is a bigger WR due.
+  const limit = inv.dcFactor;
+  const dcacTxt = sz.dcac < 1.05 ? 'WR mit Reserve – Module noch ergänzbar'
+    : sz.dcac <= 1.25 ? 'ideal'
+    : sz.dcac <= limit ? 'bewusst überbelegt – mehr Morgen/Abend/Winter-Ertrag, kaum Mittagskappung (mit Speicher ideal)'
+    : 'über WR-Grenze – größerer/zweiter WR nötig';
+  const dcacCol = sz.dcac > limit ? '#ef6c4d' : sz.dcac > 1.25 ? '#f6b93b' : '#4be0b0';
   const acKw = inv.totalKw || inv.kw, mpptTot = inv.mppt * (inv.count || 1);
   // "2 MPP-Tracker je WR" is the real per-device figure; show the sum only when
   // there is more than one inverter, so a single GEN24 never reads as "4 Tracker".
@@ -4189,6 +4198,10 @@ function renderPvProduct() {
     `<b>Geschätzter Gesamtpreis schlüsselfertig:</b> ~<b>${money(pvInvest(kwpNow, p.batt))}</b> ` +
     `<span style="color:var(--muted)">(${fmt(kwpNow, 1)} kWp + ${fmt(p.batt, 1)} kWh, Kosten-Annahmen editierbar im Grenznutzen-Card). </span>` +
     (!sz.voltOk ? `<b style="color:#ef6c4d">Achtung:</b> mit ${modWp} Wp-Modulen wird die Reihe zu lang für 1000 V – kürzere Strings / mehr Strings wählen. ` : '') +
+    (sz.dcac > 1.25 && !sz.overDc ? `<b>DC/AC ${fmt(sz.dcac, 2)} ist Absicht, kein Fehler:</b> der GEN24 trägt bis zu ${fmt(acKw * inv.dcFactor, 1)} kWp DC an seinen ${acKw.toFixed(1)} kW AC. ` +
+      `Mehr Module als WR-Leistung („überbelegen") bringt früh/abends &amp; im Winter mehr Ertrag; die kurze Mittagskappung (~1–3 % im Jahr) fängt der Speicher auf. ` +
+      `Ein <b>größerer WR lohnt erst über 1,5</b> – und darüber schlägt die App automatisch zwei Geräte vor. ` : '') +
+    (sz.overDc ? `<b style="color:#ef6c4d">DC/AC ${fmt(sz.dcac, 2)} liegt über der WR-Grenze (${fmt(inv.dcFactor, 2)}):</b> entweder ein paar Module weniger oder ein zweiter/größerer Wechselrichter. ` : '') +
     `<b>Ausbaufähig gedacht:</b> teuer & schwer tauschbar sind <b>Wechselrichter</b> und <b>Speicher-Grundgerät</b> – Module ergänzt du jederzeit ` +
     `(der WR hat noch ~${sz.headroom} Module Reserve). Darum WR <b>eine Nummer größer</b> (${esc(inv.family)}, battery-ready), Speicher <b>modular</b>. ` +
     `<span style="color:var(--muted)">Spannungen/Ströme sind <b>typische</b> Modulwerte – fürs finale Design das echte Moduldatenblatt (Voc, Vmp, Temp.-Koeffizient) und den Fronius-Konfigurator nutzen. ` +
