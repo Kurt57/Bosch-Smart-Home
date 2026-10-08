@@ -634,7 +634,8 @@ class Store:
                 " thermal_kw REAL, modulation REAL, outdoor_c REAL)"
             )
             hpcols = [r[1] for r in self.conn.execute("PRAGMA table_info(hp_samples)")]
-            for col in ("heat_kwh", "heat_w"):
+            # supply_c/return_c let the heating-curve analysis build up over time
+            for col in ("heat_kwh", "heat_w", "supply_c", "return_c"):
                 if col not in hpcols:
                     self.conn.execute(f"ALTER TABLE hp_samples ADD COLUMN {col} REAL")
             if "mode" not in hpcols:
@@ -685,10 +686,12 @@ class Store:
         with self.lock, self.conn:
             self.conn.execute(
                 "INSERT INTO hp_samples(gateway,ts,energy_kwh,power_w,thermal_kw,"
-                "modulation,outdoor_c,heat_kwh,heat_w,mode) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                "modulation,outdoor_c,heat_kwh,heat_w,mode,supply_c,return_c)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                 (row.get("gateway"), row["ts"], row.get("energy_kwh"), row.get("power_w"),
                  row.get("thermal_kw"), row.get("modulation"), row.get("outdoor_c"),
-                 row.get("heat_kwh"), row.get("heat_w"), row.get("mode")),
+                 row.get("heat_kwh"), row.get("heat_w"), row.get("mode"),
+                 row.get("supply_c"), row.get("return_c")),
             )
 
     def hp_prev(self, field: str):
@@ -710,11 +713,12 @@ class Store:
 
     def add_hp_samples_bulk(self, rows: list[tuple]):
         """Bulk insert (gateway,ts,energy_kwh,power_w,thermal_kw,modulation,
-        outdoor_c,heat_kwh,heat_w,mode) tuples – used by the demo seeder."""
+        outdoor_c,heat_kwh,heat_w,mode,supply_c,return_c) tuples – demo seeder."""
         with self.lock, self.conn:
             self.conn.executemany(
                 "INSERT INTO hp_samples(gateway,ts,energy_kwh,power_w,thermal_kw,"
-                "modulation,outdoor_c,heat_kwh,heat_w,mode) VALUES(?,?,?,?,?,?,?,?,?,?)", rows)
+                "modulation,outdoor_c,heat_kwh,heat_w,mode,supply_c,return_c)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", rows)
 
     def hp_samples_since(self, since_ts: int) -> list[dict]:
         with self.lock:
@@ -1540,7 +1544,107 @@ def compute_hp_analytics(store: Store, days: int, price: float,
     }
 
 
-def compute_heating_diag(climate: list[dict], hp: dict | None) -> dict:
+def _ideal_flow(outdoor: float) -> float:
+    """WP-friendly target flow temperature for an outdoor temp (underfloor-ish).
+    Low and flat – every +1 K flow costs ~2–3 % efficiency."""
+    return max(28.0, min(45.0, 30.0 + (18.0 - outdoor) * 0.45))
+
+
+def hp_cycle_stats(samples: list[dict]) -> dict | None:
+    """Real cycling from the stored mode/modulation sequence: compressor starts
+    per day and average run length. 'running' = heating/hot-water or load > 0."""
+    seq = [s for s in samples if s.get("ts")]
+    if len(seq) < 10:
+        return None
+    seq.sort(key=lambda s: s["ts"])
+    def running(s):
+        m = (s.get("mode") or "").lower()
+        return m in ("ch", "heating", "heat", "dhw") or (s.get("modulation") or 0) > 0
+    starts = 0
+    run_s = 0.0
+    prev = None
+    prev_run = False
+    for s in seq:
+        r = running(s)
+        if prev is not None:
+            dt = s["ts"] - prev["ts"]
+            if 0 < dt <= 1800 and prev_run:       # accumulate run time (cap gaps)
+                run_s += dt
+            if r and not prev_run:
+                starts += 1
+        elif r:
+            starts += 1
+        prev, prev_run = s, r
+    span_days = max(0.5, (seq[-1]["ts"] - seq[0]["ts"]) / 86400.0)
+    per_day = starts / span_days
+    run_min = (run_s / 60.0 / starts) if starts else None
+    return {"days": round(span_days, 1), "starts": starts,
+            "per_day": round(per_day, 1),
+            "avg_run_min": round(run_min) if run_min else None}
+
+
+def compute_heating_curve(store: "Store", days: int = 30) -> dict:
+    """The REAL heating curve: flow temperature vs. outdoor temperature from the
+    stored samples, with a fitted line and the WP-friendly target band. Builds up
+    as the bridge logs supply/return over time."""
+    since = int(time.time()) - days * 86400
+    rows = store.hp_samples_since(since)
+    pts = []
+    for s in rows:
+        o, sup = s.get("outdoor_c"), s.get("supply_c")
+        m = (s.get("mode") or "").lower()
+        heating = m in ("ch", "heating", "heat")
+        if o is None or sup is None or sup < 20 or not heating:
+            continue
+        if (s.get("modulation") or 0) <= 0:
+            continue
+        pts.append((round(float(o), 1), round(float(sup), 1)))
+    n = len(pts)
+    cyc = hp_cycle_stats(rows)
+    if n < 12:
+        return {"ok": True, "enough": False, "n": n, "points": pts,
+                "cycles": cyc,
+                "note": "Sammelt ab jetzt Vorlauf/Rücklauf bei jedem Takt – nach ein paar "
+                        "Heiztagen erscheint hier deine echte Heizkurve."}
+    xs = [p[0] for p in pts]; ys = [p[1] for p in pts]
+    mx = sum(xs) / n; my = sum(ys) / n
+    sxx = sum((x - mx) ** 2 for x in xs)
+    sxy = sum((xs[i] - mx) * (ys[i] - my) for i in range(n))
+    a = (sxy / sxx) if sxx > 1e-6 else 0.0     # slope (°C flow per °C outdoor)
+    b = my - a * mx
+    xmin = max(-15.0, min(xs)); xmax = min(18.0, max(xs))
+    if xmax - xmin < 4:
+        xmin, xmax = xmin - 2, xmax + 2
+    # over-temperature vs. ideal, averaged across the observed heating range
+    sample_x = [xmin + (xmax - xmin) * k / 6 for k in range(7)]
+    overs = [(a * x + b) - _ideal_flow(x) for x in sample_x]
+    over_k = round(sum(overs) / len(overs), 1)
+    if over_k >= 6:
+        verdict = "Heizkurve deutlich zu hoch – klares Sparpotenzial."
+    elif over_k >= 3:
+        verdict = "Heizkurve etwas zu hoch – Spielraum nach unten."
+    elif over_k <= -3:
+        verdict = "Heizkurve sehr niedrig – prüfen, ob alle Räume warm werden."
+    else:
+        verdict = "Heizkurve WP-freundlich eingestellt."
+    saving_pct = round(min(0.18, max(0.0, over_k) * 0.025), 3)
+    ref = []
+    for rx in (-7, 0, 7):
+        ref.append({"outdoor": rx, "actual": round(a * rx + b, 1),
+                    "ideal": round(_ideal_flow(rx), 1)})
+    # cap the scatter payload
+    step = max(1, n // 300)
+    pts_out = pts[::step]
+    return {"ok": True, "enough": True, "n": n, "days_window": days,
+            "points": pts_out, "fit": {"a": round(a, 3), "b": round(b, 2)},
+            "ideal": [{"x": round(x, 1), "y": round(_ideal_flow(x), 1)} for x in
+                      [xmin + (xmax - xmin) * k / 20 for k in range(21)]],
+            "xmin": round(xmin, 1), "xmax": round(xmax, 1),
+            "over_k": over_k, "verdict": verdict, "saving_pct": saving_pct,
+            "ref": ref, "cycles": cyc}
+
+
+def compute_heating_diag(climate: list[dict], hp: dict | None, cycles: dict | None = None) -> dict:
     """Turn room thermostats + the heat-pump flow/return snapshot into concrete
     'Einstellungsfehler / Effizienz' findings.
 
@@ -1554,10 +1658,10 @@ def compute_heating_diag(climate: list[dict], hp: dict | None) -> dict:
     rooms = [r for r in (climate or []) if isinstance(r, dict)]
     F = []   # findings
 
-    def add(sev, cat, title, detail, value=None, target=None, fix=None, rooms_hit=None):
+    def add(sev, cat, title, detail, value=None, target=None, fix=None, rooms_hit=None, saving_pct=0.0):
         F.append({"severity": sev, "cat": cat, "title": title, "detail": detail,
                   "value": value, "target": target, "fix": fix,
-                  "rooms": rooms_hit or []})
+                  "rooms": rooms_hit or [], "saving_pct": round(saving_pct, 3)})
 
     supply = hp.get("supply_c")
     ret = hp.get("return_c")
@@ -1573,9 +1677,7 @@ def compute_heating_diag(climate: list[dict], hp: dict | None) -> dict:
     # A heat pump wants the LOWEST flow temp that still heats the house; each +1 K
     # costs ~2.5 % efficiency. Target band derived from outdoor temp (underfloor
     # friendly). Only meaningful while the compressor heats the house.
-    ideal_flow = None
-    if outdoor is not None:
-        ideal_flow = round(max(28.0, min(45.0, 30.0 + (18.0 - outdoor) * 0.45)), 1)
+    ideal_flow = round(_ideal_flow(outdoor), 1) if outdoor is not None else None
     if heating_now and supply is not None and ideal_flow is not None:
         over = round(supply - ideal_flow, 1)
         if over >= 8:
@@ -1585,13 +1687,15 @@ def compute_heating_diag(climate: list[dict], hp: dict | None) -> dict:
                 f"Jedes +1 K Vorlauf kostet ~2–3 % Effizienz (JAZ).",
                 value=f"{supply:.0f} °C", target=f"≈ {ideal_flow:.0f} °C",
                 fix="Heizkurve (Steilheit/Niveau) absenken: schrittweise je 2–3 K, bis Räume "
-                    "gerade noch warm werden. Ziel: niedrigster Vorlauf, der die Wohnung hält.")
+                    "gerade noch warm werden. Ziel: niedrigster Vorlauf, der die Wohnung hält.",
+                saving_pct=min(0.18, over * 0.025))
         elif over >= 4:
             add("warn", "flow", "Vorlauftemperatur etwas hoch",
                 f"Vorlauf {supply:.0f} °C bei {outdoor:.0f} °C außen, ~{over:.0f} K über dem "
                 f"Zielband (~{ideal_flow:.0f} °C). Spielraum, die Heizkurve flacher zu stellen.",
                 value=f"{supply:.0f} °C", target=f"≈ {ideal_flow:.0f} °C",
-                fix="Heizkurve leicht absenken und beobachten, ob alle Räume noch warm werden.")
+                fix="Heizkurve leicht absenken und beobachten, ob alle Räume noch warm werden.",
+                saving_pct=min(0.10, over * 0.025))
         else:
             add("ok", "flow", "Vorlauftemperatur im sinnvollen Bereich",
                 f"Vorlauf {supply:.0f} °C bei {outdoor:.0f} °C außen passt zum WP-freundlichen "
@@ -1607,37 +1711,51 @@ def compute_heating_diag(climate: list[dict], hp: dict | None) -> dict:
                 f"viel – oder ein Überströmventil / zu viele offene Kreise mischen zurück. "
                 f"Das senkt die Effizienz und begünstigt Takten.",
                 value=f"{dt:.1f} K", target="5–8 K",
-                fix="Pumpendrehzahl/Volumenstrom reduzieren bis ΔT ≈ 5–7 K; Überströmventil prüfen.")
+                fix="Pumpendrehzahl/Volumenstrom reduzieren bis ΔT ≈ 5–7 K; Überströmventil prüfen.",
+                saving_pct=0.03)
         elif dt > 10:
             add("warn", "spread", "Spreizung zu groß (Vorlauf−Rücklauf)",
                 f"ΔT {dt:.1f} K. Zu große Spreizung deutet auf zu wenig Durchfluss – gedrosselte "
                 f"Thermostate, verschmutzter Filter/Sieb oder zu langsame Pumpe.",
                 value=f"{dt:.1f} K", target="5–8 K",
-                fix="Mehr Heizkreise öffnen, Schmutzfilter reinigen, Pumpenleistung erhöhen.")
+                fix="Mehr Heizkreise öffnen, Schmutzfilter reinigen, Pumpenleistung erhöhen.",
+                saving_pct=0.03)
         else:
             add("ok", "spread", "Spreizung im Zielbereich",
                 f"Vorlauf−Rücklauf ΔT {dt:.1f} K – passt (Zielband 5–8 K).",
                 value=f"{dt:.1f} K", target="5–8 K")
 
     # ---- OPERATING: cycling (short cycles) ---------------------------------- #
-    if starts and working_h and starts > 0:
-        cyc_min = round(working_h * 60.0 / starts, 0)
+    # Prefer REAL per-day cycling from the logged history; fall back to the
+    # lifetime average (counter) when there isn't enough history yet.
+    cyc_min = None
+    cyc_src = None
+    per_day = None
+    if cycles and cycles.get("avg_run_min") and (cycles.get("days") or 0) >= 1:
+        cyc_min = cycles["avg_run_min"]; per_day = cycles.get("per_day")
+        cyc_src = f"{per_day:.0f} Takte/Tag" if per_day is not None else "Verlauf"
+    elif starts and working_h and starts > 0:
+        cyc_min = round(working_h * 60.0 / starts, 0); cyc_src = "Lebensdauer-Mittel"
+    if cyc_min is not None:
+        extra = f" (~{per_day:.0f} Takte/Tag)" if per_day is not None else ""
         if cyc_min < 10:
             add("high", "cycle", "Wärmepumpe taktet zu häufig",
-                f"Ø Laufzeit nur ~{cyc_min:.0f} min pro Start ({int(starts)} Starts / "
-                f"{int(working_h)} h). Kurze Takte verschleißen den Verdichter und senken die "
-                f"Jahresarbeitszahl – meist durch zu hohen Vorlauf oder zu wenig offene Heizfläche.",
+                f"Ø Laufzeit nur ~{cyc_min:.0f} min pro Takt{extra}. Kurze Takte verschleißen den "
+                f"Verdichter und senken die Jahresarbeitszahl – meist durch zu hohen Vorlauf oder zu "
+                f"wenig offene Heizfläche.",
                 value=f"~{cyc_min:.0f} min/Takt", target="> 15 min",
-                fix="Vorlauf/Heizkurve senken, mehr Heizkreise offen lassen, ggf. Hysterese erhöhen.")
+                fix="Vorlauf/Heizkurve senken, mehr Heizkreise offen lassen, ggf. Hysterese erhöhen.",
+                saving_pct=0.05)
         elif cyc_min < 15:
             add("warn", "cycle", "Taktung grenzwertig",
-                f"Ø ~{cyc_min:.0f} min pro Start. Etwas kurz – mehr offene Heizfläche / niedrigerer "
-                f"Vorlauf verlängert die Takte.",
+                f"Ø ~{cyc_min:.0f} min pro Takt{extra}. Etwas kurz – mehr offene Heizfläche / "
+                f"niedrigerer Vorlauf verlängert die Takte.",
                 value=f"~{cyc_min:.0f} min/Takt", target="> 15 min",
-                fix="Thermostate weiter öffnen, Heizkurve flacher stellen.")
+                fix="Thermostate weiter öffnen, Heizkurve flacher stellen.",
+                saving_pct=0.03)
         else:
             add("ok", "cycle", "Taktung unauffällig",
-                f"Ø ~{cyc_min:.0f} min pro Start (Lebensdauer-Mittel) – ruhiger Lauf.",
+                f"Ø ~{cyc_min:.0f} min pro Takt ({cyc_src}) – ruhiger Lauf.",
                 value=f"~{cyc_min:.0f} min/Takt", target="> 15 min")
 
     # ---- SETTINGS: thermostats throttling the heat pump --------------------- #
@@ -1658,7 +1776,7 @@ def compute_heating_diag(climate: list[dict], hp: dict | None) -> dict:
             value=f"{len(throttled)}/{len(valved)} gedrosselt", target="Ventile möglichst offen",
             fix="Thermostate in den Haupträumen voll öffnen und die Temperatur über die Heizkurve "
                 "regeln; Feinverteilung über hydraulischen Abgleich statt Zudrosseln.",
-            rooms_hit=names)
+            rooms_hit=names, saving_pct=0.10 if sev == "high" else 0.06)
     elif valved:
         add("ok", "valves", "Heizflächen weit offen",
             f"{len(valved) - len(throttled)} von {len(valved)} Räumen haben die Ventile weit offen "
@@ -1678,7 +1796,8 @@ def compute_heating_diag(climate: list[dict], hp: dict | None) -> dict:
                 f"ab: genau das, was die WP ineffizient macht.",
                 value=f"{spread:.0f} K Spreizung", target="≤ 3 K",
                 fix="Solltemperaturen angleichen (z. B. alle 20–22 °C) und selten genutzte Räume "
-                    "eher über Lüftung/Türen temperieren als mit stark abweichendem Sollwert.")
+                    "eher über Lüftung/Türen temperieren als mit stark abweichendem Sollwert.",
+                saving_pct=0.03)
 
     # ---- SETTINGS: absolute setpoint high ----------------------------------- #
     hot = [r for r in heat_rooms if isinstance(r.get("setpoint"), (int, float)) and r["setpoint"] >= 23]
@@ -1750,12 +1869,22 @@ def compute_heating_diag(climate: list[dict], hp: dict | None) -> dict:
     else:
         verdict = "Heizung läuft sauber eingestellt."
     dt = (round(supply - ret, 1) if (supply is not None and ret is not None) else None)
-    cyc = (round(working_h * 60.0 / starts, 0) if (starts and working_h and starts > 0) else None)
+    cyc = cyc_min if cyc_min is not None else None
+    # rough combined saving potential: diminishing sum of the single effects,
+    # capped – the measures overlap (lower flow also reduces cycling).
+    eff = 0.0
+    for f in sorted(F, key=lambda x: -x.get("saving_pct", 0)):
+        sp = f.get("saving_pct", 0) or 0
+        if sp > 0:
+            eff = eff + sp * (1 - eff)          # combine as independent fractions
+    saving_pct_total = round(min(0.30, eff), 3)
     kpis = {
         "supply_c": supply, "return_c": ret, "outdoor_c": outdoor,
         "spread_k": dt, "modulation": modulation, "mode": hp.get("mode"),
         "ideal_flow_c": ideal_flow, "cycle_min": cyc,
+        "cycles_per_day": (cycles or {}).get("per_day"),
         "rooms": len(rooms), "heating_now": heating_now,
+        "saving_pct_total": saving_pct_total,
         "n_high": n_high, "n_warn": n_warn,
         "n_info": sum(1 for f in F if f["severity"] == "info"),
         "n_ok": sum(1 for f in F if f["severity"] == "ok"),
@@ -2082,7 +2211,7 @@ def seed_demo(store: Store, days: int = 90):
         h_kwh += op["heat_w"] / 1000.0 * dt_h
         hp_rows.append((DEMO_HP_GW, int(t.timestamp()), round(e_kwh, 4), op["elec_w"],
                         round(op["heat_w"] / 1000.0, 3), op["modulation"], op["outdoor_c"],
-                        round(h_kwh, 4), op["heat_w"], op["mode"]))
+                        round(h_kwh, 4), op["heat_w"], op["mode"], op["supply_c"], op["return_c"]))
         t += step
     store.add_hp_samples_bulk(hp_rows)
     print(f"[demo] inserted {len(hp_rows)} heat-pump samples.")
@@ -2146,7 +2275,8 @@ class DemoPoller(threading.Thread):
                 "gateway": DEMO_HP_GW, "ts": ts, "energy_kwh": round(e_kwh, 4),
                 "power_w": op["elec_w"], "heat_kwh": round(h_kwh, 4), "heat_w": op["heat_w"],
                 "thermal_kw": op["heat_w"] / 1000.0, "modulation": op["modulation"],
-                "outdoor_c": op["outdoor_c"], "mode": op["mode"]})
+                "outdoor_c": op["outdoor_c"], "mode": op["mode"],
+                "supply_c": op["supply_c"], "return_c": op["return_c"]})
             if self.hp_state is not None:
                 cop = round(op["heat_w"] / op["elec_w"], 2) if op["elec_w"] > 0 else None
                 self.hp_state.clear()
@@ -2218,6 +2348,7 @@ class HeatPumpPoller(threading.Thread):
             "thermal_kw": (heat_w / 1000.0) if heat_w is not None else None,
             "modulation": data.get("modulation"), "outdoor_c": data.get("outdoor_c"),
             "mode": data.get("mode"),
+            "supply_c": data.get("supply_c"), "return_c": data.get("return_c"),
         })
         # live + lifetime COP
         cop_live = round(heat_w / power_w, 2) if (heat_w and power_w and power_w > 0) else None
@@ -3236,9 +3367,10 @@ class Handler(BaseHTTPRequestHandler):
                 # heating efficiency / thermostat-settings diagnostics:
                 # room thermostats (SHC) + heat-pump flow/return snapshot (HomeCom)
                 hp = self._hp_live()
+                cyc = hp_cycle_stats(self.store.hp_samples_since(int(time.time()) - 30 * 86400))
                 if self.ctx.mode == "demo":
                     return self._send_json({"demo": True,
-                        **compute_heating_diag(_demo_climate(), hp)})
+                        **compute_heating_diag(_demo_climate(), hp, cyc)})
                 if self.ctx.mode != "live":
                     return self._send_json({"ok": False, "error": "nur im Live-Modus verfügbar"}, 400)
                 try:
@@ -3247,7 +3379,12 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception as exc:
                     return self._send_json({"ok": False, "error": str(exc)}, 200)
                 return self._send_json({"demo": False,
-                    **compute_heating_diag(climate, hp)})
+                    **compute_heating_diag(climate, hp, cyc)})
+            if path == "/api/heating/curve":
+                # the real heating curve (flow vs. outdoor) from logged samples
+                cd = int(qs.get("days", ["30"])[0])
+                return self._send_json({"demo": self.ctx.mode == "demo",
+                    **compute_heating_curve(self.store, cd)})
             if path == "/api/heatpump":
                 st = dict(self.ctx.hp_state)
                 st["available"] = bool(st) and st.get("energy_kwh") is not None or bool(st.get("last_poll"))

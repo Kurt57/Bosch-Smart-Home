@@ -357,6 +357,20 @@
       <button class="btn sec" id="hd-refresh" style="margin-top:10px">🔄 Heizungs-Check aktualisieren</button>
       <div class="note" id="hd-note" style="margin-top:8px"></div>
     </div>
+    <div class="card" id="hc-card">
+      <h2><span class="info" data-info="heating-curve" role="button" aria-label="Info">i</span>📈 Heizkurve <span class="r" id="hc-head"></span></h2>
+      <div class="note" style="margin-bottom:10px">Deine <b>echte Heizkurve</b>: gemessener <b>Vorlauf</b> über der <b>Außentemperatur</b>
+        (jeder Punkt ein Messwert beim Heizen). Die <b>grüne Linie</b> ist das WP-freundliche Zielband, die
+        <b>rote</b> deine gemessene Kurve. Liegt Rot über Grün, ist die Kurve zu hoch eingestellt.</div>
+      <div id="hc-chart"></div>
+      <div class="legend">
+        <div class="it"><span class="sw" style="background:#4be0b0"></span>Zielband (WP-freundlich)</div>
+        <div class="it"><span class="sw" style="background:#ff6b8a"></span>deine Kurve</div>
+        <div class="it"><span class="sw" style="background:var(--muted)"></span>Messpunkte</div>
+      </div>
+      <div id="hc-ref" style="margin-top:10px"></div>
+      <div class="note" id="hc-note" style="margin-top:8px"></div>
+    </div>
     <div class="grid2">
       <div class="kpi sm"><div class="v" id="hp-today-e">–</div><div class="l">Strom heute</div></div>
       <div class="kpi sm"><div class="v" id="hp-today-h">–</div><div class="l">Wärme heute</div></div>

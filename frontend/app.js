@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-08 · Neu: 🔧 Heizungs-Check (Wärme-Tab) – findet Einstellungsfehler & Effizienz-Verluste aus Raumthermostaten + Vorlauf/Rücklauf'
+const APP_VERSION = '2026-10-08 · Heizungs-Check erweitert: 📈 echte Heizkurve (Vorlauf vs. Außen), €-Sparpotenzial je Hinweis, echte Taktung/Tag aus dem Verlauf'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -194,6 +194,12 @@ const INFO = {
     'der WP. <b>Betriebswerte</b> (Vorlauf, Spreizung, Takt) sind eine <b>Momentaufnahme</b> – am aussagekräftigsten an einem kalten ' +
     'Heiztag; <b>Einstellungen</b> (Ventile, Sollwerte, Modi) gelten dauerhaft. Es sind <b>Heuristiken</b> als Entscheidungshilfe, ' +
     'keine amtliche Diagnose.',
+  'heating-curve': () => 'Die <b>Heizkurve</b> bestimmt, wie heiß der <b>Vorlauf</b> bei welcher <b>Außentemperatur</b> wird. ' +
+    'Jeder Punkt ist ein gemessener Betriebspunkt beim Heizen; die <b>rote Linie</b> ist die daraus gefittete Ist-Kurve, ' +
+    'die <b>grüne</b> ein WP-freundliches Zielband (möglichst niedrig). Liegt Rot <b>über</b> Grün, läuft die WP unnötig heiß ' +
+    '– jedes +1 K Vorlauf kostet ~2–3 % Effizienz. Senke dann an der Wärmepumpe <b>Niveau</b> (verschiebt die ganze Kurve) ' +
+    'oder <b>Steilheit/Gradient</b> (kippt sie: wirkt vor allem bei Kälte). Die App <b>sammelt</b> die Punkte im Betrieb, ' +
+    'daher wird die Kurve über die Heiztage immer aussagekräftiger – am besten an kalten Tagen.',
   'pv-margin': () => 'Hier steht der <b>Ertrag der Kosten gegenüber</b>. Oben drei editierbare Annahmen (€/kWp, €/kWh Speicher, Grundkosten). ' +
     'Oberes Diagramm: <b>Ertrag über 20 Jahre</b> (Linie) vs. <b>Investition</b> (gestrichelt) – der Abstand ist dein Gewinn. ' +
     'Unteres Diagramm: <b>Grenznutzen</b> (€/Jahr je +1 kWp) gegen die <b>Kostengrenze</b>. Das <b>wirtschaftliche Optimum</b> ist das größte ' +
@@ -1828,6 +1834,10 @@ function devRow(title, sub, valTop, valBot, pct, col) {
 /* --------------------------------------------------------------- rendering */
 function renderAll() {
   renderOverview(); renderToday(); renderHistory(); renderHeatpump(); renderProfile(); renderPv(); renderSettings(); renderAppliances(); renderMeter(); renderBorse(); renderCarbon(); renderSmart(); renderKonzept(); renderHa(); renderDarkLoad(); renderSwitches();
+  // re-paint cached heating-check once the WP annual model & price are loaded
+  // (so €-savings fill in even if the tab was opened before data arrived)
+  if (typeof _hdData !== 'undefined' && _hdData) paintHeatingDiag(_hdData);
+  if (typeof _hcData !== 'undefined' && _hcData) paintHeatingCurve(_hcData);
 }
 
 // Device control: switch Bosch Smart Plug+ (and other PowerSwitch devices) on/off.
@@ -1925,8 +1935,14 @@ function paintHeatingDiag(r) {
   const flowCol = (K.supply_c != null && K.ideal_flow_c != null)
     ? (K.supply_c - K.ideal_flow_c >= 8 ? '#ff6b8a' : K.supply_c - K.ideal_flow_c >= 4 ? '#ffb64d' : '#4be0b0') : '';
   const verdictCol = K.n_high ? '#ff6b8a' : K.n_warn ? '#ffb64d' : '#4be0b0';
+  // rough €/year: saving fraction × WP annual energy × price (same WP basis as Rechenbasis)
+  const wpY = (typeof hpMonthEst === 'function') ? (() => { let s = 0; for (let m = 0; m < 12; m++) s += hpMonthEst(m); return s; })() : 0;
+  const price = STATE.price || 0;
+  const eur = pct => (wpY > 0 && price > 0 && pct > 0) ? Math.round(pct * wpY * price) : null;
+  const totEur = eur(K.saving_pct_total);
+  const saveBadge = totEur ? ` · <span style="color:#4be0b0">geschätztes Sparpotenzial ~<b>${money(totEur)}/Jahr</b></span>` : '';
   $('hd-kpi').innerHTML =
-    `<div style="font-weight:700;color:${verdictCol};margin-bottom:10px">${esc(r.verdict || '')}</div>` +
+    `<div style="font-weight:700;color:${verdictCol};margin-bottom:10px">${esc(r.verdict || '')}${saveBadge}</div>` +
     `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(84px,1fr));gap:8px">` +
     tile('Außen', u(K.outdoor_c, '°C'), '') +
     tile('Vorlauf', u(K.supply_c, '°C'), flowCol) +
@@ -1940,8 +1956,10 @@ function paintHeatingDiag(r) {
   const oks = F.filter(f => f.severity === 'ok');
   const fx = main.map(f => {
     const m = HD_SEV[f.severity] || HD_SEV.info;
+    const fe = eur(f.saving_pct);
     const val = f.value ? `<span style="font-size:12px;color:var(--muted);white-space:nowrap">${esc(f.value)}` +
-      (f.target ? ` → <b style="color:var(--ink)">${esc(f.target)}</b>` : '') + `</span>` : '';
+      (f.target ? ` → <b style="color:var(--ink)">${esc(f.target)}</b>` : '') +
+      (fe ? ` · <b style="color:#4be0b0">~${money(fe)}/J</b>` : '') + `</span>` : '';
     return `<div style="border-left:3px solid ${m.c};background:var(--card2);border-radius:8px;padding:10px 12px;margin-bottom:8px">` +
       `<div style="display:flex;justify-content:space-between;gap:10px;align-items:baseline;flex-wrap:wrap">` +
       `<b style="color:${m.c}">${m.ic} ${esc(f.title)}</b>${val}</div>` +
@@ -1984,7 +2002,86 @@ function paintHeatingDiag(r) {
   }
   const note = $('hd-note');
   if (note) note.innerHTML = (r.demo ? '<b>Demo-Daten</b> (Beispielräume). ' : '') +
-    'Betriebswerte sind eine Momentaufnahme – am aussagekräftigsten an einem kalten Heiztag. Einstellungen gelten dauerhaft.';
+    'Betriebswerte sind eine Momentaufnahme – am aussagekräftigsten an einem kalten Heiztag. Einstellungen gelten dauerhaft. ' +
+    '€-Werte sind grobe Schätzungen (Sparanteil × WP-Jahresverbrauch × Strompreis).';
+}
+
+/* ---- Heizkurve: flow temperature vs. outdoor temperature (from history) --- */
+function curveChart(d) {
+  const h = 230, padL = 30, padR = 10, top = 12, base = h - 24;
+  const pts = d.points || [], ideal = d.ideal || [];
+  const xmin = d.xmin, xmax = d.xmax, xr = Math.max(0.1, xmax - xmin);
+  const allY = pts.map(p => p[1]).concat(ideal.map(p => p.y));
+  if (d.fit) allY.push(d.fit.a * xmin + d.fit.b, d.fit.a * xmax + d.fit.b);
+  if (!allY.length) return '<div class="note">Keine Daten.</div>';
+  let ymin = Math.floor(Math.min(...allY) - 2), ymax = Math.ceil(Math.max(...allY) + 2);
+  if (ymax - ymin < 8) ymax = ymin + 8;
+  const yr = ymax - ymin;
+  const X = x => padL + (x - xmin) / xr * (CW - padL - padR);
+  const Y = y => top + (ymax - y) / yr * (base - top);
+  let g = '';
+  for (let i = 0; i <= 3; i++) {
+    const yy = ymin + yr * i / 3, py = Y(yy);
+    g += `<line class="gl" x1="${padL}" x2="${CW - padR}" y1="${py.toFixed(1)}" y2="${py.toFixed(1)}"/>`;
+    g += `<text class="axis" x="0" y="${(py + 3).toFixed(1)}">${Math.round(yy)}</text>`;
+  }
+  let xt = '';
+  for (let i = 0; i <= 6; i++) {
+    const xv = xmin + xr * i / 6, px = X(xv);
+    xt += `<text class="axis" x="${px.toFixed(1)}" y="${h - 7}" text-anchor="middle">${Math.round(xv)}°</text>`;
+  }
+  const poly = arr => arr.map((p, i) => `${i ? 'L' : 'M'}${X(p.x).toFixed(1)} ${Y(p.y).toFixed(1)}`).join(' ');
+  const idealPath = ideal.length ? `<path d="${poly(ideal)}" fill="none" stroke="#4be0b0" stroke-width="2.5"/>` : '';
+  let fitPath = '';
+  if (d.fit) {
+    const y1 = d.fit.a * xmin + d.fit.b, y2 = d.fit.a * xmax + d.fit.b;
+    fitPath = `<line x1="${X(xmin).toFixed(1)}" y1="${Y(y1).toFixed(1)}" x2="${X(xmax).toFixed(1)}" y2="${Y(y2).toFixed(1)}" stroke="#ff6b8a" stroke-width="2.5"/>`;
+  }
+  const dots = pts.map(p => `<circle cx="${X(p[0]).toFixed(1)}" cy="${Y(p[1]).toFixed(1)}" r="2.3" fill="var(--muted)" fill-opacity="0.5"/>`).join('');
+  return svg(h, g + xt + dots + idealPath + fitPath);
+}
+let _hcData = null, _hcBusy = false;
+async function renderHeatingCurve(force) {
+  const card = $('hc-card'); if (!card) return;
+  if (_hcData && !force) { paintHeatingCurve(_hcData); return; }
+  if (_hcBusy) return;
+  _hcBusy = true;
+  try { const r = await api('/api/heating/curve?days=30'); _hcData = r; paintHeatingCurve(r); }
+  catch (e) { const c = $('hc-chart'); if (c) c.innerHTML = '<div class="note">Nur mit laufender Bridge verfügbar.</div>'; }
+  finally { _hcBusy = false; }
+}
+function paintHeatingCurve(r) {
+  const head = $('hc-head'), chart = $('hc-chart'), ref = $('hc-ref'), note = $('hc-note');
+  if (!r || !r.ok) { if (chart) chart.innerHTML = '<div class="note">Keine Daten.</div>'; return; }
+  if (!r.enough) {
+    if (head) head.textContent = '';
+    if (ref) ref.innerHTML = '';
+    if (chart) {
+      const p = r.points || [];
+      chart.innerHTML = p.length >= 2
+        ? curveChart({ points: p, ideal: [], xmin: Math.min(...p.map(q => q[0])) - 1, xmax: Math.max(...p.map(q => q[0])) + 1 })
+        : '<div class="note" style="padding:20px 0;text-align:center">📈 Noch keine Heizkurve – die App zeichnet sie auf, während die Wärmepumpe heizt.</div>';
+    }
+    if (note) note.innerHTML = '⏳ ' + esc(r.note || 'Sammelt noch Daten.') + ` <span style="color:var(--muted)">(${r.n || 0} Messpunkte)</span>`;
+    return;
+  }
+  const col = r.over_k >= 6 ? '#ff6b8a' : r.over_k >= 3 ? '#ffb64d' : '#4be0b0';
+  if (head) head.innerHTML = `<span style="color:${col}">${r.over_k > 0 ? '+' : ''}${fmt(r.over_k, 1)} K vs. Ziel</span>`;
+  if (chart) chart.innerHTML = curveChart(r);
+  if (ref) {
+    const row = (o, a, id) => {
+      const diff = a - id, dc = diff >= 2 ? '#ff6b8a' : diff >= 1 ? '#ffb64d' : '#4be0b0';
+      return `<tr><td style="padding:5px 8px">${o > 0 ? '+' : ''}${o} °C außen</td>` +
+        `<td style="padding:5px 8px;text-align:right">Vorlauf <b>${fmt(a, 0)} °C</b></td>` +
+        `<td style="padding:5px 8px;text-align:right;color:var(--muted)">Ziel ${fmt(id, 0)} °C</td>` +
+        `<td style="padding:5px 8px;text-align:right;color:${dc}">${diff >= 0 ? '+' : ''}${fmt(diff, 0)} K</td></tr>`;
+    };
+    ref.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px">` +
+      (r.ref || []).map(x => row(x.outdoor, x.actual, x.ideal)).join('') + `</table>`;
+  }
+  if (note) note.innerHTML = `<b style="color:${col}">${esc(r.verdict)}</b> · ${r.n} Messpunkte (${r.days_window || 30} Tage)` +
+    (r.cycles && r.cycles.per_day != null ? ` · ~${fmt(r.cycles.per_day, 1)} Takte/Tag` : '') +
+    (r.demo ? ' · <b>Demo-Daten</b>' : '');
 }
 
 // "Noch nicht gemessen": whole-house household load (meter/manual, minus heat
@@ -5459,8 +5556,11 @@ function switchView(v) {
   document.querySelectorAll('.view').forEach(s => s.classList.toggle('on', s.id === 'v-' + v));
   document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
   window.scrollTo({ top: 0, behavior: 'instant' in window ? 'instant' : 'auto' });
-  // lazily load the heating-check when the Wärme tab is opened
-  if (v === 'heatpump' && typeof renderHeatingDiag === 'function') renderHeatingDiag(false);
+  // lazily load the heating-check + heating-curve when the Wärme tab is opened
+  if (v === 'heatpump') {
+    if (typeof renderHeatingDiag === 'function') renderHeatingDiag(false);
+    if (typeof renderHeatingCurve === 'function') renderHeatingCurve(false);
+  }
 }
 
 function init() {
@@ -5611,7 +5711,7 @@ function init() {
     doSwitch(b.dataset.sw, b.dataset.on === '1', b.dataset.nm || 'Gerät');
   });
   const hpr = $('hp-refresh'); if (hpr) hpr.addEventListener('click', doHpRefresh);
-  const hdr = $('hd-refresh'); if (hdr) hdr.addEventListener('click', () => renderHeatingDiag(true));
+  const hdr = $('hd-refresh'); if (hdr) hdr.addEventListener('click', () => { renderHeatingDiag(true); renderHeatingCurve(true); });
   const exp = $('export-csv'); if (exp) exp.addEventListener('click', doExport);
   const aegD = $('aeg-dash');
   if (aegD) aegD.addEventListener('click', () => window.open('https://developer.electrolux.one/dashboard', '_blank'));
