@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-08 · PV-Tab: Rechenbasis sichtbar, Grenznutzen-Diagramm (ab wann lohnt mehr kWp) + konkrete Komponenten (Fronius + BYD/LG, ausbaufähig)'
+const APP_VERSION = '2026-10-08 · PV: Komponenten elektrisch korrekt (MPPT/Spannungen/DC-AC/Strings); Rechenbasis-WP = Summe Monatsmodell (konsistent mit Verlauf/Wärme)'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -3170,7 +3170,7 @@ function simulatePv(p) {
     const days = new Date(2025, m + 1, 0).getDate();
     const dayPv = (p.kwp * p.spec * pvShare[m]) / days;
     // prefer real monthly heat-pump consumption when a CSV was imported
-    const dayHp = (useReal ? hpMonthEst(m) : hpAnnual * (0.35 * (days / 365) + 0.65 * hpSeas[m])) / days;
+    const dayHp = hpMonthEst(m) / days;   // einheitlich: Monatsmodell inkl. Winter-Theorie
     const dayEv = evDayBase * (1 + 0.12 * Math.cos(2 * Math.PI * m / 12)); // a bit more in winter
     const dayAc = (p.acAnnual * acShare[m]) / days;
     const pvH = pvHourFn(m);
@@ -3240,7 +3240,7 @@ function curtailEstimate(p) {
     const clearDays = Math.max(1, Math.round(days * 0.30));       // ~30 % of days are clear
     const clearDayPv = (p.kwp * p.spec * pvShare[m]) * 0.55 / clearDays;  // carrying ~55 % of the month's yield
     const pvH = pvHourFractions(m);
-    const dayHp = (useReal ? hpMonthEst(m) : hpAnnual * (0.35 * (days / 365) + 0.65 * hpSeas[m])) / days;
+    const dayHp = hpMonthEst(m) / days;   // einheitlich: Monatsmodell inkl. Winter-Theorie
     const dayEv = evDayBase * (1 + 0.12 * Math.cos(2 * Math.PI * m / 12));
     const dayAc = (p.acAnnual * acShare[m]) / days;
     const battPeak = p.batt / 3;                                  // a battery soaks up ~its capacity over ~3 midday hours
@@ -3489,7 +3489,7 @@ function buildSurfaceYear(layout) {
   const hausMD = [], wpMD = [], extraMD = [];
   for (let m = 0; m < 12; m++) {
     hausMD[m] = shD;
-    wpMD[m] = (useReal ? hpMonthEst(m) : hpAnnual * (0.35 * (DIM[m] / 365) + 0.65 * hpSeas[m])) / DIM[m];
+    wpMD[m] = hpMonthEst(m) / DIM[m];   // einheitlich: gleiche Monatsquelle wie Verlauf/Wärme/PV
     const dayEv = evDayBase * (1 + 0.12 * Math.cos(2 * Math.PI * m / 12));
     const dayAc = p.acAnnual * acShare[m] / DIM[m];
     extraMD[m] = dayEv + dayAc;
@@ -3553,7 +3553,7 @@ function buildConsumptionYear() {
   const useReal = !!hpRealMonthMap(), hpSeas = normFrac(HP_SEASON);
   const hausMD = [], wpMD = [];
   for (let m = 0; m < 12; m++) {
-    wpMD[m] = (useReal ? hpMonthEst(m) : hpAnnual * (0.35 * (DIM[m] / 365) + 0.65 * hpSeas[m])) / DIM[m];
+    wpMD[m] = hpMonthEst(m) / DIM[m];   // einheitlich: gleiche Monatsquelle wie Verlauf/Wärme/PV
     hausMD[m] = shBase;
   }
   const haus = interpYear(hausMD), wp = interpYear(wpMD);
@@ -3973,14 +3973,16 @@ function renderPvNight() {
 function renderPvBasis() {
   const el = $('pv-basis'); if (!el) return;
   const p = pvInputs();
-  const haus = householdBaseDaily() * 365, wp = hpAvgDaily() * 365;
+  let wp = 0; for (let m = 0; m < 12; m++) wp += hpMonthEst(m);   // Σ Monatsmodell = wie Verlauf/Wärme
+  const haus = householdBaseDaily() * 365;
   const ev = p.evAnnual, ac = p.acAnnual, tot = haus + wp + ev + ac;
   if (!(tot > 0)) { el.innerHTML = ''; return; }
   const part = (lbl, v) => v > 0 ? `${lbl} <b>${kwh(v, 0)}</b>` : '';
   const parts = [part('🏠 Hausstrom', haus), part('🔥 Wärmepumpe', wp), part('🚗 E-Auto', ev), part('❄︎ Klima', ac)].filter(Boolean);
   el.innerHTML = `<b>Rechenbasis:</b> Gesamtverbrauch <b>${kwh(tot, 0)}/Jahr</b> = ` + parts.join(' + ') +
-    `. <span style="color:var(--muted)">Das ist die Grundlage für Ertrag, Autarkie, Grenznutzen und Produktvorschlag. ` +
-    `Hausstrom/WP aus deinen Messungen, E-Auto/Klima aus deinen Eingaben oben.</span>`;
+    `. <span style="color:var(--muted)">Grundlage für Ertrag, Autarkie, Grenznutzen und Produktvorschlag. ` +
+    `Wärmepumpe = <b>Summe der Monatswerte</b> (dieselbe Zahl wie im <b>Verlauf</b> und unter <b>Wärme „Erwartet"</b>, inkl. Winter-Theorie), ` +
+    `Hausstrom aus deinen Messungen, E-Auto/Klima aus deinen Eingaben oben.</span>`;
 }
 // Cost per kWp (turnkey) to judge whether an extra kWp still pays. Prefers the
 // user's own DIY set price; else a sensible German default.
@@ -4072,20 +4074,45 @@ function renderPvMargin() {
     (addEv > 0 ? ` <span style="color:var(--muted)">Planst du später ein <b>E-Auto</b> (~${kwh(addEv, 0)}/Jahr), verschiebt sich der Sweet-Spot auf ~<b>${fmt(sweetF, 0)} kWp</b> – dann lohnt größer.</span>` : '');
 }
 // Concrete components: a Fronius GEN24 Plus hybrid inverter (battery-ready,
-// expandable) sized with headroom, plus a modular BYD/LG battery.
+// expandable) sized with headroom, plus a modular BYD/LG battery – now with the
+// real electrical sizing (MPP trackers, string voltages, DC/AC, input current).
 const FRONIUS_URL = 'https://www.fronius.com/de-de/germany/solarenergie';
 const BYD_URL = 'https://www.bydbatterybox.com/';
 const LG_URL = 'https://www.lgessbattery.com/';
 function froniusInverter(kwp) {
-  const need = kwp * 0.9;   // AC ~ 90 % of DC peak is a good hybrid sizing
-  const sym = [6, 8, 10];
+  // GEN24 Plus hybrid, representative specs (im Datenblatt prüfen): 2 MPP-Tracker,
+  // max. Systemspannung 1000 V, ~25 A je MPP-Tracker, max. DC ~1,5× AC.
+  const spec = { maxSysV: 1000, mppt: 2, maxImpA: 25, dcFactor: 1.5, mppMin: 150 };
+  const need = kwp * 0.9;   // AC ≈ 90 % der DC-Spitze (DC/AC ~1,1)
   if (kwp < 4) {
-    const pri = [3, 4, 5, 6];
-    const kw = pri.find(x => x >= need) || 6;
-    return { name: `Fronius Primo GEN24 ${kw.toFixed(1)} Plus`, kw, phase: '1-phasig', family: 'Primo GEN24 Plus' };
+    const kw = [3, 4, 5, 6].find(x => x >= need) || 6;
+    return Object.assign({ name: `Fronius Primo GEN24 ${kw.toFixed(1)} Plus`, kw, phase: '1-phasig', family: 'Primo GEN24 Plus' }, spec);
   }
-  const kw = sym.find(x => x >= need) || 10;
-  return { name: `Fronius Symo GEN24 ${kw.toFixed(1)} Plus`, kw, phase: '3-phasig', family: 'Symo GEN24 Plus' };
+  const kw = [6, 8, 10].find(x => x >= need) || 10;
+  return Object.assign({ name: `Fronius Symo GEN24 ${kw.toFixed(1)} Plus`, kw, phase: '3-phasig', family: 'Symo GEN24 Plus' }, spec);
+}
+// Average module electricals derived from its Wp (typical 182 mm half-cell).
+function moduleSpec(wp) {
+  const Imp = 13.5, Vmp = wp / Imp, Voc = Vmp * 1.185, VocCold = Voc * 1.0875; // -10 °C
+  return { wp, Imp, Vmp, Voc, VocCold };
+}
+// String layout for a kWp target with this inverter + module: how many modules
+// in series per MPP tracker so the cold open-circuit voltage stays < 1000 V and
+// the operating voltage sits in the MPP window; plus DC/AC and headroom.
+function pvStringSizing(kwp, inv, ms) {
+  const total = Math.max(1, Math.round(kwp * 1000 / ms.wp));
+  const maxSeries = Math.max(1, Math.floor(inv.maxSysV / ms.VocCold));   // Spannungsgrenze
+  const minSeries = Math.max(4, Math.ceil(inv.mppMin / ms.Vmp));
+  let strings, per;
+  if (total >= 2 * minSeries && inv.mppt >= 2) { const a = Math.ceil(total / 2); strings = 2; per = [a, total - a]; }
+  else { strings = 1; per = [total]; }
+  const perMax = Math.max(...per), perMin = Math.min(...per);
+  const dcKwp = total * ms.wp / 1000, maxDcKwp = inv.kw * inv.dcFactor, dcac = dcKwp / inv.kw;
+  return { total, strings, per, maxSeries, minSeries,
+    vOper: Math.round(ms.Vmp * per[0]), vColdMax: Math.round(ms.VocCold * perMax),
+    voltOk: ms.VocCold * perMax < inv.maxSysV, mppOk: ms.Vmp * perMin >= inv.mppMin, seriesOk: perMax <= maxSeries,
+    dcKwp, maxDcKwp, dcac, headroom: Math.max(0, Math.floor(maxDcKwp * 1000 / ms.wp) - total),
+    ImpOk: ms.Imp <= inv.maxImpA };
 }
 function bydBattery(usableKwh) {
   const modKwh = 2.56;                                 // HVS module
@@ -4099,34 +4126,36 @@ function renderPvProduct() {
   card.hidden = false;
   const p = pvInputs();
   const kwpNow = Math.max(1, p.kwp || 0);
+  const modWp = Math.max(200, Math.min(700, parseFloat($('pv-mod-wp') && $('pv-mod-wp').value) || 440));
   if ($('pv-product-head')) $('pv-product-head').textContent = `${fmt(kwpNow, 1)} kWp · ${fmt(p.batt, 1)} kWh`;
-  // future-proof: size the inverter for the bigger of "now" and a plausible
-  // future (e.g. +E-Auto → a few kWp more), so modules can be added later.
+  // future-proof: size the inverter for a plausible future (e.g. +E-Auto → a few
+  // kWp more) so modules can be added later without swapping the inverter.
   const kwpFuture = Math.ceil(kwpNow + (p.evAnnual > 0 ? 0 : 3));
-  const invNow = froniusInverter(kwpNow), invFut = froniusInverter(kwpFuture);
-  const inv = invFut;                                  // recommend the headroom model
+  const invNow = froniusInverter(kwpNow), inv = froniusInverter(kwpFuture);
+  const ms = moduleSpec(modWp), sz = pvStringSizing(kwpNow, inv, ms);
   // battery target ≈ shoulder-season night consumption (as in the Speicher card)
   const loc = getLatLon(), lat = loc ? loc.lat : 51, lon = loc ? loc.lon : 10, yr = new Date().getFullYear();
-  const nightSh = nightSum(hourlyLoadKwh(8).hw, sunTimes(lat, lon, new Date(yr, 8, 23)));
-  const batTarget = p.batt > 0 ? p.batt : Math.max(5, nightSh);
+  const batTarget = p.batt > 0 ? p.batt : Math.max(5, nightSum(hourlyLoadKwh(8).hw, sunTimes(lat, lon, new Date(yr, 8, 23))));
   const bat = bydBattery(batTarget);
-  const modWp = 440, mods = Math.max(1, Math.round(kwpNow * 1000 / modWp));
-  const modsFut = Math.max(mods, Math.round(kwpFuture * 1000 / modWp));
+  const dcacTxt = sz.dcac < 1.05 ? 'WR mit Reserve' : sz.dcac <= 1.25 ? 'ideal' : sz.dcac <= 1.4 ? 'leicht überbelegt' : 'überbelegt – Mittagskappung';
   const a = (href, txt) => `<a href="${href}" target="_blank" rel="noopener" style="color:var(--accent)">${esc(txt)} ↗</a>`;
   const row = (icon, title, sub) => `<div class="devrow"><div class="nm"><b>${icon} ${title}</b><small>${sub}</small></div></div>`;
   $('pv-product-body').innerHTML =
-    row('🔌', esc(inv.name), `Hybrid, ${inv.phase}, <b>batteriefähig</b> & ausbaufähig · ${inv.kw.toFixed(1)} kW AC` +
-      ` · reicht für deine ${fmt(kwpNow, 1)} kWp und Reserve bis ~${fmt(kwpFuture, 0)} kWp · ${a(FRONIUS_URL, 'Fronius')}`) +
-    row('☀︎', `${mods} Module (~${modWp} Wp)`, `für ${fmt(kwpNow, 1)} kWp heute · später bis ~${modsFut} Module (${fmt(kwpFuture, 0)} kWp) nachrüstbar, ohne WR-Tausch`) +
-    row('🔋', esc(bat.name), `${bat.modules}× 2,56 kWh = <b>${fmt(bat.nom, 1)} kWh</b> · <b>modular</b> stapelbar ${bat.min}–${bat.max} kWh, später aufstocken · Fronius-kompatibel · ${a(BYD_URL, 'BYD Battery-Box')}`) +
+    row('🔌', esc(inv.name), `Hybrid, ${inv.phase}, <b>batteriefähig</b> · <b>${inv.kw.toFixed(1)} kW AC</b> · ` +
+      `${inv.mppt} MPP-Tracker · max ${inv.maxSysV} V · ~${inv.maxImpA} A/MPP · max DC ~${fmt(inv.kw * inv.dcFactor, 1)} kWp · ${a(FRONIUS_URL, 'Fronius')}`) +
+    row('🔗', 'Verschaltung', `${sz.strings}× String ${sz.strings >= 2 ? '(je 1 MPP-Tracker)' : ''} · <b>${sz.per.join(' + ')} Module in Reihe</b> · ` +
+      `Betrieb ~${sz.vOper} V (MPP ab ${inv.mppMin} V) · Leerlauf kalt ~${sz.vColdMax} V ${sz.voltOk ? '<b style="color:#4be0b0">✓ &lt; 1000 V</b>' : '<b style="color:#ef6c4d">⚠︎ &gt; 1000 V – kürzere Strings!</b>'} · Strom ~${fmt(ms.Imp, 1)} A/String ✓`) +
+    row('⚡', 'Eingang / Ausgang', `DC-Eingang <b>${fmt(sz.dcKwp, 1)} kWp</b> an Modulen · AC-Ausgang <b>${inv.kw.toFixed(1)} kW</b> · DC/AC <b>${fmt(sz.dcac, 2)}</b> (${dcacTxt})`) +
+    row('☀︎', `${sz.total} Module à ~${modWp} Wp`, `Ø Modul: Vmp ~${fmt(ms.Vmp, 0)} V · Voc ~${fmt(ms.Voc, 0)} V · Imp ~${fmt(ms.Imp, 1)} A (typische Werte) · ` +
+      `am WR noch Platz für ~<b>${sz.headroom}</b> weitere Module (bis ${fmt(inv.kw * inv.dcFactor, 1)} kWp DC)`) +
+    row('🔋', esc(bat.name), `${bat.modules}× 2,56 kWh = <b>${fmt(bat.nom, 1)} kWh</b> · <b>modular</b> stapelbar ${bat.min}–${bat.max} kWh, später aufstocken · Fronius-kompatibel (HV) · ${a(BYD_URL, 'BYD Battery-Box')}`) +
     row('↔︎', 'Alternative Speicher', `${a(LG_URL, 'LG')} (RESU – Verfügbarkeit prüfen, LG hat sich aus Heimspeichern teils zurückgezogen) · BYD ist aktuell die ausbaufähigste Fronius-Kombi`);
   $('pv-product-note').innerHTML =
-    `<b>Ausbaufähig gedacht:</b> teuer & schwer zu tauschen sind <b>Wechselrichter</b> und <b>Speicher-Grundgerät</b> – ` +
-    `Module ergänzt du jederzeit. Darum: Wechselrichter <b>eine Nummer größer</b> (${esc(inv.family)}, battery-ready), ` +
-    `Speicher <b>modular</b> (BYD: Module nachstecken), Module nur so viel wie heute nötig. ` +
-    `<span style="color:var(--muted)">Brauchst du in 10 J. mehr (E-Auto, Klima, Wärmepumpe)? Dann zahlt sich die Reserve aus – ` +
-    `ohne Mehrbedarf hast du nur ~${money((invFut.kw - invNow.kw) * 120)} mehr für den größeren WR gezahlt. ` +
-    `Links führen zur Herstellerseite; genaue Modellseite dort wählen.</span>`;
+    (!sz.voltOk ? `<b style="color:#ef6c4d">Achtung:</b> mit ${modWp} Wp-Modulen wird die Reihe zu lang für 1000 V – kürzere Strings / mehr Strings wählen. ` : '') +
+    `<b>Ausbaufähig gedacht:</b> teuer & schwer tauschbar sind <b>Wechselrichter</b> und <b>Speicher-Grundgerät</b> – Module ergänzt du jederzeit ` +
+    `(der WR hat noch ~${sz.headroom} Module Reserve). Darum WR <b>eine Nummer größer</b> (${esc(inv.family)}, battery-ready), Speicher <b>modular</b>. ` +
+    `<span style="color:var(--muted)">Spannungen/Ströme sind <b>typische</b> Modulwerte – fürs finale Design das echte Moduldatenblatt (Voc, Vmp, Temp.-Koeffizient) und den Fronius-Konfigurator nutzen. ` +
+    `Links führen zur Herstellerseite.</span>`;
 }
 // In which months could you run entirely without grid power – and how does
 // that change with a bigger PV array?
@@ -5593,6 +5622,7 @@ function init() {
     });
   }
   const pvSug = $('pv-suggest'); if (pvSug) pvSug.addEventListener('click', doPvSuggest);
+  const pvMod = $('pv-mod-wp'); if (pvMod) pvMod.addEventListener('input', renderPvProduct);
   const pvDS = $('pv-day-summer'), pvDW = $('pv-day-winter');
   if (pvDS) pvDS.addEventListener('click', () => { _pvDaySeason = 'summer'; renderPvDay(); });
   if (pvDW) pvDW.addEventListener('click', () => { _pvDaySeason = 'winter'; renderPvDay(); });
