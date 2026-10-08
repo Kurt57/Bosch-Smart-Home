@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-08 · PV: Kosten einbezogen (Ertrag vs. Investition, Amortisation, editierbare €/kWp·€/kWh); große Anlagen → mehrere Wechselrichter, DC/AC farbig'
+const APP_VERSION = '2026-10-08 · PV: Wechselrichter wird für die AKTUELLE Anlage ausgelegt (1 WR bis 15 kWp DC, mehrere erst darüber); MPP-Tracker korrekt „2 je WR"'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -4087,27 +4087,30 @@ const FRONIUS_URL = 'https://www.fronius.com/de-de/germany/solarenergie';
 const BYD_URL = 'https://www.bydbatterybox.com/';
 const LG_URL = 'https://www.lgessbattery.com/';
 const AIKO_URL = 'https://www.aikosolar.com/';
+// Available Fronius GEN24 Plus single units (AC kW). Each has 2 MPP trackers,
+// max. DC ~1,5× AC. Primo = 1-phasig (klein), Symo = 3-phasig.
+const FRONIUS_UNITS = [
+  { kw: 3, phase: '1-phasig', family: 'Primo GEN24 Plus' },
+  { kw: 4, phase: '1-phasig', family: 'Primo GEN24 Plus' },
+  { kw: 5, phase: '1-phasig', family: 'Primo GEN24 Plus' },
+  { kw: 6, phase: '3-phasig', family: 'Symo GEN24 Plus' },
+  { kw: 8, phase: '3-phasig', family: 'Symo GEN24 Plus' },
+  { kw: 10, phase: '3-phasig', family: 'Symo GEN24 Plus' },
+];
 function froniusInverter(kwp) {
-  // GEN24 Plus hybrid, representative specs (im Datenblatt prüfen): 2 MPP-Tracker,
-  // max. Systemspannung 1000 V, ~25 A je MPP-Tracker, max. DC ~1,5× AC.
   const spec = { maxSysV: 1000, mppt: 2, maxImpA: 25, dcFactor: 1.5, mppMin: 150 };
-  const need = kwp * 0.9;          // Ziel-AC (DC/AC ~1,1)
-  const SINGLE_MAX = 10;           // größter Hybrid-Einzel-WR (Symo GEN24 10.0)
-  if (need <= SINGLE_MAX) {
-    if (kwp < 4) {
-      const kw = [3, 4, 5, 6].find(x => x >= need) || 6;
-      return Object.assign({ name: `Fronius Primo GEN24 ${kw.toFixed(1)} Plus`, kw, count: 1, totalKw: kw,
-        phase: '1-phasig', family: 'Primo GEN24 Plus' }, spec);
-    }
-    const kw = [6, 8, 10].find(x => x >= need) || 10;
-    return Object.assign({ name: `Fronius Symo GEN24 ${kw.toFixed(1)} Plus`, kw, count: 1, totalKw: kw,
-      phase: '3-phasig', family: 'Symo GEN24 Plus' }, spec);
-  }
-  // große Anlage: ein einzelner Hybrid-WR reicht nicht → mehrere Geräte
-  const count = Math.ceil(need / SINGLE_MAX);
-  const kw = [6, 8, 10].find(x => x >= need / count) || 10;
-  return Object.assign({ name: `${count}× Fronius Symo GEN24 ${kw.toFixed(1)} Plus`, kw, count, totalKw: kw * count,
-    phase: '3-phasig', family: 'Symo GEN24 Plus', multi: true }, spec);
+  const mk = (u, count) => Object.assign({
+    name: `${count > 1 ? count + '× ' : ''}Fronius ${u.family.split(' ')[0]} GEN24 ${u.kw.toFixed(1)} Plus`,
+    kw: u.kw, count, totalKw: u.kw * count, phase: u.phase, family: u.family, multi: count > 1 }, spec);
+  const idealAC = kwp / 1.15;                              // Ziel DC/AC ~1,15
+  // smallest single unit that carries this DC within DC/AC ≤ 1,5 …
+  let u = FRONIUS_UNITS.find(x => x.kw >= idealAC) || (kwp <= 10 * spec.dcFactor ? FRONIUS_UNITS[FRONIUS_UNITS.length - 1] : null);
+  if (u) return mk(u, 1);
+  // … else split across several 10-kW units (each bis ~15 kWp DC)
+  const count = Math.ceil(kwp / (10 * spec.dcFactor));
+  const perDc = kwp / count;
+  const pu = FRONIUS_UNITS.find(x => x.kw >= perDc / 1.15) || FRONIUS_UNITS[FRONIUS_UNITS.length - 1];
+  return mk(pu, count);
 }
 // Average module electricals derived from its Wp. Defaults suit AIKO Neostar
 // (N-type ABC back-contact): higher voltage, excellent low-light/shading.
@@ -4153,10 +4156,9 @@ function renderPvProduct() {
   const kwpNow = Math.max(1, p.kwp || 0);
   const modWp = Math.max(200, Math.min(700, parseFloat($('pv-mod-wp') && $('pv-mod-wp').value) || 460));
   if ($('pv-product-head')) $('pv-product-head').textContent = `${fmt(kwpNow, 1)} kWp · ${fmt(p.batt, 1)} kWh`;
-  // future-proof: size the inverter for a plausible future (e.g. +E-Auto → a few
-  // kWp more) so modules can be added later without swapping the inverter.
-  const kwpFuture = Math.ceil(kwpNow + (p.evAnnual > 0 ? 0 : 3));
-  const invNow = froniusInverter(kwpNow), inv = froniusInverter(kwpFuture);
+  // Size the inverter for the array you build NOW; future-proofing comes from the
+  // GEN24's own ~1,5× DC headroom (you add modules later, not a second inverter).
+  const inv = froniusInverter(kwpNow);
   const ms = moduleSpec(modWp), sz = pvStringSizing(kwpNow, inv, ms);
   // battery target ≈ shoulder-season night consumption (as in the Speicher card)
   const loc = getLatLon(), lat = loc ? loc.lat : 51, lon = loc ? loc.lon : 10, yr = new Date().getFullYear();
@@ -4165,11 +4167,14 @@ function renderPvProduct() {
   const dcacTxt = sz.dcac < 1.05 ? 'WR mit Reserve' : sz.dcac <= 1.25 ? 'ideal' : sz.dcac <= 1.4 ? 'leicht überbelegt' : 'überbelegt – Mittagskappung';
   const dcacCol = sz.dcac > 1.4 ? '#ef6c4d' : sz.dcac > 1.25 ? '#f6b93b' : '#4be0b0';
   const acKw = inv.totalKw || inv.kw, mpptTot = inv.mppt * (inv.count || 1);
+  // "2 MPP-Tracker je WR" is the real per-device figure; show the sum only when
+  // there is more than one inverter, so a single GEN24 never reads as "4 Tracker".
+  const mpptTxt = inv.count > 1 ? `${inv.mppt} MPP-Tracker je WR (${mpptTot} gesamt)` : `${inv.mppt} MPP-Tracker`;
   const a = (href, txt) => `<a href="${href}" target="_blank" rel="noopener" style="color:var(--accent)">${esc(txt)} ↗</a>`;
   const row = (icon, title, sub) => `<div class="devrow"><div class="nm"><b>${icon} ${title}</b><small>${sub}</small></div></div>`;
   $('pv-product-body').innerHTML =
     row('🔌', esc(inv.name), `Hybrid, ${inv.phase}, <b>batteriefähig</b> · <b>${acKw.toFixed(1)} kW AC</b>${inv.count > 1 ? ` (${inv.count}× ${inv.kw.toFixed(1)} kW)` : ''} · ` +
-      `${mpptTot} MPP-Tracker · max ${inv.maxSysV} V · ~${inv.maxImpA} A/MPP · max DC ~${fmt(acKw * inv.dcFactor, 1)} kWp · ${a(FRONIUS_URL, 'Fronius')}`) +
+      `${mpptTxt} · max ${inv.maxSysV} V · ~${inv.maxImpA} A/MPP · max DC ~${fmt(acKw * inv.dcFactor, 1)} kWp · ${a(FRONIUS_URL, 'Fronius')}`) +
     row('🔗', 'Verschaltung', `${sz.strings} Strings über ${mpptTot} MPP-Tracker · <b>${sz.per.join(' + ')} Module in Reihe</b> · ` +
       `Betrieb ~${sz.vOper} V (MPP ab ${inv.mppMin} V) · Leerlauf kalt ~${sz.vColdMax} V ${sz.voltOk ? '<b style="color:#4be0b0">✓ &lt; 1000 V</b>' : '<b style="color:#ef6c4d">⚠︎ &gt; 1000 V – kürzere Strings!</b>'} · Strom ~${fmt(ms.Imp, 1)} A/String ✓`) +
     row('⚡', 'Eingang / Ausgang', `DC-Eingang <b>${fmt(sz.dcKwp, 1)} kWp</b> an Modulen · AC-Ausgang <b>${acKw.toFixed(1)} kW</b> · ` +
