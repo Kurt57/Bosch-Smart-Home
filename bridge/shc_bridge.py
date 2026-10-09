@@ -697,6 +697,12 @@ class Store:
                 "CREATE TABLE IF NOT EXISTS hp_curve("
                 " ts INTEGER PRIMARY KEY, outdoor_c REAL, supply_c REAL)"
             )
+            # indoor room temperature over time, logged from the SHC thermostats
+            # (the HomeCom CSV has no room temp) – for the time-series overlay.
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS room_temp("
+                " ts INTEGER PRIMARY KEY, temp REAL, setpoint REAL)"
+            )
             # AEG / Electrolux appliances (washer, dryer, …) and their readings
             self.conn.execute(
                 "CREATE TABLE IF NOT EXISTS aeg_appliances("
@@ -831,6 +837,30 @@ class Store:
     def hp_curve_count(self) -> int:
         with self.lock:
             return self.conn.execute("SELECT COUNT(*) c FROM hp_curve").fetchone()["c"]
+
+    # -- room temperature (logged from the thermostats) ------------------ #
+    def room_temp_add(self, ts: int, temp: float, setpoint=None):
+        with self.lock, self.conn:
+            self.conn.execute(
+                "INSERT INTO room_temp(ts,temp,setpoint) VALUES(?,?,?)"
+                " ON CONFLICT(ts) DO UPDATE SET temp=excluded.temp,"
+                " setpoint=excluded.setpoint", (ts, temp, setpoint))
+
+    def room_temp_hourly(self, since_ts: int) -> dict:
+        """Average logged indoor temp per hour (hour-start ts -> temp)."""
+        with self.lock:
+            cur = self.conn.execute(
+                "SELECT ts,temp FROM room_temp WHERE ts>=? AND temp IS NOT NULL", (since_ts,))
+            rows = cur.fetchall()
+        buckets = {}
+        for r in rows:
+            hts = (r["ts"] // 3600) * 3600
+            buckets.setdefault(hts, []).append(r["temp"])
+        return {h: round(sum(v) / len(v), 1) for h, v in buckets.items()}
+
+    def room_temp_count(self) -> int:
+        with self.lock:
+            return self.conn.execute("SELECT COUNT(*) c FROM room_temp").fetchone()["c"]
 
     # -- AEG / Electrolux appliances ------------------------------------- #
     def aeg_upsert_appliance(self, a: dict):
@@ -1815,8 +1845,8 @@ def compute_heat_timeseries(store: "Store", days: int = 4) -> dict:
     consumption (heating/hot-water) and the derived COP – plus efficiency/logic
     insights (how flow and consumption track the outside temperature)."""
     rows = store.hp_history("hour")
-    cutoff = time.time() - days * 86400
-    series = []
+    cutoff = int(time.time() - days * 86400)
+    by_hour = {}
     for r in rows:
         try:
             ts = int(datetime.fromisoformat(str(r.get("date"))).timestamp())
@@ -1829,14 +1859,23 @@ def compute_heat_timeseries(store: "Store", days: int = 4) -> dict:
         heating = r.get("heating_kwh") or 0
         water = r.get("water_kwh") or 0
         cop = round(heat / elec, 2) if (elec and elec > 0.05 and heat) else None
-        series.append({
+        by_hour[(ts // 3600) * 3600] = {
             "ts": ts, "hour": datetime.fromtimestamp(ts).hour,
             "outdoor": r.get("outdoor_c"), "supply": r.get("supply_c"),
-            "water_t": r.get("water_c"),
+            "indoor": None, "water_t": r.get("water_c"),
             "elec": round(elec, 2) if elec is not None else None,
             "heat": round(heat, 2) if heat is not None else None,
-            "heating": round(heating, 2), "water": round(water, 2), "cop": cop})
-    series.sort(key=lambda s: s["ts"])
+            "heating": round(heating, 2), "water": round(water, 2), "cop": cop}
+    # overlay logged indoor temperature (from the thermostats) by hour; add
+    # indoor-only hours so recently logged temps show even without CSV coverage.
+    for hts, temp in store.room_temp_hourly(cutoff).items():
+        if hts in by_hour:
+            by_hour[hts]["indoor"] = temp
+        else:
+            by_hour[hts] = {"ts": hts, "hour": datetime.fromtimestamp(hts).hour,
+                            "outdoor": None, "supply": None, "indoor": temp, "water_t": None,
+                            "elec": None, "heat": None, "heating": 0, "water": 0, "cop": None}
+    series = sorted(by_hour.values(), key=lambda s: s["ts"])
     if not series:
         return {"ok": True, "n": 0,
                 "note": "Noch keine Stundendaten. Importiere im Setup deinen HomeCom-CSV-Export – "
@@ -1880,6 +1919,14 @@ def _ts_derive(series: list[dict], days: int) -> dict:
     if best and worst and best["cop"] and worst["cop"]:
         logic.append(f"Bester Punkt: COP <b>{best['cop']}</b> bei {fmt_c(best['outdoor'])}, "
                      f"schlechtester: COP <b>{worst['cop']}</b> bei {fmt_c(worst['outdoor'])}.")
+    # indoor temperature (logged from the thermostats), when available
+    ind = [s["indoor"] for s in series if s.get("indoor") is not None]
+    if len(ind) >= 2:
+        lo, hi = min(ind), max(ind)
+        logic.append(f"<b>Innentemperatur</b> (aus den Thermostaten): Ø <b>{sum(ind) / len(ind):.1f} °C</b> "
+                     f"(Schwankung {lo:.1f}–{hi:.1f} °C). "
+                     + ("Sehr konstant – gute Regelung." if hi - lo <= 1.0 else
+                        "Spürbare Schwankung – ggf. Takten, Nachtabsenkung oder Zuglufteintrag."))
 
     return {"ok": True, "n": len(series), "days_window": days, "rows": series,
             "stats": {"avg_cop": avg_cop, "tot_elec": round(tot_elec, 1),
@@ -1923,6 +1970,7 @@ def _demo_timeseries(days: int = 4) -> dict:
         series.append({
             "ts": int(t.timestamp()), "hour": h, "outdoor": outdoor,
             "supply": supply if (heating > 0 or dhw) else None,
+            "indoor": round(21.8 + 0.7 * math.sin((h - 15) / 24.0 * 2 * math.pi), 1),
             "water_t": round(46 + 3 * math.sin(i / 3), 1),
             "elec": round(elec, 2) or None, "heat": round(heat, 2) or None,
             "heating": round(heating, 2), "water": round(water, 2),
@@ -2320,6 +2368,7 @@ class Poller(threading.Thread):
         self._stop = threading.Event()
         self.last_error: str | None = None
         self.last_poll: int | None = None
+        self._last_room = 0           # throttle for room-temp logging
 
     def run(self):
         interval = max(5, int(self.cfg.get("poll_interval", 30)))
@@ -2343,7 +2392,29 @@ class Poller(threading.Thread):
                     self.store.add_sample(dev["id"], ts, reading["power_w"], reading["energy_wh"])
             except Exception as exc:  # one bad device must not stop the others
                 print(f"[poll] device {dev.get('id')}: {exc}", file=sys.stderr)
+        # log the average indoor temperature from the thermostats (every ~10 min)
+        if ts - self._last_room >= 600:
+            self._last_room = ts
+            try:
+                self._log_room_temp(ts)
+            except Exception as exc:
+                print(f"[poll] room temp: {exc}", file=sys.stderr)
         self.last_poll = ts
+
+    def _log_room_temp(self, ts: int):
+        """Average measured room temperature across the heating rooms → store."""
+        climate = self.client.list_climate()
+        temps, sets = [], []
+        for r in climate:
+            if str(r.get("roomControlMode") or "HEATING").upper() == "OFF" or r.get("summerMode"):
+                continue
+            if isinstance(r.get("temp"), (int, float)):
+                temps.append(r["temp"])
+            if isinstance(r.get("setpoint"), (int, float)):
+                sets.append(r["setpoint"])
+        if temps:
+            self.store.room_temp_add(ts, round(sum(temps) / len(temps), 1),
+                                     round(sum(sets) / len(sets), 1) if sets else None)
 
     def stop(self):
         self._stop.set()

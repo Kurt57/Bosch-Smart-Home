@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-09 · Neu: 📉 Verlauf & Effizienz (Wärme) – stündlich Außen/Vorlauf/Verbrauch/COP aus dem CSV, mit abgeleiteter Effizienz- & Regel-Logik'
+const APP_VERSION = '2026-10-09 · Verlauf: Innentemperatur (lila) wird aus den Raumthermostaten mitgeloggt und überlagert – inkl. abgeleiteter Komfort-/Schwankungs-Logik'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -2106,7 +2106,7 @@ function heatTimeChart(rows) {
   const xi = i => padL + (n <= 1 ? plotW / 2 : i / (n - 1) * plotW);
   // temperature region (top ~48%)
   const tTop = top, tBase = Math.round(h * 0.48);
-  const temps = rows.flatMap(r => [r.outdoor, r.supply]).filter(v => v != null);
+  const temps = rows.flatMap(r => [r.outdoor, r.supply, r.indoor]).filter(v => v != null);
   let tmin = Math.floor(Math.min(...temps) - 2), tmax = Math.ceil(Math.max(...temps) + 2);
   if (tmax - tmin < 10) tmax = tmin + 10;
   const yT = v => tTop + (tmax - v) / (tmax - tmin) * (tBase - tTop);
@@ -2156,8 +2156,9 @@ function heatTimeChart(rows) {
   };
   const outdoor = line('outdoor', '#3ba9ff', yT, 2);
   const supply = line('supply', '#ff6b8a', yT, 2);
+  const indoor = line('indoor', '#b794f6', yT, 2);
   const cop = line('cop', '#4be0b0', yC, 2);
-  return svg(h, g + sep + bars + outdoor + supply + cop);
+  return svg(h, g + sep + bars + outdoor + indoor + supply + cop);
 }
 let _htsData = null, _htsBusy = false;
 async function renderHeatTimeseries(force) {
@@ -2190,8 +2191,12 @@ function paintHeatTimeseries(r) {
   if (chart) chart.innerHTML = heatTimeChart(r.rows || []);
   if (logic) logic.innerHTML = `<div style="font-weight:700;margin-bottom:6px">🧠 Abgeleitete Effizienz &amp; Logik</div>` +
     (r.logic || []).map(l => `<div style="font-size:13px;line-height:1.5;margin-bottom:5px">• ${l}</div>`).join('');
+  const hasIndoor = (r.rows || []).some(x => x.indoor != null);
   if (note) note.innerHTML = `${r.n} Stunden (${r.days_window || 4} Tage)` + (r.demo ? ' · <b>Demo-Daten</b>' : '') +
-    '. <b>Innentemperatur</b> ist in den HomeCom-Daten nicht enthalten – sag Bescheid, dann logge ich sie aus deinen Raumthermostaten mit.';
+    '. Temperaturen/Verbrauch kommen aus dem <b>CSV-Import</b> (Vorlauf erscheint nach einem erneuten Import). ' +
+    (hasIndoor
+      ? '<b>Innentemperatur</b> (lila) wird aus deinen Raumthermostaten mitgeloggt.'
+      : '<b>Innentemperatur</b> (lila) wird ab jetzt aus deinen Raumthermostaten mitgeloggt – die Kurve füllt sich über die nächsten Stunden.');
 }
 function hcDevice() {
   const g = k => { const v = parseFloat(localStorage.getItem(k)); return isFinite(v) ? v : null; };
