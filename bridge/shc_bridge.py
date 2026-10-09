@@ -4798,6 +4798,86 @@ class Runtime:
         self.tibber_last_error = None
         self.ha_cache = None            # {"data":..., "ts":...}
         self.ha_last_error = None
+        # heavy-analytics result cache: these process every raw sample in
+        # Python, so recomputing them on every request/refresh is slow. Cache
+        # results with a TTL + per-key dedup, and a background thread keeps the
+        # recently-requested ones warm so the UI gets instant responses.
+        self._calc_cache: dict = {}     # key -> (ts, result)
+        self._calc_locks: dict = {}     # key -> threading.Lock (in-flight dedup)
+        self._calc_meta = threading.Lock()
+        self._calc_wanted: dict = {}    # key -> last_requested_ts
+        self._warm_stop = threading.Event()
+        self._warm_thread = None
+
+    def calc_get(self, key, ttl, fn):
+        """Return a cached heavy-analytics result, computing it at most once per
+        TTL and deduping concurrent identical requests."""
+        now = time.time()
+        with self._calc_meta:
+            self._calc_wanted[key] = now
+            hit = self._calc_cache.get(key)
+            if hit and now - hit[0] < ttl:
+                return hit[1]
+            lock = self._calc_locks.setdefault(key, threading.Lock())
+        with lock:                       # only one thread computes this key
+            with self._calc_meta:
+                hit = self._calc_cache.get(key)
+                if hit and time.time() - hit[0] < ttl:
+                    return hit[1]
+            result = fn()
+            with self._calc_meta:
+                self._calc_cache[key] = (time.time(), result)
+            return result
+
+    def _warm_once(self):
+        cutoff = time.time() - 600       # forget ranges not requested in 10 min
+        with self._calc_meta:
+            self._calc_wanted = {k: t for k, t in self._calc_wanted.items() if t >= cutoff}
+            wanted = list(self._calc_wanted.keys())
+        for key in wanted:
+            try:
+                kind, days, price = key
+                if kind == "overview":
+                    res = compute_overview(self.store, days, price, self._warm_hp())
+                elif kind == "analytics":
+                    res = compute_analytics(self.store, days, price)
+                elif kind == "hpanalytics":
+                    res = compute_hp_analytics(self.store, days, price, self._warm_hp())
+                else:
+                    continue
+                with self._calc_meta:
+                    self._calc_cache[key] = (time.time(), res)
+            except Exception as exc:
+                print(f"[warm] {key}: {exc}", file=sys.stderr)
+
+    def _warm_hp(self):
+        hp = dict(self.hp_state)
+        hp["connected"] = bool(self.cfg.get("homecom_refresh_token")) or self.mode == "demo"
+        return hp
+
+    def start_warmer(self):
+        if self._warm_thread and self._warm_thread.is_alive():
+            return
+        # seed the ranges the UI actually requests (days=90) so even the first
+        # page load after start hits a warm cache
+        price = round(float(self.cfg.get("price_per_kwh", 0.35) or 0.35), 4)
+        now = time.time()
+        with self._calc_meta:
+            for kind in ("overview", "analytics", "hpanalytics"):
+                self._calc_wanted.setdefault((kind, 90, price), now)
+
+        def loop():
+            try:
+                self._warm_once()        # warm immediately at startup
+            except Exception as exc:
+                print(f"[warm] initial: {exc}", file=sys.stderr)
+            while not self._warm_stop.wait(25):
+                try:
+                    self._warm_once()
+                except Exception as exc:
+                    print(f"[warm] loop: {exc}", file=sys.stderr)
+        self._warm_thread = threading.Thread(target=loop, daemon=True)
+        self._warm_thread.start()
 
     def ha_values(self):
         """Lazily read Home Assistant power/energy sensors (cached ~20 s)."""
@@ -5208,22 +5288,30 @@ class Handler(BaseHTTPRequestHandler):
 
     def _send_json(self, obj, status=200):
         body = json.dumps(obj).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            # the phone navigated away / reloaded before we finished sending –
+            # harmless, don't spam the terminal with a traceback
+            self.close_connection = True
 
     def _send_csv(self, text, filename="export.csv", status=200):
         body = text.encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "text/csv; charset=utf-8")
-        self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "text/csv; charset=utf-8")
+            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            self.close_connection = True
 
     def _export_csv(self, days, price):
         """A daily CSV joining smart-home and heat-pump energy per day."""
@@ -6203,15 +6291,19 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception as exc:
                     return self._send_json({"ok": False, "error": str(exc)}, 200)
             days = int(qs.get("days", ["60"])[0])
-            price = float(qs.get("price", [self.cfg.get("price_per_kwh", 0.35)])[0])
+            price = round(float(qs.get("price", [self.cfg.get("price_per_kwh", 0.35)])[0]), 4)
             if path == "/api/analytics" or path == "/api/summary":
-                return self._send_json(compute_analytics(self.store, days, price))
+                return self._send_json(self.ctx.calc_get(
+                    ("analytics", days, price), 90,
+                    lambda: compute_analytics(self.store, days, price)))
             if path == "/api/overview":
-                return self._send_json(
-                    compute_overview(self.store, days, price, self._hp_live()))
+                return self._send_json(self.ctx.calc_get(
+                    ("overview", days, price), 90,
+                    lambda: compute_overview(self.store, days, price, self._hp_live())))
             if path == "/api/heatpump/analytics":
-                return self._send_json(
-                    compute_hp_analytics(self.store, days, price, self._hp_live()))
+                return self._send_json(self.ctx.calc_get(
+                    ("hpanalytics", days, price), 90,
+                    lambda: compute_hp_analytics(self.store, days, price, self._hp_live())))
             if path == "/api/series":
                 device = qs.get("device", ["all"])[0]
                 since = int(time.time()) - days * 86400
@@ -6414,6 +6506,9 @@ def cmd_serve(args, cfg):
     else:
         # not configured yet – stay idle so the web UI can pair the controller
         ctx.mode = "idle"
+
+    # keep the heavy analytics results warm in the background (instant UI)
+    ctx.start_warmer()
 
     # optional: start the heat-pump (HomeCom) poller if already connected
     if ctx.start_heatpump():
