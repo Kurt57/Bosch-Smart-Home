@@ -86,7 +86,8 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = 'v130 · 2026-10-09 · Fix: Einstellungen werden zuverlässig in der Bridge gespeichert (geräteübergreifend); App lädt neue Version automatisch nach (kein Cache-Hängenbleiben mehr)'
+const APP_BUILD = 'v131';   // short tag shown always-on in the header
+const APP_VERSION = 'v131 · 2026-10-09 · App-Stand jetzt oben im Kopf immer sichtbar; Einstellungen werden zuverlässig in der Bridge gespeichert (geräteübergreifend); App lädt neue Version automatisch nach (kein Cache-Hängenbleiben mehr)'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -8061,6 +8062,9 @@ function demoOverview(sh, hp) {
 // Pull shared settings from the bridge BEFORE the first render, then refresh
 // STATE from the (now server-seeded) cache, so every device shows the same.
 document.addEventListener('DOMContentLoaded', async () => {
+  // Always-visible build stamp in the header, so you can tell at a glance on ANY
+  // tab whether the browser loaded the current code (end of the cache confusion).
+  try { const av = $('app-ver'); if (av) av.textContent = 'App-Stand: ' + APP_BUILD; } catch (e) {}
   await syncSettings();
   STATE.price = parseFloat(localStorage.getItem(LS.price) || '0.35');
   STATE.demo = localStorage.getItem(LS.demo) === '1';
