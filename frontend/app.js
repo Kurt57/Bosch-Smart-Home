@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-09 · Neu: ⚖️ Hydraulischer Abgleich – Schritt-für-Schritt-Anleitung mit live Raum-Worklist (aufdrehen/androsseln) aus deinen Thermostaten'
+const APP_VERSION = '2026-10-09 · Update vom iPhone: „Neue Version verfügbar"-Banner + 1 Tipp startet die Bridge am Rechner neu (git pull + Neustart)'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -840,6 +840,7 @@ async function loadAll() {
     setMode(health.mode || 'live');
     $('diag').textContent = JSON.stringify(health, null, 1);
     renderAll();
+    checkUpdate();                       // show the "update available" banner if behind
   } catch (e) {
     STATE.health = null;
     $('conn-note').innerHTML =
@@ -5560,26 +5561,48 @@ async function doExport() {
   }
 }
 
-async function doBridgeUpdate() {
-  const note = $('bridge-update-note'), btn = $('bridge-update');
-  btn.disabled = true; note.textContent = 'Hole neuesten Code & starte neu …';
+// Shared core: triggers `git pull` + restart ON THE COMPUTER that runs the
+// bridge, from any device (incl. iPhone). Used by the Setup button and the
+// "update available" banner. `btns` are disabled while restarting.
+async function bridgeUpdate(note, btns) {
+  btns = (btns || []).filter(Boolean);
+  btns.forEach(b => b.disabled = true);
+  if (note) note.textContent = 'Hole neuesten Code & starte die Bridge neu …';
   try {
     const r = await postJSON('/api/update', {});
     if (r.ok && r.changed) {
-      note.innerHTML = '✅ ' + esc(r.message);
-      // the bridge re-execs; wait, then hard-reload fresh code
-      setTimeout(hardRefresh, 6000);
-      return; // keep button disabled while restarting
+      if (note) note.innerHTML = '✅ ' + esc(r.message);
+      setTimeout(hardRefresh, 6000);   // bridge re-execs → reload fresh code
+      return;                          // keep buttons disabled while restarting
     } else if (r.ok) {
-      note.innerHTML = 'ℹ️ ' + esc(r.message || 'Bereits aktuell.');
+      if (note) note.innerHTML = 'ℹ️ ' + esc(r.message || 'Bereits aktuell.');
+      const b = $('update-banner'); if (b) b.hidden = true;   // nothing to do
     } else {
-      note.innerHTML = '⚠︎ ' + esc(r.error || 'Update fehlgeschlagen.') +
+      if (note) note.innerHTML = '⚠︎ ' + esc(r.error || 'Update fehlgeschlagen.') +
         (r.output ? `<br><small>${esc(r.output)}</small>` : '');
     }
   } catch (e) {
-    note.textContent = 'Fehler: ' + e.message + ' – geht nur, wenn die Seite von der Bridge geöffnet ist.';
+    if (note) note.textContent = 'Fehler: ' + e.message + ' – geht nur, wenn die Seite von der Bridge geöffnet ist.';
   }
-  btn.disabled = false;
+  btns.forEach(b => b.disabled = false);
+}
+function doBridgeUpdate() { return bridgeUpdate($('bridge-update-note'), [$('bridge-update')]); }
+
+// Ask the bridge whether newer code is on the git remote; show the banner if so.
+async function checkUpdate(force) {
+  if (STATE.demo) return;
+  const banner = $('update-banner'); if (!banner) return;
+  try {
+    const r = await api('/api/update/check' + (force ? '?force=1' : ''));
+    if (r && r.git && r.behind > 0) {
+      const info = $('update-banner-info');
+      if (info) info.textContent = ` · ${r.behind} Änderung${r.behind === 1 ? '' : 'en'}`
+        + (r.latest ? ` · „${r.latest}"` : '');
+      banner.hidden = false;
+    } else {
+      banner.hidden = true;
+    }
+  } catch (e) { /* offline / not served by the bridge → stay quiet */ }
 }
 
 async function doDiscover() {
@@ -5745,6 +5768,8 @@ function init() {
   $('pair-btn').addEventListener('click', doPair);
   const hr = $('hard-refresh'); if (hr) hr.addEventListener('click', hardRefresh);
   const bu = $('bridge-update'); if (bu) bu.addEventListener('click', doBridgeUpdate);
+  const bb = $('update-banner-btn');
+  if (bb) bb.addEventListener('click', () => bridgeUpdate($('update-banner-note'), [bb, $('bridge-update')]));
   const au = $('auto-update');
   if (au) au.addEventListener('change', async () => {
     const aun = $('auto-update-note'), v = parseInt(au.value, 10) || 0;

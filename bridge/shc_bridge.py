@@ -186,6 +186,40 @@ def _git_updates_available() -> bool:
         return False
 
 
+_update_status_cache = {"ts": 0.0, "data": None}
+
+
+def _git_update_status(force: bool = False) -> dict:
+    """How many commits behind upstream we are, plus the newest commit subject –
+    for the 'update available' banner. Cached ~5 min (a git fetch is a network
+    call). Never raises."""
+    now = time.time()
+    c = _update_status_cache
+    if not force and c["data"] is not None and (now - c["ts"]) < 300:
+        return c["data"]
+    repo = _repo_root()
+    res = {"ok": True, "git": _is_git_repo(), "behind": 0, "latest": ""}
+    if res["git"]:
+        try:
+            subprocess.run(["git", "-C", repo, "fetch", "--quiet"],
+                           capture_output=True, text=True, timeout=60)
+            out = subprocess.run(["git", "-C", repo, "rev-list", "--count", "HEAD..@{u}"],
+                                 capture_output=True, text=True, timeout=30)
+            if out.returncode == 0:
+                res["behind"] = int((out.stdout or "0").strip() or "0")
+            if res["behind"] > 0:
+                msg = subprocess.run(["git", "-C", repo, "log", "-1", "--format=%s", "@{u}"],
+                                     capture_output=True, text=True, timeout=30)
+                if msg.returncode == 0:
+                    res["latest"] = (msg.stdout or "").strip()[:160]
+        except Exception as exc:
+            res["ok"] = False
+            res["error"] = str(exc)
+    c["ts"] = now
+    c["data"] = res
+    return res
+
+
 def _git_pull() -> tuple[bool, bool, str]:
     """Fast-forward pull. Returns (ok, changed, log)."""
     repo = _repo_root()
@@ -3363,6 +3397,10 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send_json({"ok": True, "switches": sw})
                 except Exception as exc:
                     return self._send_json({"ok": False, "error": str(exc)}, 200)
+            if path == "/api/update/check":
+                # is a newer version available? (cached git fetch) – drives the
+                # "update available" banner so the user can update from the phone
+                return self._send_json(_git_update_status("force" in qs))
             if path == "/api/heating/diag":
                 # heating efficiency / thermostat-settings diagnostics:
                 # room thermostats (SHC) + heat-pump flow/return snapshot (HomeCom)
