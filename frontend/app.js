@@ -2343,7 +2343,8 @@ function paintHeatTimeseries(r) {
     (r.logic || []).map(l => `<div style="font-size:13px;line-height:1.5;margin-bottom:5px">• ${l}</div>`).join('');
   const hasIndoor = (r.rows || []).some(x => x.indoor != null);
   if (note) note.innerHTML = `${r.n} Stunden (${r.days_window || 4} Tage)` + (r.demo ? ' · <b>Demo-Daten</b>' : '') +
-    '. Temperaturen/Verbrauch kommen aus dem <b>CSV-Import</b> (Vorlauf erscheint nach einem erneuten Import). ' +
+    '. Außen-/Vorlauftemperatur &amp; Verbrauch kommen <b>live aus der Wärmepumpe</b> (füllt sich über die nächsten Stunden) ' +
+    'bzw. aus dem <b>CSV-Import</b>, wo vorhanden. ' +
     (hasIndoor
       ? '<b>Innentemperatur</b> (lila) wird aus deinen Raumthermostaten mitgeloggt.'
       : '<b>Innentemperatur</b> (lila) wird ab jetzt aus deinen Raumthermostaten mitgeloggt – die Kurve füllt sich über die nächsten Stunden.');

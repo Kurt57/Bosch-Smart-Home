@@ -1999,10 +1999,66 @@ def _linfit(xy):
     return a, my - a * mx
 
 
+def _live_hourly(rows: list[dict], cutoff: int) -> dict:
+    """Hourly outdoor/flow/consumption/COP derived from the LIVE hp_samples –
+    so the time-series works without a CSV import. Consumption comes from the
+    cumulative electric/heat counters (per-sample deltas, split by mode)."""
+    rows = sorted(rows, key=lambda s: s.get("ts", 0))
+    buckets: dict[int, dict] = {}
+    prev_e = prev_h = None
+    for s in rows:
+        ts = int(s.get("ts", 0))
+        hts = (ts // 3600) * 3600
+        b = buckets.setdefault(hts, {"outs": [], "sups": [], "elec": 0.0,
+                                     "heat": 0.0, "heating": 0.0, "water": 0.0})
+        if s.get("outdoor_c") is not None:
+            b["outs"].append(s["outdoor_c"])
+        if s.get("supply_c") is not None:
+            b["sups"].append(s["supply_c"])
+        mode = (s.get("mode") or "").lower()
+        # recognise hot-water modes broadly; everything else (incl. unknown)
+        # counts as heating so the consumption bars always show
+        is_water = ("dhw" in mode or "water" in mode or "ww" in mode or "warm" in mode)
+        e = s.get("energy_kwh")
+        if e is not None and prev_e is not None:
+            de, dt_h = e - prev_e[1], (ts - prev_e[0]) / 3600.0
+            if de > 0 and 0 < dt_h <= 24 and (de / dt_h) <= 25:
+                b["elec"] += de
+                if is_water:
+                    b["water"] += de
+                else:
+                    b["heating"] += de
+        if e is not None:
+            prev_e = (ts, e)
+        h = s.get("heat_kwh")
+        if h is not None and prev_h is not None:
+            dh, dt_h = h - prev_h[1], (ts - prev_h[0]) / 3600.0
+            if dh >= 0 and 0 < dt_h <= 24 and (dh / dt_h) <= 60:
+                b["heat"] += dh
+        if h is not None:
+            prev_h = (ts, h)
+    out = {}
+    for hts, b in buckets.items():
+        if hts < cutoff:
+            continue
+        elec, heat = b["elec"], b["heat"]
+        out[hts] = {
+            "ts": hts, "hour": datetime.fromtimestamp(hts).hour,
+            "outdoor": round(sum(b["outs"]) / len(b["outs"]), 1) if b["outs"] else None,
+            "supply": round(sum(b["sups"]) / len(b["sups"]), 1) if b["sups"] else None,
+            "indoor": None, "water_t": None,
+            "elec": round(elec, 2) if elec > 0 else None,
+            "heat": round(heat, 2) if heat > 0 else None,
+            "heating": round(b["heating"], 2), "water": round(b["water"], 2),
+            "cop": round(heat / elec, 2) if (elec > 0.05 and heat > 0) else None}
+    return out
+
+
 def compute_heat_timeseries(store: "Store", days: int = 4) -> dict:
-    """Hourly time-series from the imported CSV: outdoor + flow temperature,
-    consumption (heating/hot-water) and the derived COP – plus efficiency/logic
-    insights (how flow and consumption track the outside temperature)."""
+    """Hourly time-series: outdoor + flow temperature, consumption (heating/
+    hot-water) and the derived COP, plus efficiency/logic insights. Uses the
+    imported CSV where available and fills the remaining hours from the LIVE
+    heat-pump samples, so it also works without a CSV import."""
     rows = store.hp_history("hour")
     cutoff = int(time.time() - days * 86400)
     by_hour = {}
@@ -2025,6 +2081,11 @@ def compute_heat_timeseries(store: "Store", days: int = 4) -> dict:
             "elec": round(elec, 2) if elec is not None else None,
             "heat": round(heat, 2) if heat is not None else None,
             "heating": round(heating, 2), "water": round(water, 2), "cop": cop}
+    # fill hours the CSV doesn't cover from the live heat-pump samples (CSV wins
+    # per hour where present, as its per-hour energy is clean)
+    live_rows = store.hp_samples_since(cutoff - 7200)
+    for hts, rec in _live_hourly(live_rows, cutoff).items():
+        by_hour.setdefault(hts, rec)
     # overlay logged indoor temperature (from the thermostats) by hour; add
     # indoor-only hours so recently logged temps show even without CSV coverage.
     for hts, temp in store.room_temp_hourly(cutoff).items():
@@ -2037,8 +2098,8 @@ def compute_heat_timeseries(store: "Store", days: int = 4) -> dict:
     series = sorted(by_hour.values(), key=lambda s: s["ts"])
     if not series:
         return {"ok": True, "n": 0,
-                "note": "Noch keine Stundendaten. Importiere im Setup deinen HomeCom-CSV-Export – "
-                        "er enthält stündlich Außen-/Vorlauftemperatur und Verbrauch."}
+                "note": "Noch keine Stundendaten. Bei verbundener Wärmepumpe füllt sich das über die "
+                        "nächsten Stunden von selbst; für Historie zusätzlich den HomeCom-CSV-Export importieren."}
     return _ts_derive(series, days)
 
 
