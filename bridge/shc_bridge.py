@@ -512,6 +512,47 @@ class SHCClient:
         out.sort(key=lambda d: (d["room"], d["name"]))
         return out
 
+    def list_window_contacts(self) -> list[dict]:
+        """Door/window contacts (ShutterContact service) with OPEN/CLOSED state."""
+        devices = self.get("/smarthome/devices") or []
+        rooms = {}
+        try:
+            raw = self.get("/smarthome/rooms") or []
+            if isinstance(raw, dict):
+                raw = raw.get("rooms") or raw.get("items") or []
+            for r in raw:
+                if isinstance(r, dict):
+                    rooms[r.get("id")] = r.get("name")
+        except Exception:
+            pass
+        svc = {}
+        try:
+            bulk = self.get("/smarthome/services")
+        except Exception:
+            bulk = None
+        if isinstance(bulk, list):
+            for s in bulk:
+                if isinstance(s, dict) and s.get("id") == "ShutterContact" and s.get("deviceId"):
+                    svc[s["deviceId"]] = (s.get("state") or {})
+        out = []
+        for dev in devices:
+            did = dev.get("id")
+            if "ShutterContact" not in (dev.get("deviceServiceIds") or []):
+                continue
+            st = svc.get(did)
+            if st is None:
+                try:
+                    r = self.get(f"/smarthome/devices/{did}/services/ShutterContact")
+                    st = (r or {}).get("state", r) or {}
+                except Exception:
+                    st = {}
+            val = str(st.get("value") or "").upper()
+            out.append({"id": did, "name": dev.get("name") or did,
+                        "room": rooms.get(dev.get("roomId"), ""),
+                        "open": val == "OPEN", "state": val or "UNKNOWN"})
+        out.sort(key=lambda d: (d["room"], d["name"]))
+        return out
+
     def list_climate(self) -> list[dict]:
         """Per-room climate/thermostat snapshot for the heating diagnostics.
 
@@ -703,6 +744,11 @@ class Store:
                 "CREATE TABLE IF NOT EXISTS room_temp("
                 " ts INTEGER PRIMARY KEY, temp REAL, setpoint REAL)"
             )
+            # window/door contact state changes (open-set), logged on change
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS window_log("
+                " ts INTEGER PRIMARY KEY, open_count INTEGER, rooms TEXT)"
+            )
             # AEG / Electrolux appliances (washer, dryer, …) and their readings
             self.conn.execute(
                 "CREATE TABLE IF NOT EXISTS aeg_appliances("
@@ -861,6 +907,42 @@ class Store:
     def room_temp_count(self) -> int:
         with self.lock:
             return self.conn.execute("SELECT COUNT(*) c FROM room_temp").fetchone()["c"]
+
+    def room_temp_series(self, since_ts: int) -> list[dict]:
+        with self.lock:
+            cur = self.conn.execute(
+                "SELECT ts,temp FROM room_temp WHERE ts>=? AND temp IS NOT NULL ORDER BY ts ASC",
+                (since_ts,))
+            return [dict(r) for r in cur.fetchall()]
+
+    def room_temp_at(self, ts: int, tol: int = 1800):
+        """Logged indoor temp nearest to ts (within tol seconds), or None."""
+        with self.lock:
+            r = self.conn.execute(
+                "SELECT temp FROM room_temp WHERE temp IS NOT NULL AND ABS(ts-?)<=?"
+                " ORDER BY ABS(ts-?) LIMIT 1", (ts, tol, ts)).fetchone()
+            return r["temp"] if r else None
+
+    # -- window/door contacts -------------------------------------------- #
+    def window_log_add(self, ts: int, open_count: int, rooms: str):
+        with self.lock, self.conn:
+            self.conn.execute(
+                "INSERT INTO window_log(ts,open_count,rooms) VALUES(?,?,?)"
+                " ON CONFLICT(ts) DO UPDATE SET open_count=excluded.open_count,"
+                " rooms=excluded.rooms", (ts, open_count, rooms))
+
+    def window_log_since(self, since_ts: int) -> list[dict]:
+        with self.lock:
+            cur = self.conn.execute(
+                "SELECT ts,open_count,rooms FROM window_log WHERE ts>=? ORDER BY ts ASC",
+                (since_ts,))
+            return [dict(r) for r in cur.fetchall()]
+
+    def window_log_last(self):
+        with self.lock:
+            r = self.conn.execute(
+                "SELECT ts,open_count,rooms FROM window_log ORDER BY ts DESC LIMIT 1").fetchone()
+            return dict(r) if r else None
 
     # -- AEG / Electrolux appliances ------------------------------------- #
     def aeg_upsert_appliance(self, a: dict):
@@ -1978,6 +2060,120 @@ def _demo_timeseries(days: int = 4) -> dict:
     return _ts_derive(series, days)
 
 
+def _window_events(log_rows: list[dict], now: int) -> list[dict]:
+    """Reconstruct open intervals from the window-log change rows."""
+    events, cur = [], None
+    for r in log_rows:
+        oc = r.get("open_count") or 0
+        if oc > 0:
+            if cur is None:
+                cur = {"start": r["ts"], "rooms": set(), "end": None}
+            for x in (r.get("rooms") or "").split(","):
+                if x.strip():
+                    cur["rooms"].add(x.strip())
+        elif cur is not None:
+            cur["end"] = r["ts"]
+            events.append(cur)
+            cur = None
+    if cur is not None:
+        cur["end"] = now
+        cur["ongoing"] = True
+        events.append(cur)
+    return events
+
+
+def compute_window_awareness(store: "Store", days: int = 3, current: list | None = None) -> dict:
+    """Window-open events over time + their effect on the indoor temperature –
+    so you SEE whether ventilation drops the temperature (and heat is lost)."""
+    now = int(time.time())
+    since = now - days * 86400
+    events_raw = _window_events(store.window_log_since(since), now)
+    temp_series = store.room_temp_series(since)
+    hp_rows = store.hp_samples_since(since)
+
+    events, drops, total_open = [], [], 0
+    heating_open = 0
+    for e in events_raw:
+        dur = max(0, e["end"] - e["start"])
+        total_open += dur
+        t0 = store.room_temp_at(e["start"]); t1 = store.room_temp_at(e["end"])
+        delta = round(t1 - t0, 1) if (t0 is not None and t1 is not None) else None
+        if delta is not None:
+            drops.append(delta)
+        heating = any((s.get("mode") or "").lower() in ("ch", "heating", "heat")
+                      and e["start"] <= s.get("ts", 0) <= e["end"] for s in hp_rows)
+        if heating:
+            heating_open += 1
+        events.append({"start": e["start"], "end": e["end"],
+                       "dur_min": round(dur / 60), "rooms": sorted(e["rooms"]),
+                       "temp_start": t0, "temp_end": t1, "delta": delta,
+                       "heating": heating, "ongoing": e.get("ongoing", False)})
+
+    n = len(events)
+    insights = []
+    if n == 0:
+        insights.append("Im Zeitraum wurde <b>kein Fenster geöffnet</b> (oder es werden noch keine "
+                        "Kontakte geloggt). Die App zeichnet Öffnungen ab jetzt auf.")
+    else:
+        hrs = total_open / 3600.0
+        insights.append(f"<b>{n}× gelüftet</b> in {days} Tagen, zusammen <b>{hrs:.1f} h</b> offen "
+                        f"(Ø {round(total_open / 60 / n)} min/Lüftung).")
+        avg_drop = sum(drops) / len(drops) if drops else None
+        if avg_drop is not None:
+            if avg_drop <= -0.4:
+                insights.append(f"Beim Lüften fällt die Innentemperatur im Schnitt um "
+                                f"<b>{abs(avg_drop):.1f} K</b> – diese Wärme muss die WP nachheizen. "
+                                f"<b>Kurz & kräftig stoßlüften</b> (5–10 min) statt Dauerkippen.")
+            else:
+                insights.append("Beim Lüften fällt die Innentemperatur <b>kaum</b> – kurzes "
+                                "Stoßlüften, gut gemacht. 👍")
+        long_ev = [e for e in events if e["dur_min"] >= 30]
+        if long_ev:
+            insights.append(f"<b>{len(long_ev)}× länger als 30 min</b> offen"
+                            + (" – bei Kälte kostet das spürbar Wärme." if any(e["delta"] and e["delta"] <= -0.5 for e in long_ev) else "."))
+        if heating_open:
+            insights.append(f"<b>{heating_open}×</b> war dabei die <b>Wärmepumpe am Heizen</b> – "
+                            f"Heizen gegen offenes Fenster ist reiner Verlust. Thermostat/WP beim "
+                            f"Lüften kurz runter (oder Fenster-auf-Erkennung nutzen).")
+
+    cur_open = [c for c in (current or []) if c.get("open")]
+    return {"ok": True, "days_window": days, "n_events": n,
+            "total_open_min": round(total_open / 60), "events": events[-40:],
+            "temp_series": temp_series, "current_open": cur_open,
+            "has_contacts": current is not None and len(current) > 0,
+            "insights": insights}
+
+
+def _demo_window_awareness(days: int = 3) -> dict:
+    """Synthetic window events + indoor temp dips for the demo."""
+    now = int(time.time())
+    events, temp = [], []
+    base = now - days * 86400
+    # a cold-day morning airing (big drop) and a short evening one (small drop)
+    for d in range(days):
+        day0 = base + d * 86400
+        morn = day0 + 8 * 3600
+        events.append({"start": morn, "end": morn + 25 * 60, "dur_min": 25,
+                       "rooms": ["Schlafzimmer"], "temp_start": 21.8, "temp_end": 20.9,
+                       "delta": -0.9, "heating": d % 2 == 0, "ongoing": False})
+        eve = day0 + 19 * 3600
+        events.append({"start": eve, "end": eve + 8 * 60, "dur_min": 8,
+                       "rooms": ["Küche"], "temp_start": 22.0, "temp_end": 21.9,
+                       "delta": -0.1, "heating": False, "ongoing": False})
+    for i in range(days * 24):
+        t = base + i * 3600
+        temp.append({"ts": t, "temp": round(21.8 + 0.6 * math.sin(i / 5), 1)})
+    insights = [
+        f"<b>{len(events)}× gelüftet</b> in {days} Tagen (Demo).",
+        "Beim Lüften fällt die Innentemperatur im Schnitt um <b>0.5 K</b> – kurz & kräftig stoßlüften.",
+        "<b>1×</b> war dabei die <b>Wärmepumpe am Heizen</b> – Heizen gegen offenes Fenster ist Verlust.",
+    ]
+    return {"ok": True, "demo": True, "days_window": days, "n_events": len(events),
+            "total_open_min": sum(e["dur_min"] for e in events), "events": events,
+            "temp_series": temp, "current_open": [{"name": "Küche", "room": "Küche", "open": True}],
+            "has_contacts": True, "insights": insights}
+
+
 def compute_heating_diag(climate: list[dict], hp: dict | None, cycles: dict | None = None) -> dict:
     """Turn room thermostats + the heat-pump flow/return snapshot into concrete
     'Einstellungsfehler / Effizienz' findings.
@@ -2369,6 +2565,7 @@ class Poller(threading.Thread):
         self.last_error: str | None = None
         self.last_poll: int | None = None
         self._last_room = 0           # throttle for room-temp logging
+        self._win_sig = None          # last window open-set (log only on change)
 
     def run(self):
         interval = max(5, int(self.cfg.get("poll_interval", 30)))
@@ -2399,7 +2596,22 @@ class Poller(threading.Thread):
                 self._log_room_temp(ts)
             except Exception as exc:
                 print(f"[poll] room temp: {exc}", file=sys.stderr)
+        # log window/door open-set every poll, but only when it changes
+        try:
+            self._log_windows(ts)
+        except Exception as exc:
+            print(f"[poll] windows: {exc}", file=sys.stderr)
         self.last_poll = ts
+
+    def _log_windows(self, ts: int):
+        """Record a row whenever the set of open windows changes."""
+        contacts = self.client.list_window_contacts()
+        open_rooms = sorted({(c.get("room") or c.get("name") or "?") for c in contacts if c.get("open")})
+        sig = tuple(open_rooms)
+        if sig == self._win_sig:
+            return                        # no change → nothing to log
+        self._win_sig = sig
+        self.store.window_log_add(ts, len(open_rooms), ", ".join(open_rooms))
 
     def _log_room_temp(self, ts: int):
         """Average measured room temperature across the heating rooms → store."""
@@ -3902,6 +4114,18 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send_json({"demo": True, **_demo_timeseries(td)})
                 return self._send_json({"demo": False,
                     **compute_heat_timeseries(self.store, td)})
+            if path == "/api/windows":
+                wd = int(qs.get("days", ["3"])[0])
+                if self.ctx.mode == "demo":
+                    return self._send_json(_demo_window_awareness(wd))
+                current = None
+                try:
+                    client = SHCClient(self.cfg.get("shc_ip", ""), self.cfg["cert"], self.cfg["key"])
+                    current = client.list_window_contacts()
+                except Exception:
+                    current = None
+                return self._send_json({"demo": False,
+                    **compute_window_awareness(self.store, wd, current)})
             if path == "/api/heating/devicecurve":
                 # read the device's configured 2-point heating curve from HomeCom
                 if self.ctx.mode == "demo":

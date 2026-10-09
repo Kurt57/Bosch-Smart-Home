@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-09 · Verlauf: Innentemperatur (lila) wird aus den Raumthermostaten mitgeloggt und überlagert – inkl. abgeleiteter Komfort-/Schwankungs-Logik'
+const APP_VERSION = '2026-10-09 · Neu: 🪟 Fenster & Lüften – Öffnungs-Events aus den Fensterkontakten, Timeline mit Innentemperatur-Reaktion (Awareness) + Heizen-bei-offenem-Fenster-Warnung'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -209,6 +209,11 @@ const INFO = {
     '<b>Arbeitszahl COP</b> (grün, rechte Achse). Daraus leite ich ab, <b>wie</b> die Regelung arbeitet: wie stark Vorlauf ' +
     'und Stromverbrauch mit sinkender Außentemperatur steigen, wie die Effizienz vom Wetter abhängt und welchen Anteil ' +
     'Warmwasser hat. <b>COP</b> = erzeugte Wärme ÷ eingesetzter Strom (höher = besser).',
+  'windows': () => 'Nutzt deine <b>Fensterkontakte</b>: jede Öffnung erscheint als Band auf der Zeitachse, darüber läuft die ' +
+    '<b>Innentemperatur</b>. So siehst du direkt die <b>Auswirkung</b> – fällt die Temperatur beim Lüften (Wärmeverlust) oder nicht? ' +
+    'Die Zahl im Band ist die Temperaturänderung während des Lüftens. <b>Rote</b> Bänder = die Wärmepumpe hat dabei geheizt ' +
+    '(Heizen gegen offenes Fenster = reiner Verlust). Ziel: <b>kurzes Stoßlüften</b> statt Dauerkippen. Die App zeichnet die ' +
+    'Öffnungen ab jetzt auf – die Timeline füllt sich über die nächsten Tage.',
   'hydronic': () => '<b>Hydraulischer Abgleich</b> verteilt das Heizwasser so auf die Heizkreise, dass jeder Raum ' +
     'genau die passende Menge bekommt. Ohne Abgleich bekommen kurze/nahe Kreise zu viel, lange/ferne zu wenig – ' +
     'man dreht dann den Vorlauf hoch, damit auch der kälteste Raum warm wird, und das kostet bei der Wärmepumpe viel Effizienz. ' +
@@ -2197,6 +2202,61 @@ function paintHeatTimeseries(r) {
     (hasIndoor
       ? '<b>Innentemperatur</b> (lila) wird aus deinen Raumthermostaten mitgeloggt.'
       : '<b>Innentemperatur</b> (lila) wird ab jetzt aus deinen Raumthermostaten mitgeloggt – die Kurve füllt sich über die nächsten Stunden.');
+}
+
+/* ---- Fenster & Lüften: open-event timeline vs. indoor temperature --------- */
+function windowChart(d) {
+  const h = 180, padL = 26, padR = 10, top = 14, base = h - 24;
+  const now = Date.now() / 1000, t0 = now - (d.days_window || 3) * 86400, t1 = now;
+  const plotW = CW - padL - padR;
+  const X = ts => padL + Math.max(0, Math.min(1, (ts - t0) / (t1 - t0))) * plotW;
+  const temp = (d.temp_series || []).filter(p => p.ts >= t0);
+  const tv = temp.map(p => p.temp);
+  let tmin = tv.length ? Math.floor(Math.min(...tv) - 1) : 18;
+  let tmax = tv.length ? Math.ceil(Math.max(...tv) + 1) : 24;
+  if (tmax - tmin < 4) tmax = tmin + 4;
+  const Y = v => top + (tmax - v) / (tmax - tmin) * (base - top);
+  let g = '';
+  for (let i = 0; i <= 2; i++) { const v = tmin + (tmax - tmin) * (1 - i / 2), y = Y(v); g += `<line class="gl" x1="${padL}" x2="${CW - padR}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}"/><text class="axis" x="0" y="${(y + 3).toFixed(1)}">${Math.round(v)}</text>`; }
+  let bands = '';
+  (d.events || []).forEach(e => {
+    let x1 = X(e.start), x2 = X(e.end); if (x2 < x1 + 1.5) x2 = x1 + 1.5;
+    const col = e.heating ? '#ff6b8a' : '#ffb64d';
+    bands += `<rect x="${x1.toFixed(1)}" y="${top}" width="${(x2 - x1).toFixed(1)}" height="${(base - top).toFixed(1)}" fill="${col}" fill-opacity="0.2"/>`;
+    if (e.delta != null) bands += `<text class="axis" x="${((x1 + x2) / 2).toFixed(1)}" y="${top + 9}" text-anchor="middle" fill="${e.delta <= -0.4 ? '#ff6b8a' : 'var(--muted)'}">${e.delta > 0 ? '+' : ''}${e.delta}K</text>`;
+  });
+  let sep = '';
+  for (let t = Math.ceil(t0 / 86400) * 86400; t <= t1; t += 86400) { const x = X(t); const wd = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'][new Date(t * 1000).getDay()]; sep += `<line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${top}" y2="${base}" stroke="var(--line)" stroke-dasharray="2 3"/><text class="axis" x="${(x + 3).toFixed(1)}" y="${h - 6}">${wd}</text>`; }
+  let dl = '', pen = false;
+  temp.forEach(p => { const x = X(p.ts), y = Y(p.temp); dl += (pen ? 'L' : 'M') + x.toFixed(1) + ' ' + y.toFixed(1) + ' '; pen = true; });
+  const line = dl ? `<path d="${dl.trim()}" fill="none" stroke="#b794f6" stroke-width="2"/>` : '';
+  return svg(h, g + bands + sep + line);
+}
+let _winData = null, _winBusy = false;
+async function renderWindows(force) {
+  const card = $('win-card'); if (!card) return;
+  if (_winData && !force) { paintWindows(_winData); return; }
+  if (_winBusy) return;
+  _winBusy = true;
+  try { const r = await api('/api/windows?days=3'); _winData = r; paintWindows(r); }
+  catch (e) { const c = $('win-chart'); if (c) c.innerHTML = '<div class="note">Nur mit laufender Bridge verfügbar.</div>'; }
+  finally { _winBusy = false; }
+}
+function paintWindows(r) {
+  const head = $('win-head'), chart = $('win-chart'), status = $('win-status'), logic = $('win-logic'), note = $('win-note');
+  if (!r || !r.ok) { if (chart) chart.innerHTML = '<div class="note">Keine Daten.</div>'; return; }
+  const open = r.current_open || [];
+  if (status) status.innerHTML = open.length
+    ? `<b style="color:#ffb64d">🪟 ${open.length} Fenster offen:</b> ${open.map(c => esc(c.name || c.room || '?')).join(', ')}`
+    : '<span style="color:#4be0b0">✓ Aktuell alle Fenster geschlossen.</span>';
+  if (head) head.innerHTML = r.n_events ? `<span style="color:var(--muted)">${r.n_events}× · ${r.total_open_min} min</span>` : '';
+  if (chart) chart.innerHTML = ((r.events && r.events.length) || (r.temp_series && r.temp_series.length))
+    ? windowChart(r)
+    : '<div class="note" style="padding:14px 0;text-align:center">🪟 Noch keine Öffnungen aufgezeichnet – die App loggt deine Fensterkontakte ab jetzt mit.</div>';
+  if (logic) logic.innerHTML = `<div style="font-weight:700;margin-bottom:6px">🧠 Awareness</div>` +
+    (r.insights || []).map(l => `<div style="font-size:13px;line-height:1.5;margin-bottom:5px">• ${l}</div>`).join('');
+  if (note) note.innerHTML = (r.demo ? '<b>Demo-Daten</b>. ' : '') +
+    'Band = Fenster offen (<span style="color:#ffb64d">amber</span>; <span style="color:#ff6b8a">rot</span> = dabei heizt die WP). Die Zahl im Band ist die Innentemperatur-Änderung während des Lüftens.';
 }
 function hcDevice() {
   const g = k => { const v = parseFloat(localStorage.getItem(k)); return isFinite(v) ? v : null; };
@@ -6010,6 +6070,7 @@ function switchView(v) {
     if (typeof renderHeatingDiag === 'function') renderHeatingDiag(false);
     if (typeof renderHeatingCurve === 'function') renderHeatingCurve(false);
     if (typeof renderHeatTimeseries === 'function') renderHeatTimeseries(false);
+    if (typeof renderWindows === 'function') renderWindows(false);
     if (typeof renderHydronic === 'function') renderHydronic();
     if (typeof initHpControls === 'function') initHpControls();
   }
