@@ -2889,6 +2889,10 @@ function flowManifoldOf(room, fallback) {
   const m = ((l.rooms || {})[room] || {}).manifold;
   return m || fallback || 'Ohne Verteiler';
 }
+function flowLoopsOf(room) {
+  const l = (typeof layoutModel === 'function') ? layoutModel() : { rooms: {} };
+  return Math.max(1, Math.round(parseFloat(((l.rooms || {})[room] || {}).loops) || 1));
+}
 async function renderFlow(force) {
   const card = $('flow-card'); if (!card) return;
   if (_flowData && !force) { paintFlow(_flowData); return; }
@@ -2936,29 +2940,38 @@ function paintFlow(r) {
         const mf = flowManifoldOf(x.room, x.manifold);
         (groups[mf] = groups[mf] || []).push(x);
       });
-      const fmax = Math.max.apply(null, ok.map(x => x.flow_hi || x.flow_lmin || 0)) || 1;
+      // the Tacosetter value is PER LOOP: a room's flow splits over its loops
+      const perLoop = x => (x.flow_lmin || 0) / flowLoopsOf(x.room);
+      const fmax = Math.max.apply(null, ok.map(x => (x.flow_hi || x.flow_lmin || 0) / flowLoopsOf(x.room))) || 1;
       let h = '';
       Object.keys(groups).sort().forEach(mf => {
         const items = groups[mf];
         const sub = items.filter(x => x.flow_lmin != null).reduce((s, x) => s + x.flow_lmin, 0);
+        const loopsTot = items.filter(x => x.flow_lmin != null).reduce((s, x) => s + flowLoopsOf(x.room), 0);
         h += `<div style="display:flex;justify-content:space-between;align-items:center;margin:12px 0 6px">` +
           `<b style="font-size:14px">🧭 ${esc(mf)}</b>` +
-          `<span style="color:var(--muted);font-size:12px">Teilsumme ${sub.toFixed(1)} l/min</span></div>`;
+          `<span style="color:var(--muted);font-size:12px">${loopsTot} Kreise · Σ ${sub.toFixed(1)} l/min</span></div>`;
         items.forEach(x => {
           if (x.status !== 'ok' || x.flow_lmin == null) {
             h += `<div class="devrow"><div class="nm"><b>${esc(x.room)}</b><small>${(x.missing || []).map(esc).join(' · ') || 'keine Heizlast'}</small></div>` +
               `<div class="val"><span style="color:#ffb64d;font-size:12px">offen</span></div></div>`;
             return;
           }
+          const loops = flowLoopsOf(x.room);
+          const pl = Math.round(perLoop(x) * 100) / 100;
+          const plLo = Math.round(x.flow_lo / loops * 100) / 100, plHi = Math.round(x.flow_hi / loops * 100) / 100;
           const w = (v) => Math.max(0, Math.min(100, (v / fmax) * 100));
           h += `<div style="margin-bottom:10px">` +
             `<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:3px">` +
-              `<b>${esc(x.room)}</b><span><b>${x.flow_lmin} l/min</b> <span style="color:var(--muted)">(${x.flow_lo}–${x.flow_hi})</span></span></div>` +
+              `<b>${esc(x.room)}${loops > 1 ? ` <span style="color:var(--muted);font-weight:400;font-size:12px">${loops} Kreise</span>` : ''}</b>` +
+              `<span><b style="color:#3ba9ff">${pl} l/min</b>${loops > 1 ? ' <span style="color:var(--muted);font-size:11px">je Schlauch</span>' : ''} <span style="color:var(--muted)">(${plLo}–${plHi})</span></span></div>` +
             `<div style="position:relative;background:var(--line);border-radius:6px;height:12px">` +
-              `<div style="position:absolute;left:${w(x.flow_lo)}%;width:${Math.max(1, w(x.flow_hi) - w(x.flow_lo))}%;top:0;height:100%;background:#3ba9ff;opacity:.3;border-radius:6px"></div>` +
-              `<div style="position:absolute;left:${w(x.flow_lmin)}%;top:-2px;width:3px;height:16px;background:#3ba9ff;border-radius:2px"></div>` +
+              `<div style="position:absolute;left:${w(plLo)}%;width:${Math.max(1, w(plHi) - w(plLo))}%;top:0;height:100%;background:#3ba9ff;opacity:.3;border-radius:6px"></div>` +
+              `<div style="position:absolute;left:${w(pl)}%;top:-2px;width:3px;height:16px;background:#3ba9ff;border-radius:2px"></div>` +
             `</div>` +
-            `<div style="font-size:11px;color:var(--muted);margin-top:3px">Heizlast ${x.q_design} W · ${x.area} m² · Konfidenz ${esc(x.confidence)}</div>` +
+            `<div style="font-size:11px;color:var(--muted);margin-top:3px">` +
+              (loops > 1 ? `Raum gesamt ${x.flow_lmin} l/min · ` : '') +
+              `Heizlast ${x.q_design} W · ${x.area} m² · Konfidenz ${esc(x.confidence)}</div>` +
             `</div>`;
         });
       });
@@ -2967,8 +2980,9 @@ function paintFlow(r) {
   }
 
   if (note) note.innerHTML = (r.demo ? '<b>Demo-Daten</b>. ' : '') +
-    'So stellst du vor: jeden Durchflussmesser am Verteiler auf den l/min-Wert bringen, dann über den <b>Hydraulischen Abgleich</b> ' +
-    'feinjustieren. Ein Wert je Kreis; mehrere Schleifen in einem Raum → Wert gleichmäßig aufteilen. Startwerte, kein Norm-Nachweis.';
+    'Der <b>blaue Wert ist pro Schlauch/Kreis</b> – genau das stellst du am jeweiligen Durchflussmesser (Tacosetter) ein. Hat ein Raum ' +
+    'mehrere Schläuche, ist seine Gesamtmenge bereits gleichmäßig aufgeteilt (Kreise in der Verteiler-Karte eintragen). Startwerte, ' +
+    'dann über die <b>Schrittweise Optimierung</b> feinjustieren – kein Norm-Nachweis.';
 }
 
 /* ---- Schrittweise Optimierung (Regelkreis): log steps, measure effect ----- */
@@ -3095,8 +3109,10 @@ function layoutTargets() {
     const area = parseFloat(cfg.area) || 0; if (area <= 0) continue;
     const qW = area * (parseFloat(l.q) || 40);
     const lpm = qW / (1.163 * (parseFloat(l.dt) || 6) * 60);
+    const loops = Math.max(1, Math.round(parseFloat(cfg.loops) || 1));
     out[room] = { lpm: Math.round(lpm * 10) / 10, manifold: cfg.manifold || '',
-      area, length: parseFloat(cfg.length) || null, qW: Math.round(qW) };
+      area, length: parseFloat(cfg.length) || null, qW: Math.round(qW),
+      loops, lpmPerLoop: Math.round(lpm / loops * 10) / 10 };
   }
   return out;
 }
@@ -3110,6 +3126,7 @@ function renderLayout() {
     return `<tr><td style="padding:4px 6px">${esc(room)}</td>` +
       `<td style="padding:4px 6px"><select data-lay="manifold" data-room="${esc(room)}" style="padding:4px 6px;margin:0;width:auto">${mfOpts(cfg.manifold || '')}</select></td>` +
       `<td style="padding:4px 6px;text-align:right">${inp('m²', cfg.area, 'area', room, 54)}</td>` +
+      `<td style="padding:4px 6px;text-align:right">${inp('1', cfg.loops, 'loops', room, 42)}</td>` +
       `<td style="padding:4px 6px;text-align:right">${inp('m', cfg.length, 'length', room, 50)}</td></tr>`;
   }).join('');
   body.innerHTML =
@@ -3123,7 +3140,7 @@ function renderLayout() {
       `<input id="lay-mf-name" placeholder="z. B. EG" style="width:86px;padding:4px 6px;margin:0"><button class="btn sec" id="lay-mf-add" style="width:auto;padding:4px 10px;margin:0">+ Verteiler</button>` +
     `</div>` +
     (rooms.length
-      ? `<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="color:var(--muted);font-size:11px;text-transform:uppercase"><th style="text-align:left;padding:4px 6px">Raum</th><th style="text-align:left;padding:4px 6px">Verteiler</th><th style="text-align:right;padding:4px 6px">Fläche</th><th style="text-align:right;padding:4px 6px">Länge</th></tr></thead><tbody>${rowsHtml}</tbody></table>`
+      ? `<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="color:var(--muted);font-size:11px;text-transform:uppercase"><th style="text-align:left;padding:4px 6px">Raum</th><th style="text-align:left;padding:4px 6px">Verteiler</th><th style="text-align:right;padding:4px 6px">Fläche</th><th style="text-align:right;padding:4px 6px" title="Anzahl Heizschläuche/Kreise dieses Raums am Verteiler">Kreise</th><th style="text-align:right;padding:4px 6px">Länge</th></tr></thead><tbody>${rowsHtml}</tbody></table>`
       : '<div class="note">Noch keine Räume erkannt – öffne kurz den Heizungs-Check/Räume, oder füge unten manuell hinzu.</div>') +
     `<div style="display:flex;gap:6px;align-items:center;margin-top:8px;flex-wrap:wrap"><input id="lay-room-name" placeholder="Raum hinzufügen" style="width:140px;padding:4px 6px;margin:0"><button class="btn sec" id="lay-room-add" style="width:auto;padding:4px 10px;margin:0">+ Raum</button><button class="btn sec" id="lay-rooms-load" style="width:auto;padding:4px 10px;margin:0">🔄 Räume laden</button></div>` +
     `<div id="lay-result" style="margin-top:12px"></div>`;
@@ -3139,16 +3156,22 @@ function computeLayoutResult() {
   [...new Set([...l.manifolds, ...Object.keys(byMf)])].forEach(mf => {
     const list = byMf[mf] || []; if (!list.length) return;
     const tot = list.reduce((a, [, o]) => a + o.lpm, 0);
-    html += `<div style="font-weight:700;margin:8px 0 4px">🧭 ${esc(mf)} <span style="color:var(--muted);font-weight:400">· ${list.length} Kreise · Σ ${fmt(tot, 1)} l/min</span></div>`;
-    html += `<table style="width:100%;border-collapse:collapse;font-size:13px">` +
+    const loopsTot = list.reduce((a, [, o]) => a + (o.loops || 1), 0);
+    const anyMulti = list.some(([, o]) => (o.loops || 1) > 1);
+    html += `<div style="font-weight:700;margin:8px 0 4px">🧭 ${esc(mf)} <span style="color:var(--muted);font-weight:400">· ${loopsTot} Kreise in ${list.length} Räumen · Σ ${fmt(tot, 1)} l/min</span></div>`;
+    html += `<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="color:var(--muted);font-size:10px;text-transform:uppercase">` +
+      `<th style="text-align:left;padding:2px 6px">Raum</th><th style="text-align:right;padding:2px 6px">Fläche</th>` +
+      `<th style="text-align:right;padding:2px 6px">Raum ges.</th>` + (anyMulti ? `<th style="text-align:right;padding:2px 6px">je Schlauch</th>` : '') +
+      `<th style="text-align:right;padding:2px 6px">Anteil</th></tr></thead><tbody>` +
       list.sort((a, b) => b[1].lpm - a[1].lpm).map(([room, o]) =>
-        `<tr><td style="padding:3px 6px">${esc(room)}</td>` +
-        `<td style="padding:3px 6px;text-align:right;color:var(--muted)">${o.area} m²${o.length ? ` · ${o.length} m` : ''}</td>` +
-        `<td style="padding:3px 6px;text-align:right"><b style="color:var(--accent2)">${fmt(o.lpm, 1)} l/min</b></td>` +
-        `<td style="padding:3px 6px;text-align:right;color:var(--muted)">${Math.round(o.lpm / tot * 100)}%</td></tr>`).join('') + `</table>`;
+        `<tr><td style="padding:3px 6px">${esc(room)}${(o.loops || 1) > 1 ? ` <span style="color:var(--muted);font-size:11px">${o.loops}×</span>` : ''}</td>` +
+        `<td style="padding:3px 6px;text-align:right;color:var(--muted)">${o.area} m²</td>` +
+        `<td style="padding:3px 6px;text-align:right"><b>${fmt(o.lpm, 1)}</b></td>` +
+        (anyMulti ? `<td style="padding:3px 6px;text-align:right"><b style="color:var(--accent2)">${(o.loops || 1) > 1 ? fmt(o.lpmPerLoop, 1) : fmt(o.lpm, 1)}</b></td>` : '') +
+        `<td style="padding:3px 6px;text-align:right;color:var(--muted)">${Math.round(o.lpm / tot * 100)}%</td></tr>`).join('') + `</tbody></table>`;
   });
   if (unassigned.length) html += `<div class="note" style="margin-top:6px">Ohne Verteiler (noch zuordnen): ${unassigned.map(esc).join(', ')}.</div>`;
-  html += `<div class="note" style="margin-top:8px">Stell die <b>Durchflussmesser (Tacosetter)</b> am Verteiler auf diese l/min als <b>Startwert</b>, dann feinjustieren über den <b>Hydraulischen Abgleich</b> oben. Längere Kreise brauchen evtl. etwas mehr Pumpendruck.</div>`;
+  html += `<div class="note" style="margin-top:8px">Stell an jedem <b>Durchflussmesser (Tacosetter)</b> den Wert <b>„je Schlauch"</b> ein (hat ein Raum mehrere Kreise, teilt sich seine Menge gleichmäßig darauf auf) – als <b>Startwert</b>, dann feinjustieren über den <b>Hydraulischen Abgleich</b>/die <b>Schrittweise Optimierung</b> oben.</div>`;
   el.innerHTML = html;
 }
 function hcDevice() {
@@ -7181,7 +7204,7 @@ function init() {
       else if (t.id === 'lay-dt') { const l = layoutModel(); l.dt = t.value; layoutSave(l); computeLayoutResult(); }
       else if (t.dataset.lay && t.dataset.room) {
         layoutSet(t.dataset.room, t.dataset.lay, t.value); computeLayoutResult();
-        if (t.dataset.lay === 'area') { _hlData = null; _flowData = null; }  // depend on area
+        if (t.dataset.lay === 'area' || t.dataset.lay === 'loops') { _hlData = null; _flowData = null; }
       }
     });
     layCard.addEventListener('change', e => {
