@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-08 · Heizungs-Check erweitert: 📈 echte Heizkurve (Vorlauf vs. Außen), €-Sparpotenzial je Hinweis, echte Taktung/Tag aus dem Verlauf'
+const APP_VERSION = '2026-10-09 · Neu: ⚖️ Hydraulischer Abgleich – Schritt-für-Schritt-Anleitung mit live Raum-Worklist (aufdrehen/androsseln) aus deinen Thermostaten'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -200,6 +200,14 @@ const INFO = {
     '– jedes +1 K Vorlauf kostet ~2–3 % Effizienz. Senke dann an der Wärmepumpe <b>Niveau</b> (verschiebt die ganze Kurve) ' +
     'oder <b>Steilheit/Gradient</b> (kippt sie: wirkt vor allem bei Kälte). Die App <b>sammelt</b> die Punkte im Betrieb, ' +
     'daher wird die Kurve über die Heiztage immer aussagekräftiger – am besten an kalten Tagen.',
+  'hydronic': () => '<b>Hydraulischer Abgleich</b> verteilt das Heizwasser so auf die Heizkreise, dass jeder Raum ' +
+    'genau die passende Menge bekommt. Ohne Abgleich bekommen kurze/nahe Kreise zu viel, lange/ferne zu wenig – ' +
+    'man dreht dann den Vorlauf hoch, damit auch der kälteste Raum warm wird, und das kostet bei der Wärmepumpe viel Effizienz. ' +
+    'Die App nutzt <b>Soll/Ist/Ventilstellung</b> deiner Räume, um die <b>Problemräume</b> zu finden: Räume mit offenem Ventil, die ' +
+    '<b>trotzdem zu kalt</b> sind, brauchen <b>mehr</b> Durchfluss (am Verteiler aufdrehen); Räume, die ihr Soll mit fast ' +
+    'geschlossenem Ventil erreichen, bekommen <b>zu viel</b> und können <b>angedrosselt</b> werden. ' +
+    'Der <b>rechnerische</b> Abgleich (Verfahren B, Heizlast je Raum) ist für Förderungen Pflicht und Sache des Fachbetriebs – ' +
+    'die hier gezeigte Beobachtungs-Methode ist die praktische Selbstoptimierung.',
   'pv-margin': () => 'Hier steht der <b>Ertrag der Kosten gegenüber</b>. Oben drei editierbare Annahmen (€/kWp, €/kWh Speicher, Grundkosten). ' +
     'Oberes Diagramm: <b>Ertrag über 20 Jahre</b> (Linie) vs. <b>Investition</b> (gestrichelt) – der Abstand ist dein Gewinn. ' +
     'Unteres Diagramm: <b>Grenznutzen</b> (€/Jahr je +1 kWp) gegen die <b>Kostengrenze</b>. Das <b>wirtschaftliche Optimum</b> ist das größte ' +
@@ -2004,6 +2012,7 @@ function paintHeatingDiag(r) {
   if (note) note.innerHTML = (r.demo ? '<b>Demo-Daten</b> (Beispielräume). ' : '') +
     'Betriebswerte sind eine Momentaufnahme – am aussagekräftigsten an einem kalten Heiztag. Einstellungen gelten dauerhaft. ' +
     '€-Werte sind grobe Schätzungen (Sparanteil × WP-Jahresverbrauch × Strompreis).';
+  if (typeof renderHydronic === 'function') renderHydronic();   // worklist uses the same room data
 }
 
 /* ---- Heizkurve: flow temperature vs. outdoor temperature (from history) --- */
@@ -2082,6 +2091,64 @@ function paintHeatingCurve(r) {
   if (note) note.innerHTML = `<b style="color:${col}">${esc(r.verdict)}</b> · ${r.n} Messpunkte (${r.days_window || 30} Tage)` +
     (r.cycles && r.cycles.per_day != null ? ` · ~${fmt(r.cycles.per_day, 1)} Takte/Tag` : '') +
     (r.demo ? ' · <b>Demo-Daten</b>' : '');
+}
+
+/* ---- Hydraulischer Abgleich: step guide + data-driven room worklist ------- */
+function renderHydronic() {
+  const card = $('ha-card'); if (!card) return;
+  const work = $('ha-work'), steps = $('ha-steps'), note = $('ha-note'), head = $('ha-head');
+  const rooms = (_hdData && _hdData.rooms) ? _hdData.rooms : null;
+  // classify heating rooms from Soll/Ist/Ventil
+  let under = [], over = [], lead = null;
+  if (rooms) {
+    const heat = rooms.filter(r => String(r.roomControlMode || 'HEATING').toUpperCase() !== 'OFF' && !r.summerMode
+      && r.setpoint != null && r.temp != null);
+    heat.forEach(r => {
+      const d = r.temp - r.setpoint;                 // <0 = zu kalt
+      if (d <= -0.5 && (r.valve == null || r.valve >= 85)) under.push(r);
+      else if (d >= -0.2 && r.valve != null && r.valve <= 60) over.push(r);
+    });
+    under.sort((a, b) => (a.temp - a.setpoint) - (b.temp - b.setpoint));   // coldest first
+    over.sort((a, b) => (a.valve || 0) - (b.valve || 0));                  // most-throttled first
+    lead = under[0] || null;
+  }
+  const chip = (txt, col) => `<span style="display:inline-block;background:${col}22;color:${col};border:1px solid ${col}66;border-radius:999px;padding:2px 9px;font-size:12px;font-weight:600">${txt}</span>`;
+  const roomLine = (r, action, col) =>
+    `<div class="devrow"><div class="nm"><b>${esc(r.room)}</b>` +
+    `<small>Soll ${fmt(r.setpoint, 0)}° · Ist ${fmt(r.temp, 1)}° · Ventil ${r.valve != null ? r.valve + '%' : '–'}</small></div>` +
+    `<div class="val">${chip(action, col)}</div></div>`;
+  if (head) head.innerHTML = rooms ? (under.length || over.length
+    ? `<span style="color:#ffb64d">${under.length + over.length} Raum/Räume justieren</span>`
+    : `<span style="color:#4be0b0">ausgeglichen</span>`) : '';
+  if (work) {
+    if (!rooms) {
+      work.innerHTML = '<div class="note">Öffne/aktualisiere oben den <b>Heizungs-Check</b>, dann sortiere ich deine Räume hier in „aufdrehen" / „androsseln".</div>';
+    } else if (!under.length && !over.length) {
+      work.innerHTML = '<div class="note">✓ Aus den aktuellen Werten ist keine Schieflage erkennbar – alle Räume erreichen ihr Soll ohne stark gedrosselte Ventile. (Am aussagekräftigsten an einem kalten Tag mit voll geöffneten Thermostaten.)</div>';
+    } else {
+      let h = '';
+      if (under.length) h += `<div style="font-weight:700;color:#ff6b8a;margin:4px 0 6px">🔺 Mehr Durchfluss (am Verteiler aufdrehen)</div>` +
+        under.map(r => roomLine(r, 'aufdrehen', '#ff6b8a')).join('');
+      if (over.length) h += `<div style="font-weight:700;color:#3ba9ff;margin:12px 0 6px">🔻 Zu viel – androsseln (Reserve für die kalten Räume)</div>` +
+        over.map(r => roomLine(r, 'androsseln', '#3ba9ff')).join('');
+      work.innerHTML = h;
+    }
+  }
+  // step-by-step guide (Leitraum woven in when known)
+  const leadTxt = lead ? `<b>${esc(lead.room)}</b> (aktuell ${fmt(lead.temp, 1)}° / Soll ${fmt(lead.setpoint, 0)}°)` : 'der kälteste Raum';
+  const step = (n, t) => `<div style="display:flex;gap:10px;margin-bottom:9px"><div style="flex:0 0 22px;height:22px;border-radius:50%;background:var(--accent);color:#06121f;font-weight:700;display:flex;align-items:center;justify-content:center;font-size:12px">${n}</div><div style="font-size:13px;line-height:1.5">${t}</div></div>`;
+  if (steps) steps.innerHTML =
+    `<div style="font-weight:700;margin:4px 0 8px">So gehst du vor (Beobachtungs-Methode, für Flächenheizung mit Verteiler):</div>` +
+    step(1, '<b>Thermostate voll öffnen.</b> Alle Raumthermostate auf Maximum / „Heizen" – so bestimmt der Verteiler die Verteilung, nicht die Einzelraumregelung. Ein paar gleichmäßige Tage abwarten.') +
+    step(2, '<b>Grundeinstellung am Heizkreisverteiler.</b> Durchfluss (l/min an den Durchflussmessern / Tacosettern) grob nach Kreislänge/Raumgröße einstellen – lange Kreise & große Räume mehr, kleine Bäder weniger.') +
+    step(3, `<b>Beobachten.</b> 1–2 Tage schauen, welche Räume zu kühl bleiben und welche zu warm werden. Die App zeigt das oben live – <b>Leitraum</b> ist gerade ${leadTxt}: der bestimmt, wie hoch der Vorlauf mindestens sein muss.`) +
+    step(4, '<b>Nachjustieren in kleinen Schritten.</b> Zu kalte Räume: Durchfluss am Verteiler erhöhen. Zu warme: reduzieren. Immer nur ±0,2–0,5 l/min, dann wieder 1 Tag beobachten.') +
+    step(5, '<b>Vorlauf senken.</b> Wenn alle Räume gleichmäßig ihr Soll erreichen, die <b>Heizkurve</b> so weit absenken, bis der Leitraum gerade noch warm wird (siehe Heizkurven-Karte). Das ist der eigentliche Effizienzgewinn.') +
+    step(6, '<b>Wiederholen, dann Feintuning.</b> Schritte 3–5 wiederholen, bis es passt. Danach die Raumthermostate wieder dezent regeln lassen – sie müssen jetzt nur noch wenig eingreifen.');
+  if (note) note.innerHTML =
+    '🔧 <b>Heizkörper statt Flächenheizung?</b> Dann über <b>voreinstellbare Thermostatventile</b> abgleichen (oder Rücklauf-Methode: alle Rücklauftemperaturen angleichen). ' +
+    '📄 <b>Für Förderung (BEG/BAFA)</b> ist der <b>rechnerische</b> Abgleich „Verfahren B" (Heizlast je Raum) Pflicht – das macht ein Fachbetrieb mit Software. ' +
+    'Diese Anleitung ist die praktische Selbstoptimierung und kommt ohne Rechnung erstaunlich weit.';
 }
 
 // "Noch nicht gemessen": whole-house household load (meter/manual, minus heat
@@ -5560,6 +5627,7 @@ function switchView(v) {
   if (v === 'heatpump') {
     if (typeof renderHeatingDiag === 'function') renderHeatingDiag(false);
     if (typeof renderHeatingCurve === 'function') renderHeatingCurve(false);
+    if (typeof renderHydronic === 'function') renderHydronic();
   }
 }
 
