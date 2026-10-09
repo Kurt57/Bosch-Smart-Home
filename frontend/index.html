@@ -497,6 +497,26 @@
       <div id="hl-logic" style="margin-top:12px"></div>
       <div class="note" id="hl-note" style="margin-top:8px"></div>
     </div>
+    <div class="card" id="flow-card">
+      <h2><span class="info" data-info="flow" role="button" aria-label="Info">i</span>🚰 Ziel-Durchfluss je Kreis (l/min) <span class="r" id="flow-head"></span></h2>
+      <div class="note" style="margin-bottom:10px">Der <b>Einstellwert für die Durchflussmesser (Tacosetter)</b> je Heizkreis –
+        physikalisch aus der <b>echten Heizlast</b> (Modul „Heizlast") und der gewählten <b>Spreizung je Kreis</b>:
+        l/min = Q ÷ (1,163 × ΔT × 60). Gruppiert nach <b>Verteiler</b> (aus der Verteiler-Karte).</div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+        <label style="margin:0">Spreizung je Kreis
+          <select id="flow-spread" style="width:auto;padding:5px 10px;margin:0">
+            <option value="4">4 K</option>
+            <option value="5" selected>5 K</option>
+            <option value="6">6 K</option>
+            <option value="7">7 K</option>
+            <option value="8">8 K</option>
+          </select></label>
+        <button class="btn sec" id="flow-refresh" style="width:auto;padding:6px 14px;margin:0">🔄 Neu berechnen</button>
+      </div>
+      <div id="flow-context" style="margin-bottom:10px"></div>
+      <div id="flow-body"></div>
+      <div class="note" id="flow-note" style="margin-top:8px"></div>
+    </div>
     <div class="card" id="ha-card">
       <h2><span class="info" data-info="hydronic" role="button" aria-label="Info">i</span>⚖️ Hydraulischer Abgleich <span class="r" id="ha-head"></span></h2>
       <div class="note" style="margin-bottom:10px">Sorgt dafür, dass <b>jeder Heizkreis die richtige Wassermenge</b> bekommt – damit alle Räume

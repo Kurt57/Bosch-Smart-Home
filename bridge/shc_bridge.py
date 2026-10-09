@@ -2899,15 +2899,47 @@ def _energy_signature(store: "Store") -> dict | None:
             "balance_c": (-b / a) if a else None, "mean_w": mean_y}
 
 
+def _central_spread(store: "Store") -> dict | None:
+    """Measured central spread (supply − return, K) during space heating – the
+    SYSTEM spread at the heat pump, NOT a per-circuit ΔT. For context only."""
+    rows = store.hp_samples_since(int(time.time()) - 21 * 86400)
+    diffs = []
+    for s in rows:
+        if (s.get("mode") or "").lower() not in ("ch", "heating", "heat"):
+            continue
+        su, re = s.get("supply_c"), s.get("return_c")
+        if su is None or re is None:
+            continue
+        d = su - re
+        if 0.3 <= d <= 20:
+            diffs.append(d)
+    if len(diffs) < 3:
+        return None
+    diffs.sort()
+    return {"spread_k": round(diffs[len(diffs) // 2], 1), "n": len(diffs)}
+
+
 def compute_heatload(store: "Store", areas: dict | None = None,
-                     design_c: float = DESIGN_OUTDOOR_C) -> dict:
+                     design_c: float = DESIGN_OUTDOOR_C,
+                     spread_k: float = 5.0) -> dict:
     """Per-room heat load in watts (at the design outdoor temp) with a
-    confidence band, calibrated to the measured whole-house energy signature."""
+    confidence band, calibrated to the measured whole-house energy signature –
+    plus the physically correct per-circuit target flow l/min = Q/(1.163·60·ΔT).
+
+    ΔT here is the chosen DESIGN spread PER CIRCUIT, not the measured central
+    system spread. When every loop is set to its target flow, all loops share
+    that ΔT and the central spread equals it; mixing it up would mis-size the
+    flows, so the two are reported separately."""
     try:
         design_c = float(design_c)
     except (TypeError, ValueError):
         design_c = DESIGN_OUTDOOR_C
     design_c = max(-25.0, min(-5.0, design_c))
+    try:
+        spread_k = float(spread_k)
+    except (TypeError, ValueError):
+        spread_k = 5.0
+    spread_k = max(3.0, min(10.0, spread_k))
     areas = areas or {}
 
     tm = compute_thermal_model(store, days=21)
@@ -2962,10 +2994,16 @@ def compute_heatload(store: "Store", areas: dict | None = None,
             rel = max(0.15, min(0.6, rel))
             band = q * rel
             sum_q += q
+            # per-circuit target flow: l/h = Q/(1.163·ΔT); l/min = /60
+            flow_lmin = q / (1.163 * spread_k) / 60.0
+            flow_lo = (q - band) / (1.163 * spread_k) / 60.0
+            flow_hi = (q + band) / (1.163 * spread_k) / 60.0
             base.update({"status": "ok", "ua": round(ua, 1), "q_design": round(q),
                          "q_lo": round(q - band), "q_hi": round(q + band),
                          "spec": round(spec, 1), "rel": round(rel, 2),
-                         "plausible": 10 <= spec <= 120})
+                         "plausible": 10 <= spec <= 120,
+                         "flow_lmin": round(flow_lmin, 2),
+                         "flow_lo": round(flow_lo, 2), "flow_hi": round(flow_hi, 2)})
         else:
             miss = []
             if not w["area"]:
@@ -3000,14 +3038,27 @@ def compute_heatload(store: "Store", areas: dict | None = None,
             insights.append("Unplausible spezifische Last (W/m²) bei: <b>" + ", ".join(odd) +
                             "</b> – Fläche prüfen oder τ noch unsicher.")
 
+    total_flow = sum(r.get("flow_lmin") or 0 for r in out if r.get("status") == "ok")
+    central = _central_spread(store)
+    if can_abs:
+        flow_msg = (f"Ziel-Durchfluss gesamt ≈ <b>{total_flow:.1f} l/min</b> bei Auslege-Spreizung "
+                    f"<b>{spread_k:.0f} K</b> je Kreis.")
+        if central:
+            flow_msg += (f" Aktuell <b>zentral gemessene</b> Spreizung ≈ {central['spread_k']} K "
+                         f"(System, nicht je Kreis) – die beiden sind erst bei vollständig "
+                         f"ausgeglichener Anlage gleich.")
+        insights.append(flow_msg)
+
     return {
-        "ok": True, "design_c": design_c,
+        "ok": True, "design_c": design_c, "spread_k": spread_k,
         "q_total_design": round(q_total_design) if q_total_design else None,
         "ua_total": round(ua_total, 1) if ua_total else None,
         "balance_c": round(sig["balance_c"], 1) if sig and sig.get("balance_c") is not None else None,
         "signature": ({"src": sig["src"], "n": sig["n"], "rel": round(sig["rel"], 2) if sig["rel"] else None}
                       if sig else None),
         "coverage": coverage, "sum_q_design": round(sum_q) if sum_q else None,
+        "total_flow_lmin": round(total_flow, 1) if total_flow else None,
+        "central_spread": central,
         "rooms": out, "insights": insights,
         "note": ("Datenbasierte Schätzung, kein normgerechter Heizlast-Nachweis (DIN EN 12831). "
                  "Fläche = eingegeben, τ = abgeleitet, Gesamtlast = gemessen; Annahme gleicher "
@@ -3015,35 +3066,52 @@ def compute_heatload(store: "Store", areas: dict | None = None,
     }
 
 
-def _demo_heatload(design_c: float = DESIGN_OUTDOOR_C) -> dict:
+def _demo_heatload(design_c: float = DESIGN_OUTDOOR_C, spread_k: float = 5.0) -> dict:
     try:
         design_c = max(-25.0, min(-5.0, float(design_c)))
     except (TypeError, ValueError):
         design_c = DESIGN_OUTDOOR_C
+    try:
+        spread_k = max(3.0, min(10.0, float(spread_k)))
+    except (TypeError, ValueError):
+        spread_k = 5.0
     rooms = [
         {"room": "Wohnzimmer", "area": 32.0, "tau_h": 48.0, "setpoint": 22.0,
          "confidence": "hoch", "n_tau": 5, "status": "ok", "ua": 62.0, "q_design": 2108,
-         "q_lo": 1750, "q_hi": 2466, "spec": 65.9, "rel": 0.17, "plausible": True},
+         "q_lo": 1750, "q_hi": 2466, "spec": 65.9, "rel": 0.17, "plausible": True,
+         "manifold": "EG"},
         {"room": "Büro", "area": 14.0, "tau_h": 22.0, "setpoint": 21.0,
          "confidence": "hoch", "n_tau": 4, "status": "ok", "ua": 59.0, "q_design": 1947,
-         "q_lo": 1460, "q_hi": 2434, "spec": 139.1, "rel": 0.25, "plausible": False},
+         "q_lo": 1460, "q_hi": 2434, "spec": 139.1, "rel": 0.25, "plausible": False,
+         "manifold": "EG"},
         {"room": "Bad", "area": 8.0, "tau_h": 18.0, "setpoint": 24.0,
          "confidence": "mittel", "n_tau": 4, "status": "ok", "ua": 41.0, "q_design": 1476,
-         "q_lo": 1040, "q_hi": 1912, "spec": 184.5, "rel": 0.30, "plausible": False},
+         "q_lo": 1040, "q_hi": 1912, "spec": 184.5, "rel": 0.30, "plausible": False,
+         "manifold": "OG"},
         {"room": "Schlafzimmer", "area": 16.0, "tau_h": None, "setpoint": 19.0,
          "confidence": "niedrig", "n_tau": 1, "status": "missing",
-         "missing": ["mehr Auskühlphasen (τ fehlt)"]},
+         "missing": ["mehr Auskühlphasen (τ fehlt)"], "manifold": "OG"},
     ]
+    for r in rooms:
+        if r["status"] == "ok":
+            r["flow_lmin"] = round(r["q_design"] / (1.163 * spread_k) / 60.0, 2)
+            r["flow_lo"] = round(r["q_lo"] / (1.163 * spread_k) / 60.0, 2)
+            r["flow_hi"] = round(r["q_hi"] / (1.163 * spread_k) / 60.0, 2)
     sum_q = sum(r.get("q_design", 0) for r in rooms if r.get("status") == "ok")
+    total_flow = round(sum(r.get("flow_lmin", 0) for r in rooms if r.get("status") == "ok"), 1)
     return {
-        "ok": True, "demo": True, "design_c": design_c,
+        "ok": True, "demo": True, "design_c": design_c, "spread_k": spread_k,
         "q_total_design": 5531, "ua_total": 167.0, "balance_c": 15.3,
         "signature": {"src": "csv", "n": 412, "rel": 0.12},
-        "coverage": 0.81, "sum_q_design": sum_q, "rooms": rooms,
+        "coverage": 0.81, "sum_q_design": sum_q,
+        "total_flow_lmin": total_flow, "central_spread": {"spread_k": 4.2, "n": 180},
+        "rooms": rooms,
         "insights": [
             f"Gesamt-Heizlast bei {design_c:.0f} °C ≈ <b>5531 W</b> (aus der gemessenen Kennlinie, Quelle: CSV). "
             "Gebäude-UA ≈ 167 W/K, Bilanzpunkt ≈ 15.3 °C.",
             "Unplausible spezifische Last (W/m²) bei: <b>Büro, Bad</b> – Fläche prüfen oder τ noch unsicher.",
+            f"Ziel-Durchfluss gesamt ≈ <b>{total_flow:.1f} l/min</b> bei Auslege-Spreizung <b>{spread_k:.0f} K</b> je Kreis. "
+            "Aktuell <b>zentral gemessene</b> Spreizung ≈ 4.2 K (System, nicht je Kreis).",
         ],
         "note": ("Datenbasierte Schätzung, kein normgerechter Heizlast-Nachweis (DIN EN 12831). "
                  "Fläche = eingegeben, τ = abgeleitet, Gesamtlast = gemessen; Annahme gleicher "
@@ -5058,15 +5126,19 @@ class Handler(BaseHTTPRequestHandler):
             dc = float(body.get("design_c")) if body.get("design_c") is not None else DESIGN_OUTDOOR_C
         except (TypeError, ValueError):
             dc = DESIGN_OUTDOOR_C
+        try:
+            sk = float(body.get("spread_k")) if body.get("spread_k") is not None else 5.0
+        except (TypeError, ValueError):
+            sk = 5.0
         if self.ctx.mode == "demo":
-            return self._send_json(_demo_heatload(dc))
+            return self._send_json(_demo_heatload(dc, sk))
         try:
             if int(time.time()) - self.store.room_log_last_ts() >= 120:
                 self._log_rooms_now()
         except Exception:
             pass
         return self._send_json({"ok": True, "demo": False,
-            **compute_heatload(self.store, areas, dc)})
+            **compute_heatload(self.store, areas, dc, sk)})
 
     def _post_update(self, body):
         """Pull the latest code (git) and restart the bridge in place.
@@ -5235,9 +5307,13 @@ class Handler(BaseHTTPRequestHandler):
                     dc = float(qs.get("design", [str(DESIGN_OUTDOOR_C)])[0])
                 except ValueError:
                     dc = DESIGN_OUTDOOR_C
+                try:
+                    sk = float(qs.get("spread", ["5"])[0])
+                except ValueError:
+                    sk = 5.0
                 if self.ctx.mode == "demo":
-                    return self._send_json(_demo_heatload(dc))
-                return self._send_json({"demo": False, **compute_heatload(self.store, None, dc)})
+                    return self._send_json(_demo_heatload(dc, sk))
+                return self._send_json({"demo": False, **compute_heatload(self.store, None, dc, sk)})
             if path == "/api/windows":
                 wd = int(qs.get("days", ["3"])[0])
                 if self.ctx.mode == "demo":

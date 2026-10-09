@@ -224,6 +224,15 @@ const INFO = {
     '– der praktische Startwert für die Durchflussmesser (Tacosetter) am Verteiler. Formel: Heizlast ≈ Fläche × spez. Last (W/m²), ' +
     'Durchfluss = Heizlast ÷ (1,16 × Spreizung ΔT). Länge ist nachrangig (beeinflusst den Pumpendruck, nicht den Ziel-Durchfluss). ' +
     'Danach feinjustieren über den <b>Hydraulischen Abgleich</b>. Alles nur lokal gespeichert.',
+  'flow': () => '<b>Ziel-Durchfluss je Heizkreis (l/min)</b> – der Einstellwert für die Durchflussmesser/Tacosetter am Verteiler. ' +
+    'Physikalisch aus Energieerhaltung: Q = ṁ·c·ΔT, praktisch <b>l/min = Q ÷ (1,163 × ΔT × 60)</b>, mit Q = der gemessen/abgeleiteten ' +
+    '<b>Heizlast je Raum</b> (Modul Heizlast) und ΔT = der <b>gewählten Auslege-Spreizung je Kreis</b> (bei Fußbodenheizung typ. 4–7 K). ' +
+    '<b>Wichtig – nicht verwechseln:</b> diese Spreizung je Kreis ist <b>nicht</b> die zentral gemessene System-Spreizung (Vorlauf − ' +
+    'Rücklauf an der WP). Erst wenn <b>jeder</b> Kreis auf seinen Zielwert eingestellt ist, teilen sich alle Kreise dieselbe Spreizung ' +
+    'und die zentrale entspricht ihr; die zentrale Spreizung in die Kreis-Rechnung einzusetzen würde die Durchflüsse falsch ' +
+    'dimensionieren. Höhere Spreizung → weniger Durchfluss (aber kühlerer Rücklauf). Gruppiert nach Verteiler mit Teilsummen. ' +
+    '<b>Hinweis:</b> ein Wert je Raum; hat ein Raum mehrere Schleifen, teile den l/min-Wert gleichmäßig darauf auf. ' +
+    'Startwerte für den Abgleich, kein Norm-Nachweis.',
   'heatload': () => '<b>Heizlast je Raum in Watt.</b> Physikalisch begründet und <b>kalibriert</b>: Zuerst die <b>Gebäude-Wärmekennlinie</b> ' +
     '(Energiesignatur) – die gemessene Heizleistung über der Außentemperatur ergibt per Regression eine Gerade; bei der ' +
     '<b>Auslegungstemperatur</b> liefert sie die Gesamt-Heizlast. Pro Raum ist die Verlustleistung UA ∝ <b>Fläche ÷ τ</b> ' +
@@ -2702,6 +2711,95 @@ function paintHeatload(r) {
     ? (r.insights || []).map(l => `<div style="font-size:13px;line-height:1.5;margin-bottom:5px">• ${l}</div>`).join('') : '';
 
   if (note) note.innerHTML = (r.demo ? '<b>Demo-Daten</b>. ' : '') + esc(r.note || '');
+}
+
+/* ---- Ziel-Durchfluss je Kreis (l/min): Q-based, grouped by manifold -------- */
+let _flowData = null, _flowBusy = false;
+function flowManifoldOf(room, fallback) {
+  const l = (typeof layoutModel === 'function') ? layoutModel() : { rooms: {} };
+  const m = ((l.rooms || {})[room] || {}).manifold;
+  return m || fallback || 'Ohne Verteiler';
+}
+async function renderFlow(force) {
+  const card = $('flow-card'); if (!card) return;
+  if (_flowData && !force) { paintFlow(_flowData); return; }
+  if (_flowBusy) return;
+  _flowBusy = true;
+  const body = $('flow-body');
+  if (force && body) body.innerHTML = '<div class="note">Durchfluss wird aus Heizlast + Spreizung berechnet …</div>';
+  const spread = parseFloat(($('flow-spread') || {}).value || '5');
+  const design = parseFloat(($('hl-design') || {}).value || '-12');
+  try {
+    const r = await postJSON('/api/heatload', { areas: hlAreas(), design_c: design, spread_k: spread });
+    _flowData = r; paintFlow(r);
+  } catch (e) { if (body) body.innerHTML = '<div class="note">Nur mit laufender Bridge verfügbar.</div>'; }
+  finally { _flowBusy = false; }
+}
+function paintFlow(r) {
+  const head = $('flow-head'), ctx = $('flow-context'), body = $('flow-body'), note = $('flow-note');
+  if (!r || !r.ok) { if (body) body.innerHTML = '<div class="note">Keine Daten.</div>'; return; }
+  const ok = (r.rooms || []).filter(x => x.status === 'ok' && x.flow_lmin != null);
+  if (head) head.innerHTML = r.total_flow_lmin != null
+    ? `<span style="color:var(--muted)">${r.total_flow_lmin} l/min · ΔT ${r.spread_k}K</span>` : '';
+
+  // central-vs-circuit context (the thing not to confuse)
+  if (ctx) {
+    const cs = r.central_spread;
+    ctx.innerHTML =
+      `<div style="display:flex;gap:8px;flex-wrap:wrap">` +
+        `<div class="kpi sm"><div class="v">${r.spread_k} K</div><div class="l">Auslege-ΔT je Kreis (gewählt)</div></div>` +
+        `<div class="kpi sm"><div class="v">${cs ? cs.spread_k + ' K' : '–'}</div><div class="l">zentral gemessen (System)</div></div>` +
+        (r.total_flow_lmin != null ? `<div class="kpi sm"><div class="v">${r.total_flow_lmin}</div><div class="l">Σ l/min (Auslegung)</div></div>` : '') +
+      `</div>` +
+      `<div class="note" style="margin-top:6px">Die <b>Kreis-Spreizung</b> (${r.spread_k} K) ist der Auslege-Zielwert je Kreis – ` +
+      `<b>nicht</b> die zentral gemessene System-Spreizung${cs ? ` (${cs.spread_k} K)` : ''}. Beide stimmen erst überein, ` +
+      `wenn alle Kreise auf ihren Zielwert eingestellt sind.</div>`;
+  }
+
+  if (body) {
+    if (!ok.length) {
+      body.innerHTML = '<div class="note">Noch keine Heizlast je Raum vorhanden – erst <b>Beobachtung</b> (τ), <b>Flächen</b> '
+        + '(Verteiler-Karte) und die <b>Gesamt-Wärmekennlinie</b>. Danach erscheinen hier die l/min-Einstellwerte.</div>';
+    } else {
+      // group by manifold
+      const groups = {};
+      r.rooms.forEach(x => {
+        const mf = flowManifoldOf(x.room, x.manifold);
+        (groups[mf] = groups[mf] || []).push(x);
+      });
+      const fmax = Math.max.apply(null, ok.map(x => x.flow_hi || x.flow_lmin || 0)) || 1;
+      let h = '';
+      Object.keys(groups).sort().forEach(mf => {
+        const items = groups[mf];
+        const sub = items.filter(x => x.flow_lmin != null).reduce((s, x) => s + x.flow_lmin, 0);
+        h += `<div style="display:flex;justify-content:space-between;align-items:center;margin:12px 0 6px">` +
+          `<b style="font-size:14px">🧭 ${esc(mf)}</b>` +
+          `<span style="color:var(--muted);font-size:12px">Teilsumme ${sub.toFixed(1)} l/min</span></div>`;
+        items.forEach(x => {
+          if (x.status !== 'ok' || x.flow_lmin == null) {
+            h += `<div class="devrow"><div class="nm"><b>${esc(x.room)}</b><small>${(x.missing || []).map(esc).join(' · ') || 'keine Heizlast'}</small></div>` +
+              `<div class="val"><span style="color:#ffb64d;font-size:12px">offen</span></div></div>`;
+            return;
+          }
+          const w = (v) => Math.max(0, Math.min(100, (v / fmax) * 100));
+          h += `<div style="margin-bottom:10px">` +
+            `<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:3px">` +
+              `<b>${esc(x.room)}</b><span><b>${x.flow_lmin} l/min</b> <span style="color:var(--muted)">(${x.flow_lo}–${x.flow_hi})</span></span></div>` +
+            `<div style="position:relative;background:var(--line);border-radius:6px;height:12px">` +
+              `<div style="position:absolute;left:${w(x.flow_lo)}%;width:${Math.max(1, w(x.flow_hi) - w(x.flow_lo))}%;top:0;height:100%;background:#3ba9ff;opacity:.3;border-radius:6px"></div>` +
+              `<div style="position:absolute;left:${w(x.flow_lmin)}%;top:-2px;width:3px;height:16px;background:#3ba9ff;border-radius:2px"></div>` +
+            `</div>` +
+            `<div style="font-size:11px;color:var(--muted);margin-top:3px">Heizlast ${x.q_design} W · ${x.area} m² · Konfidenz ${esc(x.confidence)}</div>` +
+            `</div>`;
+        });
+      });
+      body.innerHTML = h;
+    }
+  }
+
+  if (note) note.innerHTML = (r.demo ? '<b>Demo-Daten</b>. ' : '') +
+    'So stellst du vor: jeden Durchflussmesser am Verteiler auf den l/min-Wert bringen, dann über den <b>Hydraulischen Abgleich</b> ' +
+    'feinjustieren. Ein Wert je Kreis; mehrere Schleifen in einem Raum → Wert gleichmäßig aufteilen. Startwerte, kein Norm-Nachweis.';
 }
 
 /* ---- Verteiler & Heizkreise: layout + per-circuit flow (l/min) distribution */
@@ -6606,6 +6704,7 @@ function switchView(v) {
     if (typeof renderObservation === 'function') renderObservation(false);
     if (typeof renderThermal === 'function') renderThermal(false);
     if (typeof renderHeatload === 'function') renderHeatload(false);
+    if (typeof renderFlow === 'function') renderFlow(false);
     if (typeof renderHydronic === 'function') renderHydronic();
     if (typeof renderLayout === 'function') renderLayout();
     if (typeof initHpControls === 'function') initHpControls();
@@ -6776,7 +6875,9 @@ function init() {
   const obsP = $('obs-stop'); if (obsP) obsP.addEventListener('click', () => obsControl('stop'));
   const tmr = $('tm-refresh'); if (tmr) tmr.addEventListener('click', () => { renderThermal(true); renderObservation(true); });
   const hlr = $('hl-refresh'); if (hlr) hlr.addEventListener('click', () => renderHeatload(true));
-  const hld = $('hl-design'); if (hld) hld.addEventListener('change', () => renderHeatload(true));
+  const hld = $('hl-design'); if (hld) hld.addEventListener('change', () => { renderHeatload(true); _flowData = null; renderFlow(true); });
+  const flr = $('flow-refresh'); if (flr) flr.addEventListener('click', () => renderFlow(true));
+  const fls = $('flow-spread'); if (fls) fls.addEventListener('change', () => renderFlow(true));
   const rtsSel = $('rts-room');
   if (rtsSel) rtsSel.addEventListener('change', () => { _rtsSel = rtsSel.value; if (_rtsData) paintRoomTs(_rtsData); });
   const rtsRange = $('rts-range');
@@ -6789,12 +6890,12 @@ function init() {
       else if (t.id === 'lay-dt') { const l = layoutModel(); l.dt = t.value; layoutSave(l); computeLayoutResult(); }
       else if (t.dataset.lay && t.dataset.room) {
         layoutSet(t.dataset.room, t.dataset.lay, t.value); computeLayoutResult();
-        if (t.dataset.lay === 'area') _hlData = null;   // heat load depends on area
+        if (t.dataset.lay === 'area') { _hlData = null; _flowData = null; }  // depend on area
       }
     });
     layCard.addEventListener('change', e => {
       const t = e.target;
-      if (t.dataset.lay === 'manifold' && t.dataset.room) { layoutSet(t.dataset.room, 'manifold', t.value); computeLayoutResult(); }
+      if (t.dataset.lay === 'manifold' && t.dataset.room) { layoutSet(t.dataset.room, 'manifold', t.value); computeLayoutResult(); _flowData = null; }
     });
     layCard.addEventListener('click', e => {
       const del = e.target.closest('[data-mfdel]');
