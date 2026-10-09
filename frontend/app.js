@@ -131,6 +131,29 @@ function _pushSetting(key, val) {
   if (_settingsTimer) clearTimeout(_settingsTimer);
   _settingsTimer = setTimeout(_flushSettings, 400);
 }
+// force an immediate push (use after structural changes like deleting a room,
+// so a quick reload can't lose it before the 400 ms debounce fires)
+function _flushSettingsNow() {
+  if (_settingsTimer) { clearTimeout(_settingsTimer); _settingsTimer = null; }
+  _flushSettings();
+}
+// reliably persist pending changes when the page is hidden/closed/reloaded –
+// otherwise syncSettings() on the next load would overwrite them from the bridge
+function _beaconFlush() {
+  if (_settingsTimer) { clearTimeout(_settingsTimer); _settingsTimer = null; }
+  if (!Object.keys(_pendingSettings).length) return;
+  const body = JSON.stringify({ settings: _pendingSettings });
+  _pendingSettings = {};
+  const url = ((typeof STATE !== 'undefined' && STATE.base) || '') + '/api/settings';
+  try {
+    if (navigator.sendBeacon && navigator.sendBeacon(url, new Blob([body], { type: 'application/json' }))) return;
+  } catch (e) {}
+  try { fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: true }).catch(() => {}); } catch (e) {}
+}
+try {
+  window.addEventListener('pagehide', _beaconFlush);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') _beaconFlush(); });
+} catch (e) {}
 // transparently mirror app-setting writes to the bridge
 try {
   localStorage.setItem = function (k, v) {
@@ -3118,6 +3141,7 @@ function layoutModel() {
   l.q = (l.q != null ? l.q : 40); l.dt = (l.dt != null ? l.dt : 6);
   l.manifolds = Array.isArray(l.manifolds) ? l.manifolds : [];
   l.rooms = l.rooms || {};
+  l.hidden = Array.isArray(l.hidden) ? l.hidden : [];   // rooms the user removed (stay gone)
   return l;
 }
 function layoutSet(room, field, val) {
@@ -3149,7 +3173,8 @@ function layoutTargets() {
 function renderLayout() {
   const body = $('lay-body'); if (!body) return;
   const l = layoutModel();
-  const rooms = [...new Set([...knownRooms(), ...Object.keys(l.rooms)])].sort();
+  const rooms = [...new Set([...knownRooms(), ...Object.keys(l.rooms)])]
+    .filter(r => !l.hidden.includes(r)).sort();
   const mfOpts = sel => '<option value="">–</option>' + l.manifolds.map(m => `<option${m === sel ? ' selected' : ''}>${esc(m)}</option>`).join('');
   const inp = (ph, val, field, room, w) => `<input type="number" inputmode="decimal" data-lay="${field}" data-room="${esc(room)}" value="${val != null && val !== '' ? esc(String(val)) : ''}" placeholder="${ph}" style="width:${w || 58}px;padding:4px 6px;margin:0">`;
   const rowsHtml = rooms.map(room => { const cfg = l.rooms[room] || {};
@@ -3232,7 +3257,9 @@ function layoutPresetMyHouse() {
     Object.entries(l.rooms).some(([rm, cfg]) => cfg.manifold === m && !presetRooms.includes(rm)));
   l.manifolds = [...new Set([...LAYOUT_PRESET.manifolds, ...keep])];
   Object.entries(LAYOUT_PRESET.rooms).forEach(([rm, v]) => { l.rooms[rm] = { ...(l.rooms[rm] || {}), ...v }; });
+  l.hidden = (l.hidden || []).filter(h => !(h in LAYOUT_PRESET.rooms));   // un-hide rooms the preset adds
   layoutSave(l);
+  if (typeof _flushSettingsNow === 'function') _flushSettingsNow();
   _hlData = null; _flowData = null;
   renderLayout();
   const n = $('lay-preset-note');
@@ -7286,7 +7313,10 @@ function init() {
       if (rdel) {
         e.preventDefault(); const rm = rdel.dataset.roomdel;
         if (confirm('Raum „' + rm + '" aus dem Layout entfernen?')) {
-          const l = layoutModel(); delete l.rooms[rm]; layoutSave(l);
+          const l = layoutModel(); delete l.rooms[rm];
+          if (!l.hidden.includes(rm)) l.hidden.push(rm);   // stays gone even if it's a live thermostat room
+          layoutSave(l);
+          if (typeof _flushSettingsNow === 'function') _flushSettingsNow();   // persist now, survive quick reload
           _hlData = null; _flowData = null; renderLayout();
         }
         return;
@@ -7295,7 +7325,7 @@ function init() {
       if (del) { e.preventDefault(); const l = layoutModel(); l.manifolds = l.manifolds.filter(m => m !== del.dataset.mfdel); Object.values(l.rooms).forEach(r => { if (r.manifold === del.dataset.mfdel) delete r.manifold; }); layoutSave(l); renderLayout(); return; }
       if (e.target.id === 'lay-mf-add') { const v = ($('lay-mf-name').value || '').trim(); if (v) { const l = layoutModel(); if (!l.manifolds.includes(v)) l.manifolds.push(v); layoutSave(l); renderLayout(); } return; }
       if (e.target.id === 'lay-room-add') { const v = ($('lay-room-name').value || '').trim(); if (v) { const l = layoutModel(); l.rooms[v] = l.rooms[v] || {}; layoutSave(l); renderLayout(); } return; }
-      if (e.target.id === 'lay-rooms-load') { renderLayout(); return; }
+      if (e.target.id === 'lay-rooms-load') { const l = layoutModel(); l.hidden = []; layoutSave(l); if (typeof _flushSettingsNow === 'function') _flushSettingsNow(); renderLayout(); return; }
       if (e.target.id === 'lay-preset') {
         if (confirm('Verteiler-Layout mit deinen Hauswerten vorbefüllen (Flächen, Stränge, Verteiler Küche/Schlafzimmer/OG)? Bestehende Angaben zu diesen Räumen werden überschrieben.'))
           layoutPresetMyHouse();
