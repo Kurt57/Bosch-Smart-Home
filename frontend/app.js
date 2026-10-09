@@ -251,6 +251,13 @@ const INFO = {
     '<b>Ehrlich:</b> Flächen sind eingegeben, der Split ist abgeleitet (kein Durchfluss je Kreis gemessen), die Gleich-Estrich-' +
     'Annahme ist eine Näherung. Das ist eine <b>datenbasierte Schätzung</b>, kein normgerechter Heizlast-Nachweis (DIN EN 12831) ' +
     'und ersetzt keine Fachplanung.',
+  'automeasure': () => '<b>Auto-Messung – aktive Thermostat-Steuerung.</b> Statt dich nachts selbst absenken zu lassen, macht es die App: ' +
+    'sie senkt im <b>Nachtfenster</b> die Raum-Solltemperaturen (schreibt über die lokale Bosch-SHC-API an die Thermostate), erzwingt ' +
+    'so freie <b>Auskühlphasen</b> für die τ-Messung und stellt morgens die <b>exakt vorher gespeicherten</b> Sollwerte wieder her. ' +
+    '<b>Sicherheitsregeln:</b> senkt nur ab (hebt nie an), nie unter die eingestellte <b>Mindesttemperatur</b>, der Bridge-Client ' +
+    'begrenzt zusätzlich hart auf 5–30 °C; die Originalwerte werden <b>vor</b> dem ersten Schreiben gespeichert, sodass auch nach ' +
+    'einem Neustart korrekt zurückgestellt wird; „Stop" stellt sofort alles zurück; und es stoppt von selbst nach den eingestellten ' +
+    'Nächten oder sobald jeder Raum genug τ-Daten hat. Nur im Live-Modus mit verbundener Bosch-Zentrale.',
   'observation': () => '<b>Geführte Beobachtungsphase.</b> Ein kontrollierter, mehrtägiger Mess-Ablauf, der die Datenbasis für das ' +
     'thermische Modell und den hydraulischen Abgleich schafft. Mit <b>Start</b> wird ein Zeitpunkt verankert und der Fortschritt ' +
     '<b>ab jetzt</b> gemessen – unabhängig von alten Daten. Die App prüft fünf Schritte: (1) Thermostate voll geöffnet, ' +
@@ -1937,6 +1944,7 @@ function renderAll() {
   if (typeof _hdData !== 'undefined' && _hdData) paintHeatingDiag(_hdData);
   if (typeof _hcData !== 'undefined' && _hcData) paintHeatingCurve(_hcData);
   if (typeof initHpControls === 'function') initHpControls();
+  if (typeof renderAutomeasure === 'function') renderAutomeasure();   // re-check availability after health
 }
 
 // Device control: switch Bosch Smart Plug+ (and other PowerSwitch devices) on/off.
@@ -2418,6 +2426,88 @@ function paintRoomTs(r) {
   if (note) note.innerHTML = (r.demo ? '<b>Demo-Daten</b>. ' : '') +
     'Einen Raum oben wählen zeigt zusätzlich den <b>Sollwert</b> (gestrichelt) und – als leichte Schattierung – wann sein <b>Ventil offen</b> ist (Raum verlangt Wärme). Wird pro Raum ab jetzt mitgeloggt.';
 }
+/* ---- Auto-Messung: active night-setback on the thermostats ---------------- */
+let _amData = null, _amBusy = false;
+async function renderAutomeasure(force) {
+  const card = $('am-card'); if (!card) return;
+  // only show when it could actually work: demo, or live with a paired SHC cert
+  const h = STATE.health || {};
+  const avail = STATE.demo || h.mode === 'demo' || (h.mode === 'live' && h.has_cert);
+  card.hidden = !avail;
+  if (!avail) return;
+  if (_amData && !force) { paintAutomeasure(_amData); return; }
+  if (_amBusy) return;
+  _amBusy = true;
+  try { const r = await api('/api/automeasure'); _amData = r; paintAutomeasure(r); }
+  catch (e) { const s = $('am-status'); if (s) s.innerHTML = '<div class="note">Nur mit laufender Bridge verfügbar.</div>'; }
+  finally { _amBusy = false; }
+}
+async function amControl(action) {
+  const note = $('am-note'); if (note) note.textContent = '';
+  let body = {};
+  if (action === 'arm') {
+    body = {
+      setback_k: parseFloat(($('am-setback') || {}).value) || 4,
+      floor_c: parseFloat(($('am-floor') || {}).value) || 15,
+      start_h: parseInt(($('am-start') || {}).value, 10),
+      end_h: parseInt(($('am-end') || {}).value, 10),
+      max_nights: parseInt(($('am-nights') || {}).value, 10) || 5,
+    };
+  }
+  try {
+    const r = await postJSON('/api/automeasure/' + action, body);
+    if (r && r.ok) { _amData = r; paintAutomeasure(r); }
+    else if (note) note.textContent = (r && r.error) || 'Aktion fehlgeschlagen.';
+  } catch (e) { if (note) note.textContent = 'Nur möglich, wenn die Seite von der Bridge geöffnet ist.'; }
+}
+function amActionLabel(a) {
+  return a === 'absenken' ? '🔻 abgesenkt' : (a === 'zurückgestellt' ? '↩︎ zurückgestellt'
+    : (a === 'auto-stop' ? '⏹ Auto-Stop' : (a === 'fehler' ? '⚠︎ Fehler' : a)));
+}
+function paintAutomeasure(r) {
+  const head = $('am-head'), status = $('am-status'), logEl = $('am-log'), note = $('am-note'),
+    btnArm = $('am-arm'), btnDis = $('am-disarm');
+  if (!r || !r.ok) { if (status) status.innerHTML = '<div class="note">Keine Daten.</div>'; return; }
+  if (btnArm) btnArm.hidden = r.enabled;
+  if (btnDis) btnDis.hidden = !r.enabled;
+  // prefill config from server (so it reflects the armed values)
+  [['am-setback', r.setback_k], ['am-floor', r.floor_c], ['am-start', r.start_h], ['am-end', r.end_h], ['am-nights', r.max_nights]].forEach(([id, v]) => {
+    const el = $(id); if (el && v != null && document.activeElement !== el) { el.value = v; el.disabled = r.enabled; }
+  });
+  if (head) head.innerHTML = r.enabled
+    ? `<span style="color:${r.running ? 'var(--warn)' : 'var(--accent)'}">${esc(r.state)}</span>`
+    : '<span style="color:var(--muted)">aus</span>';
+  if (status) {
+    const kpi = (v, l) => `<div class="kpi sm"><div class="v">${v}</div><div class="l">${l}</div></div>`;
+    status.innerHTML = `<div style="display:flex;gap:8px;flex-wrap:wrap">` +
+      kpi(esc(r.state.split(' ')[0]), 'Status') +
+      kpi(`${r.nights_done}/${r.max_nights}`, 'Nächte') +
+      kpi(`−${r.setback_k} K`, 'Absenkung') +
+      kpi(`≥${r.floor_c}°`, 'Minimum') +
+      kpi(`${r.start_h}–${r.end_h} Uhr`, 'Fenster') +
+      `</div>` +
+      (r.running && r.lowered_rooms && r.lowered_rooms.length
+        ? `<div class="note" style="margin-top:6px">Gerade abgesenkt: <b>${r.lowered_rooms.map(esc).join(', ')}</b> – werden morgens automatisch zurückgestellt.</div>`
+        : '');
+  }
+  if (logEl) {
+    const L = r.log || [];
+    logEl.innerHTML = L.length
+      ? `<div style="font-weight:700;margin-bottom:6px">Protokoll</div>` + L.map(e => {
+          const when = new Date(e.ts * 1000).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+          const chg = (e.from != null && e.to != null) ? ` ${e.from}° → ${e.to}°` : (e.to != null ? ` → ${e.to}°` : '');
+          return `<div style="font-size:12.5px;line-height:1.5;padding:3px 0;border-bottom:1px solid var(--line)">` +
+            `<span style="color:var(--muted)">${when}</span> · ${amActionLabel(e.action)}` +
+            (e.room ? ` <b>${esc(e.room)}</b>` : '') + esc(chg) +
+            (e.note ? ` <span style="color:var(--muted)">(${esc(e.note)})</span>` : '') + `</div>`;
+        }).join('')
+      : '';
+  }
+  if (note) note.innerHTML = (r.demo ? '<b>Demo-Daten</b> – im Demo wird nichts real geschrieben. ' : '') +
+    'Tipp: lass es 3–5 Nächte laufen; sobald jeder Raum genug τ-Daten hat, stoppt es automatisch. '
+    + 'Du kannst jederzeit <b>Stop</b> drücken – dann werden sofort alle Sollwerte zurückgestellt.';
+}
+
 /* ---- Geführte Beobachtungsphase: controlled multi-day data-collection ----- */
 let _obsData = null, _obsBusy = false;
 async function renderObservation(force) {
@@ -6815,6 +6905,7 @@ function switchView(v) {
     if (typeof renderRoomTs === 'function') renderRoomTs(false);
     if (typeof renderWindows === 'function') renderWindows(false);
     if (typeof renderObservation === 'function') renderObservation(false);
+    if (typeof renderAutomeasure === 'function') renderAutomeasure(false);
     if (typeof renderThermal === 'function') renderThermal(false);
     if (typeof renderHeatload === 'function') renderHeatload(false);
     if (typeof renderFlow === 'function') renderFlow(false);
@@ -6987,6 +7078,13 @@ function init() {
   });
   const obsS = $('obs-start'); if (obsS) obsS.addEventListener('click', () => obsControl('start'));
   const obsP = $('obs-stop'); if (obsP) obsP.addEventListener('click', () => obsControl('stop'));
+  const amA = $('am-arm');
+  if (amA) amA.addEventListener('click', () => {
+    const sb = parseFloat(($('am-setback') || {}).value) || 4, fl = parseFloat(($('am-floor') || {}).value) || 15;
+    if (confirm(`Auto-Messung starten? Die App senkt nachts die Raum-Solltemperaturen um ${sb} K (nie unter ${fl} °C) und schreibt dafür real an deine Bosch-Thermostate. Morgens werden sie automatisch zurückgestellt.`))
+      amControl('arm');
+  });
+  const amD = $('am-disarm'); if (amD) amD.addEventListener('click', () => amControl('disarm'));
   const tmr = $('tm-refresh'); if (tmr) tmr.addEventListener('click', () => { renderThermal(true); renderObservation(true); });
   const hlr = $('hl-refresh'); if (hlr) hlr.addEventListener('click', () => renderHeatload(true));
   const hld = $('hl-design'); if (hld) hld.addEventListener('change', () => { renderHeatload(true); _flowData = null; renderFlow(true); });

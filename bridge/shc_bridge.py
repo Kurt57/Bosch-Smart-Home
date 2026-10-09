@@ -372,6 +372,26 @@ class SHCClient:
             raise RuntimeError(f"GET {path} -> HTTP {status}: {data[:200]!r}")
         return json.loads(data) if data else None
 
+    def put(self, path: str, obj: dict) -> int:
+        """PUT a service state. Returns the HTTP status (200/204 = ok)."""
+        status, data = self._request(
+            "PUT", 8444, path, body=json.dumps(obj).encode("utf-8"))
+        if status not in (200, 204):
+            raise RuntimeError(f"PUT {path} -> HTTP {status}: {data[:200]!r}")
+        return status
+
+    def set_room_setpoint(self, rcc_device_id: str, temp: float) -> float:
+        """Write a room's target temperature via RoomClimateControl.
+
+        Hard safety clamp to 5–30 °C regardless of caller – this is the only
+        place that ever changes a thermostat, so the clamp lives here."""
+        if not rcc_device_id:
+            raise ValueError("kein RoomClimateControl-Gerät für diesen Raum")
+        t = round(max(5.0, min(30.0, float(temp))), 1)
+        self.put(f"/smarthome/devices/{rcc_device_id}/services/RoomClimateControl/state",
+                 {"@type": "climateControlState", "setpointTemperature": t})
+        return t
+
     # -- registration ------------------------------------------------------ #
     def register(self, system_password: str) -> tuple[int, bytes]:
         with open(self.cert, "r", encoding="utf-8") as fh:
@@ -618,7 +638,7 @@ class SHCClient:
                 "room": name, "setpoint": None, "temp": None, "valve": None,
                 "valves": [], "operationMode": None, "roomControlMode": None,
                 "boost": False, "summerMode": False, "low": False, "offset": None,
-                "childLock": False, "faults": [], "devices": 0})
+                "childLock": False, "faults": [], "devices": 0, "rcc_device": None})
 
         for dev in devices:
             did = dev.get("id")
@@ -636,6 +656,7 @@ class SHCClient:
             st = svc.get(did, {})
             rcc = st.get("RoomClimateControl") or {}
             if rcc:
+                rec["rcc_device"] = did        # device that carries the setpoint (for writes)
                 sp = num(rcc, "setpointTemperature")
                 if sp is not None:
                     rec["setpoint"] = sp
@@ -3391,6 +3412,241 @@ def _demo_optimize() -> dict:
     }
 
 
+# ===================================================================== #
+#  Active control — "Auto-Messung": orchestrated night setback for τ      #
+# ===================================================================== #
+# The ONLY part of the system that writes to the heating. Opt-in, bounded,
+# time-boxed and self-restoring. While armed, it lowers the room setpoints
+# during a night window to force clean, undisturbed cool-down (so module 1
+# can derive τ per room), then writes the EXACT previous setpoints back in
+# the morning. Originals are persisted BEFORE any write, so a restart still
+# restores. Hard guards: only ever LOWERS (never raises), never below the
+# floor temperature, the SHC client clamps 5–30 °C, and disabling restores
+# immediately. It auto-stops after enough nights or once every room has τ.
+
+AM_KEY = "automeasure"
+AM_SETBACK_MIN, AM_SETBACK_MAX = 1.0, 5.0
+AM_FLOOR_MIN, AM_FLOOR_MAX = 12.0, 20.0
+
+
+def _am_defaults() -> dict:
+    return {"enabled": False, "setback_k": 4.0, "floor_c": 15.0,
+            "start_h": 23, "end_h": 5, "max_nights": 5, "nights_done": 0,
+            "last_night": None, "run": None, "log": []}
+
+
+def _am_cfg(store: "Store"):
+    raw = store.kv_get(AM_KEY)
+    if not raw:
+        return None
+    try:
+        d = json.loads(raw)
+        return d if isinstance(d, dict) else None
+    except (ValueError, TypeError):
+        return None
+
+
+def _am_save(store: "Store", cfg: dict):
+    cfg["log"] = (cfg.get("log") or [])[-40:]
+    store.kv_set(AM_KEY, json.dumps(cfg))
+
+
+def _am_log(cfg: dict, ts: int, action: str, room, frm, to, note):
+    cfg.setdefault("log", []).append({"ts": ts, "action": action, "room": room,
+                                      "from": frm, "to": to, "note": note})
+
+
+def _am_in_window(now: int, start_h: int, end_h: int) -> bool:
+    h = datetime.fromtimestamp(now).hour
+    if start_h == end_h:
+        return False
+    if start_h < end_h:
+        return start_h <= h < end_h
+    return h >= start_h or h < end_h          # wraps across midnight
+
+
+def _am_window_ends(now: int, end_h: int) -> int:
+    dt = datetime.fromtimestamp(now)
+    end = dt.replace(hour=end_h, minute=0, second=0, microsecond=0)
+    if end <= dt:
+        end = end + timedelta(days=1)
+    return int(end.timestamp())
+
+
+def _am_night_label(now: int, start_h: int, end_h: int) -> str:
+    dt = datetime.fromtimestamp(now)
+    if start_h > end_h and dt.hour < end_h:   # early-morning part belongs to last night
+        dt = dt - timedelta(days=1)
+    return dt.strftime("%Y-%m-%d")
+
+
+def _am_start(client, store, cfg, now, night):
+    try:
+        climate = client.list_climate()
+    except Exception as exc:
+        _am_log(cfg, now, "fehler", None, None, None, f"Lesen fehlgeschlagen: {exc}")
+        _am_save(store, cfg)
+        return
+    setback = max(AM_SETBACK_MIN, min(AM_SETBACK_MAX, float(cfg.get("setback_k", 4.0))))
+    floor = max(AM_FLOOR_MIN, min(AM_FLOOR_MAX, float(cfg.get("floor_c", 15.0))))
+    originals, applied = {}, {}
+    for r in climate:
+        if str(r.get("roomControlMode") or "HEATING").upper() == "OFF" or r.get("summerMode"):
+            continue
+        sp, rcc = r.get("setpoint"), r.get("rcc_device")
+        if not isinstance(sp, (int, float)) or not rcc:
+            continue
+        target = max(floor, round(sp - setback, 1))
+        if target >= sp - 0.1:                 # already at/below floor → nothing to lower
+            continue
+        try:
+            t = client.set_room_setpoint(rcc, target)
+            originals[r["room"]] = {"rcc": rcc, "setpoint": sp}
+            applied[r["room"]] = t
+            _am_log(cfg, now, "absenken", r["room"], sp, t, None)
+        except Exception as exc:
+            _am_log(cfg, now, "fehler", r["room"], sp, target, str(exc))
+    if originals:
+        cfg["run"] = {"night": night, "started": now,
+                      "ends_ts": _am_window_ends(now, cfg["end_h"]),
+                      "originals": originals, "applied": applied}
+    cfg["last_night"] = night
+    _am_save(store, cfg)
+
+
+def _am_restore(client, store, cfg, now, reason=""):
+    run = cfg.get("run") or {}
+    originals = run.get("originals") or {}
+    remaining = {}
+    for room, o in originals.items():
+        if client is None:
+            remaining[room] = o
+            continue
+        try:
+            client.set_room_setpoint(o["rcc"], o["setpoint"])
+            _am_log(cfg, now, "zurückgestellt", room, None, o["setpoint"], reason or None)
+        except Exception as exc:
+            _am_log(cfg, now, "fehler", room, None, o.get("setpoint"), f"Restore: {exc}")
+            remaining[room] = o
+    if remaining:
+        run["originals"] = remaining
+        cfg["run"] = run                        # keep for retry on the next tick
+    else:
+        cfg["run"] = None
+        cfg["nights_done"] = cfg.get("nights_done", 0) + 1
+        try:
+            tm = compute_thermal_model(store, days=21)
+            heat = tm.get("rooms") or []
+            if heat and all(r.get("n_tau", 0) >= 2 for r in heat):
+                cfg["enabled"] = False
+                _am_log(cfg, now, "auto-stop", None, None, None, "genug τ-Daten gesammelt")
+        except Exception:
+            pass
+        if cfg.get("nights_done", 0) >= cfg.get("max_nights", 5):
+            cfg["enabled"] = False
+            _am_log(cfg, now, "auto-stop", None, None, None, "max. Nächte erreicht")
+    _am_save(store, cfg)
+
+
+def automeasure_tick(client, store, now=None):
+    """Reconciliation tick (called from the poller). Idempotent and restart-safe:
+    it brings the real state in line with 'should we be lowered right now?'."""
+    cfg = _am_cfg(store)
+    if not cfg:
+        return
+    now = now or int(time.time())
+    run = cfg.get("run")
+    if not cfg.get("enabled"):
+        if run:                                 # disabled mid-run → restore
+            _am_restore(client, store, cfg, now, reason="deaktiviert")
+        return
+    in_win = _am_in_window(now, cfg.get("start_h", 23), cfg.get("end_h", 5))
+    if run:
+        if now >= run.get("ends_ts", 0) or not in_win:
+            _am_restore(client, store, cfg, now, reason="Fenster beendet")
+        return                                  # else hold (already lowered)
+    if not in_win:
+        return
+    night = _am_night_label(now, cfg.get("start_h", 23), cfg.get("end_h", 5))
+    if cfg.get("last_night") == night:
+        return
+    if cfg.get("nights_done", 0) >= cfg.get("max_nights", 5):
+        cfg["enabled"] = False
+        _am_save(store, cfg)
+        return
+    if client is None:
+        return
+    _am_start(client, store, cfg, now, night)
+
+
+def compute_automeasure(store: "Store") -> dict:
+    cfg = _am_cfg(store) or _am_defaults()
+    now = int(time.time())
+    run = cfg.get("run")
+    state = "aktiv – abgesenkt" if run else ("scharf (wartet auf Nachtfenster)"
+                                             if cfg.get("enabled") else "aus")
+    return {"ok": True, "enabled": bool(cfg.get("enabled")),
+            "setback_k": cfg.get("setback_k", 4.0), "floor_c": cfg.get("floor_c", 15.0),
+            "start_h": cfg.get("start_h", 23), "end_h": cfg.get("end_h", 5),
+            "max_nights": cfg.get("max_nights", 5), "nights_done": cfg.get("nights_done", 0),
+            "running": bool(run), "state": state,
+            "lowered_rooms": list((run.get("applied") or {}).keys()) if run else [],
+            "in_window": _am_in_window(now, cfg.get("start_h", 23), cfg.get("end_h", 5)),
+            "log": list(reversed(cfg.get("log") or []))[:20]}
+
+
+def _am_arm(store: "Store", body: dict) -> dict:
+    cfg = _am_cfg(store) or _am_defaults()
+
+    def cf(key, lo, hi, dflt):
+        try:
+            return max(lo, min(hi, float(body.get(key))))
+        except (TypeError, ValueError):
+            return dflt
+
+    def ci(key, lo, hi, dflt):
+        try:
+            return int(max(lo, min(hi, int(body.get(key)))))
+        except (TypeError, ValueError):
+            return dflt
+
+    cfg["setback_k"] = cf("setback_k", AM_SETBACK_MIN, AM_SETBACK_MAX, cfg.get("setback_k", 4.0))
+    cfg["floor_c"] = cf("floor_c", AM_FLOOR_MIN, AM_FLOOR_MAX, cfg.get("floor_c", 15.0))
+    cfg["start_h"] = ci("start_h", 0, 23, cfg.get("start_h", 23))
+    cfg["end_h"] = ci("end_h", 0, 23, cfg.get("end_h", 5))
+    cfg["max_nights"] = ci("max_nights", 1, 14, cfg.get("max_nights", 5))
+    cfg["enabled"] = True
+    cfg["nights_done"] = 0
+    cfg["last_night"] = None
+    _am_save(store, cfg)
+    return compute_automeasure(store)
+
+
+def _am_disarm(store: "Store", client, now=None) -> dict:
+    cfg = _am_cfg(store) or _am_defaults()
+    cfg["enabled"] = False
+    _am_save(store, cfg)
+    if cfg.get("run"):
+        _am_restore(client, store, cfg, now or int(time.time()), reason="manuell gestoppt")
+    return compute_automeasure(store)
+
+
+def _demo_automeasure() -> dict:
+    now = int(time.time())
+    return {
+        "ok": True, "demo": True, "enabled": True,
+        "setback_k": 4.0, "floor_c": 15.0, "start_h": 23, "end_h": 5,
+        "max_nights": 5, "nights_done": 2, "running": True, "state": "aktiv – abgesenkt",
+        "lowered_rooms": ["Wohnzimmer", "Büro", "Schlafzimmer"],
+        "in_window": True,
+        "log": [
+            {"ts": now - 3600, "action": "absenken", "room": "Wohnzimmer", "from": 22.0, "to": 18.0, "note": None},
+            {"ts": now - 3600, "action": "absenken", "room": "Büro", "from": 21.0, "to": 17.0, "note": None},
+            {"ts": now - 90000, "action": "zurückgestellt", "room": "Wohnzimmer", "from": None, "to": 22.0, "note": "Fenster beendet"},
+        ],
+    }
+
+
 def _window_events(log_rows: list[dict], now: int) -> list[dict]:
     """Reconstruct open intervals from the window-log change rows."""
     events, cur = [], None
@@ -3932,6 +4188,11 @@ class Poller(threading.Thread):
             self._log_windows(ts)
         except Exception as exc:
             print(f"[poll] windows: {exc}", file=sys.stderr)
+        # Auto-Messung: orchestrated night setback (opt-in; writes thermostats)
+        try:
+            automeasure_tick(self.client, self.store, ts)
+        except Exception as exc:
+            print(f"[poll] automeasure: {exc}", file=sys.stderr)
         self.last_poll = ts
 
     def _log_windows(self, ts: int):
@@ -4928,6 +5189,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._post_observation_stop(body)
             if parsed.path == "/api/heatload":
                 return self._post_heatload(body)
+            if parsed.path == "/api/automeasure/arm":
+                return self._post_automeasure("arm", body)
+            if parsed.path == "/api/automeasure/disarm":
+                return self._post_automeasure("disarm", body)
             if parsed.path == "/api/optimize/step":
                 return self._post_optimize("step", body)
             if parsed.path == "/api/optimize/undo":
@@ -5436,6 +5701,29 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json(_opt_reset(self.store))
         return self._send_json({"ok": False, "error": "unknown"}, 400)
 
+    def _post_automeasure(self, kind, body):
+        """Arm/disarm the active night-setback. Only writes thermostats in live
+        mode; demo returns a simulated view and changes nothing real."""
+        if self.ctx.mode == "demo":
+            return self._send_json(_demo_automeasure())
+        if self.ctx.mode != "live":
+            return self._send_json({"ok": False, "error": "nur im Live-Modus verfügbar"}, 400)
+        try:
+            client = SHCClient(self.cfg.get("shc_ip", ""), self.cfg["cert"], self.cfg["key"])
+        except Exception as exc:
+            return self._send_json({"ok": False, "error": str(exc)}, 200)
+        if kind == "arm":
+            res = _am_arm(self.store, body or {})
+            # if we are already inside the night window, start right away
+            try:
+                automeasure_tick(client, self.store)
+            except Exception as exc:
+                print(f"[automeasure] arm tick: {exc}", file=sys.stderr)
+            return self._send_json({"ok": True, **compute_automeasure(self.store)})
+        if kind == "disarm":
+            return self._send_json({"ok": True, **_am_disarm(self.store, client)})
+        return self._send_json({"ok": False, "error": "unknown"}, 400)
+
     def _post_update(self, body):
         """Pull the latest code (git) and restart the bridge in place.
 
@@ -5610,6 +5898,10 @@ class Handler(BaseHTTPRequestHandler):
                 if self.ctx.mode == "demo":
                     return self._send_json(_demo_heatload(dc, sk))
                 return self._send_json({"demo": False, **compute_heatload(self.store, None, dc, sk)})
+            if path == "/api/automeasure":
+                if self.ctx.mode == "demo":
+                    return self._send_json(_demo_automeasure())
+                return self._send_json({"demo": False, **compute_automeasure(self.store)})
             if path == "/api/optimize":
                 if self.ctx.mode == "demo":
                     return self._send_json(_demo_optimize())
