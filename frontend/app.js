@@ -224,6 +224,13 @@ const INFO = {
     '– der praktische Startwert für die Durchflussmesser (Tacosetter) am Verteiler. Formel: Heizlast ≈ Fläche × spez. Last (W/m²), ' +
     'Durchfluss = Heizlast ÷ (1,16 × Spreizung ΔT). Länge ist nachrangig (beeinflusst den Pumpendruck, nicht den Ziel-Durchfluss). ' +
     'Danach feinjustieren über den <b>Hydraulischen Abgleich</b>. Alles nur lokal gespeichert.',
+  'observation': () => '<b>Geführte Beobachtungsphase.</b> Ein kontrollierter, mehrtägiger Mess-Ablauf, der die Datenbasis für das ' +
+    'thermische Modell und den hydraulischen Abgleich schafft. Mit <b>Start</b> wird ein Zeitpunkt verankert und der Fortschritt ' +
+    '<b>ab jetzt</b> gemessen – unabhängig von alten Daten. Die App prüft fünf Schritte: (1) Thermostate voll geöffnet, ' +
+    '(2) Zieldauer erreicht, (3) genug freie <b>Auskühlphasen</b> je Raum (für τ), (4) genug <b>Aufheizphasen</b>, ' +
+    '(5) ausreichende <b>Außentemperatur-Spanne</b>. <b>Störungen</b> wie offene Fenster oder eine fehlende Nachtabsenkung ' +
+    'werden erkannt und erklärt (eine gestörte Auskühlphase wird verworfen – das ist Absicht, kein Fehler). Du bekommst immer ' +
+    '<b>genau eine</b> nächste Aktion. Der Ablauf <b>steuert die Heizung nicht</b>, er sammelt nur Daten und zeigt den Fortschritt.',
   'thermal': () => '<b>Lernendes thermisches Raummodell.</b> Aus dem protokollierten Verlauf (Ist/Soll/Ventil je Raum + ' +
     'Außentemperatur) schätze ich pro Raum ein RC-Modell: C·dT/dt = Q − UA·(T<sub>innen</sub>−T<sub>außen</sub>). Aus freien ' +
     '<b>Auskühlphasen</b> (Ventil zu, keine Störung) ergibt sich die <b>Zeitkonstante τ = C/UA</b> (thermische Trägheit), aus ' +
@@ -2375,6 +2382,111 @@ function paintRoomTs(r) {
   if (note) note.innerHTML = (r.demo ? '<b>Demo-Daten</b>. ' : '') +
     'Einen Raum oben wählen zeigt zusätzlich den <b>Sollwert</b> (gestrichelt) und – als leichte Schattierung – wann sein <b>Ventil offen</b> ist (Raum verlangt Wärme). Wird pro Raum ab jetzt mitgeloggt.';
 }
+/* ---- Geführte Beobachtungsphase: controlled multi-day data-collection ----- */
+let _obsData = null, _obsBusy = false;
+async function renderObservation(force) {
+  const card = $('obs-card'); if (!card) return;
+  if (_obsData && !force) { paintObservation(_obsData); return; }
+  if (_obsBusy) return;
+  _obsBusy = true;
+  const next = $('obs-next');
+  if (force && next) next.innerHTML = '<div class="note">Status wird berechnet …</div>';
+  try { const r = await api('/api/observation'); _obsData = r; paintObservation(r); }
+  catch (e) { if (next) next.innerHTML = '<div class="note">Nur mit laufender Bridge verfügbar.</div>'; }
+  finally { _obsBusy = false; }
+}
+async function obsControl(action) {
+  const btnS = $('obs-start'), btnP = $('obs-stop'), note = $('obs-note');
+  const days = parseInt(($('obs-days') || {}).value || '7', 10);
+  const setback = !!($('obs-setback') || {}).checked;
+  if (note) note.textContent = '';
+  try {
+    const path = action === 'start' ? '/api/observation/start' : '/api/observation/stop';
+    const body = action === 'start' ? { target_days: days, night_setback: setback } : {};
+    const r = await postJSON(path, body);
+    if (r && r.ok) { _obsData = r; paintObservation(r); }
+    else if (note) note.textContent = (r && r.error) || 'Aktion fehlgeschlagen.';
+  } catch (e) {
+    if (note) note.textContent = 'Nur möglich, wenn die Seite von der Bridge geöffnet ist.';
+  }
+}
+function obsBar(p, col) {
+  return `<div style="background:var(--line);border-radius:6px;height:9px;overflow:hidden;flex:1">` +
+    `<div style="width:${Math.max(0, Math.min(100, p))}%;height:100%;background:${col}"></div></div>`;
+}
+function paintObservation(r) {
+  const head = $('obs-head'), next = $('obs-next'), overall = $('obs-overall'),
+    stepsEl = $('obs-steps'), roomsEl = $('obs-rooms'), distEl = $('obs-dist'),
+    btnS = $('obs-start'), btnP = $('obs-stop'), note = $('obs-note'),
+    daysSel = $('obs-days'), setback = $('obs-setback');
+  if (!r || !r.ok) { if (next) next.innerHTML = '<div class="note">Keine Daten.</div>'; return; }
+
+  // start/stop button visibility + prefill controls from server state
+  if (btnS) btnS.hidden = r.active;
+  if (btnP) btnP.hidden = !r.active;
+  if (daysSel && r.target_days) { daysSel.value = String(r.target_days); daysSel.disabled = r.active; }
+  if (setback) setback.disabled = r.active;
+
+  if (head) head.innerHTML = r.active
+    ? `<span style="color:var(--accent)">läuft · Tag ${r.elapsed_days} / ${r.target_days}</span>`
+    : `<span style="color:var(--muted)">nicht gestartet</span>`;
+
+  // next action — the single most important thing to do
+  if (next) {
+    const col = r.done ? '#4be0b0' : (r.active ? 'var(--accent)' : '#ffb64d');
+    next.innerHTML = `<div style="border:1px solid ${col};background:${col}14;border-radius:12px;padding:12px">` +
+      `<div style="font-size:12px;color:var(--muted);margin-bottom:3px">Nächster Schritt</div>` +
+      `<div style="font-size:14px;font-weight:600;line-height:1.5">${esc(r.next_action)}</div>` +
+      (r.eta_days != null && r.active && !r.done
+        ? `<div style="font-size:12px;color:var(--muted);margin-top:5px">Voraussichtlich bereit in ~${r.eta_days} Tag(en).</div>` : '') +
+      `</div>`;
+  }
+
+  // overall progress
+  if (overall) overall.innerHTML =
+    `<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">` +
+    `<b>Gesamtfortschritt</b><span style="color:var(--muted)">${r.overall}% · ${r.rooms_ready}/${r.n_rooms} Räume bereit</span></div>` +
+    `<div style="display:flex;gap:8px;align-items:center">${obsBar(r.overall, r.done ? '#4be0b0' : 'var(--accent)')}</div>`;
+
+  // step checklist
+  if (stepsEl) stepsEl.innerHTML = (r.steps || []).map(s => {
+    const icon = s.state === 'done' ? '✅' : (s.state === 'active' ? '🔄' : '⚪');
+    const col = s.state === 'done' ? '#4be0b0' : (s.state === 'active' ? 'var(--accent)' : 'var(--muted)');
+    return `<div style="margin-bottom:10px">` +
+      `<div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;margin-bottom:3px">` +
+        `<span>${icon} <b>${esc(s.title)}</b></span><span style="color:var(--muted)">${s.progress}%</span></div>` +
+      `<div style="display:flex;gap:8px;align-items:center;margin-bottom:3px">${obsBar(s.progress, col)}</div>` +
+      `<div style="font-size:12px;color:var(--muted);line-height:1.5">${esc(s.detail)}` +
+        (s.hint ? ` · ${esc(s.hint)}` : '') + `</div></div>`;
+  }).join('');
+
+  // per-room readiness
+  if (roomsEl) {
+    const rr = r.room_ready || [];
+    roomsEl.innerHTML = rr.length
+      ? `<div style="font-weight:700;margin-bottom:6px">Räume bereit?</div>` +
+        rr.map(x => {
+          const ok = x.status === 'bereit';
+          const col = ok ? '#4be0b0' : '#ffb64d';
+          return `<div class="devrow"><div class="nm"><b>${esc(x.room)}</b>` +
+            `<small>${x.n_tau}× Auskühlen · ${x.n_warm}× Aufheizen` +
+            (x.missing && x.missing.length ? ' · fehlt: ' + esc(x.missing[0]) : '') + `</small></div>` +
+            `<div class="val"><span style="color:${col};font-weight:600;font-size:12px">${ok ? '✓ bereit' : '⏳ ' + esc(x.confidence)}</span></div></div>`;
+        }).join('')
+      : '';
+  }
+
+  // disturbances
+  if (distEl) distEl.innerHTML = (r.disturbances || []).length
+    ? `<div style="font-weight:700;margin-bottom:6px">⚠︎ Störungen / Hinweise</div>` +
+      (r.disturbances || []).map(d => `<div style="font-size:13px;line-height:1.5;margin-bottom:4px">• ${esc(d)}</div>`).join('')
+    : '';
+
+  if (note) note.innerHTML = (r.demo ? '<b>Demo-Daten</b>. ' : '') +
+    'Der Fortschritt wird fortlaufend aktualisiert. Fenster-Öffnungen während einer Auskühlphase werden automatisch ' +
+    'ausgeklammert. Nach Abschluss liefert das <b>thermische Modell</b> belastbare τ-Werte und die Abgleich-Priorität.';
+}
+
 /* ---- Thermisches Raummodell (lernend): RC model + heat-demand ranking ---- */
 let _tmData = null, _tmBusy = false;
 async function renderThermal(force) {
@@ -6388,6 +6500,7 @@ function switchView(v) {
     if (typeof renderHeatTimeseries === 'function') renderHeatTimeseries(false);
     if (typeof renderRoomTs === 'function') renderRoomTs(false);
     if (typeof renderWindows === 'function') renderWindows(false);
+    if (typeof renderObservation === 'function') renderObservation(false);
     if (typeof renderThermal === 'function') renderThermal(false);
     if (typeof renderHydronic === 'function') renderHydronic();
     if (typeof renderLayout === 'function') renderLayout();
@@ -6555,7 +6668,9 @@ function init() {
       if (_hcData) paintHeatingCurve(_hcData); else renderHcDeviceNote(hcDevice());
     });
   });
-  const tmr = $('tm-refresh'); if (tmr) tmr.addEventListener('click', () => renderThermal(true));
+  const obsS = $('obs-start'); if (obsS) obsS.addEventListener('click', () => obsControl('start'));
+  const obsP = $('obs-stop'); if (obsP) obsP.addEventListener('click', () => obsControl('stop'));
+  const tmr = $('tm-refresh'); if (tmr) tmr.addEventListener('click', () => { renderThermal(true); renderObservation(true); });
   const rtsSel = $('rts-room');
   if (rtsSel) rtsSel.addEventListener('change', () => { _rtsSel = rtsSel.value; if (_rtsData) paintRoomTs(_rtsData); });
   const rtsRange = $('rts-range');

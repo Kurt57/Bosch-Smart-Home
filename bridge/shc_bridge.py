@@ -787,6 +787,11 @@ class Store:
                 "CREATE TABLE IF NOT EXISTS spot_prices("
                 " ts INTEGER PRIMARY KEY, market_ct REAL)"
             )
+            # small key/value store for server-side app state (e.g. the guided
+            # observation run anchor for the thermal/hydraulic analysis)
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY, value TEXT)"
+            )
 
     # -- heat pump ------------------------------------------------------- #
     def add_hp_sample(self, row: dict):
@@ -1054,6 +1059,22 @@ class Store:
     def meter_delete(self, ts: int):
         with self.lock, self.conn:
             self.conn.execute("DELETE FROM meter_readings WHERE ts=?", (int(ts),))
+
+    # -- generic key/value app state ------------------------------------- #
+    def kv_get(self, key: str):
+        with self.lock:
+            r = self.conn.execute("SELECT value FROM kv WHERE key=?", (key,)).fetchone()
+            return r["value"] if r else None
+
+    def kv_set(self, key: str, value: str):
+        with self.lock, self.conn:
+            self.conn.execute(
+                "INSERT INTO kv(key,value) VALUES(?,?)"
+                " ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
+
+    def kv_del(self, key: str):
+        with self.lock, self.conn:
+            self.conn.execute("DELETE FROM kv WHERE key=?", (key,))
 
     # -- day-ahead exchange prices --------------------------------------- #
     def spot_upsert(self, rows: list[tuple]):
@@ -2577,6 +2598,235 @@ def _demo_thermal(days: int = 14) -> dict:
         "next_observations": [
             "Nachts die Soll-Temperatur absenken: die Auskühlphasen liefern τ je Raum.",
             "Normale Aufheizphasen genügen – je mehr, desto genauer die Aufheizrate.",
+        ],
+    }
+
+
+# ===================================================================== #
+#  Intelligent heat-load analysis — module 2: guided observation phase   #
+# ===================================================================== #
+# A controlled, multi-day protocol that makes module 1 trustworthy: it
+# anchors a start time, tracks per-room how many clean cool-down / heat-up
+# phases have been collected, flags disturbances (open windows, missing
+# night set-back, too little outdoor-temperature spread) and tells the user
+# the single next action. Nothing here changes the heating – it only guides
+# data collection and reports progress honestly.
+
+OBS_KEY = "observation"
+
+
+def _obs_cfg(store: "Store"):
+    raw = store.kv_get(OBS_KEY)
+    if not raw:
+        return None
+    try:
+        c = json.loads(raw)
+        return c if isinstance(c, dict) else None
+    except (ValueError, TypeError):
+        return None
+
+
+def _detect_night_setback(room_rows: list[dict]) -> bool:
+    """True if the room setpoints are clearly lower at night (0–5 h) than by
+    day (11–20 h) – a night set-back produces clean free cool-down for τ."""
+    night, day = [], []
+    for r in room_rows:
+        sp = r.get("setpoint")
+        if sp is None:
+            continue
+        h = datetime.fromtimestamp(r["ts"]).hour
+        if 0 <= h <= 5:
+            night.append(sp)
+        elif 11 <= h <= 20:
+            day.append(sp)
+    if len(night) < 5 or len(day) < 5:
+        return False
+    return (sum(day) / len(day)) - (sum(night) / len(night)) >= 0.8
+
+
+def _rooms_valve_high(room_rows: list[dict]) -> set:
+    """Rooms seen with a (near) fully open valve – evidence the thermostat was
+    opened up so the manifold, not the room controller, sets the distribution."""
+    seen = set()
+    for r in room_rows:
+        v = r.get("valve")
+        if v is not None and v >= 80:
+            seen.add(r.get("room") or "—")
+    return seen
+
+
+def compute_observation(store: "Store", lookback_days: int = 21) -> dict:
+    """Status of the guided observation phase for the thermal model."""
+    now = int(time.time())
+    cfg = _obs_cfg(store)
+    active = bool(cfg and cfg.get("active"))
+    started = int(cfg["started_ts"]) if (cfg and cfg.get("started_ts")) else None
+    target_days = int(cfg.get("target_days")) if (cfg and cfg.get("target_days")) else 7
+    want_setback = bool(cfg.get("night_setback")) if cfg else True
+
+    since = started if (active and started) else now - lookback_days * 86400
+    elapsed_days = max(0.0, (now - since) / 86400.0)
+
+    model_days = max(1, int(math.ceil(elapsed_days)) if active else lookback_days)
+    tm = compute_thermal_model(store, days=model_days)
+    rooms = tm["rooms"]
+    n_rooms = len(rooms)
+    has_outdoor = tm["assessment"]["has_outdoor"]
+
+    rl = store.room_log_since(int(since))
+    hp = store.hp_samples_since(int(since))
+    win_events = _window_events(store.window_log_since(int(since)), now)
+
+    outs = [s["outdoor_c"] for s in hp if s.get("outdoor_c") is not None]
+    out_span = round(max(outs) - min(outs), 1) if outs else 0.0
+    out_min = round(min(outs), 1) if outs else None
+    out_max = round(max(outs), 1) if outs else None
+    night_setback = _detect_night_setback(rl)
+    valves_seen = _rooms_valve_high(rl)
+
+    tau_ok = sum(1 for r in rooms if r["n_tau"] >= 2)
+    warm_ok = sum(1 for r in rooms if r["n_warm"] >= 2)
+    ready = sum(1 for r in rooms if r["status"] == "bereit")
+
+    def pct(x):
+        return max(0, min(100, round(x * 100)))
+
+    # ---- protocol steps (derived state, each 0–100 %) ----
+    steps = []
+    s_open = (len(valves_seen) / n_rooms) if n_rooms else 0.0
+    steps.append({
+        "key": "open", "title": "1 · Thermostate öffnen",
+        "progress": pct(s_open), "state": "done" if s_open >= 0.8 else "active",
+        "detail": (f"{len(valves_seen)}/{n_rooms} Räume mit voll geöffnetem Ventil erkannt"
+                   if n_rooms else "noch keine Raumdaten"),
+        "hint": "Alle Raumthermostate auf Maximum/„Heizen“ stellen, damit der Verteiler die Verteilung bestimmt."})
+
+    s_days = (elapsed_days / target_days) if (active and target_days) else 0.0
+    steps.append({
+        "key": "days", "title": f"2 · Zeitraum ({target_days} Tage)",
+        "progress": pct(s_days),
+        "state": ("done" if elapsed_days >= target_days else "active") if active else "todo",
+        "detail": (f"Tag {elapsed_days:.1f} von {target_days}" if active else "noch nicht gestartet"),
+        "hint": "Je länger protokolliert wird, desto belastbarer τ und die Bedarfs-Reihenfolge."})
+
+    s_tau = (tau_ok / n_rooms) if n_rooms else 0.0
+    steps.append({
+        "key": "cooldown", "title": "3 · Auskühlphasen sammeln",
+        "progress": pct(s_tau), "state": "done" if s_tau >= 0.8 else "active",
+        "detail": f"{tau_ok}/{n_rooms} Räume mit ≥2 freien Auskühlphasen (τ bestimmbar)",
+        "hint": ("Nachtabsenkung aktiv – liefert saubere Auskühlphasen. 👍" if night_setback
+                 else "Tipp: nachts die Soll-Temperatur 1–2 K absenken → freie Auskühlung je Raum.")})
+
+    s_warm = (warm_ok / n_rooms) if n_rooms else 0.0
+    steps.append({
+        "key": "heatup", "title": "4 · Aufheizphasen sammeln",
+        "progress": pct(s_warm), "state": "done" if s_warm >= 0.8 else "active",
+        "detail": f"{warm_ok}/{n_rooms} Räume mit ≥2 klaren Aufheizphasen",
+        "hint": "Normale Aufheizvorgänge genügen – je mehr, desto genauer die Aufheizrate."})
+
+    s_span = min(1.0, out_span / 8.0) if has_outdoor else 0.0
+    steps.append({
+        "key": "span", "title": "5 · Temperaturspanne außen",
+        "progress": pct(s_span), "state": "done" if (has_outdoor and out_span >= 8.0) else "active",
+        "detail": (f"Außen {out_min}…{out_max} °C (Spanne {out_span} K, Ziel ≥8 K)"
+                   if has_outdoor else "keine Außentemperatur (WP/HomeCom verbinden)"),
+        "hint": "Eine breitere Außen-Spanne macht die Heizkurve und die Bedarfs-Schätzung sicherer."})
+
+    overall = round(sum(s["progress"] for s in steps) / len(steps))
+    done = active and elapsed_days >= target_days and ready >= max(1, round(n_rooms * 0.75))
+
+    # ---- disturbances during the window ----
+    disturbances = []
+    nwin = len(win_events)
+    if nwin:
+        disturbances.append(f"{nwin}× Fenster geöffnet im Zeitraum – Auskühlphasen in den "
+                            f"betroffenen Räumen werden dabei als gestört verworfen (kein Fehler).")
+    if active and want_setback and not night_setback and elapsed_days >= 1:
+        disturbances.append("Keine klare Nachtabsenkung erkannt – ohne sie dauert es länger, "
+                            "bis saubere Auskühlphasen (τ) zusammenkommen.")
+    if has_outdoor and out_span < 4 and elapsed_days >= 2:
+        disturbances.append(f"Außentemperatur bisher nur {out_span} K Spanne – die Kurve/Heizlast "
+                            f"wird erst mit wechselhafterem Wetter belastbar.")
+
+    # ---- the single next concrete action (most actionable first, not just the
+    # first open step) ----
+    step_by = {s["key"]: s for s in steps}
+    need_tau = [r["room"] for r in rooms if r["n_tau"] < 2]
+    if not active:
+        next_action = "Beobachtung starten (Button unten) – dann messe ich den Fortschritt ab jetzt."
+    elif done:
+        next_action = "Fertig: genug Daten. Weiter zum thermischen Modell und zur Abgleich-Priorität oben. ✅"
+    elif step_by["open"]["state"] != "done":
+        next_action = "Jetzt: alle Raumthermostate voll öffnen / auf „Heizen“ stellen."
+    elif step_by["cooldown"]["state"] != "done" and not night_setback:
+        next_action = ("Heute Abend die Soll-Temperatur 1–2 K absenken (Fenster zu) – liefert τ für "
+                       + (", ".join(need_tau[:4]) if need_tau else "die offenen Räume") + ".")
+    elif step_by["span"]["state"] != "done" and not has_outdoor:
+        next_action = "Wärmepumpe/HomeCom verbinden – ohne Außentemperatur lässt sich τ nicht ableiten."
+    else:
+        next_action = (f"Weiterlaufen lassen (Tag {elapsed_days:.1f} von {target_days}) – die offenen "
+                       f"Schritte vervollständigen sich mit der Zeit"
+                       + (f"; es fehlen noch Auskühlphasen für {', '.join(need_tau[:4])}" if need_tau else "") + ".")
+
+    # rough completion estimate
+    eta = None
+    if active and not done:
+        remaining_days = max(0.0, target_days - elapsed_days)
+        slow = (not night_setback) or (has_outdoor and out_span < 6)
+        eta = round(remaining_days + (2 if slow else 0))
+
+    # per-room readiness (compact)
+    room_ready = [{"room": r["room"], "status": r["status"], "confidence": r["confidence"],
+                   "n_tau": r["n_tau"], "n_warm": r["n_warm"], "missing": r["missing"]}
+                  for r in rooms]
+
+    return {
+        "ok": True, "active": active, "started_ts": started,
+        "target_days": target_days, "night_setback_wanted": want_setback,
+        "elapsed_days": round(elapsed_days, 1), "overall": overall, "done": done,
+        "n_rooms": n_rooms, "rooms_ready": ready,
+        "has_outdoor": has_outdoor, "night_setback": night_setback,
+        "out_span": out_span, "out_min": out_min, "out_max": out_max,
+        "n_windows": nwin, "eta_days": eta,
+        "steps": steps, "disturbances": disturbances, "next_action": next_action,
+        "room_ready": room_ready,
+    }
+
+
+def _demo_observation() -> dict:
+    now = int(time.time())
+    steps = [
+        {"key": "open", "title": "1 · Thermostate öffnen", "progress": 100, "state": "done",
+         "detail": "4/4 Räume mit voll geöffnetem Ventil erkannt",
+         "hint": "Alle Raumthermostate auf Maximum/„Heizen“."},
+        {"key": "days", "title": "2 · Zeitraum (7 Tage)", "progress": 71, "state": "active",
+         "detail": "Tag 5.0 von 7",
+         "hint": "Je länger protokolliert wird, desto belastbarer τ."},
+        {"key": "cooldown", "title": "3 · Auskühlphasen sammeln", "progress": 75, "state": "active",
+         "detail": "3/4 Räume mit ≥2 freien Auskühlphasen",
+         "hint": "Nachtabsenkung aktiv – liefert saubere Auskühlphasen. 👍"},
+        {"key": "heatup", "title": "4 · Aufheizphasen sammeln", "progress": 100, "state": "done",
+         "detail": "4/4 Räume mit ≥2 klaren Aufheizphasen",
+         "hint": "Normale Aufheizvorgänge genügen."},
+        {"key": "span", "title": "5 · Temperaturspanne außen", "progress": 85, "state": "active",
+         "detail": "Außen −2…8 °C (Spanne 10.0 K, Ziel ≥8 K)",
+         "hint": "Breitere Spanne macht Kurve/Heizlast sicherer."},
+    ]
+    return {
+        "ok": True, "demo": True, "active": True, "started_ts": now - 5 * 86400,
+        "target_days": 7, "night_setback_wanted": True, "elapsed_days": 5.0,
+        "overall": round(sum(s["progress"] for s in steps) / len(steps)), "done": False,
+        "n_rooms": 4, "rooms_ready": 3, "has_outdoor": True, "night_setback": True,
+        "out_span": 10.0, "out_min": -2.0, "out_max": 8.0, "n_windows": 6, "eta_days": 2,
+        "steps": steps,
+        "disturbances": ["6× Fenster geöffnet im Zeitraum – betroffene Auskühlphasen werden verworfen (kein Fehler)."],
+        "next_action": "Heute Abend die Soll-Temperatur 1–2 K absenken (Fenster zu) – liefert τ für Schlafzimmer.",
+        "room_ready": [
+            {"room": "Wohnzimmer", "status": "bereit", "confidence": "hoch", "n_tau": 5, "n_warm": 6, "missing": []},
+            {"room": "Büro", "status": "bereit", "confidence": "hoch", "n_tau": 4, "n_warm": 3, "missing": []},
+            {"room": "Bad", "status": "bereit", "confidence": "mittel", "n_tau": 4, "n_warm": 5, "missing": []},
+            {"room": "Schlafzimmer", "status": "beobachtung", "confidence": "niedrig", "n_tau": 1, "n_warm": 1,
+             "missing": ["1–2 ungestörte Auskühlphasen (Nacht-Absenkung, Fenster zu)"]},
         ],
     }
 
@@ -4112,6 +4362,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._post_meter(body)
             if parsed.path == "/api/meter/delete":
                 return self._post_meter_delete(body)
+            if parsed.path == "/api/observation/start":
+                return self._post_observation_start(body)
+            if parsed.path == "/api/observation/stop":
+                return self._post_observation_stop(body)
             if parsed.path == "/api/update":
                 return self._post_update(body)
             return self._send_json({"error": "unknown endpoint"}, 404)
@@ -4550,6 +4804,30 @@ class Handler(BaseHTTPRequestHandler):
         self.store.meter_delete(ts)
         return self._send_json({"ok": True, "readings": self.store.meter_list()})
 
+    def _post_observation_start(self, body):
+        """Anchor a guided observation run so progress is measured from now."""
+        try:
+            td = max(3, min(21, int(body.get("target_days") or 7)))
+        except (TypeError, ValueError):
+            td = 7
+        cfg = {"active": True, "started_ts": int(time.time()), "target_days": td,
+               "night_setback": bool(body.get("night_setback", True))}
+        self.store.kv_set(OBS_KEY, json.dumps(cfg))
+        if self.ctx.mode == "demo":
+            return self._send_json(_demo_observation())
+        try:
+            self._log_rooms_now()
+        except Exception:
+            pass
+        return self._send_json({"ok": True, **compute_observation(self.store)})
+
+    def _post_observation_stop(self, body):
+        """End the guided observation run (data stays; only the anchor clears)."""
+        self.store.kv_del(OBS_KEY)
+        if self.ctx.mode == "demo":
+            return self._send_json({"ok": True, **_demo_observation(), "active": False})
+        return self._send_json({"ok": True, **compute_observation(self.store)})
+
     def _post_update(self, body):
         """Pull the latest code (git) and restart the bridge in place.
 
@@ -4703,6 +4981,15 @@ class Handler(BaseHTTPRequestHandler):
                     pass
                 return self._send_json({"demo": False,
                     **compute_thermal_model(self.store, tdy)})
+            if path == "/api/observation":
+                if self.ctx.mode == "demo":
+                    return self._send_json(_demo_observation())
+                try:
+                    if int(time.time()) - self.store.room_log_last_ts() >= 120:
+                        self._log_rooms_now()
+                except Exception:
+                    pass
+                return self._send_json({"demo": False, **compute_observation(self.store)})
             if path == "/api/windows":
                 wd = int(qs.get("days", ["3"])[0])
                 if self.ctx.mode == "demo":

@@ -436,6 +436,31 @@
       <div id="win-logic" style="margin-top:12px"></div>
       <div class="note" id="win-note" style="margin-top:8px"></div>
     </div>
+    <div class="card" id="obs-card">
+      <h2><span class="info" data-info="observation" role="button" aria-label="Info">i</span>🔭 Geführte Beobachtungsphase <span class="r" id="obs-head"></span></h2>
+      <div class="note" style="margin-bottom:10px">Ein <b>mehrtägiger Mess-Ablauf</b>, der das thermische Modell belastbar macht:
+        ich protokolliere ab Start automatisch, zähle je Raum die sauberen <b>Auskühl-/Aufheizphasen</b>, erkenne <b>Störungen</b>
+        (offene Fenster, fehlende Nachtabsenkung) und sage dir den <b>einen nächsten Schritt</b>. Ändert selbst <b>nichts</b> an der Heizung.</div>
+      <div id="obs-next" style="margin-bottom:10px"></div>
+      <div id="obs-overall" style="margin-bottom:12px"></div>
+      <div id="obs-steps"></div>
+      <div id="obs-rooms" style="margin-top:12px"></div>
+      <div id="obs-dist" style="margin-top:12px"></div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px">
+        <label style="margin:0">Zieldauer
+          <select id="obs-days" style="width:auto;padding:5px 10px;margin:0">
+            <option value="5">5 Tage</option>
+            <option value="7" selected>7 Tage</option>
+            <option value="10">10 Tage</option>
+            <option value="14">14 Tage</option>
+          </select></label>
+        <label style="margin:0;display:flex;align-items:center;gap:6px;font-size:13px">
+          <input type="checkbox" id="obs-setback" checked style="width:auto;margin:0"> Nachtabsenkung geplant</label>
+        <button class="btn" id="obs-start" style="width:auto;padding:7px 16px;margin:0">▶︎ Beobachtung starten</button>
+        <button class="btn sec" id="obs-stop" style="width:auto;padding:7px 16px;margin:0" hidden>⏹ Beenden</button>
+      </div>
+      <div class="note" id="obs-note" style="margin-top:8px"></div>
+    </div>
     <div class="card" id="tm-card">
       <h2><span class="info" data-info="thermal" role="button" aria-label="Info">i</span>🧪 Thermisches Raummodell <span class="r" id="tm-head"></span></h2>
       <div class="note" style="margin-bottom:10px">Für jeden Raum lerne ich aus dem Verlauf ein eigenes <b>thermisches Modell</b>:
