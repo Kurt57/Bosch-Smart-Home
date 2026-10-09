@@ -1737,34 +1737,42 @@ def compute_heating_curve(store: "Store", days: int = 30, hp_live: dict | None =
     elif over_k >= 3:
         verdict = "Heizkurve etwas zu hoch – Spielraum nach unten."
     elif over_k <= -3:
-        verdict = "Heizkurve sehr niedrig – prüfen, ob alle Räume warm werden."
+        verdict = "Heizkurve niedrig eingestellt – effizient (Komfort im Blick behalten)."
     else:
         verdict = "Heizkurve WP-freundlich eingestellt."
     saving_pct = round(min(0.18, max(0.0, over_k) * 0.025), 3)
 
-    # concrete recommendation
-    niveau = round(over_k)                    # lower the whole curve by this many K
-    rec = {"basis": basis, "niveau_k": niveau,
+    # concrete recommendation. KEY: a LOW curve is good for a heat pump – raising
+    # it is never an efficiency recommendation, only a comfort note.
+    niveau = round(over_k)                    # >0 = lower the curve; <0 = already low
+    rec = {"basis": basis, "niveau_k": niveau, "efficient": niveau <= -2,
            "slope_act10": slope_act10, "slope_ideal10": slope_ideal10, "steil": steil}
     parts = []
+    comfort_ok = True
     if niveau >= 2:
         parts.append(f"<b>Niveau / Parallelverschiebung um ca. −{niveau} K</b> senken "
                      f"(die ganze Kurve bzw. den Vorlauf-Soll um {niveau} K runter)")
+        comfort_ok = False
     elif niveau <= -2:
-        parts.append(f"<b>Niveau um ca. +{abs(niveau)} K</b> anheben – die Räume könnten sonst "
-                     f"zu kühl werden")
+        parts.append("deine Kurve liegt <b>bereits unter dem WP-Zielband</b> – das ist "
+                     "<b>effizient</b>. <b>Niveau so lassen</b>; nur anheben, falls einzelne Räume "
+                     "nicht richtig warm werden")
     else:
         parts.append("das <b>Niveau</b> passt bereits gut")
+    # steeper = more flow in the cold = less efficient → only suggest when the
+    # curve isn't already low; flatter always saves, so always allowed.
     if steil == "flacher":
         parts.append(f"die <b>Steilheit/Gradient etwas flacher</b> stellen "
                      f"(aktuell ~{slope_act10} K je 10 K kälter, Ziel ~{slope_ideal10})")
-    elif steil == "steiler":
+    elif steil == "steiler" and not comfort_ok:
         parts.append(f"die <b>Steilheit etwas steiler</b> stellen "
                      f"(aktuell ~{slope_act10}, Ziel ~{slope_ideal10} K je 10 K kälter)")
     rec["text"] = " und ".join(parts) + "."
-    rec["howto"] = ("In kleinen Schritten (2–3 K bzw. eine Stufe), dann 1–2 Tage beobachten, ob "
-                    "alle Räume noch warm werden – besonders der kälteste Raum (Leitraum). "
-                    "Wiederholen, bis es gerade noch reicht.")
+    rec["howto"] = ("Immer in kleinen Schritten (2–3 K bzw. eine Stufe), dann 1–2 Tage beobachten. "
+                    "Ziel: der <b>niedrigste</b> Vorlauf, bei dem alle Räume – besonders der kälteste "
+                    "(Leitraum) – gerade noch warm werden.") if not comfort_ok else \
+        ("Niedriger Vorlauf = effizient. Falls ein Raum zu kühl bleibt, lieber erst den "
+         "<b>hydraulischen Abgleich</b> prüfen, bevor du die ganze Kurve anhebst.")
 
     ref = [{"outdoor": rx, "actual": round(a * rx + b, 1), "ideal": round(_ideal_flow(rx), 1)}
            for rx in (-7, 0, 7)]

@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-09 · Schnellerer Start: Kern lädt sofort, externe Integrationen (Home Assistant/Tibber/Carbon/Börse) im Hintergrund – kein Warten mehr beim Refresh'
+const APP_VERSION = '2026-10-09 · Heizkurven-Empfehlung korrigiert: niedrige Kurve = effizient (nie „anheben" als Spar-Tipp); Widerspruch zum „sehr effizient"-Hinweis behoben'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
