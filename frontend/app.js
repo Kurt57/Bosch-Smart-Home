@@ -3127,7 +3127,8 @@ function renderLayout() {
       `<td style="padding:4px 6px"><select data-lay="manifold" data-room="${esc(room)}" style="padding:4px 6px;margin:0;width:auto">${mfOpts(cfg.manifold || '')}</select></td>` +
       `<td style="padding:4px 6px;text-align:right">${inp('m²', cfg.area, 'area', room, 54)}</td>` +
       `<td style="padding:4px 6px;text-align:right">${inp('1', cfg.loops, 'loops', room, 42)}</td>` +
-      `<td style="padding:4px 6px;text-align:right">${inp('m', cfg.length, 'length', room, 50)}</td></tr>`;
+      `<td style="padding:4px 6px;text-align:right">${inp('m', cfg.length, 'length', room, 50)}</td>` +
+      `<td style="padding:4px 6px;text-align:center"><a href="#" data-roomdel="${esc(room)}" title="Raum aus dem Layout entfernen" style="color:var(--away);text-decoration:none;font-weight:700;font-size:16px">×</a></td></tr>`;
   }).join('');
   body.innerHTML =
     `<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-bottom:10px;font-size:13px">` +
@@ -3140,7 +3141,7 @@ function renderLayout() {
       `<input id="lay-mf-name" placeholder="z. B. EG" style="width:86px;padding:4px 6px;margin:0"><button class="btn sec" id="lay-mf-add" style="width:auto;padding:4px 10px;margin:0">+ Verteiler</button>` +
     `</div>` +
     (rooms.length
-      ? `<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="color:var(--muted);font-size:11px;text-transform:uppercase"><th style="text-align:left;padding:4px 6px">Raum</th><th style="text-align:left;padding:4px 6px">Verteiler</th><th style="text-align:right;padding:4px 6px">Fläche</th><th style="text-align:right;padding:4px 6px" title="Anzahl Heizschläuche/Kreise dieses Raums am Verteiler">Kreise</th><th style="text-align:right;padding:4px 6px">Länge</th></tr></thead><tbody>${rowsHtml}</tbody></table>`
+      ? `<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="color:var(--muted);font-size:11px;text-transform:uppercase"><th style="text-align:left;padding:4px 6px">Raum</th><th style="text-align:left;padding:4px 6px">Verteiler</th><th style="text-align:right;padding:4px 6px">Fläche</th><th style="text-align:right;padding:4px 6px" title="Anzahl Heizschläuche/Kreise dieses Raums am Verteiler">Kreise</th><th style="text-align:right;padding:4px 6px">Länge</th><th style="padding:4px 6px"></th></tr></thead><tbody>${rowsHtml}</tbody></table>`
       : '<div class="note">Noch keine Räume erkannt – öffne kurz den Heizungs-Check/Räume, oder füge unten manuell hinzu.</div>') +
     `<div style="display:flex;gap:6px;align-items:center;margin-top:8px;flex-wrap:wrap"><input id="lay-room-name" placeholder="Raum hinzufügen" style="width:140px;padding:4px 6px;margin:0"><button class="btn sec" id="lay-room-add" style="width:auto;padding:4px 10px;margin:0">+ Raum</button><button class="btn sec" id="lay-rooms-load" style="width:auto;padding:4px 10px;margin:0">🔄 Räume laden</button><button class="btn sec" id="lay-preset" style="width:auto;padding:4px 10px;margin:0">🏠 Mein Haus vorbefüllen</button></div>` +
     `<div class="note" id="lay-preset-note" style="margin-top:6px;display:none"></div>` +
@@ -3186,8 +3187,8 @@ const LAYOUT_PRESET = {
     'Flur': { manifold: 'Küche', area: 14, loops: 1 },
     'Bad': { manifold: 'Küche', area: 6, loops: 1 },
     'Schlafzimmer': { manifold: 'Schlafzimmer', area: 20, loops: 2 },
-    'Kinderzimmer 1': { manifold: 'OG', area: 30, loops: 2 },
-    'Kinderzimmer 2': { manifold: 'OG', area: 30, loops: 2 },
+    'Yusuf’s Zimmer': { manifold: 'OG', area: 30, loops: 2 },
+    'Elif’s Zimmer': { manifold: 'OG', area: 30, loops: 2 },
   },
 };
 function layoutPresetMyHouse() {
@@ -3207,9 +3208,10 @@ function layoutPresetMyHouse() {
   const n = $('lay-preset-note');
   if (n) {
     n.style.display = '';
-    n.innerHTML = '✓ Vorbefüllt – 3 Verteiler: <b>Küche</b> (Wohnzimmer, Küche, Flur, Bad), <b>Schlafzimmer</b>, <b>OG</b> (2 Kinderzimmer). ' +
-      '<b>Bitte noch prüfen:</b> die Raum-<b>Namen</b> müssen deinen Bosch-Raumnamen entsprechen (sonst verknüpft sich die Fläche nicht mit τ – ' +
-      'ggf. umbenennen bzw. die echten Räume nehmen). Kinderzimmer-Fläche = beheizte Bodenfläche (~30 m²), nicht die Wohnfläche.';
+    n.innerHTML = '✓ Vorbefüllt – 3 Verteiler: <b>Küche</b> (Wohnzimmer, Küche, Flur, Bad), <b>Schlafzimmer</b>, <b>OG</b> (Yusuf’s &amp; Elif’s Zimmer). ' +
+      '<b>Bitte noch prüfen:</b> die Raum-<b>Namen</b> müssen exakt deinen Bosch-Namen entsprechen (auch der Apostroph!). ' +
+      'Erscheint ein Raum doppelt (echter + Vorlage), nimm den echten (mit „🔄 Räume laden") und <b>lösch die Vorlage-Zeile mit dem ×</b>. ' +
+      'Fläche der Kinderzimmer = beheizte Bodenfläche (~30 m²), nicht die Wohnfläche.';
   }
 }
 function hcDevice() {
@@ -7250,6 +7252,15 @@ function init() {
       if (t.dataset.lay === 'manifold' && t.dataset.room) { layoutSet(t.dataset.room, 'manifold', t.value); computeLayoutResult(); _flowData = null; }
     });
     layCard.addEventListener('click', e => {
+      const rdel = e.target.closest('[data-roomdel]');
+      if (rdel) {
+        e.preventDefault(); const rm = rdel.dataset.roomdel;
+        if (confirm('Raum „' + rm + '" aus dem Layout entfernen?')) {
+          const l = layoutModel(); delete l.rooms[rm]; layoutSave(l);
+          _hlData = null; _flowData = null; renderLayout();
+        }
+        return;
+      }
       const del = e.target.closest('[data-mfdel]');
       if (del) { e.preventDefault(); const l = layoutModel(); l.manifolds = l.manifolds.filter(m => m !== del.dataset.mfdel); Object.values(l.rooms).forEach(r => { if (r.manifold === del.dataset.mfdel) delete r.manifold; }); layoutSave(l); renderLayout(); return; }
       if (e.target.id === 'lay-mf-add') { const v = ($('lay-mf-name').value || '').trim(); if (v) { const l = layoutModel(); if (!l.manifolds.includes(v)) l.manifolds.push(v); layoutSave(l); renderLayout(); } return; }
