@@ -3142,7 +3142,8 @@ function renderLayout() {
     (rooms.length
       ? `<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="color:var(--muted);font-size:11px;text-transform:uppercase"><th style="text-align:left;padding:4px 6px">Raum</th><th style="text-align:left;padding:4px 6px">Verteiler</th><th style="text-align:right;padding:4px 6px">Fläche</th><th style="text-align:right;padding:4px 6px" title="Anzahl Heizschläuche/Kreise dieses Raums am Verteiler">Kreise</th><th style="text-align:right;padding:4px 6px">Länge</th></tr></thead><tbody>${rowsHtml}</tbody></table>`
       : '<div class="note">Noch keine Räume erkannt – öffne kurz den Heizungs-Check/Räume, oder füge unten manuell hinzu.</div>') +
-    `<div style="display:flex;gap:6px;align-items:center;margin-top:8px;flex-wrap:wrap"><input id="lay-room-name" placeholder="Raum hinzufügen" style="width:140px;padding:4px 6px;margin:0"><button class="btn sec" id="lay-room-add" style="width:auto;padding:4px 10px;margin:0">+ Raum</button><button class="btn sec" id="lay-rooms-load" style="width:auto;padding:4px 10px;margin:0">🔄 Räume laden</button></div>` +
+    `<div style="display:flex;gap:6px;align-items:center;margin-top:8px;flex-wrap:wrap"><input id="lay-room-name" placeholder="Raum hinzufügen" style="width:140px;padding:4px 6px;margin:0"><button class="btn sec" id="lay-room-add" style="width:auto;padding:4px 10px;margin:0">+ Raum</button><button class="btn sec" id="lay-rooms-load" style="width:auto;padding:4px 10px;margin:0">🔄 Räume laden</button><button class="btn sec" id="lay-preset" style="width:auto;padding:4px 10px;margin:0">🏠 Mein Haus vorbefüllen</button></div>` +
+    `<div class="note" id="lay-preset-note" style="margin-top:6px;display:none"></div>` +
     `<div id="lay-result" style="margin-top:12px"></div>`;
   computeLayoutResult();
 }
@@ -3173,6 +3174,38 @@ function computeLayoutResult() {
   if (unassigned.length) html += `<div class="note" style="margin-top:6px">Ohne Verteiler (noch zuordnen): ${unassigned.map(esc).join(', ')}.</div>`;
   html += `<div class="note" style="margin-top:8px">Stell an jedem <b>Durchflussmesser (Tacosetter)</b> den Wert <b>„je Schlauch"</b> ein (hat ein Raum mehrere Kreise, teilt sich seine Menge gleichmäßig darauf auf) – als <b>Startwert</b>, dann feinjustieren über den <b>Hydraulischen Abgleich</b>/die <b>Schrittweise Optimierung</b> oben.</div>`;
   el.innerHTML = html;
+}
+// one-tap preset for this household (areas + loops + manifold guess). Only the
+// user triggers it; values are merged so manually changed rooms aren't lost
+// beyond the preset ones. Honest estimates – the user adjusts afterwards.
+const LAYOUT_PRESET = {
+  q: 40, dt: 6, manifolds: ['EG', 'OG'],
+  rooms: {
+    'Wohnzimmer': { manifold: 'EG', area: 35, loops: 3 },
+    'Küche': { manifold: 'EG', area: 25, loops: 2 },
+    'Flur': { manifold: 'EG', area: 14, loops: 1 },
+    'Schlafzimmer': { manifold: 'EG', area: 20, loops: 2 },
+    'Bad': { manifold: 'EG', area: 6, loops: 1 },
+    'Kinderzimmer 1': { manifold: 'OG', area: 30, loops: 2 },
+    'Kinderzimmer 2': { manifold: 'OG', area: 30, loops: 2 },
+  },
+};
+function layoutPresetMyHouse() {
+  const l = layoutModel();
+  l.q = LAYOUT_PRESET.q; l.dt = LAYOUT_PRESET.dt;
+  l.manifolds = [...new Set([...(l.manifolds || []), ...LAYOUT_PRESET.manifolds])];
+  l.rooms = l.rooms || {};
+  Object.entries(LAYOUT_PRESET.rooms).forEach(([rm, v]) => { l.rooms[rm] = { ...(l.rooms[rm] || {}), ...v }; });
+  layoutSave(l);
+  _hlData = null; _flowData = null;
+  renderLayout();
+  const n = $('lay-preset-note');
+  if (n) {
+    n.style.display = '';
+    n.innerHTML = '✓ Vorbefüllt. <b>Bitte prüfen/anpassen:</b> die Raum-<b>Namen</b> müssen deinen Bosch-Raumnamen entsprechen ' +
+      '(sonst verknüpft sich die Fläche nicht mit τ – ggf. umbenennen bzw. die echten Räume nehmen). Die <b>Verteiler-Zuordnung EG/OG</b> ' +
+      'ist geraten. Kinderzimmer-Fläche = beheizte Bodenfläche (nicht die Wohnfläche).';
+  }
 }
 function hcDevice() {
   const g = k => { const v = parseFloat(localStorage.getItem(k)); return isFinite(v) ? v : null; };
@@ -7217,6 +7250,11 @@ function init() {
       if (e.target.id === 'lay-mf-add') { const v = ($('lay-mf-name').value || '').trim(); if (v) { const l = layoutModel(); if (!l.manifolds.includes(v)) l.manifolds.push(v); layoutSave(l); renderLayout(); } return; }
       if (e.target.id === 'lay-room-add') { const v = ($('lay-room-name').value || '').trim(); if (v) { const l = layoutModel(); l.rooms[v] = l.rooms[v] || {}; layoutSave(l); renderLayout(); } return; }
       if (e.target.id === 'lay-rooms-load') { renderLayout(); return; }
+      if (e.target.id === 'lay-preset') {
+        if (confirm('Verteiler-Layout mit deinen Hauswerten vorbefüllen (Flächen, Kreise, Verteiler EG/OG)? Bestehende Angaben zu diesen Räumen werden überschrieben.'))
+          layoutPresetMyHouse();
+        return;
+      }
     });
   }
   const hcdr = $('hc-dev-read'); if (hcdr) hcdr.addEventListener('click', readDeviceCurve);
