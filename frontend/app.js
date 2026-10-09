@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-09 · Update vom iPhone: „Neue Version verfügbar"-Banner + 1 Tipp startet die Bridge am Rechner neu (git pull + Neustart)'
+const APP_VERSION = '2026-10-09 · Heizkurve: konkrete Empfehlung (Niveau −X K / Steilheit) aus der Kurve – sofort vorläufig aus dem aktuellen Betriebspunkt, mit jedem Takt genauer'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -2079,6 +2079,16 @@ function paintHeatingCurve(r) {
   if (head) head.innerHTML = `<span style="color:${col}">${r.over_k > 0 ? '+' : ''}${fmt(r.over_k, 1)} K vs. Ziel</span>`;
   if (chart) chart.innerHTML = curveChart(r);
   if (ref) {
+    // concrete recommendation box (Niveau / Steilheit) derived from the curve
+    const rec = r.recommendation;
+    let recBox = '';
+    if (rec && rec.text) {
+      const prov = r.provisional ? `<span style="color:var(--muted);font-weight:400"> · vorläufig${rec.basis === 'provisional' ? ', nur Niveau' : ''}</span>` : '';
+      recBox = `<div style="background:var(--card2);border:1px solid var(--line);border-left:3px solid ${col};border-radius:8px;padding:10px 12px;margin-bottom:10px">` +
+        `<div style="font-weight:700;color:${col}">💡 Empfehlung${prov}</div>` +
+        `<div style="font-size:13px;margin-top:4px;line-height:1.5">${rec.text}</div>` +
+        `<div style="font-size:12px;color:var(--muted);margin-top:6px">${esc(rec.howto || '')}</div></div>`;
+    }
     const row = (o, a, id) => {
       const diff = a - id, dc = diff >= 2 ? '#ff6b8a' : diff >= 1 ? '#ffb64d' : '#4be0b0';
       return `<tr><td style="padding:5px 8px">${o > 0 ? '+' : ''}${o} °C außen</td>` +
@@ -2086,12 +2096,13 @@ function paintHeatingCurve(r) {
         `<td style="padding:5px 8px;text-align:right;color:var(--muted)">Ziel ${fmt(id, 0)} °C</td>` +
         `<td style="padding:5px 8px;text-align:right;color:${dc}">${diff >= 0 ? '+' : ''}${fmt(diff, 0)} K</td></tr>`;
     };
-    ref.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px">` +
+    ref.innerHTML = recBox + `<table style="width:100%;border-collapse:collapse;font-size:13px">` +
       (r.ref || []).map(x => row(x.outdoor, x.actual, x.ideal)).join('') + `</table>`;
   }
-  if (note) note.innerHTML = `<b style="color:${col}">${esc(r.verdict)}</b> · ${r.n} Messpunkte (${r.days_window || 30} Tage)` +
+  if (note) note.innerHTML = `<b style="color:${col}">${esc(r.verdict)}</b> · ${r.n} Messpunkt${r.n === 1 ? '' : 'e'} (${r.days_window || 30} Tage)` +
     (r.cycles && r.cycles.per_day != null ? ` · ~${fmt(r.cycles.per_day, 1)} Takte/Tag` : '') +
-    (r.demo ? ' · <b>Demo-Daten</b>' : '');
+    (r.demo ? ' · <b>Demo-Daten</b>' : '') +
+    (r.provisional ? '<br><span style="color:var(--muted)">Noch vorläufig – wird mit jedem Heiztakt genauer. Ältere CSV-/Energiedaten enthalten keine Vorlauftemperatur, daher baut sich die echte Kurve erst seit dem Update auf.</span>' : '');
 }
 
 /* ---- Hydraulischer Abgleich: step guide + data-driven room worklist ------- */

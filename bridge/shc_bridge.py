@@ -1617,10 +1617,17 @@ def hp_cycle_stats(samples: list[dict]) -> dict | None:
             "avg_run_min": round(run_min) if run_min else None}
 
 
-def compute_heating_curve(store: "Store", days: int = 30) -> dict:
+IDEAL_SLOPE = -0.45   # °C flow per °C outdoor (= 4,5 K Vorlauf je 10 K kälter)
+
+
+def compute_heating_curve(store: "Store", days: int = 30, hp_live: dict | None = None) -> dict:
     """The REAL heating curve: flow temperature vs. outdoor temperature from the
-    stored samples, with a fitted line and the WP-friendly target band. Builds up
-    as the bridge logs supply/return over time."""
+    stored samples + the current operating point, a fitted (or provisional) line,
+    the WP-friendly target band, and a CONCRETE recommendation (Niveau/Steilheit).
+
+    Historic CSV/energy data has no flow temperature, so the curve builds from the
+    flow/return we log from now on – plus the live snapshot, so a first
+    recommendation is possible immediately instead of waiting days."""
     since = int(time.time()) - days * 86400
     rows = store.hp_samples_since(since)
     pts = []
@@ -1633,26 +1640,59 @@ def compute_heating_curve(store: "Store", days: int = 30) -> dict:
         if (s.get("modulation") or 0) <= 0:
             continue
         pts.append((round(float(o), 1), round(float(sup), 1)))
+    # add the live operating point (counts immediately, before history fills up)
+    live_pt = None
+    if hp_live:
+        lo, ls = hp_live.get("outdoor_c"), hp_live.get("supply_c")
+        lm = (hp_live.get("mode") or "").lower()
+        if lo is not None and ls is not None and ls >= 20 and lm in ("ch", "heating", "heat") \
+                and (hp_live.get("modulation") or 0) > 0:
+            live_pt = (round(float(lo), 1), round(float(ls), 1))
+            pts.append(live_pt)
     n = len(pts)
     cyc = hp_cycle_stats(rows)
-    if n < 12:
-        return {"ok": True, "enough": False, "n": n, "points": pts,
-                "cycles": cyc,
-                "note": "Sammelt ab jetzt Vorlauf/Rücklauf bei jedem Takt – nach ein paar "
-                        "Heiztagen erscheint hier deine echte Heizkurve."}
+    if n == 0:
+        return {"ok": True, "enough": False, "n": 0, "points": [], "cycles": cyc,
+                "note": "Sobald die Wärmepumpe heizt, zeichnet die App Vorlauf × Außentemperatur "
+                        "auf – dann erscheint hier deine Kurve samt konkreter Empfehlung. "
+                        "(Historische CSV-Daten enthalten leider keine Vorlauftemperatur.)"}
+
     xs = [p[0] for p in pts]; ys = [p[1] for p in pts]
-    mx = sum(xs) / n; my = sum(ys) / n
-    sxx = sum((x - mx) ** 2 for x in xs)
-    sxy = sum((xs[i] - mx) * (ys[i] - my) for i in range(n))
-    a = (sxy / sxx) if sxx > 1e-6 else 0.0     # slope (°C flow per °C outdoor)
-    b = my - a * mx
-    xmin = max(-15.0, min(xs)); xmax = min(18.0, max(xs))
-    if xmax - xmin < 4:
-        xmin, xmax = xmin - 2, xmax + 2
-    # over-temperature vs. ideal, averaged across the observed heating range
+    span = max(xs) - min(xs)
+    full_fit = n >= 10 and span >= 5
+    if full_fit:
+        mx = sum(xs) / n; my = sum(ys) / n
+        sxx = sum((x - mx) ** 2 for x in xs)
+        sxy = sum((xs[i] - mx) * (ys[i] - my) for i in range(n))
+        a = (sxy / sxx) if sxx > 1e-6 else IDEAL_SLOPE
+        b = my - a * mx
+        basis = "fit"
+    else:
+        # too few points / too little outdoor spread to trust a slope → assume the
+        # standard steepness and only estimate the LEVEL (parallel offset).
+        a = IDEAL_SLOPE
+        offs = [ys[i] - _ideal_flow(xs[i]) for i in range(n)]
+        b = (sum(offs) / n) + _ideal_flow(0.0)      # ideal(0)=b_ideal; shift by mean offset
+        basis = "provisional"
+
+    xmin = max(-15.0, min(min(xs), -7.0)); xmax = min(18.0, max(max(xs), 12.0))
+    if xmax - xmin < 6:
+        xmin, xmax = xmin - 3, xmax + 3
     sample_x = [xmin + (xmax - xmin) * k / 6 for k in range(7)]
-    overs = [(a * x + b) - _ideal_flow(x) for x in sample_x]
-    over_k = round(sum(overs) / len(overs), 1)
+    over_k = round(sum((a * x + b) - _ideal_flow(x) for x in sample_x) / len(sample_x), 1)
+
+    # slope expressed as "K Vorlauf je 10 K kälter" (positive number)
+    slope_act10 = round(abs(a) * 10, 1)
+    slope_ideal10 = round(abs(IDEAL_SLOPE) * 10, 1)
+    steil = None
+    if full_fit:
+        if slope_act10 >= slope_ideal10 + 1.5:
+            steil = "flacher"      # too steep (rises too much towards cold)
+        elif slope_act10 <= slope_ideal10 - 1.5:
+            steil = "steiler"
+        else:
+            steil = "ok"
+
     if over_k >= 6:
         verdict = "Heizkurve deutlich zu hoch – klares Sparpotenzial."
     elif over_k >= 3:
@@ -1662,20 +1702,42 @@ def compute_heating_curve(store: "Store", days: int = 30) -> dict:
     else:
         verdict = "Heizkurve WP-freundlich eingestellt."
     saving_pct = round(min(0.18, max(0.0, over_k) * 0.025), 3)
-    ref = []
-    for rx in (-7, 0, 7):
-        ref.append({"outdoor": rx, "actual": round(a * rx + b, 1),
-                    "ideal": round(_ideal_flow(rx), 1)})
-    # cap the scatter payload
+
+    # concrete recommendation
+    niveau = round(over_k)                    # lower the whole curve by this many K
+    rec = {"basis": basis, "niveau_k": niveau,
+           "slope_act10": slope_act10, "slope_ideal10": slope_ideal10, "steil": steil}
+    parts = []
+    if niveau >= 2:
+        parts.append(f"<b>Niveau / Parallelverschiebung um ca. −{niveau} K</b> senken "
+                     f"(die ganze Kurve bzw. den Vorlauf-Soll um {niveau} K runter)")
+    elif niveau <= -2:
+        parts.append(f"<b>Niveau um ca. +{abs(niveau)} K</b> anheben – die Räume könnten sonst "
+                     f"zu kühl werden")
+    else:
+        parts.append("das <b>Niveau</b> passt bereits gut")
+    if steil == "flacher":
+        parts.append(f"die <b>Steilheit/Gradient etwas flacher</b> stellen "
+                     f"(aktuell ~{slope_act10} K je 10 K kälter, Ziel ~{slope_ideal10})")
+    elif steil == "steiler":
+        parts.append(f"die <b>Steilheit etwas steiler</b> stellen "
+                     f"(aktuell ~{slope_act10}, Ziel ~{slope_ideal10} K je 10 K kälter)")
+    rec["text"] = " und ".join(parts) + "."
+    rec["howto"] = ("In kleinen Schritten (2–3 K bzw. eine Stufe), dann 1–2 Tage beobachten, ob "
+                    "alle Räume noch warm werden – besonders der kälteste Raum (Leitraum). "
+                    "Wiederholen, bis es gerade noch reicht.")
+
+    ref = [{"outdoor": rx, "actual": round(a * rx + b, 1), "ideal": round(_ideal_flow(rx), 1)}
+           for rx in (-7, 0, 7)]
     step = max(1, n // 300)
-    pts_out = pts[::step]
-    return {"ok": True, "enough": True, "n": n, "days_window": days,
-            "points": pts_out, "fit": {"a": round(a, 3), "b": round(b, 2)},
+    return {"ok": True, "enough": True, "provisional": not full_fit, "basis": basis,
+            "n": n, "days_window": days, "points": pts[::step], "live_point": live_pt,
+            "fit": {"a": round(a, 3), "b": round(b, 2)},
             "ideal": [{"x": round(x, 1), "y": round(_ideal_flow(x), 1)} for x in
                       [xmin + (xmax - xmin) * k / 20 for k in range(21)]],
             "xmin": round(xmin, 1), "xmax": round(xmax, 1),
             "over_k": over_k, "verdict": verdict, "saving_pct": saving_pct,
-            "ref": ref, "cycles": cyc}
+            "recommendation": rec, "ref": ref, "cycles": cyc}
 
 
 def compute_heating_diag(climate: list[dict], hp: dict | None, cycles: dict | None = None) -> dict:
@@ -3420,9 +3482,10 @@ class Handler(BaseHTTPRequestHandler):
                     **compute_heating_diag(climate, hp, cyc)})
             if path == "/api/heating/curve":
                 # the real heating curve (flow vs. outdoor) from logged samples
+                # plus the live operating point, with a concrete recommendation
                 cd = int(qs.get("days", ["30"])[0])
                 return self._send_json({"demo": self.ctx.mode == "demo",
-                    **compute_heating_curve(self.store, cd)})
+                    **compute_heating_curve(self.store, cd, self._hp_live())})
             if path == "/api/heatpump":
                 st = dict(self.ctx.hp_state)
                 st["available"] = bool(st) and st.get("energy_kwh") is not None or bool(st.get("last_poll"))
