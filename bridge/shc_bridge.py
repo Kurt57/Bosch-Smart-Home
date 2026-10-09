@@ -2280,27 +2280,37 @@ def _demo_hp(dt: datetime) -> dict:
 
 
 def _demo_controls() -> list[dict]:
-    """Synthetic heat-pump controls for the demo (operation mode, heating-curve
-    level, room/DHW setpoints) – some writeable, some read-only, with ranges."""
+    """Synthetic heat-pump controls for the demo – mirrors a real CS6800i tree
+    (weather-compensated: no Niveau/Steilheit knob; the curve follows the room
+    setpoint + max flow temp). Some writeable, some read-only, with ranges."""
+    def c(path, value, writeable=True, allowed=None, lo=None, hi=None, unit=None):
+        return {"path": path, "value": value, "type": "value", "writeable": writeable,
+                "allowed": allowed, "min": lo, "max": hi, "unit": unit}
+    H = "/resource/heatingCircuits/hc1"
+    W = "/resource/dhwCircuits/dhw1"
     return [
-        {"path": "/resource/heatingCircuits/hc1/operationMode", "value": "auto",
-         "type": "stringValue", "writeable": True, "allowed": ["auto", "manual", "off"],
-         "min": None, "max": None, "unit": None},
-        {"path": "/resource/heatingCircuits/hc1/heatingCurveLevel", "value": 0,
-         "type": "floatValue", "writeable": True, "allowed": None,
-         "min": -10, "max": 10, "unit": "K"},
-        {"path": "/resource/heatingCircuits/hc1/roomtemperature", "value": 21.0,
-         "type": "floatValue", "writeable": True, "allowed": None,
-         "min": 5, "max": 30, "unit": "C"},
-        {"path": "/resource/heatingCircuits/hc1/actualSupplyTemperature", "value": 33.0,
-         "type": "floatValue", "writeable": False, "allowed": None,
-         "min": None, "max": None, "unit": "C"},
-        {"path": "/resource/dhwCircuits/dhw1/operationMode", "value": "eco",
-         "type": "stringValue", "writeable": True, "allowed": ["eco", "comfort", "off"],
-         "min": None, "max": None, "unit": None},
-        {"path": "/resource/dhwCircuits/dhw1/temperatureLevels/high", "value": 52.0,
-         "type": "floatValue", "writeable": True, "allowed": None,
-         "min": 40, "max": 65, "unit": "C"},
+        c(f"{H}/controlType", "wdcoptimized", True, ["wdcoptimized", "wdcsimplified", "ISRC", "vbh"]),
+        c(f"{H}/maxFlowTemp", 50, True, None, 30, 50, "C"),
+        c(f"{H}/temperatureLevels/comfort2", 25, True, None, 23.5, 30, "C"),
+        c(f"{H}/temperatureLevels/eco", 23, True, None, 5, 23, "C"),
+        c(f"{H}/temperatureRoomManual", 23.5, True, None, 5, 30, "C"),
+        c(f"{H}/currentRoomSetpoint", 23.5, False, None, None, None, "C"),
+        c(f"{H}/heatingType", "floor", False, ["radiator", "floor", "airHeating"]),
+        c(f"{H}/operationMode", "manual", True, ["off", "manual", "auto"]),
+        c(f"{H}/boostMode", "off", True, ["on", "off"]),
+        c(f"{H}/boostDuration", 1, True, None, 1, 8, "hours"),
+        c(f"{H}/overallStatus", "heating_manual_on", False,
+          ["boost", "away", "holiday", "heating_manual_on", "heating_auto"]),
+        c(f"{H}/name", "AFoAZQBpAHQ=", True),      # binary → should be hidden
+        c(f"{W}/operationMode", "eco", True, ["Off", "low", "high", "ownprogram", "eco"]),
+        c(f"{W}/temperatureLevels/high", 53, True, None, 40, 55, "C"),
+        c(f"{W}/temperatureLevels/eco", 44, True, None, 30, 46, "C"),
+        c(f"{W}/temperatureLevels/low", 51, True, None, 35, 51, "C"),
+        c(f"{W}/singleChargeSetpoint", 60, True, None, 50, 70, "C"),
+        c(f"{W}/charge", "stop", True, ["start", "stop"]),
+        c(f"{W}/chargeDuration", 60, True, None, 60, 2880, "mins"),
+        c(f"{W}/actualTemp", 45.3, False, None, None, None, "C"),
+        c(f"{W}/currentSetpoint", 53, False, None, None, None, "C"),
     ]
 
 

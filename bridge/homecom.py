@@ -396,8 +396,9 @@ class HomeComClient:
                     rid = norm(r.get("id") if isinstance(r, dict) else None)
                     if rid and rid not in seen:
                         queue.append(rid)
+                continue                       # a container, not a value leaf
             d = self._control_desc(res)
-            if d:
+            if d and d.get("value") is not None:  # skip empty/placeholder leaves
                 d["path"] = norm(d["path"]) or p
                 out[d["path"]] = d
         return list(out.values())

@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-09 · Neu: 🛠️ Wärmepumpe steuern (Experte) – Betriebsart/Heizkurven-Niveau/Soll-Temperaturen direkt per HomeCom-API setzen (nur änderbare Werte, bestätigungspflichtig)'
+const APP_VERSION = '2026-10-09 · WP-Steuerung lesbarer: Klartext-Namen + Erklärung je Parameter, gruppiert (Heizkurve/Heizung/Warmwasser); Heizkurve erklärt (witterungsgeführt)'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -2199,20 +2199,73 @@ async function fetchHpControls(force) {
     if (body) body.innerHTML = '<div class="note">Nur möglich, wenn die Seite von der Bridge geöffnet ist.</div>';
   }
 }
+// Human label + plain-language description + group for a HomeCom control path.
+function hpCtlMeta(path) {
+  const p = (path || '').toLowerCase();
+  const seg = p.replace(/\/+$/, '').split('/').pop();
+  const water = p.includes('dhwcircuits');
+  const levels = p.includes('temperaturelevels');
+  const M = (label, desc, group) => ({ label, desc, group });
+  if (seg === 'name' || seg === 'namea' || seg === 'a') return { hide: true };
+  if (levels) {
+    if (water) {
+      if (seg === 'high') return M('Warmwasser-Soll · Komfort', 'Zieltemperatur im „high"-Betrieb – höher = mehr Komfort, aber mehr Strom.', 'water');
+      if (seg === 'eco') return M('Warmwasser-Soll · Eco', 'Zieltemperatur im Eco-Betrieb – guter Spar-Kompromiss.', 'water');
+      if (seg === 'low') return M('Warmwasser-Soll · Sparen', 'Zieltemperatur im Sparbetrieb („low").', 'water');
+      if (seg === 'off') return { hide: true };
+    } else {
+      if (seg.startsWith('comfort')) return M('Raumtemperatur · Komfort', 'Soll-Raumtemperatur im Komfortbetrieb. Höher hebt die ganze witterungsgeführte Heizkurve an (mehr Vorlauf) – DER Hebel, um die Kurve zu verschieben.', 'curve');
+      if (seg === 'eco') return M('Raumtemperatur · Absenkung (Eco)', 'Soll-Raumtemperatur im Absenkbetrieb (z. B. nachts). Bei Wärmepumpe nur leicht absenken – tiefe Absenkung kostet beim Wiederaufheizen.', 'curve');
+    }
+  }
+  if (seg === 'operationmode') return water
+    ? M('Betriebsart Warmwasser', 'eco/low/high/ownprogram/off – wie warm & wann Warmwasser bereitet wird. eco spart, high = heißer.', 'water')
+    : M('Betriebsart Heizung', 'auto = nach Zeitprogramm, manual = feste Wunschtemperatur, off = Heizung aus (Frostschutz bleibt aktiv).', 'heat');
+  const MAP = {
+    controltype: M('Regelungsart der Heizkurve', 'wdcoptimized = witterungsgeführt optimiert: der Vorlauf wird automatisch aus Außentemperatur + Raum-Soll berechnet. Das IST deine Heizkurve – es gibt keinen separaten „Niveau/Steilheit"-Regler; du verschiebst sie über die Raum-Solltemperatur.', 'curve'),
+    maxflowtemp: M('Max. Vorlauftemperatur', 'Obergrenze, die die Heizkurve nie überschreitet. Bei Fußbodenheizung sinnvoll z. B. 35–40 °C statt 50 – schont den Estrich und spart.', 'curve'),
+    temperatureroommanual: M('Raum-Soll (manuell)', 'Gewünschte Raumtemperatur im manuellen Betrieb – verschiebt die witterungsgeführte Kurve nach oben/unten.', 'curve'),
+    manualroomsetpoint: M('Raum-Soll (manuell)', 'Gewünschte Raumtemperatur im manuellen Betrieb – verschiebt die Kurve nach oben/unten.', 'curve'),
+    currentroomsetpoint: M('Aktueller Raum-Soll', 'Momentan aktive Soll-Raumtemperatur (nur Anzeige).', 'curve'),
+    heatingtype: M('Heizflächentyp', 'floor = Fußbodenheizung (niedrige Vorlauftemperaturen möglich).', 'heat'),
+    heatcoolmode: M('Heizen / Kühlen', 'Aktueller Betriebsmodus der Anlage.', 'heat'),
+    currentsuwimode: M('Sommer / Winter', 'forced = Heizbetrieb erzwungen, off = Sommerpause, cooling = Kühlen.', 'heat'),
+    suwithreshold: M('Sommer/Winter-Schwelle', 'Außentemperatur, ab der die Heizung in den Sommerbetrieb geht.', 'heat'),
+    boostmode: M('Boost', 'Kurzzeitige Leistungserhöhung. Für Wärmepumpen-Effizienz eher aus lassen.', 'heat'),
+    boostduration: M('Boost-Dauer', 'Wie lange ein Boost läuft (Stunden).', 'heat'),
+    overallstatus: M('Status Heizung', 'Aktueller Betriebszustand (nur Anzeige).', 'heat'),
+    activeswitchprogram: M('Aktives Zeitprogramm', 'Welches gespeicherte Heizprogramm gerade aktiv ist.', 'heat'),
+    switchprogrammode: M('Zeitprogramm-Modus', 'Art der Zeitsteuerung (z. B. nach Temperaturstufe).', 'heat'),
+    singlechargesetpoint: M('Warmwasser Einmalladung – Soll', 'Zieltemperatur für eine manuelle Einmalladung (z. B. vor dem Duschen).', 'water'),
+    charge: M('Warmwasser Einmalladung', 'start = jetzt einmalig auf die Einmalladungs-Temperatur aufheizen, stop = abbrechen.', 'water'),
+    chargeduration: M('Einmalladungs-Dauer', 'Maximale Dauer der Einmalladung (Minuten).', 'water'),
+    chargeremainingtime: M('Einmalladung – Restzeit', 'Verbleibende Zeit der laufenden Einmalladung (Anzeige).', 'water'),
+    reducetemponalarm: M('Temp. senken bei Alarm', 'Sicherheitsfunktion – im Alarmfall Zieltemperatur senken.', 'water'),
+    actualtemp: M('Warmwasser – Ist-Temperatur', 'Aktuelle Speichertemperatur (nur Anzeige).', 'water'),
+    currentsetpoint: M('Warmwasser – aktueller Soll', 'Momentane Zieltemperatur (nur Anzeige).', 'water'),
+    currenttemperaturelevel: M('Warmwasser – aktive Stufe', 'Welche WW-Stufe gerade aktiv ist (Anzeige).', 'water'),
+    tdmode: M('Thermische Desinfektion', 'Legionellenschutz-Aufheizung (Anzeige).', 'water'),
+  };
+  if (MAP[seg]) return MAP[seg];
+  return M(seg, '', water ? 'water' : 'heat');
+}
+const HP_CTL_GROUPS = [['curve', '🌡️ Heizkurve & Vorlauf'], ['heat', '⚙️ Heizung – Betrieb'],
+  ['water', '🚿 Warmwasser'], ['other', '⋯ Weitere']];
 function renderHpControlList(list) {
   const body = $('hpctl-body'); if (!body) return;
-  const unit = u => u ? (u === 'C' ? ' °C' : u === 'K' ? ' K' : ' ' + esc(u)) : '';
-  const rows = list.map((c, i) => {
-    const lbl = c.label || c.path.split('/').pop();
+  const unit = u => !u ? '' : (u === 'C' ? ' °C' : u === 'K' ? ' K' : ' ' + esc(u));
+  const items = list.map((c, i) => ({ c, i, m: hpCtlMeta(c.path) })).filter(x => !x.m.hide);
+  const hasCurve = items.some(x => x.m.group === 'curve');
+  const rowHtml = ({ c, i, m }) => {
     const cur = `<b>${esc(String(c.value))}${unit(c.unit)}</b>`;
-    let control = '';
+    let control;
     if (c.writeable) {
       if (c.allowed && c.allowed.length) {
         control = `<select data-ctl="${i}" style="width:auto;padding:6px 8px;margin:0">` +
           c.allowed.map(a => `<option${String(a) === String(c.value) ? ' selected' : ''}>${esc(String(a))}</option>`).join('') + `</select>`;
       } else {
-        const min = c.min != null ? ` min="${c.min}"` : '', max = c.max != null ? ` max="${c.max}"` : '';
-        control = `<input type="number" data-ctl="${i}" value="${esc(String(c.value))}" step="0.5"${min}${max} style="width:92px;padding:6px 8px;margin:0">`;
+        const mn = c.min != null ? ` min="${c.min}"` : '', mx = c.max != null ? ` max="${c.max}"` : '';
+        control = `<input type="number" data-ctl="${i}" value="${esc(String(c.value))}" step="0.5"${mn}${mx} style="width:88px;padding:6px 8px;margin:0">`;
       }
       control += ` <button class="btn" data-write="${i}" style="width:auto;padding:6px 14px;margin-left:6px">Setzen</button>`;
     } else {
@@ -2220,18 +2273,29 @@ function renderHpControlList(list) {
     }
     const range = (c.allowed && c.allowed.length) ? esc(c.allowed.join(' / '))
       : (c.min != null || c.max != null) ? `${c.min != null ? c.min : '–'} … ${c.max != null ? c.max : '–'}${unit(c.unit)}` : '';
-    return `<div class="devrow" style="align-items:center"><div class="nm"><b>${esc(lbl)}</b>` +
-      `<small>jetzt ${cur}${range ? ' · erlaubt ' + range : ''}</small></div>` +
-      `<div class="val" style="display:flex;align-items:center;flex-wrap:wrap;gap:4px">${control}</div></div>`;
-  }).join('');
-  body.innerHTML = (list._demo ? '<div class="note" style="margin-bottom:8px"><b>Demo</b> – schreibt keine echte Anlage.</div>' : '') + rows;
+    return `<div class="devrow" style="align-items:flex-start"><div class="nm" style="flex:1 1 60%"><b>${esc(m.label)}</b>` +
+      `<small>jetzt ${cur}${range ? ' · erlaubt ' + range : ''}</small>` +
+      (m.desc ? `<small style="color:var(--muted);display:block;margin-top:2px;white-space:normal">${m.desc}</small>` : '') +
+      `</div><div class="val" style="display:flex;align-items:center;flex-wrap:wrap;gap:4px">${control}</div></div>`;
+  };
+  let html = list._demo ? '<div class="note" style="margin-bottom:8px"><b>Demo</b> – schreibt keine echte Anlage.</div>' : '';
+  if (hasCurve) html += `<div class="note" style="margin-bottom:10px;border-left:3px solid var(--accent);padding-left:10px">` +
+    `<b>Deine Heizkurve ist witterungsgeführt</b> (automatisch). Es gibt <b>keinen</b> „Niveau/Steilheit"-Regler – du verschiebst die Kurve über die ` +
+    `<b>Raumtemperatur (Komfort/Eco)</b> und begrenzt sie mit der <b>max. Vorlauftemperatur</b>. Niedriger = effizienter, solange alle Räume warm werden.</div>`;
+  for (const [g, title] of HP_CTL_GROUPS) {
+    const gi = items.filter(x => x.m.group === g);
+    if (!gi.length) continue;
+    gi.sort((a, b) => (b.c.writeable ? 1 : 0) - (a.c.writeable ? 1 : 0));
+    html += `<div style="font-weight:700;margin:14px 0 6px;color:var(--ink)">${title}</div>` + gi.map(rowHtml).join('');
+  }
+  body.innerHTML = html;
 }
 async function doHpWrite(i) {
   const c = (_hpControls || [])[i]; if (!c) return;
   const el = document.querySelector(`[data-ctl="${i}"]`); if (!el) return;
   let value = el.value;
   const note = $('hpctl-note');
-  const lbl = c.label || c.path.split('/').pop();
+  const lbl = hpCtlMeta(c.path).label || c.path.split('/').pop();
   if (!window.confirm(`„${lbl}" wirklich auf ${value}${c.unit === 'C' ? ' °C' : c.unit === 'K' ? ' K' : ''} setzen?\n\n(vorher ${c.value}) – wirkt direkt auf die Wärmepumpe.`)) return;
   if (note) note.textContent = `Setze „${lbl}" …`;
   try {
