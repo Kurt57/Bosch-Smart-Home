@@ -2403,6 +2403,14 @@ def compute_thermal_model(store: "Store", days: int = 14) -> dict:
             warm_rates.append(rise / dur_h)
 
         tau_h = round(_median(taus), 1) if taus else None
+        # spread of the τ estimates (coefficient of variation) – feeds the
+        # heat-load uncertainty band in module 3
+        tau_cv = None
+        if len(taus) >= 2:
+            mean_t = sum(taus) / len(taus)
+            if mean_t > 0:
+                var_t = sum((x - mean_t) ** 2 for x in taus) / (len(taus) - 1)
+                tau_cv = round(var_t ** 0.5 / mean_t, 2)
         cool_kph = round(_median(cool_rates), 2) if cool_rates else None
         warm_kph = round(_median(warm_rates), 2) if warm_rates else None
 
@@ -2475,7 +2483,8 @@ def compute_thermal_model(store: "Store", days: int = 14) -> dict:
             "room": rm, "n": len(pts), "setpoint": sp,
             "temp_now": round(temp_now, 1) if temp_now is not None else None,
             "reaches": reaches, "max_deficit": max_deficit,
-            "tau_h": tau_h, "cooldown_kph": cool_kph, "heatup_kph": warm_kph,
+            "tau_h": tau_h, "tau_cv": tau_cv,
+            "cooldown_kph": cool_kph, "heatup_kph": warm_kph,
             "n_cool": len(cool_rates), "n_warm": n_warm, "n_tau": n_tau,
             "confidence": conf, "conf_score": round(score, 2),
             "status": status, "missing": missing, "category": category,
@@ -2828,6 +2837,217 @@ def _demo_observation() -> dict:
             {"room": "Schlafzimmer", "status": "beobachtung", "confidence": "niedrig", "n_tau": 1, "n_warm": 1,
              "missing": ["1–2 ungestörte Auskühlphasen (Nacht-Absenkung, Fenster zu)"]},
         ],
+    }
+
+
+# ===================================================================== #
+#  Intelligent heat-load analysis — module 3: per-room heat load (W)     #
+# ===================================================================== #
+# Idea (physically grounded, calibrated, no fake precision):
+#   • The building heat-demand line comes from a MEASURED "energy signature":
+#     space-heating power vs. outdoor temperature (linear regression). At the
+#     design outdoor temperature that line gives the whole-house load Q_total.
+#   • Per room, the conductance UA_i is proportional to area_i / τ_i:
+#     τ = C/UA and, assuming the same screed capacity per m² across rooms,
+#     C_i ∝ area_i, so UA_i ∝ area_i/τ_i. The unknown screed constant CANCELS
+#     once we calibrate the sum of room losses to the measured Q_total.
+#   • Q_design,i = UA_i · (T_set,i − T_design); the Σ equals Q_total by
+#     construction. A confidence band is propagated from the τ spread, an
+#     area tolerance and the signature scatter.
+# Honest limits: areas are user-entered; the equal-screed assumption is just
+# that; and without per-circuit flow the split is derived, not measured. This
+# is a DATA-BASED estimate, not a norm heat-load calculation (DIN EN 12831).
+
+DESIGN_OUTDOOR_C = -12.0   # typical German norm design outdoor temp (region −10…−16)
+
+
+def _energy_signature(store: "Store") -> dict | None:
+    """Building heat-demand line: average space-heating power (W) vs. outdoor
+    temperature, by least-squares regression. Prefers the clean hourly CSV
+    energy; falls back to live thermal-power samples."""
+    pts = []
+    for r in store.hp_history("hour"):
+        heating = r.get("heating_kwh")
+        o = r.get("outdoor_c")
+        if heating is None or o is None or heating <= 0.01:
+            continue
+        pts.append((o, heating * 1000.0))     # kWh in that hour -> average W
+    src = "csv"
+    if len(pts) < 6:
+        pts = []
+        for s in store.hp_samples_since(int(time.time()) - 60 * 86400):
+            if (s.get("mode") or "").lower() not in ("ch", "heating", "heat"):
+                continue
+            w = s.get("heat_w")
+            o = s.get("outdoor_c")
+            if w is None or o is None or w <= 50:
+                continue
+            pts.append((o, w))
+        src = "live"
+    if len(pts) < 6:
+        return None
+    fit = _linfit(pts)
+    if not fit or fit[0] >= 0:
+        return None                            # no sensible negative slope
+    a, b = fit
+    n = len(pts)
+    mean_y = sum(y for _, y in pts) / n
+    rss = sum((y - (a * x + b)) ** 2 for x, y in pts)
+    sigma = (rss / max(1, n - 2)) ** 0.5
+    rel = (sigma / mean_y) if mean_y > 0 else None
+    return {"a": a, "b": b, "n": n, "src": src, "sigma": sigma, "rel": rel,
+            "balance_c": (-b / a) if a else None, "mean_w": mean_y}
+
+
+def compute_heatload(store: "Store", areas: dict | None = None,
+                     design_c: float = DESIGN_OUTDOOR_C) -> dict:
+    """Per-room heat load in watts (at the design outdoor temp) with a
+    confidence band, calibrated to the measured whole-house energy signature."""
+    try:
+        design_c = float(design_c)
+    except (TypeError, ValueError):
+        design_c = DESIGN_OUTDOOR_C
+    design_c = max(-25.0, min(-5.0, design_c))
+    areas = areas or {}
+
+    tm = compute_thermal_model(store, days=21)
+    sig = _energy_signature(store)
+    q_total_design = None
+    ua_total = None
+    if sig:
+        q = sig["a"] * design_c + sig["b"]
+        if q > 0:
+            q_total_design = q
+            ua_total = -sig["a"]               # W per K (slope magnitude)
+
+    def _area_of(rm):
+        v = areas.get(rm)
+        try:
+            v = float(v)
+            return v if v > 0 else None
+        except (TypeError, ValueError):
+            return None
+
+    rooms = []
+    for r in tm["rooms"]:
+        rm = r["room"]; tau = r["tau_h"]; sp = r["setpoint"]
+        area = _area_of(rm)
+        dt = (sp - design_c) if sp is not None else None
+        usable = bool(tau and area and dt and dt > 0 and r["n_tau"] >= 1)
+        rooms.append({"room": rm, "tau_h": tau, "tau_cv": r.get("tau_cv"),
+                      "n_tau": r["n_tau"], "setpoint": sp, "area": area,
+                      "dt": dt, "confidence": r["confidence"], "usable": usable})
+
+    covered = [w for w in rooms if w["usable"]]
+    sumL = sum((w["area"] / w["tau_h"]) * w["dt"] for w in covered)
+    can_abs = bool(q_total_design and sumL > 0 and covered)
+    k = (q_total_design / sumL) if can_abs else None
+
+    total_area = sum(w["area"] for w in rooms if w["area"]) or 0.0
+    covered_area = sum(w["area"] for w in covered) or 0.0
+    coverage = round(covered_area / total_area, 2) if total_area else 0.0
+
+    out, sum_q = [], 0.0
+    for w in rooms:
+        rm = w["room"]
+        base = {"room": rm, "area": w["area"], "tau_h": w["tau_h"],
+                "setpoint": w["setpoint"], "confidence": w["confidence"],
+                "n_tau": w["n_tau"]}
+        if w["usable"] and can_abs:
+            ua = k * (w["area"] / w["tau_h"])          # W/K
+            q = ua * w["dt"]                            # W at design
+            spec = q / w["area"]                        # W/m²
+            rel_tau = w["tau_cv"] if w["tau_cv"] is not None else 0.30
+            rel = (rel_tau ** 2 + 0.10 ** 2 + ((sig["rel"] or 0.15) ** 2)) ** 0.5
+            rel = max(0.15, min(0.6, rel))
+            band = q * rel
+            sum_q += q
+            base.update({"status": "ok", "ua": round(ua, 1), "q_design": round(q),
+                         "q_lo": round(q - band), "q_hi": round(q + band),
+                         "spec": round(spec, 1), "rel": round(rel, 2),
+                         "plausible": 10 <= spec <= 120})
+        else:
+            miss = []
+            if not w["area"]:
+                miss.append("Fläche in der Verteiler-Karte eintragen")
+            if not w["tau_h"]:
+                miss.append("mehr Auskühlphasen (τ fehlt)")
+            if w["area"] and w["tau_h"] and not can_abs:
+                miss.append("Gesamt-Wärmekennlinie (mehr Heizdaten/HomeCom)")
+            base.update({"status": "missing", "missing": miss})
+        out.append(base)
+
+    # order: computed rooms by load desc, then the rest
+    out.sort(key=lambda x: (x["status"] != "ok", -(x.get("q_design") or 0)))
+
+    insights = []
+    if not sig:
+        insights.append("Noch keine <b>Gesamt-Wärmekennlinie</b>: dafür brauche ich Heizleistung über "
+                        "der Außentemperatur (HomeCom-CSV importieren oder die WP länger mitlaufen lassen).")
+    elif not can_abs:
+        insights.append("Kennlinie vorhanden, aber noch keine Raum-Absolutwerte – es fehlen <b>Flächen</b> "
+                        "(Verteiler-Karte) und/oder <b>τ</b> (Beobachtungsphase).")
+    else:
+        insights.append(f"Gesamt-Heizlast bei {design_c:.0f} °C ≈ <b>{round(q_total_design):d} W</b> "
+                        f"(aus der gemessenen Kennlinie, Quelle: {'CSV' if sig['src']=='csv' else 'Live'}). "
+                        f"Gebäude-UA ≈ {ua_total:.0f} W/K, Bilanzpunkt ≈ {sig['balance_c']:.1f} °C.")
+        if coverage < 0.8:
+            insights.append(f"⚠︎ Nur <b>{round(coverage*100)} %</b> der erfassten Fläche hat Raum-Daten – "
+                            f"die Absolutwerte der abgedeckten Räume sind dadurch eher zu hoch. Trage für alle "
+                            f"beheizten Räume Fläche ein und sammle τ.")
+        odd = [r["room"] for r in out if r.get("status") == "ok" and not r.get("plausible")]
+        if odd:
+            insights.append("Unplausible spezifische Last (W/m²) bei: <b>" + ", ".join(odd) +
+                            "</b> – Fläche prüfen oder τ noch unsicher.")
+
+    return {
+        "ok": True, "design_c": design_c,
+        "q_total_design": round(q_total_design) if q_total_design else None,
+        "ua_total": round(ua_total, 1) if ua_total else None,
+        "balance_c": round(sig["balance_c"], 1) if sig and sig.get("balance_c") is not None else None,
+        "signature": ({"src": sig["src"], "n": sig["n"], "rel": round(sig["rel"], 2) if sig["rel"] else None}
+                      if sig else None),
+        "coverage": coverage, "sum_q_design": round(sum_q) if sum_q else None,
+        "rooms": out, "insights": insights,
+        "note": ("Datenbasierte Schätzung, kein normgerechter Heizlast-Nachweis (DIN EN 12831). "
+                 "Fläche = eingegeben, τ = abgeleitet, Gesamtlast = gemessen; Annahme gleicher "
+                 "Estrich-Speichermasse je m². Ersetzt keine Fachplanung."),
+    }
+
+
+def _demo_heatload(design_c: float = DESIGN_OUTDOOR_C) -> dict:
+    try:
+        design_c = max(-25.0, min(-5.0, float(design_c)))
+    except (TypeError, ValueError):
+        design_c = DESIGN_OUTDOOR_C
+    rooms = [
+        {"room": "Wohnzimmer", "area": 32.0, "tau_h": 48.0, "setpoint": 22.0,
+         "confidence": "hoch", "n_tau": 5, "status": "ok", "ua": 62.0, "q_design": 2108,
+         "q_lo": 1750, "q_hi": 2466, "spec": 65.9, "rel": 0.17, "plausible": True},
+        {"room": "Büro", "area": 14.0, "tau_h": 22.0, "setpoint": 21.0,
+         "confidence": "hoch", "n_tau": 4, "status": "ok", "ua": 59.0, "q_design": 1947,
+         "q_lo": 1460, "q_hi": 2434, "spec": 139.1, "rel": 0.25, "plausible": False},
+        {"room": "Bad", "area": 8.0, "tau_h": 18.0, "setpoint": 24.0,
+         "confidence": "mittel", "n_tau": 4, "status": "ok", "ua": 41.0, "q_design": 1476,
+         "q_lo": 1040, "q_hi": 1912, "spec": 184.5, "rel": 0.30, "plausible": False},
+        {"room": "Schlafzimmer", "area": 16.0, "tau_h": None, "setpoint": 19.0,
+         "confidence": "niedrig", "n_tau": 1, "status": "missing",
+         "missing": ["mehr Auskühlphasen (τ fehlt)"]},
+    ]
+    sum_q = sum(r.get("q_design", 0) for r in rooms if r.get("status") == "ok")
+    return {
+        "ok": True, "demo": True, "design_c": design_c,
+        "q_total_design": 5531, "ua_total": 167.0, "balance_c": 15.3,
+        "signature": {"src": "csv", "n": 412, "rel": 0.12},
+        "coverage": 0.81, "sum_q_design": sum_q, "rooms": rooms,
+        "insights": [
+            f"Gesamt-Heizlast bei {design_c:.0f} °C ≈ <b>5531 W</b> (aus der gemessenen Kennlinie, Quelle: CSV). "
+            "Gebäude-UA ≈ 167 W/K, Bilanzpunkt ≈ 15.3 °C.",
+            "Unplausible spezifische Last (W/m²) bei: <b>Büro, Bad</b> – Fläche prüfen oder τ noch unsicher.",
+        ],
+        "note": ("Datenbasierte Schätzung, kein normgerechter Heizlast-Nachweis (DIN EN 12831). "
+                 "Fläche = eingegeben, τ = abgeleitet, Gesamtlast = gemessen; Annahme gleicher "
+                 "Estrich-Speichermasse je m². Ersetzt keine Fachplanung."),
     }
 
 
@@ -4366,6 +4586,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._post_observation_start(body)
             if parsed.path == "/api/observation/stop":
                 return self._post_observation_stop(body)
+            if parsed.path == "/api/heatload":
+                return self._post_heatload(body)
             if parsed.path == "/api/update":
                 return self._post_update(body)
             return self._send_json({"error": "unknown endpoint"}, 404)
@@ -4828,6 +5050,24 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json({"ok": True, **_demo_observation(), "active": False})
         return self._send_json({"ok": True, **compute_observation(self.store)})
 
+    def _post_heatload(self, body):
+        """Per-room heat load (W) with the room areas supplied by the frontend
+        (they live in the browser's layout storage)."""
+        areas = body.get("areas") if isinstance(body.get("areas"), dict) else {}
+        try:
+            dc = float(body.get("design_c")) if body.get("design_c") is not None else DESIGN_OUTDOOR_C
+        except (TypeError, ValueError):
+            dc = DESIGN_OUTDOOR_C
+        if self.ctx.mode == "demo":
+            return self._send_json(_demo_heatload(dc))
+        try:
+            if int(time.time()) - self.store.room_log_last_ts() >= 120:
+                self._log_rooms_now()
+        except Exception:
+            pass
+        return self._send_json({"ok": True, "demo": False,
+            **compute_heatload(self.store, areas, dc)})
+
     def _post_update(self, body):
         """Pull the latest code (git) and restart the bridge in place.
 
@@ -4990,6 +5230,14 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
                 return self._send_json({"demo": False, **compute_observation(self.store)})
+            if path == "/api/heatload":
+                try:
+                    dc = float(qs.get("design", [str(DESIGN_OUTDOOR_C)])[0])
+                except ValueError:
+                    dc = DESIGN_OUTDOOR_C
+                if self.ctx.mode == "demo":
+                    return self._send_json(_demo_heatload(dc))
+                return self._send_json({"demo": False, **compute_heatload(self.store, None, dc)})
             if path == "/api/windows":
                 wd = int(qs.get("days", ["3"])[0])
                 if self.ctx.mode == "demo":

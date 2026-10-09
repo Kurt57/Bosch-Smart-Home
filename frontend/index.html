@@ -476,6 +476,27 @@
       <button class="btn sec" id="tm-refresh" style="margin-top:10px">🔄 Modell aktualisieren</button>
       <div class="note" id="tm-note" style="margin-top:8px"></div>
     </div>
+    <div class="card" id="hl-card">
+      <h2><span class="info" data-info="heatload" role="button" aria-label="Info">i</span>📐 Heizlast je Raum (W) <span class="r" id="hl-head"></span></h2>
+      <div class="note" style="margin-bottom:10px">Die <b>Heizlast je Raum in Watt</b> bei Auslegungstemperatur – aus der <b>gemessenen</b>
+        Gebäude-Wärmekennlinie (Heizleistung über Außentemperatur), aufgeteilt über <b>τ je Raum</b> (Modell) und die
+        <b>Fläche</b> (Verteiler-Karte). Die Summe ist auf die gemessene Gesamtlast <b>kalibriert</b>; jeder Wert hat ein
+        <b>Unsicherheitsband</b>. <b>Kein</b> normgerechter Heizlast-Nachweis.</div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+        <label style="margin:0">Auslegungstemperatur
+          <select id="hl-design" style="width:auto;padding:5px 10px;margin:0">
+            <option value="-10">−10 °C</option>
+            <option value="-12" selected>−12 °C</option>
+            <option value="-14">−14 °C</option>
+            <option value="-16">−16 °C</option>
+          </select></label>
+        <button class="btn sec" id="hl-refresh" style="width:auto;padding:6px 14px;margin:0">🔄 Neu berechnen</button>
+      </div>
+      <div id="hl-summary"></div>
+      <div id="hl-rooms" style="margin-top:12px"></div>
+      <div id="hl-logic" style="margin-top:12px"></div>
+      <div class="note" id="hl-note" style="margin-top:8px"></div>
+    </div>
     <div class="card" id="ha-card">
       <h2><span class="info" data-info="hydronic" role="button" aria-label="Info">i</span>⚖️ Hydraulischer Abgleich <span class="r" id="ha-head"></span></h2>
       <div class="note" style="margin-bottom:10px">Sorgt dafür, dass <b>jeder Heizkreis die richtige Wassermenge</b> bekommt – damit alle Räume
