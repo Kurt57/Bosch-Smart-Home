@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-09 · Geräte-Heizkurve „Vom Gerät lesen": versucht die konfigurierte Heizkurve per HomeCom-API auszulesen (mit Diagnose, falls die Struktur abweicht)'
+const APP_VERSION = '2026-10-09 · Schnellerer Start: Kern lädt sofort, externe Integrationen (Home Assistant/Tibber/Carbon/Börse) im Hintergrund – kein Warten mehr beim Refresh'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -827,31 +827,29 @@ async function loadAll() {
       STATE.price = health.price_per_kwh; $('price').value = STATE.price;
     }
     const p = STATE.price;
-    const wantTib = health.tibber_connected || health.mode === 'demo';
-    const wantHa = health.ha_connected || health.mode === 'demo';
-    const [ov, hpA, data, appl, meter, sp, co2, tibCons, haData] = await Promise.all([
+    // CORE: local, fast calls (store reads + computation). Render as soon as
+    // these are in – never wait for the external integrations below.
+    const [ov, hpA, data, meter] = await Promise.all([
       api('/api/overview?days=90&price=' + p),
       api('/api/heatpump/analytics?days=90&price=' + p),
       api('/api/analytics?days=90&price=' + p),
-      api('/api/appliances').catch(() => null),
       api('/api/meter').catch(() => null),
-      api('/api/spot').catch(() => null),
-      api('/api/carbon').catch(() => null),
-      wantTib ? api('/api/tibber/consumption?resolution=DAILY&last=30').catch(() => null) : Promise.resolve(null),
-      wantHa ? api('/api/ha').catch(() => null) : Promise.resolve(null),
     ]);
-    STATE.ov = ov; STATE.hpA = hpA; STATE.data = data; STATE.appliances = appl;
+    STATE.ov = ov; STATE.hpA = hpA; STATE.data = data;
     STATE.meter = (meter && meter.readings) || [];
-    STATE.spot = sp;
-    STATE.tibberCons = (tibCons && tibCons.ok) ? tibCons : null;
-    STATE.ha = haData || null;
-    STATE.carbon = (co2 && co2.ok) ? co2 : demoCarbon();
+    // safe defaults so the first render never trips over missing optional data
+    STATE.appliances = STATE.appliances || null;
+    STATE.spot = STATE.spot || null;
+    STATE.tibberCons = STATE.tibberCons || null;
+    STATE.ha = STATE.ha || null;
+    STATE.carbon = STATE.carbon || demoCarbon();
     STATE.cur = data.currency || STATE.cur;
     $('cur').textContent = STATE.cur;
     setMode(health.mode || 'live');
     $('diag').textContent = JSON.stringify(health, null, 1);
-    renderAll();
+    renderAll();                         // ← first paint happens here, fast
     checkUpdate();                       // show the "update available" banner if behind
+    loadOptional(health, p);             // external integrations fill in afterwards
   } catch (e) {
     STATE.health = null;
     $('conn-note').innerHTML =
@@ -859,6 +857,22 @@ async function loadAll() {
       'Trage im Setup die Adresse deiner Bridge ein oder öffne diese Seite direkt von der Bridge.';
     applyDemo('err');
   }
+}
+
+// External integrations (Home Assistant, Tibber, carbon, spot market). Each may
+// be a slow network call, so they load AFTER the first paint and update their
+// own card when they arrive – a slow/unreachable service never delays the app.
+function loadOptional(health, p) {
+  const wantTib = health.tibber_connected || health.mode === 'demo';
+  const wantHa = health.ha_connected || health.mode === 'demo';
+  const upd = (fn) => { try { fn(); } catch (e) {} };
+  api('/api/appliances').then(a => { STATE.appliances = a; upd(renderAppliances); }).catch(() => {});
+  api('/api/spot').then(sp => { STATE.spot = sp; upd(renderBorse); upd(renderSmart); }).catch(() => {});
+  api('/api/carbon').then(co2 => { STATE.carbon = (co2 && co2.ok) ? co2 : demoCarbon(); upd(renderCarbon); }).catch(() => {});
+  if (wantTib) api('/api/tibber/consumption?resolution=DAILY&last=30')
+    .then(t => { STATE.tibberCons = (t && t.ok) ? t : null; upd(renderBorse); }).catch(() => {});
+  if (wantHa) api('/api/ha')
+    .then(h => { STATE.ha = h || null; upd(renderHa); upd(renderOverview); }).catch(() => {});
 }
 
 function applyDemo(mode) {
