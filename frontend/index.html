@@ -407,7 +407,18 @@
       <h2><span class="info" data-info="room-ts" role="button" aria-label="Info">i</span>🌡️ Räume &amp; Heizbetrieb <span class="r" id="rts-head"></span></h2>
       <div class="note" style="margin-bottom:8px">Pro Raum: <b>Innentemperatur</b> über die Zeit, gestrichelt der <b>Sollwert</b>, unten der <b>WP-Heizbetrieb</b> (grün).
         So erkennst du, welcher Raum sein Soll <b>nie</b> erreicht, wann Ventile <b>schließen</b> und <b>warum</b> die WP pausiert.</div>
-      <div style="margin-bottom:8px"><select id="rts-room" style="width:auto;padding:5px 10px;margin:0"></select></div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+        <select id="rts-room" style="width:auto;padding:5px 10px;margin:0"></select>
+        <select id="rts-range" style="width:auto;padding:5px 10px;margin:0">
+          <option value="0.0104">15 Min</option>
+          <option value="0.0417">1 Std</option>
+          <option value="0.25">6 Std</option>
+          <option value="0.5">12 Std</option>
+          <option value="1">1 Tag</option>
+          <option value="2" selected>2 Tage</option>
+          <option value="7">7 Tage</option>
+        </select>
+      </div>
       <div id="rts-chart"></div>
       <div class="legend" id="rts-legend"></div>
       <div id="rts-logic" style="margin-top:12px"></div>
@@ -433,6 +444,14 @@
       <div id="ha-work"></div>
       <div id="ha-steps" style="margin-top:12px"></div>
       <div class="note" id="ha-note" style="margin-top:10px"></div>
+    </div>
+    <div class="card" id="layout-card">
+      <h2><span class="info" data-info="layout" role="button" aria-label="Info">i</span>🧭 Verteiler &amp; Heizkreise</h2>
+      <div class="note" style="margin-bottom:10px">Ordne deine Räume den <b>Heizkreisverteilern</b> zu und gib je Raum <b>Fläche</b> und grobe
+        <b>Kreislänge</b> an. Daraus rechne ich eine <b>Durchfluss-Startverteilung (l/min)</b> pro Kreis für den hydraulischen
+        Abgleich – heizlast-proportional. Alles lokal gespeichert.</div>
+      <div id="lay-body"></div>
+      <div class="note" id="lay-note" style="margin-top:8px"></div>
     </div>
     <div class="card" id="hpctl-card" hidden>
       <h2><span class="info" data-info="hp-control" role="button" aria-label="Info">i</span>🛠️ Wärmepumpe steuern <span class="r" style="color:var(--warn)">Experte</span></h2>

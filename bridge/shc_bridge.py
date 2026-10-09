@@ -943,6 +943,11 @@ class Store:
         with self.lock:
             return self.conn.execute("SELECT COUNT(*) c FROM room_log").fetchone()["c"]
 
+    def room_log_last_ts(self) -> int:
+        with self.lock:
+            r = self.conn.execute("SELECT MAX(ts) m FROM room_log").fetchone()
+            return int(r["m"]) if r and r["m"] else 0
+
     def room_temp_at(self, ts: int, tol: int = 1800):
         """Logged indoor temp nearest to ts (within tol seconds), or None."""
         with self.lock:
@@ -2201,11 +2206,13 @@ def _demo_room_timeseries(days: int = 2) -> dict:
                  ("Büro", 21, 1.2, False), ("Schlafzimmer", 19, 0.5, True)]
     out, heat = [], []
     palette = ["#3ba9ff", "#ff6b8a", "#4be0b0", "#ffb64d"]
-    n = days * 24 * 3   # 20-min resolution
+    total = days * 86400
+    step = max(60, int(total / 90))         # ~90 points across the chosen range
+    n = max(2, int(total / step))
     for idx, (rm, sp, deficit, reaches) in enumerate(rooms_def):
         pts = []
         for i in range(n):
-            t = base + i * 1200
+            t = base + i * step
             h = datetime.fromtimestamp(t).hour + datetime.fromtimestamp(t).minute / 60.0
             swing = 0.8 * math.sin((h - 15) / 24.0 * 2 * math.pi)
             temp = sp - deficit + swing + (0.3 if reaches else -0.4)
@@ -2215,8 +2222,8 @@ def _demo_room_timeseries(days: int = 2) -> dict:
                     "reached": reaches, "below_always": not reaches,
                     "valve_closes": reaches, "cooldown": round(0.6 + 0.3 * idx, 1),
                     "points": pts[::2]})
-    for d in range(days):
-        day0 = base + d * 86400
+    for dayi in range(int(base // 86400), int(now // 86400) + 1):
+        day0 = dayi * 86400
         heat.append([day0 + 5 * 3600, day0 + 9 * 3600])
         heat.append([day0 + 16 * 3600, day0 + 22 * 3600])
     insights = [
@@ -3475,6 +3482,34 @@ class Handler(BaseHTTPRequestHandler):
         hp["connected"] = bool(self.cfg.get("homecom_refresh_token")) or self.ctx.mode == "demo"
         return hp
 
+    def _log_rooms_now(self):
+        """On-demand per-room temperature log (used by the rooms endpoint so the
+        chart isn't empty until the 10-min poller runs)."""
+        if self.ctx.mode != "live":
+            return
+        client = SHCClient(self.cfg.get("shc_ip", ""), self.cfg["cert"], self.cfg["key"])
+        climate = client.list_climate()
+        ts = int(time.time())
+        per_room, temps, sets = [], [], []
+        for r in climate:
+            if str(r.get("roomControlMode") or "HEATING").upper() == "OFF" or r.get("summerMode"):
+                continue
+            t = r.get("temp") if isinstance(r.get("temp"), (int, float)) else None
+            if t is None:
+                continue
+            sp = r.get("setpoint") if isinstance(r.get("setpoint"), (int, float)) else None
+            vv = r.get("valve") if isinstance(r.get("valve"), (int, float)) else None
+            per_room.append((ts, r.get("room") or "—", round(t, 1),
+                             round(sp, 1) if sp is not None else None, vv))
+            temps.append(t)
+            if sp is not None:
+                sets.append(sp)
+        if per_room:
+            self.store.room_log_add_bulk(per_room)
+        if temps:
+            self.store.room_temp_add(ts, round(sum(temps) / len(temps), 1),
+                                     round(sum(sets) / len(sets), 1) if sets else None)
+
     def _spot_payload(self) -> dict:
         """Hourly consumer prices for the Börse tab. Uses the user's REAL Tibber
         tariff when connected, otherwise the EPEX/aWATTar market + surcharge."""
@@ -4293,9 +4328,19 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json({"demo": False,
                     **compute_heat_timeseries(self.store, td)})
             if path == "/api/rooms/timeseries":
-                rd = int(qs.get("days", ["2"])[0])
+                try:
+                    rd = max(0.007, min(14.0, float(qs.get("days", ["2"])[0])))
+                except ValueError:
+                    rd = 2.0
                 if self.ctx.mode == "demo":
                     return self._send_json(_demo_room_timeseries(rd))
+                # log a fresh per-room sample on demand (if the last one is stale),
+                # so the chart shows something immediately instead of waiting 10 min
+                try:
+                    if int(time.time()) - self.store.room_log_last_ts() >= 120:
+                        self._log_rooms_now()
+                except Exception:
+                    pass
                 return self._send_json({"demo": False,
                     **compute_room_timeseries(self.store, rd)})
             if path == "/api/windows":

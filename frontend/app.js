@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-09 · Neu: 🌡️ Räume & Heizbetrieb (pro Raum Temp/Soll/Ventil + WP-Streifen); Heizkurve-Tabelle an Bosch-Punkten (+20/−10); Verlauf: Achsen beschriftet + Hover-Werte'
+const APP_VERSION = '2026-10-09 · Neu: 🧭 Verteiler & Heizkreise (l/min-Startverteilung); Räume & Heizbetrieb: Zeitachse 15 Min–7 Tage umschaltbar + Punkte sofort sichtbar'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -219,6 +219,11 @@ const INFO = {
     'und dann das <b>Ventil schließt</b>, wie schnell ein Raum nach Ventil-zu wieder <b>auskühlt</b> (K/h) und <b>warum</b> die WP ' +
     'pausiert (meist: alle Räume am Soll → Ventile zu → keine Abnahme). Einen Raum wählen zeigt zusätzlich die Ventilöffnung ' +
     'als Schattierung. Wird aus deinen Bosch-Raumthermostaten mitgeloggt (ab jetzt).',
+  'layout': () => 'Dein <b>Heizkreis-Layout</b>: welche Räume an welchem <b>Verteiler</b> hängen, plus <b>Fläche</b> und grobe ' +
+    '<b>Kreislänge</b> je Raum. Daraus rechne ich eine <b>heizlast-proportionale Durchfluss-Startverteilung (l/min)</b> pro Kreis ' +
+    '– der praktische Startwert für die Durchflussmesser (Tacosetter) am Verteiler. Formel: Heizlast ≈ Fläche × spez. Last (W/m²), ' +
+    'Durchfluss = Heizlast ÷ (1,16 × Spreizung ΔT). Länge ist nachrangig (beeinflusst den Pumpendruck, nicht den Ziel-Durchfluss). ' +
+    'Danach feinjustieren über den <b>Hydraulischen Abgleich</b>. Alles nur lokal gespeichert.',
   'hydronic': () => '<b>Hydraulischer Abgleich</b> verteilt das Heizwasser so auf die Heizkreise, dass jeder Raum ' +
     'genau die passende Menge bekommt. Ohne Abgleich bekommen kurze/nahe Kreise zu viel, lange/ferne zu wenig – ' +
     'man dreht dann den Vorlauf hoch, damit auch der kälteste Raum warm wird, und das kostet bei der Wärmepumpe viel Effizienz. ' +
@@ -2307,26 +2312,37 @@ function roomChart(d, sel) {
   const stripY = base + 10;
   let strip = `<text class="axis" x="0" y="${stripY + 6}">WP</text>`;
   (d.heating || []).forEach(iv => { const x1 = X(iv[0]), x2 = X(iv[1]); strip += `<rect x="${x1.toFixed(1)}" y="${stripY}" width="${Math.max(1, x2 - x1).toFixed(1)}" height="6" fill="#4be0b0" fill-opacity="0.85"/>`; });
-  // day separators
+  // time grid: weekdays for multi-day ranges, hours for short ranges
+  const span = t1 - t0;
+  const WD = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
   let sep = '';
-  for (let t = Math.ceil(t0 / 86400) * 86400; t <= t1; t += 86400) { const x = X(t), wd = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'][new Date(t * 1000).getDay()]; sep += `<line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${top}" y2="${base}" stroke="var(--line)" stroke-dasharray="2 3"/><text class="axis" x="${(x + 3).toFixed(1)}" y="${h - 6}">${wd}</text>`; }
-  // temp lines + setpoints
+  const twoD = n => String(n).padStart(2, '0');
+  if (span > 1.6 * 86400) {
+    for (let t = Math.ceil(t0 / 86400) * 86400; t <= t1; t += 86400) { const x = X(t); sep += `<line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${top}" y2="${base}" stroke="var(--line)" stroke-dasharray="2 3"/><text class="axis" x="${(x + 3).toFixed(1)}" y="${h - 6}">${WD[new Date(t * 1000).getDay()]}</text>`; }
+  } else {
+    const stepH = span <= 3600 ? 1 / 6 : span <= 6 * 3600 ? 1 : span <= 13 * 3600 ? 3 : 6; // hours between ticks
+    const stepS = stepH * 3600;
+    for (let t = Math.ceil(t0 / stepS) * stepS; t <= t1; t += stepS) { const x = X(t), dd = new Date(t * 1000); const lbl = stepH < 1 ? `${twoD(dd.getHours())}:${twoD(dd.getMinutes())}` : `${twoD(dd.getHours())}:00`; sep += `<line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${top}" y2="${base}" stroke="var(--line)" stroke-dasharray="2 3"/><text class="axis" x="${(x + 2).toFixed(1)}" y="${h - 6}">${lbl}</text>`; }
+  }
+  // temp lines + setpoints + current dot
   let lines = '';
   rooms.forEach(r => {
+    const pv = r.points.filter(p => p.temp != null && p.ts >= t0);
     let dl = '', pen = false;
-    r.points.forEach(p => { if (p.temp == null) { pen = false; return; } const x = X(p.ts), y = Y(p.temp); dl += (pen ? 'L' : 'M') + x.toFixed(1) + ' ' + y.toFixed(1) + ' '; pen = true; });
+    pv.forEach(p => { const x = X(p.ts), y = Y(p.temp); dl += (pen ? 'L' : 'M') + x.toFixed(1) + ' ' + y.toFixed(1) + ' '; pen = true; });
     if (dl) lines += `<path d="${dl.trim()}" fill="none" stroke="${r.color}" stroke-width="${sel ? 2.4 : 1.8}"/>`;
+    if (pv.length) { const last = pv[pv.length - 1]; lines += `<circle cx="${X(last.ts).toFixed(1)}" cy="${Y(last.temp).toFixed(1)}" r="${sel ? 3.2 : 2.6}" fill="${r.color}"/>`; }
     if (r.setpoint != null) { const y = Y(r.setpoint); lines += `<line x1="${padL}" x2="${CW - padR}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="${r.color}" stroke-width="1" stroke-dasharray="4 3" opacity="${sel ? 0.85 : 0.3}"/>`; if (sel) lines += `<text class="axis" x="${CW - padR + 2}" y="${(y + 3).toFixed(1)}" fill="${r.color}" text-anchor="start">Soll ${r.setpoint}</text>`; }
   });
   return svg(h, g + band + sep + strip + lines);
 }
-let _rtsData = null, _rtsBusy = false, _rtsSel = '';
+let _rtsData = null, _rtsBusy = false, _rtsSel = '', _rtsDays = 2;
 async function renderRoomTs(force) {
   const card = $('rts-card'); if (!card) return;
   if (_rtsData && !force) { paintRoomTs(_rtsData); return; }
   if (_rtsBusy) return;
   _rtsBusy = true;
-  try { const r = await api('/api/rooms/timeseries?days=2'); _rtsData = r; paintRoomTs(r); }
+  try { const r = await api('/api/rooms/timeseries?days=' + _rtsDays); _rtsData = r; paintRoomTs(r); }
   catch (e) { const c = $('rts-chart'); if (c) c.innerHTML = '<div class="note">Nur mit laufender Bridge verfügbar.</div>'; }
   finally { _rtsBusy = false; }
 }
@@ -2348,6 +2364,91 @@ function paintRoomTs(r) {
     (r.insights || []).map(l => `<div style="font-size:13px;line-height:1.5;margin-bottom:5px">• ${l}</div>`).join('');
   if (note) note.innerHTML = (r.demo ? '<b>Demo-Daten</b>. ' : '') +
     'Einen Raum oben wählen zeigt zusätzlich den <b>Sollwert</b> (gestrichelt) und – als leichte Schattierung – wann sein <b>Ventil offen</b> ist (Raum verlangt Wärme). Wird pro Raum ab jetzt mitgeloggt.';
+}
+/* ---- Verteiler & Heizkreise: layout + per-circuit flow (l/min) distribution */
+function layoutLoad() { try { return JSON.parse(localStorage.getItem('heatLayout')) || {}; } catch (e) { return {}; } }
+function layoutSave(l) { try { localStorage.setItem('heatLayout', JSON.stringify(l)); } catch (e) {} }
+function layoutModel() {
+  const l = layoutLoad();
+  l.q = (l.q != null ? l.q : 40); l.dt = (l.dt != null ? l.dt : 6);
+  l.manifolds = Array.isArray(l.manifolds) ? l.manifolds : [];
+  l.rooms = l.rooms || {};
+  return l;
+}
+function layoutSet(room, field, val) {
+  const l = layoutModel();
+  l.rooms[room] = l.rooms[room] || {};
+  if (val === '' || val == null) delete l.rooms[room][field]; else l.rooms[room][field] = val;
+  layoutSave(l);
+}
+function knownRooms() {
+  const s = new Set();
+  ((typeof _hdData !== 'undefined' && _hdData && _hdData.rooms) || []).forEach(r => r.room && s.add(r.room));
+  ((typeof _rtsData !== 'undefined' && _rtsData && _rtsData.rooms) || []).forEach(r => r.room && s.add(r.room));
+  return [...s];
+}
+// heat-load-proportional target flow per circuit: Q = area·q [W], l/h = Q/(1.163·ΔT)
+function layoutTargets() {
+  const l = layoutModel(), out = {};
+  for (const [room, cfg] of Object.entries(l.rooms)) {
+    const area = parseFloat(cfg.area) || 0; if (area <= 0) continue;
+    const qW = area * (parseFloat(l.q) || 40);
+    const lpm = qW / (1.163 * (parseFloat(l.dt) || 6) * 60);
+    out[room] = { lpm: Math.round(lpm * 10) / 10, manifold: cfg.manifold || '',
+      area, length: parseFloat(cfg.length) || null, qW: Math.round(qW) };
+  }
+  return out;
+}
+function renderLayout() {
+  const body = $('lay-body'); if (!body) return;
+  const l = layoutModel();
+  const rooms = [...new Set([...knownRooms(), ...Object.keys(l.rooms)])].sort();
+  const mfOpts = sel => '<option value="">–</option>' + l.manifolds.map(m => `<option${m === sel ? ' selected' : ''}>${esc(m)}</option>`).join('');
+  const inp = (ph, val, field, room, w) => `<input type="number" inputmode="decimal" data-lay="${field}" data-room="${esc(room)}" value="${val != null && val !== '' ? esc(String(val)) : ''}" placeholder="${ph}" style="width:${w || 58}px;padding:4px 6px;margin:0">`;
+  const rowsHtml = rooms.map(room => { const cfg = l.rooms[room] || {};
+    return `<tr><td style="padding:4px 6px">${esc(room)}</td>` +
+      `<td style="padding:4px 6px"><select data-lay="manifold" data-room="${esc(room)}" style="padding:4px 6px;margin:0;width:auto">${mfOpts(cfg.manifold || '')}</select></td>` +
+      `<td style="padding:4px 6px;text-align:right">${inp('m²', cfg.area, 'area', room, 54)}</td>` +
+      `<td style="padding:4px 6px;text-align:right">${inp('m', cfg.length, 'length', room, 50)}</td></tr>`;
+  }).join('');
+  body.innerHTML =
+    `<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-bottom:10px;font-size:13px">` +
+      `<label>Spez. Heizlast <input type="number" id="lay-q" value="${esc(String(l.q))}" style="width:58px;padding:4px 6px;margin:0"> W/m²</label>` +
+      `<label>Spreizung ΔT <input type="number" id="lay-dt" value="${esc(String(l.dt))}" style="width:48px;padding:4px 6px;margin:0"> K</label>` +
+    `</div>` +
+    `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:10px">` +
+      `<b style="font-size:13px">Verteiler:</b> ` +
+      l.manifolds.map(m => `<span style="background:var(--card2);border:1px solid var(--line);border-radius:999px;padding:3px 9px;font-size:12px">${esc(m)} <a href="#" data-mfdel="${esc(m)}" style="color:var(--away);text-decoration:none;font-weight:700">×</a></span>`).join('') +
+      `<input id="lay-mf-name" placeholder="z. B. EG" style="width:86px;padding:4px 6px;margin:0"><button class="btn sec" id="lay-mf-add" style="width:auto;padding:4px 10px;margin:0">+ Verteiler</button>` +
+    `</div>` +
+    (rooms.length
+      ? `<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="color:var(--muted);font-size:11px;text-transform:uppercase"><th style="text-align:left;padding:4px 6px">Raum</th><th style="text-align:left;padding:4px 6px">Verteiler</th><th style="text-align:right;padding:4px 6px">Fläche</th><th style="text-align:right;padding:4px 6px">Länge</th></tr></thead><tbody>${rowsHtml}</tbody></table>`
+      : '<div class="note">Noch keine Räume erkannt – öffne kurz den Heizungs-Check/Räume, oder füge unten manuell hinzu.</div>') +
+    `<div style="display:flex;gap:6px;align-items:center;margin-top:8px;flex-wrap:wrap"><input id="lay-room-name" placeholder="Raum hinzufügen" style="width:140px;padding:4px 6px;margin:0"><button class="btn sec" id="lay-room-add" style="width:auto;padding:4px 10px;margin:0">+ Raum</button><button class="btn sec" id="lay-rooms-load" style="width:auto;padding:4px 10px;margin:0">🔄 Räume laden</button></div>` +
+    `<div id="lay-result" style="margin-top:12px"></div>`;
+  computeLayoutResult();
+}
+function computeLayoutResult() {
+  const el = $('lay-result'); if (!el) return;
+  const t = layoutTargets(), l = layoutModel();
+  if (!Object.keys(t).length) { el.innerHTML = '<div class="note">Trag je Raum eine <b>Fläche</b> ein und ordne einen Verteiler zu – dann rechne ich die l/min-Startverteilung.</div>'; return; }
+  const byMf = {}, unassigned = [];
+  for (const [room, o] of Object.entries(t)) { if (o.manifold) (byMf[o.manifold] = byMf[o.manifold] || []).push([room, o]); else unassigned.push(room); }
+  let html = '';
+  [...new Set([...l.manifolds, ...Object.keys(byMf)])].forEach(mf => {
+    const list = byMf[mf] || []; if (!list.length) return;
+    const tot = list.reduce((a, [, o]) => a + o.lpm, 0);
+    html += `<div style="font-weight:700;margin:8px 0 4px">🧭 ${esc(mf)} <span style="color:var(--muted);font-weight:400">· ${list.length} Kreise · Σ ${fmt(tot, 1)} l/min</span></div>`;
+    html += `<table style="width:100%;border-collapse:collapse;font-size:13px">` +
+      list.sort((a, b) => b[1].lpm - a[1].lpm).map(([room, o]) =>
+        `<tr><td style="padding:3px 6px">${esc(room)}</td>` +
+        `<td style="padding:3px 6px;text-align:right;color:var(--muted)">${o.area} m²${o.length ? ` · ${o.length} m` : ''}</td>` +
+        `<td style="padding:3px 6px;text-align:right"><b style="color:var(--accent2)">${fmt(o.lpm, 1)} l/min</b></td>` +
+        `<td style="padding:3px 6px;text-align:right;color:var(--muted)">${Math.round(o.lpm / tot * 100)}%</td></tr>`).join('') + `</table>`;
+  });
+  if (unassigned.length) html += `<div class="note" style="margin-top:6px">Ohne Verteiler (noch zuordnen): ${unassigned.map(esc).join(', ')}.</div>`;
+  html += `<div class="note" style="margin-top:8px">Stell die <b>Durchflussmesser (Tacosetter)</b> am Verteiler auf diese l/min als <b>Startwert</b>, dann feinjustieren über den <b>Hydraulischen Abgleich</b> oben. Längere Kreise brauchen evtl. etwas mehr Pumpendruck.</div>`;
+  el.innerHTML = html;
 }
 function hcDevice() {
   const g = k => { const v = parseFloat(localStorage.getItem(k)); return isFinite(v) ? v : null; };
@@ -6164,6 +6265,7 @@ function switchView(v) {
     if (typeof renderRoomTs === 'function') renderRoomTs(false);
     if (typeof renderWindows === 'function') renderWindows(false);
     if (typeof renderHydronic === 'function') renderHydronic();
+    if (typeof renderLayout === 'function') renderLayout();
     if (typeof initHpControls === 'function') initHpControls();
   }
 }
@@ -6330,6 +6432,28 @@ function init() {
   });
   const rtsSel = $('rts-room');
   if (rtsSel) rtsSel.addEventListener('change', () => { _rtsSel = rtsSel.value; if (_rtsData) paintRoomTs(_rtsData); });
+  const rtsRange = $('rts-range');
+  if (rtsRange) rtsRange.addEventListener('change', () => { _rtsDays = parseFloat(rtsRange.value) || 2; renderRoomTs(true); });
+  const layCard = $('layout-card');
+  if (layCard) {
+    layCard.addEventListener('input', e => {
+      const t = e.target;
+      if (t.id === 'lay-q') { const l = layoutModel(); l.q = t.value; layoutSave(l); computeLayoutResult(); }
+      else if (t.id === 'lay-dt') { const l = layoutModel(); l.dt = t.value; layoutSave(l); computeLayoutResult(); }
+      else if (t.dataset.lay && t.dataset.room) { layoutSet(t.dataset.room, t.dataset.lay, t.value); computeLayoutResult(); }
+    });
+    layCard.addEventListener('change', e => {
+      const t = e.target;
+      if (t.dataset.lay === 'manifold' && t.dataset.room) { layoutSet(t.dataset.room, 'manifold', t.value); computeLayoutResult(); }
+    });
+    layCard.addEventListener('click', e => {
+      const del = e.target.closest('[data-mfdel]');
+      if (del) { e.preventDefault(); const l = layoutModel(); l.manifolds = l.manifolds.filter(m => m !== del.dataset.mfdel); Object.values(l.rooms).forEach(r => { if (r.manifold === del.dataset.mfdel) delete r.manifold; }); layoutSave(l); renderLayout(); return; }
+      if (e.target.id === 'lay-mf-add') { const v = ($('lay-mf-name').value || '').trim(); if (v) { const l = layoutModel(); if (!l.manifolds.includes(v)) l.manifolds.push(v); layoutSave(l); renderLayout(); } return; }
+      if (e.target.id === 'lay-room-add') { const v = ($('lay-room-name').value || '').trim(); if (v) { const l = layoutModel(); l.rooms[v] = l.rooms[v] || {}; layoutSave(l); renderLayout(); } return; }
+      if (e.target.id === 'lay-rooms-load') { renderLayout(); return; }
+    });
+  }
   const hcdr = $('hc-dev-read'); if (hcdr) hcdr.addEventListener('click', readDeviceCurve);
   const hpcl = $('hpctl-load'); if (hpcl) hpcl.addEventListener('click', () => fetchHpControls(true));
   const hpcb = $('hpctl-body');
