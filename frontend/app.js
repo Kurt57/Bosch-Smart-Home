@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-09 · Heizkurve: konkrete Empfehlung (Niveau −X K / Steilheit) aus der Kurve – sofort vorläufig aus dem aktuellen Betriebspunkt, mit jedem Takt genauer'
+const APP_VERSION = '2026-10-09 · Heizkurve aus CSV-Import: der HomeCom-Export liefert stündlich Vorlauf+Außen – echte Heizkurve + Empfehlung sofort, ohne Warten'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -199,7 +199,9 @@ const INFO = {
     'die <b>grüne</b> ein WP-freundliches Zielband (möglichst niedrig). Liegt Rot <b>über</b> Grün, läuft die WP unnötig heiß ' +
     '– jedes +1 K Vorlauf kostet ~2–3 % Effizienz. Senke dann an der Wärmepumpe <b>Niveau</b> (verschiebt die ganze Kurve) ' +
     'oder <b>Steilheit/Gradient</b> (kippt sie: wirkt vor allem bei Kälte). Die App <b>sammelt</b> die Punkte im Betrieb, ' +
-    'daher wird die Kurve über die Heiztage immer aussagekräftiger – am besten an kalten Tagen.',
+    'daher wird die Kurve über die Heiztage immer aussagekräftiger – am besten an kalten Tagen. ' +
+    'Schneller geht es mit einem <b>HomeCom-CSV-Export</b> (Setup → Import): der enthält <b>stündlich</b> Vorlauf- und ' +
+    'Außentemperatur, daraus baut die App die Kurve sofort rückwirkend – es zählen nur echte Heizstunden (kein Warmwasser/Standby).',
   'hydronic': () => '<b>Hydraulischer Abgleich</b> verteilt das Heizwasser so auf die Heizkreise, dass jeder Raum ' +
     'genau die passende Menge bekommt. Ohne Abgleich bekommen kurze/nahe Kreise zu viel, lange/ferne zu wenig – ' +
     'man dreht dann den Vorlauf hoch, damit auch der kälteste Raum warm wird, und das kostet bei der Wärmepumpe viel Effizienz. ' +
@@ -2099,10 +2101,11 @@ function paintHeatingCurve(r) {
     ref.innerHTML = recBox + `<table style="width:100%;border-collapse:collapse;font-size:13px">` +
       (r.ref || []).map(x => row(x.outdoor, x.actual, x.ideal)).join('') + `</table>`;
   }
-  if (note) note.innerHTML = `<b style="color:${col}">${esc(r.verdict)}</b> · ${r.n} Messpunkt${r.n === 1 ? '' : 'e'} (${r.days_window || 30} Tage)` +
+  if (note) note.innerHTML = `<b style="color:${col}">${esc(r.verdict)}</b> · ${r.n} Messpunkt${r.n === 1 ? '' : 'e'}` +
+    (r.csv_points ? ` (davon ${r.csv_points} aus CSV-Import)` : '') +
     (r.cycles && r.cycles.per_day != null ? ` · ~${fmt(r.cycles.per_day, 1)} Takte/Tag` : '') +
     (r.demo ? ' · <b>Demo-Daten</b>' : '') +
-    (r.provisional ? '<br><span style="color:var(--muted)">Noch vorläufig – wird mit jedem Heiztakt genauer. Ältere CSV-/Energiedaten enthalten keine Vorlauftemperatur, daher baut sich die echte Kurve erst seit dem Update auf.</span>' : '');
+    (r.provisional ? '<br><span style="color:var(--muted)">Noch vorläufig – mit mehr Punkten (weiter heizen oder einen HomeCom-CSV-Export mit stündlicher Vorlauftemperatur importieren) wird die Steilheit belastbar.</span>' : '');
 }
 
 /* ---- Hydraulischer Abgleich: step guide + data-driven room worklist ------- */
@@ -5471,9 +5474,12 @@ function parseHomeComCsv(text) {
     prodUmg: find(['produziertewärme', 'umgebung', 'gesamt']),
     heatWP: find(['verbrauchteenergie', 'wärmepumpe', 'heizung']),
     heatEH: find(['verbrauchteenergie', 'elektrischerzuheizer', 'heizung']),
+    prodHeatWP: find(['produziertewärme', 'wärmepumpe', 'heizung']),
+    prodHeatUmg: find(['produziertewärme', 'umgebung', 'heizung']),
     waterWP: find(['verbrauchteenergie', 'wärmepumpe', 'warmwasser']),
     waterEH: find(['verbrauchteenergie', 'elektrischerzuheizer', 'warmwasser']),
     outdoor: r2.findIndex(c => norm(c).includes('temperatur') && norm(c).includes('aussen') || norm(c).includes('außentemperatur')),
+    supply: r2.findIndex(c => norm(c).includes('vorlauftemperatur')),
   };
   if (idx.elecWP < 0) return { error: 'Spalte „Verbrauchte Energie · Wärmepumpe · Gesamt" nicht gefunden.' };
   const num = s => { s = (s || '').trim(); if (!s || s === '-') return null; const n = parseFloat(s.replace(/\./g, '').replace(',', '.')); return isNaN(n) ? null : n; };
@@ -5493,7 +5499,9 @@ function parseHomeComCsv(text) {
       period, date, elec_kwh: elec, heat_kwh: heat,
       heating_kwh: add(at(c, idx.heatWP), at(c, idx.heatEH)),
       water_kwh: add(at(c, idx.waterWP), at(c, idx.waterEH)),
+      heat_heating_kwh: add(at(c, idx.prodHeatWP), at(c, idx.prodHeatUmg)),  // produced space heat
       outdoor_c: at(c, idx.outdoor),
+      supply_c: at(c, idx.supply),       // Vorlauftemperatur (for the heating curve)
     });
   }
   return { rows };

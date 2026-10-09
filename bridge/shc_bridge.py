@@ -685,6 +685,13 @@ class Store:
                 " heating_kwh REAL, water_kwh REAL, outdoor_c REAL,"
                 " PRIMARY KEY(period,date))"
             )
+            # heating-curve points from an imported CSV: flow temp vs. outdoor
+            # during SPACE HEATING hours (the CSV exposes Vorlauftemperatur hourly).
+            # Separate from hp_samples so energy/COP analytics stay untouched.
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS hp_curve("
+                " ts INTEGER PRIMARY KEY, outdoor_c REAL, supply_c REAL)"
+            )
             # AEG / Electrolux appliances (washer, dryer, …) and their readings
             self.conn.execute(
                 "CREATE TABLE IF NOT EXISTS aeg_appliances("
@@ -792,7 +799,30 @@ class Store:
         """Remove ALL imported heat-pump history (CSV). Returns rows deleted."""
         with self.lock, self.conn:
             cur = self.conn.execute("DELETE FROM hp_history")
-            return cur.rowcount or 0
+            n = cur.rowcount or 0
+            cur2 = self.conn.execute("DELETE FROM hp_curve")   # CSV curve points too
+            return n + (cur2.rowcount or 0)
+
+    # -- heating-curve points from CSV (flow temp vs. outdoor) ----------- #
+    def hp_curve_upsert(self, rows: list[tuple]) -> int:
+        """rows: (ts, outdoor_c, supply_c). Replace on timestamp conflict."""
+        with self.lock, self.conn:
+            self.conn.executemany(
+                "INSERT INTO hp_curve(ts,outdoor_c,supply_c) VALUES(?,?,?)"
+                " ON CONFLICT(ts) DO UPDATE SET outdoor_c=excluded.outdoor_c,"
+                " supply_c=excluded.supply_c", rows)
+        return len(rows)
+
+    def hp_curve_since(self, since_ts: int) -> list[dict]:
+        with self.lock:
+            cur = self.conn.execute(
+                "SELECT ts,outdoor_c,supply_c FROM hp_curve WHERE ts>=? ORDER BY ts ASC",
+                (since_ts,))
+            return [dict(r) for r in cur.fetchall()]
+
+    def hp_curve_count(self) -> int:
+        with self.lock:
+            return self.conn.execute("SELECT COUNT(*) c FROM hp_curve").fetchone()["c"]
 
     # -- AEG / Electrolux appliances ------------------------------------- #
     def aeg_upsert_appliance(self, a: dict):
@@ -1640,6 +1670,14 @@ def compute_heating_curve(store: "Store", days: int = 30, hp_live: dict | None =
         if (s.get("modulation") or 0) <= 0:
             continue
         pts.append((round(float(o), 1), round(float(sup), 1)))
+    # historical heating-curve points imported from a HomeCom CSV (flow temp vs.
+    # outdoor during space-heating hours) – make the curve usable immediately.
+    csv_rows = store.hp_curve_since(since)
+    for s in csv_rows:
+        o, sup = s.get("outdoor_c"), s.get("supply_c")
+        if o is not None and sup is not None and sup >= 20:
+            pts.append((round(float(o), 1), round(float(sup), 1)))
+    n_csv = len(csv_rows)
     # add the live operating point (counts immediately, before history fills up)
     live_pt = None
     if hp_live:
@@ -1653,9 +1691,10 @@ def compute_heating_curve(store: "Store", days: int = 30, hp_live: dict | None =
     cyc = hp_cycle_stats(rows)
     if n == 0:
         return {"ok": True, "enough": False, "n": 0, "points": [], "cycles": cyc,
-                "note": "Sobald die Wärmepumpe heizt, zeichnet die App Vorlauf × Außentemperatur "
-                        "auf – dann erscheint hier deine Kurve samt konkreter Empfehlung. "
-                        "(Historische CSV-Daten enthalten leider keine Vorlauftemperatur.)"}
+                "csv_points": 0,
+                "note": "Noch keine Heizpunkte. Entweder heizt die Wärmepumpe gerade nicht, oder "
+                        "importiere im Setup deinen HomeCom-CSV-Export – er enthält stündlich "
+                        "Vorlauf- und Außentemperatur, daraus baue ich die Kurve sofort."}
 
     xs = [p[0] for p in pts]; ys = [p[1] for p in pts]
     span = max(xs) - min(xs)
@@ -1731,7 +1770,8 @@ def compute_heating_curve(store: "Store", days: int = 30, hp_live: dict | None =
            for rx in (-7, 0, 7)]
     step = max(1, n // 300)
     return {"ok": True, "enough": True, "provisional": not full_fit, "basis": basis,
-            "n": n, "days_window": days, "points": pts[::step], "live_point": live_pt,
+            "n": n, "csv_points": n_csv, "days_window": days,
+            "points": pts[::step], "live_point": live_pt,
             "fit": {"a": round(a, 3), "b": round(b, 2)},
             "ideal": [{"x": round(x, 1), "y": round(_ideal_flow(x), 1)} for x in
                       [xmin + (xmax - xmin) * k / 20 for k in range(21)]],
@@ -3189,6 +3229,7 @@ class Handler(BaseHTTPRequestHandler):
             except (TypeError, ValueError):
                 return None
         clean = []
+        curve = []          # (ts, outdoor, supply) heating-curve points (hourly)
         for r in (body.get("rows") or []):
             period = r.get("period")
             date = str(r.get("date") or "").strip()
@@ -3196,23 +3237,44 @@ class Handler(BaseHTTPRequestHandler):
                 continue
             elec = f(r.get("elec_kwh"))
             heat = f(r.get("heat_kwh"))
+            outdoor = f(r.get("outdoor_c"))
+            heating = f(r.get("heating_kwh"))
+            water = f(r.get("water_kwh"))
             if elec is None and heat is None:
                 continue
-            clean.append((period, date, elec, heat, f(r.get("heating_kwh")),
-                          f(r.get("water_kwh")), f(r.get("outdoor_c"))))
+            clean.append((period, date, elec, heat, heating, water, outdoor))
+            # real heating-curve point: an HOUR with actual space-heating OUTPUT
+            # (produced heating heat > 0 – excludes standby & hot-water hours where
+            # the flow sensor still reads the hot tank), no hot water, flow+outdoor
+            # present. Using produced heat, not the 0.1 kWh standby electricity.
+            supply = f(r.get("supply_c"))
+            prod_heat = f(r.get("heat_heating_kwh"))
+            active = (prod_heat or 0) > 0.1 if prod_heat is not None else (heating or 0) > 0.15
+            if (period == "hour" and supply is not None and outdoor is not None
+                    and supply >= 20 and active and (water or 0) <= 0.05):
+                try:
+                    ts = int(datetime.fromisoformat(date).timestamp())
+                    curve.append((ts, round(outdoor, 1), round(supply, 1)))
+                except (ValueError, OverflowError):
+                    pass
         if not clean:
             return self._send_json({"ok": False, "error": "Keine gültigen Zeilen erkannt."}, 200)
         self.store.hp_history_upsert(clean)
+        if curve:
+            self.store.hp_curve_upsert(curve)
         cnt = self.store.hp_history_count()
         days = sum(1 for c in clean if c[0] == "day")
         months = sum(1 for c in clean if c[0] == "month")
         hours = sum(1 for c in clean if c[0] == "hour")
+        ctot = self.store.hp_curve_count()
+        cmsg = f", {len(curve)} Heizkurven-Punkte" if curve else ""
         return self._send_json({"ok": True, "imported": len(clean),
                                 "new_days": days, "new_months": months, "new_hours": hours,
+                                "curve_points": len(curve), "total_curve": ctot,
                                 "total_days": cnt["days"], "total_months": cnt["months"],
                                 "total_hours": cnt.get("hours", 0),
                                 "message": f"{len(clean)} Zeilen importiert "
-                                           f"({days} Tage, {months} Monate, {hours} Stunden)."})
+                                           f"({days} Tage, {months} Monate, {hours} Stunden{cmsg})."})
 
     def _post_hp_import_clear(self, body):
         """Delete ALL imported heat-pump history (the CSV the user uploaded).
