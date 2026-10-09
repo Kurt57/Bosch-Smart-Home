@@ -2279,6 +2279,59 @@ def _demo_hp(dt: datetime) -> dict:
             "supply_c": supply, "return_c": round(supply - (heat / 6000.0) * 5.0, 1)}
 
 
+def _demo_controls() -> list[dict]:
+    """Synthetic heat-pump controls for the demo (operation mode, heating-curve
+    level, room/DHW setpoints) – some writeable, some read-only, with ranges."""
+    return [
+        {"path": "/resource/heatingCircuits/hc1/operationMode", "value": "auto",
+         "type": "stringValue", "writeable": True, "allowed": ["auto", "manual", "off"],
+         "min": None, "max": None, "unit": None},
+        {"path": "/resource/heatingCircuits/hc1/heatingCurveLevel", "value": 0,
+         "type": "floatValue", "writeable": True, "allowed": None,
+         "min": -10, "max": 10, "unit": "K"},
+        {"path": "/resource/heatingCircuits/hc1/roomtemperature", "value": 21.0,
+         "type": "floatValue", "writeable": True, "allowed": None,
+         "min": 5, "max": 30, "unit": "C"},
+        {"path": "/resource/heatingCircuits/hc1/actualSupplyTemperature", "value": 33.0,
+         "type": "floatValue", "writeable": False, "allowed": None,
+         "min": None, "max": None, "unit": "C"},
+        {"path": "/resource/dhwCircuits/dhw1/operationMode", "value": "eco",
+         "type": "stringValue", "writeable": True, "allowed": ["eco", "comfort", "off"],
+         "min": None, "max": None, "unit": None},
+        {"path": "/resource/dhwCircuits/dhw1/temperatureLevels/high", "value": 52.0,
+         "type": "floatValue", "writeable": True, "allowed": None,
+         "min": 40, "max": 65, "unit": "C"},
+    ]
+
+
+# human labels for the common heat-pump control resources
+_CONTROL_LABELS = [
+    ("operationmode", "Betriebsart"),
+    ("heatingcurvelevel", "Heizkurve · Niveau (Parallelverschiebung)"),
+    ("heatingcurve", "Heizkurve"),
+    ("heatcurve", "Heizkurve"),
+    ("roomtemperature", "Raum-Solltemperatur"),
+    ("roommanual", "Raum-Soll (manuell)"),
+    ("manualroomsetpoint", "Raum-Soll (manuell)"),
+    ("suwithreshold", "Sommer/Winter-Schwelle"),
+    ("supplytemperature", "Vorlauftemperatur"),
+    ("temperaturelevels/high", "Warmwasser-Solltemperatur"),
+    ("singlechargesetpoint", "Warmwasser Einmalladung"),
+    ("temperatureroommanual", "Raum-Soll (manuell)"),
+]
+
+
+def _control_label(path: str) -> str:
+    p = (path or "").lower()
+    area = "Warmwasser" if "dhwcircuits" in p else ("Heizung" if "heatingcircuits" in p else "")
+    for key, lbl in _CONTROL_LABELS:
+        if key in p:
+            return (lbl if "·" in lbl or not area else f"{area}: {lbl}")
+    # fall back to the last path segment
+    seg = path.rstrip("/").rsplit("/", 1)[-1]
+    return f"{area}: {seg}" if area else seg
+
+
 def _demo_climate() -> list[dict]:
     """Synthetic per-room thermostat snapshot for the heating diagnostics demo –
     deliberately seeded with a few typical misconfigurations so the check has
@@ -3044,6 +3097,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._post_switch(body)
             if parsed.path == "/api/homecom/refresh":
                 return self._post_hp_refresh(body)
+            if parsed.path == "/api/homecom/write":
+                return self._post_hp_write(body)
             if parsed.path == "/api/electrolux/connect":
                 return self._post_electrolux_connect(body)
             if parsed.path == "/api/electrolux/probe":
@@ -3318,6 +3373,67 @@ class Handler(BaseHTTPRequestHandler):
         return self._send_json({"ok": True, "ts": st.get("ts"),
                                 "energy_kwh": st.get("energy_kwh"),
                                 "message": "Aktueller Zählerstand gelesen – versäumte Verbräuche nachgeladen."})
+
+    def _post_hp_write(self, body):
+        """Write a single heat-pump setting via the HomeCom API – guarded:
+        only writeable heating/hot-water resources, value validated against the
+        device's own allowedValues / min-max, explicit confirmation required."""
+        path = str(body.get("path") or "").strip()
+        value = body.get("value")
+        if not path or value is None:
+            return self._send_json({"ok": False, "error": "path und value erforderlich."}, 200)
+        if not body.get("confirm"):
+            return self._send_json({"ok": False, "error": "Bestätigung erforderlich."}, 200)
+        # safety allowlist: only heating / hot-water circuits, never sensors/system
+        low = path.lower()
+        if not (low.startswith("/resource/heatingcircuits/") or low.startswith("/resource/dhwcircuits/")):
+            return self._send_json({"ok": False,
+                                    "error": "Aus Sicherheitsgründen nur Heiz-/Warmwasserkreise änderbar."}, 200)
+        if self.ctx.mode == "demo":
+            return self._send_json({"ok": True, "demo": True, "path": path, "value": value,
+                                    "message": f"Demo: '{_control_label(path)}' würde auf {value} gesetzt."})
+        client = self.ctx.homecom_client()
+        if not client:
+            return self._send_json({"ok": False, "error": "nicht mit HomeCom verbunden"}, 200)
+        gid = self.cfg.get("homecom_gateway", "")
+        try:
+            cur = client.read_resource(gid, path)
+        except Exception as exc:
+            return self._send_json({"ok": False, "error": f"Ressource nicht lesbar: {exc}"}, 200)
+        if not cur:
+            return self._send_json({"ok": False, "error": "Ressource nicht gefunden."}, 200)
+        if not cur.get("writeable"):
+            return self._send_json({"ok": False,
+                                    "error": "Diese Ressource ist laut Anlage nicht änderbar (read-only)."}, 200)
+        prev = cur.get("value")
+        # validate against the device's own constraints
+        if cur.get("allowed"):
+            if value not in cur["allowed"]:
+                return self._send_json({"ok": False,
+                                        "error": f"Wert nicht erlaubt. Erlaubt: {', '.join(map(str, cur['allowed']))}."}, 200)
+        else:
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                return self._send_json({"ok": False, "error": "Zahlenwert erwartet."}, 200)
+            lo, hi = cur.get("min"), cur.get("max")
+            if lo is not None and value < lo:
+                return self._send_json({"ok": False, "error": f"Wert unter Minimum ({lo})."}, 200)
+            if hi is not None and value > hi:
+                return self._send_json({"ok": False, "error": f"Wert über Maximum ({hi})."}, 200)
+            if float(value).is_integer():
+                value = int(value)
+        try:
+            status, resp = client.put(gid, path, value)
+        except Exception as exc:
+            return self._send_json({"ok": False, "error": f"Schreiben fehlgeschlagen: {exc}"}, 200)
+        if status not in (200, 204):
+            return self._send_json({"ok": False,
+                                    "error": f"Anlage lehnte ab (HTTP {status}).",
+                                    "detail": resp[:200]}, 200)
+        return self._send_json({"ok": True, "path": path, "value": value, "previous": prev,
+                                "label": _control_label(path),
+                                "message": f"'{_control_label(path)}' auf {value} gesetzt (vorher {prev})."})
 
     def _post_electrolux_connect(self, body):
         """Save the AEG/Electrolux API key + refresh token, verify them by
@@ -3609,6 +3725,25 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send_json({"error": "nicht mit HomeCom verbunden"}, 400)
                 gid = qs.get("gateway", [self.cfg.get("homecom_gateway", "")])[0]
                 return self._send_json({"gateway": gid, "results": client.probe(gid)})
+            if path == "/api/homecom/controls":
+                # discover settable heat-pump resources (heating curve, modes,
+                # setpoints) with their current value + writeable/range
+                if self.ctx.mode == "demo":
+                    ctrls = _demo_controls()
+                    for c in ctrls:
+                        c["label"] = _control_label(c["path"])
+                    return self._send_json({"ok": True, "demo": True, "controls": ctrls})
+                client = self.ctx.homecom_client()
+                if not client:
+                    return self._send_json({"ok": False, "error": "nicht mit HomeCom verbunden"}, 200)
+                gid = qs.get("gateway", [self.cfg.get("homecom_gateway", "")])[0]
+                try:
+                    ctrls = client.read_controls(gid)
+                    for c in ctrls:
+                        c["label"] = _control_label(c["path"])
+                    return self._send_json({"ok": True, "controls": ctrls, "gateway": gid})
+                except Exception as exc:
+                    return self._send_json({"ok": False, "error": str(exc)}, 200)
             days = int(qs.get("days", ["60"])[0])
             price = float(qs.get("price", [self.cfg.get("price_per_kwh", 0.35)])[0])
             if path == "/api/analytics" or path == "/api/summary":

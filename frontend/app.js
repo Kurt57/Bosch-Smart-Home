@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-09 · Heizkurve aus CSV-Import: der HomeCom-Export liefert stündlich Vorlauf+Außen – echte Heizkurve + Empfehlung sofort, ohne Warten'
+const APP_VERSION = '2026-10-09 · Neu: 🛠️ Wärmepumpe steuern (Experte) – Betriebsart/Heizkurven-Niveau/Soll-Temperaturen direkt per HomeCom-API setzen (nur änderbare Werte, bestätigungspflichtig)'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -210,6 +210,13 @@ const INFO = {
     'geschlossenem Ventil erreichen, bekommen <b>zu viel</b> und können <b>angedrosselt</b> werden. ' +
     'Der <b>rechnerische</b> Abgleich (Verfahren B, Heizlast je Raum) ist für Förderungen Pflicht und Sache des Fachbetriebs – ' +
     'die hier gezeigte Beobachtungs-Methode ist die praktische Selbstoptimierung.',
+  'hp-control': () => 'Schreibt Einstellungen <b>direkt an die Wärmepumpe</b> über die HomeCom-Cloud-API – z. B. ' +
+    '<b>Betriebsart</b>, <b>Heizkurven-Niveau</b> oder <b>Soll-Temperaturen</b>. Die App fragt die Anlage, welche ' +
+    'Ressourcen <b>änderbar</b> sind (die API meldet pro Wert „writeable" und den erlaubten Bereich), und bietet nur ' +
+    'diese an – Werte werden gegen den von der Anlage gemeldeten Bereich geprüft. Jede Änderung ist <b>bestätigungspflichtig</b> ' +
+    'und zeigt den vorherigen Wert (zum Zurückstellen). <b>Ehrlich:</b> Die HomeCom-API ist inoffiziell/reverse-engineered; ' +
+    'Schreiben ist experimentell. Teste mit einem harmlosen Wert (z. B. Warmwasser-Soll ±1 °C) und beobachte, bevor du die ' +
+    'Heizkurve verstellst. Frostschutz/Sicherheitsfunktionen der Anlage bleiben unberührt.',
   'pv-margin': () => 'Hier steht der <b>Ertrag der Kosten gegenüber</b>. Oben drei editierbare Annahmen (€/kWp, €/kWh Speicher, Grundkosten). ' +
     'Oberes Diagramm: <b>Ertrag über 20 Jahre</b> (Linie) vs. <b>Investition</b> (gestrichelt) – der Abstand ist dein Gewinn. ' +
     'Unteres Diagramm: <b>Grenznutzen</b> (€/Jahr je +1 kWp) gegen die <b>Kostengrenze</b>. Das <b>wirtschaftliche Optimum</b> ist das größte ' +
@@ -1849,6 +1856,7 @@ function renderAll() {
   // (so €-savings fill in even if the tab was opened before data arrived)
   if (typeof _hdData !== 'undefined' && _hdData) paintHeatingDiag(_hdData);
   if (typeof _hcData !== 'undefined' && _hcData) paintHeatingCurve(_hcData);
+  if (typeof initHpControls === 'function') initHpControls();
 }
 
 // Device control: switch Bosch Smart Plug+ (and other PowerSwitch devices) on/off.
@@ -2164,6 +2172,78 @@ function renderHydronic() {
     '🔧 <b>Heizkörper statt Flächenheizung?</b> Dann über <b>voreinstellbare Thermostatventile</b> abgleichen (oder Rücklauf-Methode: alle Rücklauftemperaturen angleichen). ' +
     '📄 <b>Für Förderung (BEG/BAFA)</b> ist der <b>rechnerische</b> Abgleich „Verfahren B" (Heizlast je Raum) Pflicht – das macht ein Fachbetrieb mit Software. ' +
     'Diese Anleitung ist die praktische Selbstoptimierung und kommt ohne Rechnung erstaunlich weit.';
+}
+
+/* ---- Wärmepumpe steuern (Experte): read + write HomeCom settings --------- */
+let _hpControls = null;
+function initHpControls() {
+  const card = $('hpctl-card'); if (!card) return;
+  const avail = STATE.demo || (STATE.health && (STATE.health.homecom_connected || STATE.health.mode === 'demo'));
+  card.hidden = !avail;
+  if (avail && _hpControls) renderHpControlList(_hpControls);   // repaint cached
+}
+async function fetchHpControls(force) {
+  const card = $('hpctl-card'), body = $('hpctl-body'), note = $('hpctl-note');
+  if (!card) return;
+  if (note) note.textContent = '';
+  if (force && body) body.innerHTML = '<div class="note">Lese steuerbare Werte von der Wärmepumpe …</div>';
+  try {
+    const r = await api('/api/homecom/controls');
+    if (r && r.ok && (r.controls || []).length) {
+      _hpControls = r.controls; _hpControls._demo = !!r.demo;
+      card.hidden = false; renderHpControlList(_hpControls);
+    } else if (body) {
+      body.innerHTML = `<div class="note">${esc((r && r.error) || 'Keine steuerbaren Werte gefunden. Ist die Wärmepumpe im Setup verbunden?')}</div>`;
+    }
+  } catch (e) {
+    if (body) body.innerHTML = '<div class="note">Nur möglich, wenn die Seite von der Bridge geöffnet ist.</div>';
+  }
+}
+function renderHpControlList(list) {
+  const body = $('hpctl-body'); if (!body) return;
+  const unit = u => u ? (u === 'C' ? ' °C' : u === 'K' ? ' K' : ' ' + esc(u)) : '';
+  const rows = list.map((c, i) => {
+    const lbl = c.label || c.path.split('/').pop();
+    const cur = `<b>${esc(String(c.value))}${unit(c.unit)}</b>`;
+    let control = '';
+    if (c.writeable) {
+      if (c.allowed && c.allowed.length) {
+        control = `<select data-ctl="${i}" style="width:auto;padding:6px 8px;margin:0">` +
+          c.allowed.map(a => `<option${String(a) === String(c.value) ? ' selected' : ''}>${esc(String(a))}</option>`).join('') + `</select>`;
+      } else {
+        const min = c.min != null ? ` min="${c.min}"` : '', max = c.max != null ? ` max="${c.max}"` : '';
+        control = `<input type="number" data-ctl="${i}" value="${esc(String(c.value))}" step="0.5"${min}${max} style="width:92px;padding:6px 8px;margin:0">`;
+      }
+      control += ` <button class="btn" data-write="${i}" style="width:auto;padding:6px 14px;margin-left:6px">Setzen</button>`;
+    } else {
+      control = `<span style="color:var(--muted);font-size:12px">nur Ablesen</span>`;
+    }
+    const range = (c.allowed && c.allowed.length) ? esc(c.allowed.join(' / '))
+      : (c.min != null || c.max != null) ? `${c.min != null ? c.min : '–'} … ${c.max != null ? c.max : '–'}${unit(c.unit)}` : '';
+    return `<div class="devrow" style="align-items:center"><div class="nm"><b>${esc(lbl)}</b>` +
+      `<small>jetzt ${cur}${range ? ' · erlaubt ' + range : ''}</small></div>` +
+      `<div class="val" style="display:flex;align-items:center;flex-wrap:wrap;gap:4px">${control}</div></div>`;
+  }).join('');
+  body.innerHTML = (list._demo ? '<div class="note" style="margin-bottom:8px"><b>Demo</b> – schreibt keine echte Anlage.</div>' : '') + rows;
+}
+async function doHpWrite(i) {
+  const c = (_hpControls || [])[i]; if (!c) return;
+  const el = document.querySelector(`[data-ctl="${i}"]`); if (!el) return;
+  let value = el.value;
+  const note = $('hpctl-note');
+  const lbl = c.label || c.path.split('/').pop();
+  if (!window.confirm(`„${lbl}" wirklich auf ${value}${c.unit === 'C' ? ' °C' : c.unit === 'K' ? ' K' : ''} setzen?\n\n(vorher ${c.value}) – wirkt direkt auf die Wärmepumpe.`)) return;
+  if (note) note.textContent = `Setze „${lbl}" …`;
+  try {
+    const r = await postJSON('/api/homecom/write', { path: c.path, value, confirm: true });
+    if (r && r.ok) {
+      if (note) note.innerHTML = '✅ ' + esc(r.message || 'Gesetzt.');
+      c.value = r.value;                       // reflect new value locally
+      renderHpControlList(_hpControls);
+    } else if (note) {
+      note.innerHTML = '⚠︎ ' + esc((r && r.error) || 'Fehlgeschlagen.') + ((r && r.detail) ? `<br><small>${esc(r.detail)}</small>` : '');
+    }
+  } catch (e) { if (note) note.textContent = 'Fehler: ' + e.message; }
 }
 
 // "Noch nicht gemessen": whole-house household load (meter/manual, minus heat
@@ -5670,6 +5750,7 @@ function switchView(v) {
     if (typeof renderHeatingDiag === 'function') renderHeatingDiag(false);
     if (typeof renderHeatingCurve === 'function') renderHeatingCurve(false);
     if (typeof renderHydronic === 'function') renderHydronic();
+    if (typeof initHpControls === 'function') initHpControls();
   }
 }
 
@@ -5824,6 +5905,12 @@ function init() {
   });
   const hpr = $('hp-refresh'); if (hpr) hpr.addEventListener('click', doHpRefresh);
   const hdr = $('hd-refresh'); if (hdr) hdr.addEventListener('click', () => { renderHeatingDiag(true); renderHeatingCurve(true); });
+  const hpcl = $('hpctl-load'); if (hpcl) hpcl.addEventListener('click', () => fetchHpControls(true));
+  const hpcb = $('hpctl-body');
+  if (hpcb) hpcb.addEventListener('click', e => {
+    const b = e.target.closest('button[data-write]'); if (!b) return;
+    doHpWrite(parseInt(b.dataset.write, 10));
+  });
   const exp = $('export-csv'); if (exp) exp.addEventListener('click', doExport);
   const aegD = $('aeg-dash');
   if (aegD) aegD.addEventListener('click', () => window.open('https://developer.electrolux.one/dashboard', '_blank'));

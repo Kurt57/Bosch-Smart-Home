@@ -340,3 +340,88 @@ class HomeComClient:
             except Exception as exc:
                 out[p] = {"error": str(exc)}
         return out
+
+    # -- controls (read settings + write them back) ----------------------- #
+    @staticmethod
+    def _control_desc(res: dict) -> dict | None:
+        """Normalise a Bosch resource JSON into a control descriptor, or None if
+        it is not a settable/scalar leaf."""
+        if not isinstance(res, dict):
+            return None
+        rid = res.get("id")
+        val = res.get("value")
+        if rid is None or isinstance(val, (list, dict)):
+            return None
+        allowed = res.get("allowedValues")
+        return {
+            "path": rid,
+            "value": val,
+            "type": res.get("type"),
+            "writeable": bool(res.get("writeable")),
+            "allowed": allowed if isinstance(allowed, list) else None,
+            "min": res.get("minValue"),
+            "max": res.get("maxValue"),
+            "unit": res.get("unitOfMeasure"),
+        }
+
+    def read_controls(self, gateway_id: str, max_nodes: int = 90) -> list[dict]:
+        """Discover settable heating/hot-water resources by crawling the
+        heatingCircuits and dhwCircuits trees (bounded). Read-only; returns each
+        leaf's current value plus whether the device reports it writeable and its
+        allowed range – so writes can be validated against the device's own rules."""
+        prefix = f"{API_BASE}{gateway_id}"
+
+        def norm(pid):
+            if not isinstance(pid, str) or not pid.startswith("/"):
+                return None
+            return pid if pid.startswith("/resource/") else "/resource" + pid
+
+        seen, out, budget = set(), {}, max_nodes
+        queue = ["/resource/heatingCircuits", "/resource/dhwCircuits"]
+        while queue and budget > 0:
+            p = queue.pop(0)
+            if p in seen:
+                continue
+            seen.add(p)
+            budget -= 1
+            try:
+                res = self._api_get(prefix + p)
+            except HomeComError:
+                res = None
+            if not isinstance(res, dict):
+                continue
+            refs = res.get("references")
+            if isinstance(refs, list):
+                for r in refs:
+                    rid = norm(r.get("id") if isinstance(r, dict) else None)
+                    if rid and rid not in seen:
+                        queue.append(rid)
+            d = self._control_desc(res)
+            if d:
+                d["path"] = norm(d["path"]) or p
+                out[d["path"]] = d
+        return list(out.values())
+
+    def read_resource(self, gateway_id: str, resource_path: str) -> dict | None:
+        """GET one resource as a control descriptor (for write validation)."""
+        res = self._api_get(f"{API_BASE}{gateway_id}{resource_path}")
+        return self._control_desc(res) if isinstance(res, dict) else None
+
+    def put(self, gateway_id: str, resource_path: str, value) -> tuple[int, str]:
+        """Write a value to a resource (PUT {"value": …}). Returns (status, body).
+        Caller is responsible for validating the resource is writeable first."""
+        token = self._valid_token()
+        full = f"{API_BASE}{gateway_id}{resource_path}"
+        body = json.dumps({"value": value}).encode("utf-8")
+        conn = http.client.HTTPSConnection(API_HOST, 443, timeout=self.timeout, context=self._ctx)
+        try:
+            conn.request("PUT", full, body=body, headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+            })
+            r = conn.getresponse()
+            data = r.read()
+            return r.status, data.decode("utf-8", "replace")
+        finally:
+            conn.close()

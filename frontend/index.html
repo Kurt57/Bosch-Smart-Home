@@ -387,6 +387,18 @@
       <div id="ha-steps" style="margin-top:12px"></div>
       <div class="note" id="ha-note" style="margin-top:10px"></div>
     </div>
+    <div class="card" id="hpctl-card" hidden>
+      <h2><span class="info" data-info="hp-control" role="button" aria-label="Info">i</span>🛠️ Wärmepumpe steuern <span class="r" style="color:var(--warn)">Experte</span></h2>
+      <div class="note" style="margin-bottom:10px;border-left:3px solid var(--warn);padding-left:10px">
+        <b>Direkt an die Wärmepumpe schreiben</b> (HomeCom-API): Betriebsart, Heizkurven-Niveau, Soll-Temperaturen.
+        Es werden nur Werte angeboten, die deine Anlage selbst als <b>änderbar</b> meldet, und nur im von ihr
+        erlaubten Bereich. Jede Änderung musst du <b>bestätigen</b>. ⚠︎ Wirkt <b>real</b> auf die Heizung –
+        in kleinen Schritten, und notiere dir den vorherigen Wert.
+      </div>
+      <button class="btn sec" id="hpctl-load" style="margin-bottom:8px">🔄 Steuerbare Werte laden</button>
+      <div id="hpctl-body"></div>
+      <div class="note" id="hpctl-note" style="margin-top:8px"></div>
+    </div>
     <div class="grid2">
       <div class="kpi sm"><div class="v" id="hp-today-e">–</div><div class="l">Strom heute</div></div>
       <div class="kpi sm"><div class="v" id="hp-today-h">–</div><div class="l">Wärme heute</div></div>
