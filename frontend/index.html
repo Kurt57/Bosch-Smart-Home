@@ -372,9 +372,16 @@
       <div id="hc-chart"></div>
       <div class="legend">
         <div class="it"><span class="sw" style="background:#4be0b0"></span>Zielband (WP-freundlich)</div>
-        <div class="it"><span class="sw" style="background:#ff6b8a"></span>deine Kurve</div>
+        <div class="it"><span class="sw" style="background:#ff6b8a"></span>gemessen</div>
+        <div class="it"><span class="sw" style="background:#3ba9ff"></span>Geräte-Kurve</div>
         <div class="it"><span class="sw" style="background:var(--muted)"></span>Messpunkte</div>
       </div>
+      <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:10px;font-size:13px">
+        <b style="color:#3ba9ff">🔵 Geräte-Heizkurve eintragen:</b>
+        <label>Vorlauf bei <b>+20&nbsp;°C</b> <input id="hc-p20" type="number" step="0.5" placeholder="z. B. 22" style="width:72px;padding:5px 7px;margin:0"></label>
+        <label>bei <b>−10&nbsp;°C</b> <input id="hc-pm10" type="number" step="0.5" placeholder="z. B. 39" style="width:72px;padding:5px 7px;margin:0"></label>
+      </div>
+      <div class="note" id="hc-dev-note" style="margin-top:4px">Lies die zwei Punkte an deiner Wärmepumpe ab (Menü <b>Heizkurve</b>) – dann zeichne ich sie blau mit ein und vergleiche.</div>
       <div id="hc-ref" style="margin-top:10px"></div>
       <div class="note" id="hc-note" style="margin-top:8px"></div>
     </div>

@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-09 · Heizkurven-Grafik als klassische Kennlinie: X umgedreht (+20 °C links → −10 °C rechts), Y-Vorlauf fest 20–50 °C'
+const APP_VERSION = '2026-10-09 · Geräte-Heizkurve eintragen (2 Punkte wie am WP-Display, +20/−10 °C): wird blau eingezeichnet und mit dem Zielband verglichen'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -201,7 +201,9 @@ const INFO = {
     'oder <b>Steilheit/Gradient</b> (kippt sie: wirkt vor allem bei Kälte). Die App <b>sammelt</b> die Punkte im Betrieb, ' +
     'daher wird die Kurve über die Heiztage immer aussagekräftiger – am besten an kalten Tagen. ' +
     'Schneller geht es mit einem <b>HomeCom-CSV-Export</b> (Setup → Import): der enthält <b>stündlich</b> Vorlauf- und ' +
-    'Außentemperatur, daraus baut die App die Kurve sofort rückwirkend – es zählen nur echte Heizstunden (kein Warmwasser/Standby).',
+    'Außentemperatur, daraus baut die App die Kurve sofort rückwirkend – es zählen nur echte Heizstunden (kein Warmwasser/Standby). ' +
+    'Trägst du zusätzlich die <b>zwei Punkte deiner Geräte-Heizkurve</b> ein (Vorlauf bei +20 °C und −10 °C, wie am WP-Display), ' +
+    'zeichne ich sie <b style="color:#3ba9ff">blau</b> mit ein und vergleiche sie direkt mit dem Zielband.',
   'hydronic': () => '<b>Hydraulischer Abgleich</b> verteilt das Heizwasser so auf die Heizkreise, dass jeder Raum ' +
     'genau die passende Menge bekommt. Ohne Abgleich bekommen kurze/nahe Kreise zu viel, lange/ferne zu wenig – ' +
     'man dreht dann den Vorlauf hoch, damit auch der kälteste Raum warm wird, und das kostet bei der Wärmepumpe viel Effizienz. ' +
@@ -2063,7 +2065,44 @@ function curveChart(d) {
   // measured points within the visible domain
   const dots = pts.filter(p => p[0] <= XL + 0.01 && p[0] >= XR - 0.01 && p[1] >= YB && p[1] <= YT)
     .map(p => `<circle cx="${X(p[0]).toFixed(1)}" cy="${Y(p[1]).toFixed(1)}" r="2.3" fill="var(--muted)" fill-opacity="0.55"/>`).join('');
-  return svg(h, g + xt + dots + idealPath + fitPath);
+  // the device's configured 2-point curve (blue), as read off the heat pump
+  let devPath = '';
+  const dv = d.device;
+  if (dv && dv.p20 != null && dv.pm10 != null) {
+    const x20 = X(20), xm10 = X(-10), y20 = Y(clampY(dv.p20)), ym10 = Y(clampY(dv.pm10));
+    devPath = `<line x1="${x20.toFixed(1)}" y1="${y20.toFixed(1)}" x2="${xm10.toFixed(1)}" y2="${ym10.toFixed(1)}" stroke="#3ba9ff" stroke-width="2.5"/>` +
+      `<circle cx="${x20.toFixed(1)}" cy="${y20.toFixed(1)}" r="4" fill="#3ba9ff"/>` +
+      `<circle cx="${xm10.toFixed(1)}" cy="${ym10.toFixed(1)}" r="4" fill="#3ba9ff"/>` +
+      `<text class="axis" x="${(x20 + 7).toFixed(1)}" y="${(y20 - 5).toFixed(1)}" fill="#3ba9ff">${dv.p20}</text>` +
+      `<text class="axis" x="${(xm10 - 7).toFixed(1)}" y="${(ym10 - 5).toFixed(1)}" text-anchor="end" fill="#3ba9ff">${dv.pm10}</text>`;
+  }
+  return svg(h, g + xt + dots + idealPath + fitPath + devPath);
+}
+function hcDevice() {
+  const g = k => { const v = parseFloat(localStorage.getItem(k)); return isFinite(v) ? v : null; };
+  const p20 = g('hc_dev_p20'), pm10 = g('hc_dev_pm10');
+  return (p20 != null && pm10 != null) ? { p20, pm10 } : null;
+}
+// Compare the device's 2-point curve against the WP-friendly target band and
+// advise concretely which point to lower (and roughly by how much).
+function renderHcDeviceNote(device) {
+  const el = $('hc-dev-note'); if (!el) return;
+  if (!device) {
+    el.innerHTML = 'Lies die zwei Punkte an deiner Wärmepumpe ab (Menü <b>Heizkurve</b>) – dann zeichne ich sie blau mit ein und vergleiche.';
+    return;
+  }
+  const t20 = Math.round(HC_IDEAL(20)), tm10 = Math.round(HC_IDEAL(-10));
+  const d20 = device.p20 - t20, dm10 = device.pm10 - tm10;
+  const slope10 = (device.pm10 - device.p20) / 30 * 10;   // K Vorlauf je 10 K kälter (positiv)
+  let advice;
+  const parts = [];
+  if (dm10 >= 2) parts.push(`den <b>−10 °C-Punkt</b> Richtung ~${tm10} °C (−${Math.round(dm10)} K)`);
+  if (d20 >= 2) parts.push(`den <b>+20 °C-Punkt</b> Richtung ~${t20} °C (−${Math.round(d20)} K)`);
+  if (parts.length) advice = `<span style="color:#ffb64d">Spielraum nach unten:</span> ${parts.join(' und ')} senken – in <b>1–2 K-Schritten</b>, dann beobachten, ob alle Räume (v. a. der Leitraum) warm bleiben.`;
+  else if (d20 <= -2 && dm10 <= -2) advice = '<span style="color:#4be0b0">Deine Kurve liegt bereits unter dem WP-Zielband – sehr effizient.</span> Nur anheben, falls Räume nicht richtig warm werden.';
+  else advice = '<span style="color:#4be0b0">Deine Kurve liegt gut im effizienten Bereich.</span>';
+  el.innerHTML = `🔵 <b>Deine Geräte-Kurve:</b> +20 °C → ${device.p20} °C · −10 °C → ${device.pm10} °C ` +
+    `<span style="color:var(--muted)">(~${fmt(slope10, 1)} K Vorlauf je 10 K kälter)</span>. ${advice}`;
 }
 let _hcData = null, _hcBusy = false;
 async function renderHeatingCurve(force) {
@@ -2078,14 +2117,17 @@ async function renderHeatingCurve(force) {
 function paintHeatingCurve(r) {
   const head = $('hc-head'), chart = $('hc-chart'), ref = $('hc-ref'), note = $('hc-note');
   if (!r || !r.ok) { if (chart) chart.innerHTML = '<div class="note">Keine Daten.</div>'; return; }
+  const device = hcDevice();
+  r.device = device;
+  renderHcDeviceNote(device);
   if (!r.enough) {
     if (head) head.textContent = '';
     if (ref) ref.innerHTML = '';
     if (chart) {
       const p = r.points || [];
-      chart.innerHTML = p.length >= 2
-        ? curveChart({ points: p, ideal: [], xmin: Math.min(...p.map(q => q[0])) - 1, xmax: Math.max(...p.map(q => q[0])) + 1 })
-        : '<div class="note" style="padding:20px 0;text-align:center">📈 Noch keine Heizkurve – die App zeichnet sie auf, während die Wärmepumpe heizt.</div>';
+      chart.innerHTML = (p.length >= 2 || device)
+        ? curveChart({ points: p, device })
+        : '<div class="note" style="padding:20px 0;text-align:center">📈 Noch keine Heizkurve – trage oben deine Geräte-Kurve ein oder lass die Wärmepumpe heizen.</div>';
     }
     if (note) note.innerHTML = '⏳ ' + esc(r.note || 'Sammelt noch Daten.') + ` <span style="color:var(--muted)">(${r.n || 0} Messpunkte)</span>`;
     return;
@@ -5974,6 +6016,15 @@ function init() {
   });
   const hpr = $('hp-refresh'); if (hpr) hpr.addEventListener('click', doHpRefresh);
   const hdr = $('hd-refresh'); if (hdr) hdr.addEventListener('click', () => { renderHeatingDiag(true); renderHeatingCurve(true); });
+  // device heating-curve points (read off the heat pump), stored locally
+  [['hc-p20', 'hc_dev_p20'], ['hc-pm10', 'hc_dev_pm10']].forEach(([id, key]) => {
+    const el = $(id); if (!el) return;
+    const s = localStorage.getItem(key); if (s !== null) el.value = s;
+    el.addEventListener('input', () => {
+      try { el.value === '' ? localStorage.removeItem(key) : localStorage.setItem(key, el.value); } catch (e) {}
+      if (_hcData) paintHeatingCurve(_hcData); else renderHcDeviceNote(hcDevice());
+    });
+  });
   const hpcl = $('hpctl-load'); if (hpcl) hpcl.addEventListener('click', () => fetchHpControls(true));
   const hpcb = $('hpctl-body');
   if (hpcb) hpcb.addEventListener('click', e => {
