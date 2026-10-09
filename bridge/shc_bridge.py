@@ -491,6 +491,29 @@ class SHCClient:
             "energy_start": _parse_start_date(st.get("energyConsumptionStartDate")),
         }
 
+    def read_power_bulk(self) -> dict:
+        """{device_id: {power_w, energy_wh, energy_start}} for ALL PowerMeter
+        devices in ONE `/smarthome/services` call – avoids one mTLS request per
+        device (which, with many devices, made each poll take tens of seconds
+        and kept the controller busy for the UI's own requests)."""
+        out: dict[str, dict] = {}
+        try:
+            bulk = self.get("/smarthome/services")
+        except Exception:
+            return out
+        if not isinstance(bulk, list):
+            return out
+        for s in bulk:
+            if not (isinstance(s, dict) and s.get("id") == "PowerMeter" and s.get("deviceId")):
+                continue
+            st = s.get("state") or {}
+            out[s["deviceId"]] = {
+                "power_w": float(st.get("powerConsumption", 0.0) or 0.0),
+                "energy_wh": float(st.get("energyConsumption", 0.0) or 0.0),
+                "energy_start": _parse_start_date(st.get("energyConsumptionStartDate")),
+            }
+        return out
+
     def read_switch(self, device_id: str) -> str | None:
         """Current PowerSwitch state ('ON'/'OFF') for a switchable device, or None."""
         try:
@@ -515,9 +538,23 @@ class SHCClient:
 
     def list_switchables(self, name_filter: list[str] | None = None) -> list[dict]:
         """Switchable devices (PowerSwitch service) with their current state.
-        Reuses list_power_devices' naming/room logic for a consistent label."""
+        Reuses list_power_devices' naming/room logic for a consistent label.
+
+        PERF: read ALL PowerSwitch states in ONE bulk `/smarthome/services`
+        call instead of one mTLS request per device (which, with many lights,
+        meant dozens of sequential TLS handshakes = tens of seconds)."""
         meter = {d["id"]: d for d in self.list_power_devices(name_filter)}
         devices = self.get("/smarthome/devices") or []
+        sw_state, have_bulk = {}, False
+        try:
+            bulk = self.get("/smarthome/services")
+            if isinstance(bulk, list):
+                have_bulk = True
+                for s in bulk:
+                    if isinstance(s, dict) and s.get("id") == "PowerSwitch" and s.get("deviceId"):
+                        sw_state[s["deviceId"]] = (s.get("state") or {}).get("switchState")
+        except Exception:
+            pass
         out = []
         for dev in devices:
             if "PowerSwitch" not in (dev.get("deviceServiceIds") or []):
@@ -526,9 +563,12 @@ class SHCClient:
             info = meter.get(dev_id)              # nice name/room if it's also a meter
             name = (info or {}).get("name") or dev.get("name") or dev_id
             room = (info or {}).get("room") or ""
+            state = sw_state.get(dev_id)
+            if state is None and not have_bulk:   # bulk unavailable → single read (rare)
+                state = self.read_switch(dev_id)
             out.append({"id": dev_id, "name": name, "room": room,
                         "model": dev.get("deviceModel") or "",
-                        "state": self.read_switch(dev_id)})
+                        "state": state})
         out.sort(key=lambda d: (d["room"], d["name"]))
         return out
 
@@ -4229,9 +4269,12 @@ class Poller(threading.Thread):
     def _poll_once(self):
         ts = int(time.time())
         devices = self.client.list_power_devices(self.cfg.get("device_filter") or None)
+        bulk = self.client.read_power_bulk()     # all PowerMeter states in ONE request
         for dev in devices:
             try:
-                reading = self.client.read_power(dev["id"])
+                reading = bulk.get(dev["id"])
+                if reading is None and not bulk:  # bulk unavailable → single read (rare)
+                    reading = self.client.read_power(dev["id"])
                 self.store.upsert_device(dev, ts, reading.get("energy_start") if reading else None)
                 if reading:
                     self.store.add_sample(dev["id"], ts, reading["power_w"], reading["energy_wh"])
