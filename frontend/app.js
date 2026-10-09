@@ -104,6 +104,67 @@ async function hardRefresh() {
   location.reload();
 }
 
+/* ------------------------------------------------------------------ *
+ * Device/browser-independent settings.
+ * Every app setting (PV, tariffs, finance, heating layout, …) is mirrored
+ * to the BRIDGE so that every device/browser shows the same values. We keep
+ * using localStorage as a synchronous local cache, but:
+ *   • on startup we pull the bridge's stored settings into localStorage, and
+ *   • every write to an app-setting key is pushed back to the bridge.
+ * Only the connection/mode keys (bridge URL, demo flag) stay device-local.  */
+const SETTINGS_LOCAL_ONLY = new Set(['bhe_base', 'bhe_demo']);
+function isAppSettingKey(k) {
+  if (typeof k !== 'string') return false;
+  if (SETTINGS_LOCAL_ONLY.has(k)) return false;
+  return k.startsWith('bhe_') || k === 'heatLayout' || k === 'hc_dev_p20' || k === 'hc_dev_pm10';
+}
+let _settingsReady = false, _pendingSettings = {}, _settingsTimer = null;
+const _rawSet = localStorage.setItem.bind(localStorage);
+const _rawRemove = localStorage.removeItem.bind(localStorage);
+function _flushSettings() {
+  const batch = _pendingSettings; _pendingSettings = {}; _settingsTimer = null;
+  if (!Object.keys(batch).length) return;
+  if (typeof postJSON === 'function') postJSON('/api/settings', { settings: batch }).catch(() => {});
+}
+function _pushSetting(key, val) {
+  _pendingSettings[key] = val;                 // val null = delete
+  if (_settingsTimer) clearTimeout(_settingsTimer);
+  _settingsTimer = setTimeout(_flushSettings, 400);
+}
+// transparently mirror app-setting writes to the bridge
+try {
+  localStorage.setItem = function (k, v) {
+    _rawSet(k, v);
+    if (_settingsReady && isAppSettingKey(k)) _pushSetting(k, String(v));
+  };
+  localStorage.removeItem = function (k) {
+    _rawRemove(k);
+    if (_settingsReady && isAppSettingKey(k)) _pushSetting(k, null);
+  };
+} catch (e) { /* localStorage may be unavailable (private mode) */ }
+// Pull the bridge's settings into localStorage BEFORE the first render. If the
+// bridge has none yet, seed it from this device's current settings (migration).
+async function syncSettings() {
+  try {
+    const r = await (typeof api === 'function' ? api('/api/settings') : Promise.resolve(null));
+    const srv = (r && r.settings) || {};
+    if (Object.keys(srv).length) {
+      Object.keys(srv).forEach(k => { if (isAppSettingKey(k)) _rawSet(k, srv[k]); });
+    } else {
+      // migrate: push this device's existing app settings up to the bridge
+      const up = {};
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (isAppSettingKey(k)) up[k] = localStorage.getItem(k);
+      }
+      if (Object.keys(up).length && typeof postJSON === 'function') {
+        try { await postJSON('/api/settings', { settings: up }); } catch (e) {}
+      }
+    }
+  } catch (e) { /* offline / demo file:// – fall back to local values */ }
+  _settingsReady = true;
+}
+
 let STATE = {
   base: localStorage.getItem(LS.base) || '',
   price: parseFloat(localStorage.getItem(LS.price) || '0.35'),
@@ -7814,4 +7875,11 @@ function demoOverview(sh, hp) {
   };
 }
 
-document.addEventListener('DOMContentLoaded', init);
+// Pull shared settings from the bridge BEFORE the first render, then refresh
+// STATE from the (now server-seeded) cache, so every device shows the same.
+document.addEventListener('DOMContentLoaded', async () => {
+  await syncSettings();
+  STATE.price = parseFloat(localStorage.getItem(LS.price) || '0.35');
+  STATE.demo = localStorage.getItem(LS.demo) === '1';
+  init();
+});

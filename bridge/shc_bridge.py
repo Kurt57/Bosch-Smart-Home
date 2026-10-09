@@ -5189,6 +5189,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._post_observation_stop(body)
             if parsed.path == "/api/heatload":
                 return self._post_heatload(body)
+            if parsed.path == "/api/settings":
+                return self._post_settings(body)
             if parsed.path == "/api/automeasure/arm":
                 return self._post_automeasure("arm", body)
             if parsed.path == "/api/automeasure/disarm":
@@ -5701,6 +5703,49 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json(_opt_reset(self.store))
         return self._send_json({"ok": False, "error": "unknown"}, 400)
 
+    SETTINGS_KEY = "settings"
+
+    def _settings_load(self) -> dict:
+        raw = self.store.kv_get(self.SETTINGS_KEY)
+        if not raw:
+            return {}
+        try:
+            d = json.loads(raw)
+            return d if isinstance(d, dict) else {}
+        except (ValueError, TypeError):
+            return {}
+
+    def _post_settings(self, body):
+        """Merge app settings into the shared store. Accepts {key, value} or a
+        bulk {settings: {...}}; a null value deletes the key. Values are strings
+        (the frontend mirrors its localStorage here), capped for safety."""
+        cur = self._settings_load()
+        updates = {}
+        if isinstance(body.get("settings"), dict):
+            updates = body["settings"]
+        elif "key" in body:
+            updates = {body.get("key"): body.get("value")}
+        if not isinstance(updates, dict):
+            return self._send_json({"ok": False, "error": "ungültige Daten"}, 400)
+        changed = 0
+        for k, v in updates.items():
+            if not isinstance(k, str) or not k or len(k) > 128:
+                continue
+            if v is None:
+                if k in cur:
+                    del cur[k]; changed += 1
+            else:
+                sv = v if isinstance(v, str) else json.dumps(v)
+                if len(sv) > 100000:          # guard against runaway values
+                    continue
+                if cur.get(k) != sv:
+                    cur[k] = sv; changed += 1
+        if len(cur) > 2000:                   # hard cap on number of keys
+            return self._send_json({"ok": False, "error": "zu viele Einstellungen"}, 400)
+        if changed:
+            self.store.kv_set(self.SETTINGS_KEY, json.dumps(cur))
+        return self._send_json({"ok": True, "changed": changed, "settings": cur})
+
     def _post_automeasure(self, kind, body):
         """Arm/disarm the active night-setback. Only writes thermostats in live
         mode; demo returns a simulated view and changes nothing real."""
@@ -5898,6 +5943,10 @@ class Handler(BaseHTTPRequestHandler):
                 if self.ctx.mode == "demo":
                     return self._send_json(_demo_heatload(dc, sk))
                 return self._send_json({"demo": False, **compute_heatload(self.store, None, dc, sk)})
+            if path == "/api/settings":
+                # device/browser-independent app settings (single source of truth
+                # on the bridge; every device loads from here and writes back)
+                return self._send_json({"ok": True, "settings": self._settings_load()})
             if path == "/api/automeasure":
                 if self.ctx.mode == "demo":
                     return self._send_json(_demo_automeasure())
