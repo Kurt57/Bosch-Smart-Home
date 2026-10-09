@@ -517,6 +517,34 @@
       <div id="flow-body"></div>
       <div class="note" id="flow-note" style="margin-top:8px"></div>
     </div>
+    <div class="card" id="opt-card">
+      <h2><span class="info" data-info="optimize" role="button" aria-label="Info">i</span>🔁 Schrittweise Optimierung <span class="r" id="opt-head"></span></h2>
+      <div class="note" style="margin-bottom:10px">Der <b>Regelkreis</b>: ich schlage <b>einen</b> konkreten Schritt vor (welcher Kreis auf/zu),
+        du führst ihn am Verteiler aus und protokollierst ihn – dann messe ich über die nächsten Tage die <b>Wirkung</b>
+        (erreicht der Raum jetzt sein Soll?) und schlage den nächsten Schritt vor. Am Ende: Heizkurve absenken für die Effizienz.
+        <b>Schreibt nichts</b> an die Wärmepumpe.</div>
+      <div id="opt-rec" style="margin-bottom:12px"></div>
+      <div id="opt-eff" style="margin-bottom:12px"></div>
+      <div style="border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:12px">
+        <div style="font-weight:700;margin-bottom:8px">Schritt protokollieren</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <select id="opt-room" style="width:auto;padding:5px 10px;margin:0"></select>
+          <select id="opt-action" style="width:auto;padding:5px 10px;margin:0">
+            <option value="open">aufdrehen</option>
+            <option value="throttle">androsseln</option>
+          </select>
+          <input id="opt-delta" type="number" step="0.1" inputmode="decimal" placeholder="± l/min" style="width:90px;padding:5px 7px;margin:0">
+          <input id="opt-note" type="text" placeholder="Notiz (optional)" style="flex:1;min-width:140px;padding:5px 7px;margin:0">
+          <button class="btn" id="opt-log" style="width:auto;padding:6px 14px;margin:0">＋ Schritt speichern</button>
+        </div>
+      </div>
+      <div id="opt-steps"></div>
+      <div style="display:flex;gap:10px;margin-top:8px">
+        <button class="btn sec" id="opt-undo" style="width:auto;padding:6px 14px;margin:0">↩︎ Letzten Schritt löschen</button>
+        <button class="btn sec" id="opt-reset" style="width:auto;padding:6px 14px;margin:0">Verlauf zurücksetzen</button>
+      </div>
+      <div class="note" id="opt-note" style="margin-top:8px"></div>
+    </div>
     <div class="card" id="ha-card">
       <h2><span class="info" data-info="hydronic" role="button" aria-label="Info">i</span>⚖️ Hydraulischer Abgleich <span class="r" id="ha-head"></span></h2>
       <div class="note" style="margin-bottom:10px">Sorgt dafür, dass <b>jeder Heizkreis die richtige Wassermenge</b> bekommt – damit alle Räume

@@ -2042,10 +2042,16 @@ def _ts_derive(series: list[dict], days: int) -> dict:
     if avg_cop is not None:
         logic.append(f"Ø Arbeitszahl (COP) <b>{avg_cop}</b> im Zeitraum – aus "
                      f"<b>{tot_elec:.1f} kWh</b> Strom wurden <b>{tot_heat:.1f} kWh</b> Wärme.")
-    if supply_fit and elec_fit:
-        logic.append(f"<b>Logik:</b> je <b>1 °C kälter</b> steigt der Vorlauf um "
-                     f"~<b>{abs(supply_fit[0]):.1f} K</b> und der Heizstrom um "
-                     f"~<b>{abs(elec_fit[0]):.2f} kWh/h</b> – die Regelung folgt der Außentemperatur.")
+    if supply_fit:
+        msg = (f"<b>Logik:</b> je <b>1 °C kälter</b> steigt der Vorlauf um "
+               f"~<b>{abs(supply_fit[0]):.1f} K</b>")
+        # heating power per °C in watts (kWh/h → W); only show if meaningful
+        if elec_fit:
+            w_per_k = round(abs(elec_fit[0]) * 1000)
+            if w_per_k >= 5:
+                msg += f" und der Heizstrombedarf um ~<b>{w_per_k} W</b>"
+        msg += " – die Regelung folgt der Außentemperatur."
+        logic.append(msg)
     if cop_fit and abs(cop_fit[0]) > 0.01:
         trend = "steigt" if cop_fit[0] > 0 else "sinkt"
         logic.append(f"Die Effizienz <b>{trend}</b> mit wärmerer Luft (~{abs(cop_fit[0]):.2f} COP je °C) – "
@@ -3116,6 +3122,272 @@ def _demo_heatload(design_c: float = DESIGN_OUTDOOR_C, spread_k: float = 5.0) ->
         "note": ("Datenbasierte Schätzung, kein normgerechter Heizlast-Nachweis (DIN EN 12831). "
                  "Fläche = eingegeben, τ = abgeleitet, Gesamtlast = gemessen; Annahme gleicher "
                  "Estrich-Speichermasse je m². Ersetzt keine Fachplanung."),
+    }
+
+
+# ===================================================================== #
+#  Intelligent heat-load analysis — module 5: step-wise balancing loop   #
+# ===================================================================== #
+# The closed loop that ties it together: one concrete adjustment at a time,
+# then OBSERVE its effect (does the room now reach its setpoint? did the
+# deficit shrink?), then the next step – until the system is balanced, at
+# which point the heating curve can be lowered for the real efficiency gain.
+# State (the log of steps + a per-step baseline snapshot) lives in kv so the
+# loop survives restarts. It never writes to the heat pump; it records what
+# the user did at the manifold and measures the result from the thermostats.
+
+OPT_KEY = "optimize"
+
+
+def _esc(s) -> str:
+    """Minimal HTML escape for user-supplied text embedded in recommendation HTML."""
+    return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+
+def _opt_steps(store: "Store") -> list:
+    raw = store.kv_get(OPT_KEY)
+    if not raw:
+        return []
+    try:
+        d = json.loads(raw)
+        return d.get("steps", []) if isinstance(d, dict) else []
+    except (ValueError, TypeError):
+        return []
+
+
+def _opt_save(store: "Store", steps: list):
+    store.kv_set(OPT_KEY, json.dumps({"steps": steps}))
+
+
+def _room_snapshot(room: dict) -> dict:
+    """The metrics we freeze when a step is logged, to measure its effect later."""
+    return {"deficit": room.get("max_deficit"), "reaches": room.get("reaches"),
+            "cooldown": room.get("cooldown_kph"), "tau": room.get("tau_h"),
+            "temp": room.get("temp_now"), "setpoint": room.get("setpoint")}
+
+
+def _step_effect(step: dict, cur: dict | None, now: int) -> dict:
+    """Compare a logged step's baseline against the current room state."""
+    days = round((now - step["ts"]) / 86400.0, 1)
+    b = step.get("baseline") or {}
+    if not cur:
+        return {"days": days, "verdict": "unbekannt",
+                "line": "Raum nicht mehr in den Daten gefunden."}
+    cur_def = cur.get("max_deficit") or 0.0
+    base_def = b.get("deficit") or 0.0
+    d_def = round(cur_def - base_def, 1)          # negative = deficit shrank = better
+    reaches_now = bool(cur.get("reaches"))
+    was_reaching = bool(b.get("reaches"))
+    settling = days < 1.5
+    action = step.get("action")
+    if settling:
+        verdict = "läuft"
+        line = f"Seit {days} Tagen in Beobachtung – Wirkung braucht meist 1–2 Tage (Fußboden ist träge)."
+    elif action == "open":
+        if reaches_now and not was_reaching:
+            verdict = "wirksam"; line = f"Raum erreicht jetzt sein Soll (vorher nicht). Defizit {d_def:+.1f} K."
+        elif d_def <= -0.3:
+            verdict = "wirksam"; line = f"Defizit um {abs(d_def):.1f} K kleiner geworden. 👍"
+        elif d_def >= 0.3:
+            verdict = "verschlechtert"; line = f"Defizit um {d_def:.1f} K größer – anderer Einfluss? (Wetter/Fenster)"
+        else:
+            verdict = "kaum effekt"; line = f"Kaum Änderung ({d_def:+.1f} K) – evtl. größeren Schritt oder Vorlauf prüfen."
+    else:  # throttle
+        if reaches_now and cur_def < 0.4:
+            verdict = "ok"; line = f"Raum hält sein Soll trotz Drosselung – Reserve korrekt abgegeben. 👍"
+        elif (not reaches_now) or d_def >= 0.4:
+            verdict = "zu weit gedrosselt"; line = f"Raum wird jetzt zu kühl (Defizit {d_def:+.1f} K) – etwas zurücknehmen."
+        else:
+            verdict = "ok"; line = f"Stabil ({d_def:+.1f} K)."
+    return {"days": days, "d_deficit": d_def, "reaches_now": reaches_now, "verdict": verdict, "line": line}
+
+
+def _opt_recommend(tm: dict, curve: dict | None, steps: list, now: int) -> dict:
+    """The single next action for the balancing loop."""
+    rooms = tm.get("rooms", [])
+    rmap = {r["room"]: r for r in rooms}
+    n_rooms = len(rooms)
+    confident = sum(1 for r in rooms if r.get("confidence") != "niedrig")
+
+    # 1) don't stack changes: if the last step is still settling, wait
+    if steps:
+        last = steps[-1]
+        days = (now - last["ts"]) / 86400.0
+        if days < 1.5:
+            return {"kind": "wait", "title": "Letzten Schritt wirken lassen",
+                    "text": f"Der letzte Schritt an <b>{_esc(last['room'])}</b> läuft seit {days:.1f} Tagen. "
+                            f"Mindestens 1–2 Tage beobachten, bevor der nächste Kreis verstellt wird – "
+                            f"Fußbodenheizung reagiert träge.", "room": last["room"]}
+
+    # 2) need a trustworthy model first
+    if n_rooms == 0 or confident < max(1, round(n_rooms * 0.5)):
+        return {"kind": "observe", "title": "Erst Datenbasis schaffen",
+                "text": "Noch zu wenige Räume mit belastbarem Modell. Starte/führe die "
+                        "<b>Beobachtungsphase</b> fort, dann kommen hier konkrete Abgleich-Schritte.",
+                "room": None}
+
+    under = [r for r in rooms if r.get("category") == "under"]
+    reserve = [r for r in rooms if r.get("category") == "reserve"]
+
+    # 3) biggest under-supplied room → open one small step
+    if under:
+        under.sort(key=lambda r: -(r.get("max_deficit") or 0))
+        w = under[0]
+        return {"kind": "open", "title": f"{w['room']}: Durchfluss erhöhen",
+                "room": w["room"], "action": "open",
+                "text": f"<b>{_esc(w['room'])}</b> erreicht sein Soll nicht (Defizit bis "
+                        f"{(w.get('max_deficit') or 0):.1f} K). Am Verteiler den Durchfluss dieses Kreises "
+                        f"<b>einen kleinen Schritt öffnen</b> (~+0,2–0,3 l/min)"
+                        + (f"; wenn ein <b>Reserve-Raum</b> ({_esc(reserve[0]['room'])}) vorhanden ist, diesen "
+                           f"im Gegenzug etwas drosseln" if reserve else "")
+                        + ". Dann 1–2 Tage beobachten.",
+                "counter_room": reserve[0]["room"] if reserve else None}
+
+    # 4) all rooms reach → efficiency: lower the heating curve if it is high
+    if curve and curve.get("enough"):
+        over_k = curve.get("over_k") or 0
+        rec = curve.get("recommendation") or {}
+        if over_k >= 2 and not rec.get("efficient", False):
+            sv = curve.get("saving_pct") or 0
+            return {"kind": "curve", "title": "Heizkurve absenken (Effizienz)",
+                    "room": None,
+                    "text": "Alle Räume erreichen ihr Soll – jetzt der eigentliche Effizienzgewinn: "
+                            f"die <b>Heizkurve ~{round(over_k)} K absenken</b> (siehe Heizkurven-Karte), "
+                            f"in 2–3-K-Schritten, bis der kälteste Raum gerade noch warm wird."
+                            + (f" Geschätzte Ersparnis ~{round(sv*100)} %." if sv else ""),
+                    "saving_pct": sv}
+        # curve already low/efficient and everyone warm → done
+        if reserve:
+            w = max(reserve, key=lambda r: (r.get("cooldown_kph") is not None))
+            return {"kind": "throttle", "title": f"{w['room']}: leicht androsseln",
+                    "room": w["room"], "action": "throttle",
+                    "text": f"Keine unterversorgten Räume mehr. <b>{_esc(w['room'])}</b> hat Reserve "
+                            f"(erreicht Soll zügig) – einen kleinen Schritt <b>androsseln</b> macht den "
+                            f"Rücklauf kühler und die WP effizienter, ohne Komfortverlust. Danach beobachten."}
+        return {"kind": "done", "title": "Abgleich & Kurve passen ✅",
+                "room": None,
+                "text": "Alle Räume erreichen ihr Soll und die Heizkurve ist WP-freundlich. "
+                        "Nichts weiter zu tun – weiter beobachten lassen."}
+
+    # 5) balanced but no curve data yet
+    return {"kind": "observe", "title": "Kurve messen",
+            "room": None,
+            "text": "Räume sind ausgeglichen. Für den Effizienz-Schritt brauche ich noch die "
+                    "<b>Heizkurve</b> (Vorlauf/Außen) – sammelt sich beim Heizen von selbst."}
+
+
+def compute_optimize(store: "Store") -> dict:
+    """Step-wise hydraulic-balancing loop: current recommendation, the logged
+    steps with their measured effect, and the efficiency coupling."""
+    now = int(time.time())
+    tm = compute_thermal_model(store, days=21)
+    rmap = {r["room"]: r for r in tm.get("rooms", [])}
+    try:
+        curve = compute_heating_curve(store, 30, None)
+    except Exception:
+        curve = None
+    steps = _opt_steps(store)
+
+    # attach live effect to every logged step
+    hist = []
+    for s in steps:
+        eff = _step_effect(s, rmap.get(s["room"]), now)
+        hist.append({**s, "effect": eff})
+    hist.sort(key=lambda x: -x["ts"])
+
+    rec = _opt_recommend(tm, curve, steps, now)
+
+    # efficiency panel
+    eff_panel = None
+    if curve and curve.get("enough"):
+        r = curve.get("recommendation") or {}
+        eff_panel = {"over_k": curve.get("over_k"), "verdict": curve.get("verdict"),
+                     "saving_pct": curve.get("saving_pct"), "efficient": r.get("efficient", False)}
+
+    # room list for the step form
+    room_opts = [{"room": r["room"], "category": r.get("category"),
+                  "deficit": r.get("max_deficit"), "reaches": r.get("reaches"),
+                  "confidence": r.get("confidence")} for r in tm.get("rooms", [])]
+
+    balanced = bool(tm.get("rooms")) and not any(r.get("category") == "under" for r in tm["rooms"])
+    return {"ok": True, "recommendation": rec, "steps": hist, "n_steps": len(steps),
+            "efficiency": eff_panel, "rooms": room_opts, "balanced": balanced,
+            "note": ("Die App schreibt NICHT an die Wärmepumpe – sie protokolliert deine Handgriffe am "
+                     "Verteiler und misst die Wirkung aus den Raumthermostaten. Immer nur EIN Kreis pro "
+                     "Schritt, dann 1–2 Tage beobachten. Datenbasierte Selbstoptimierung, kein Norm-Abgleich.")}
+
+
+def _opt_add_step(store: "Store", body: dict) -> dict:
+    """Log one adjustment with a baseline snapshot of the target room."""
+    room = str(body.get("room") or "").strip()
+    action = body.get("action") if body.get("action") in ("open", "throttle") else "open"
+    if not room:
+        return {"ok": False, "error": "Raum fehlt."}
+    tm = compute_thermal_model(store, days=21)
+    rmap = {r["room"]: r for r in tm.get("rooms", [])}
+
+    def _f(key):
+        try:
+            return round(float(body.get(key)), 2)
+        except (TypeError, ValueError):
+            return None
+
+    steps = _opt_steps(store)
+    nid = (max((s.get("id", 0) for s in steps), default=0) + 1)
+    step = {"id": nid, "ts": int(time.time()), "room": room, "action": action,
+            "delta_lmin": _f("delta_lmin"), "from_lmin": _f("from_lmin"),
+            "to_lmin": _f("to_lmin"), "note": str(body.get("note") or "")[:200],
+            "baseline": _room_snapshot(rmap.get(room, {}))}
+    steps.append(step)
+    _opt_save(store, steps)
+    return {"ok": True, **compute_optimize(store)}
+
+
+def _opt_undo(store: "Store") -> dict:
+    steps = _opt_steps(store)
+    if steps:
+        steps.pop()
+        _opt_save(store, steps)
+    return {"ok": True, **compute_optimize(store)}
+
+
+def _opt_reset(store: "Store") -> dict:
+    store.kv_del(OPT_KEY)
+    return {"ok": True, **compute_optimize(store)}
+
+
+def _demo_optimize() -> dict:
+    now = int(time.time())
+    steps = [
+        {"id": 1, "ts": now - 4 * 86400, "room": "Büro", "action": "open",
+         "delta_lmin": 0.3, "from_lmin": 1.4, "to_lmin": 1.7, "note": "Verteiler Kreis 3 aufgedreht",
+         "baseline": {"deficit": 1.2, "reaches": False, "cooldown": 0.9, "tau": 22.0, "temp": 19.8, "setpoint": 21.0},
+         "effect": {"days": 4.0, "d_deficit": -0.9, "reaches_now": True, "verdict": "wirksam",
+                    "line": "Raum erreicht jetzt sein Soll (vorher nicht). Defizit -0.9 K."}},
+        {"id": 2, "ts": now - 12 * 3600, "room": "Wohnzimmer", "action": "throttle",
+         "delta_lmin": -0.3, "from_lmin": 3.0, "to_lmin": 2.7, "note": "etwas zurückgenommen",
+         "baseline": {"deficit": 0.1, "reaches": True, "cooldown": 0.35, "tau": 48.0, "temp": 21.9, "setpoint": 22.0},
+         "effect": {"days": 0.5, "d_deficit": 0.0, "reaches_now": True, "verdict": "läuft",
+                    "line": "Seit 0.5 Tagen in Beobachtung – Wirkung braucht meist 1–2 Tage."}},
+    ]
+    return {
+        "ok": True, "demo": True,
+        "recommendation": {"kind": "wait", "title": "Letzten Schritt wirken lassen",
+                           "room": "Wohnzimmer",
+                           "text": "Der letzte Schritt an <b>Wohnzimmer</b> läuft seit 0.5 Tagen. "
+                                   "Mindestens 1–2 Tage beobachten, bevor der nächste Kreis verstellt wird."},
+        "steps": sorted(steps, key=lambda x: -x["ts"]), "n_steps": 2,
+        "efficiency": {"over_k": 4, "verdict": "Heizkurve etwas zu hoch – Spielraum nach unten.",
+                       "saving_pct": 0.1, "efficient": False},
+        "rooms": [
+            {"room": "Wohnzimmer", "category": "reserve", "deficit": 0.1, "reaches": True, "confidence": "hoch"},
+            {"room": "Büro", "category": "balanced", "deficit": 0.2, "reaches": True, "confidence": "hoch"},
+            {"room": "Bad", "category": "balanced", "deficit": 0.2, "reaches": True, "confidence": "mittel"},
+            {"room": "Schlafzimmer", "category": "observing", "deficit": None, "reaches": True, "confidence": "niedrig"},
+        ],
+        "balanced": True,
+        "note": ("Die App schreibt NICHT an die Wärmepumpe – sie protokolliert deine Handgriffe am Verteiler "
+                 "und misst die Wirkung. Immer nur EIN Kreis pro Schritt, dann 1–2 Tage beobachten."),
     }
 
 
@@ -4656,6 +4928,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._post_observation_stop(body)
             if parsed.path == "/api/heatload":
                 return self._post_heatload(body)
+            if parsed.path == "/api/optimize/step":
+                return self._post_optimize("step", body)
+            if parsed.path == "/api/optimize/undo":
+                return self._post_optimize("undo", body)
+            if parsed.path == "/api/optimize/reset":
+                return self._post_optimize("reset", body)
             if parsed.path == "/api/update":
                 return self._post_update(body)
             return self._send_json({"error": "unknown endpoint"}, 404)
@@ -5140,6 +5418,24 @@ class Handler(BaseHTTPRequestHandler):
         return self._send_json({"ok": True, "demo": False,
             **compute_heatload(self.store, areas, dc, sk)})
 
+    def _post_optimize(self, kind, body):
+        """Log/undo/reset a balancing step. Logging captures a baseline snapshot
+        so the step's effect can be measured over the following days."""
+        if self.ctx.mode == "demo":
+            return self._send_json(_demo_optimize())
+        if kind == "step":
+            try:
+                self._log_rooms_now()
+            except Exception:
+                pass
+            res = _opt_add_step(self.store, body or {})
+            return self._send_json(res, 200 if res.get("ok") else 400)
+        if kind == "undo":
+            return self._send_json(_opt_undo(self.store))
+        if kind == "reset":
+            return self._send_json(_opt_reset(self.store))
+        return self._send_json({"ok": False, "error": "unknown"}, 400)
+
     def _post_update(self, body):
         """Pull the latest code (git) and restart the bridge in place.
 
@@ -5314,6 +5610,15 @@ class Handler(BaseHTTPRequestHandler):
                 if self.ctx.mode == "demo":
                     return self._send_json(_demo_heatload(dc, sk))
                 return self._send_json({"demo": False, **compute_heatload(self.store, None, dc, sk)})
+            if path == "/api/optimize":
+                if self.ctx.mode == "demo":
+                    return self._send_json(_demo_optimize())
+                try:
+                    if int(time.time()) - self.store.room_log_last_ts() >= 120:
+                        self._log_rooms_now()
+                except Exception:
+                    pass
+                return self._send_json({"demo": False, **compute_optimize(self.store)})
             if path == "/api/windows":
                 wd = int(qs.get("days", ["3"])[0])
                 if self.ctx.mode == "demo":

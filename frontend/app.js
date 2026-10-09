@@ -224,6 +224,15 @@ const INFO = {
     '– der praktische Startwert für die Durchflussmesser (Tacosetter) am Verteiler. Formel: Heizlast ≈ Fläche × spez. Last (W/m²), ' +
     'Durchfluss = Heizlast ÷ (1,16 × Spreizung ΔT). Länge ist nachrangig (beeinflusst den Pumpendruck, nicht den Ziel-Durchfluss). ' +
     'Danach feinjustieren über den <b>Hydraulischen Abgleich</b>. Alles nur lokal gespeichert.',
+  'optimize': () => '<b>Schrittweise Abgleich-Optimierung als Regelkreis.</b> Statt alles auf einmal zu verstellen: ein konkreter ' +
+    'Schritt, dann messen, dann der nächste. Die App nennt <b>genau einen</b> nächsten Handgriff (z. B. „Büro aufdrehen, ein kleiner ' +
+    'Schritt +0,2–0,3 l/min"), priorisiert nach dem Raum-Modell (größtes Defizit zuerst, Reserve-Raum im Gegenzug androsseln). Du ' +
+    'führst ihn am Verteiler aus und <b>protokollierst</b> ihn; dabei friert die App eine <b>Momentaufnahme</b> des Raums ein ' +
+    '(Defizit, Soll-Erreichung, τ). Über die nächsten 1–2 Tage vergleicht sie den neuen Zustand und bewertet den Schritt als ' +
+    '<b>wirksam / kaum Effekt / verschlechtert / zu weit gedrosselt</b>. Erst wenn <b>alle</b> Räume ihr Soll erreichen, kommt der ' +
+    'eigentliche Effizienz-Schritt: die <b>Heizkurve absenken</b> (kühlerer Vorlauf → höhere Arbeitszahl), gekoppelt an die ' +
+    'Heizkurven-Karte und die geschätzte Ersparnis. <b>Wichtig:</b> die App <b>schreibt nicht</b> an die Wärmepumpe – sie führt nur ' +
+    'Buch über deine Handgriffe und misst die Wirkung. Datenbasierte Selbstoptimierung, kein normgerechter Abgleich.',
   'flow': () => '<b>Ziel-Durchfluss je Heizkreis (l/min)</b> – der Einstellwert für die Durchflussmesser/Tacosetter am Verteiler. ' +
     'Physikalisch aus Energieerhaltung: Q = ṁ·c·ΔT, praktisch <b>l/min = Q ÷ (1,163 × ΔT × 60)</b>, mit Q = der gemessen/abgeleiteten ' +
     '<b>Heizlast je Raum</b> (Modul Heizlast) und ΔT = der <b>gewählten Auslege-Spreizung je Kreis</b> (bei Fußbodenheizung typ. 4–7 K). ' +
@@ -2167,12 +2176,13 @@ function heatTimeChart(rows) {
   const yE = v => eBase - v / emax * (eBase - eTop);
   const copMax = Math.max(3, Math.ceil(Math.max(...rows.map(r => r.cop || 0))));
   const yC = v => eBase - v / copMax * (eBase - eTop);
-  // temp grid + left labels
+  // temp grid + left labels (unit "°C" appended to the TOP label only, so no
+  // separate caption collides with the top value)
   let g = '';
   for (let i = 0; i <= 2; i++) {
     const v = tmin + (tmax - tmin) * (1 - i / 2), y = yT(v);
     g += `<line class="gl" x1="${padL}" x2="${CW - padR}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}"/>`;
-    g += `<text class="axis" x="0" y="${(y + 3).toFixed(1)}">${Math.round(v)}</text>`;
+    g += `<text class="axis" x="0" y="${(y + (i === 0 ? 8 : 3)).toFixed(1)}">${Math.round(v)}${i === 0 ? ' °C' : ''}</text>`;
   }
   // energy baseline + COP right labels
   g += `<line class="gl" x1="${padL}" x2="${CW - padR}" y1="${eBase}" y2="${eBase}"/>`;
@@ -2180,10 +2190,11 @@ function heatTimeChart(rows) {
     const y = yC(c);
     g += `<text class="axis" x="${CW - padR + 3}" y="${(y + 3).toFixed(1)}" text-anchor="start" fill="#4be0b0">${c}</text>`;
   }
-  // axis unit captions
-  g += `<text class="axis" x="2" y="${(tTop + 7).toFixed(1)}" style="opacity:.75">°C</text>`;
-  g += `<text class="axis" x="${CW - padR + 3}" y="${(eTop + 1).toFixed(1)}" text-anchor="start" fill="#4be0b0" style="opacity:.85">COP</text>`;
-  g += `<text class="axis" x="2" y="${(eTop + 6).toFixed(1)}" style="opacity:.75">kWh</text>`;
+  // axis unit captions placed in the empty band between the temp and energy
+  // regions (tBase..eTop) so nothing overlaps the numeric labels
+  const capY = tBase + 15;
+  g += `<text class="axis" x="2" y="${capY.toFixed(1)}" style="opacity:.75">kWh ↓</text>`;
+  g += `<text class="axis" x="${CW - padR + 3}" y="${capY.toFixed(1)}" text-anchor="start" fill="#4be0b0" style="opacity:.85">COP</text>`;
   g += `<text class="axis" x="${CW - padR}" y="${(h - 6).toFixed(1)}" text-anchor="end" style="opacity:.7">Zeit →</text>`;
   // day separators + weekday labels at midnight
   const WD = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
@@ -2283,13 +2294,20 @@ function windowChart(d) {
   const Y = v => top + (tmax - v) / (tmax - tmin) * (base - top);
   let g = '';
   for (let i = 0; i <= 2; i++) { const v = tmin + (tmax - tmin) * (1 - i / 2), y = Y(v); g += `<line class="gl" x1="${padL}" x2="${CW - padR}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}"/><text class="axis" x="0" y="${(y + 3).toFixed(1)}">${Math.round(v)}</text>`; }
-  let bands = '';
+  let bands = '', labels = '', lastLabelX = -1e9;
   (d.events || []).forEach(e => {
     let x1 = X(e.start), x2 = X(e.end); if (x2 < x1 + 1.5) x2 = x1 + 1.5;
     const col = e.heating ? '#ff6b8a' : '#ffb64d';
     bands += `<rect x="${x1.toFixed(1)}" y="${top}" width="${(x2 - x1).toFixed(1)}" height="${(base - top).toFixed(1)}" fill="${col}" fill-opacity="0.2"/>`;
-    if (e.delta != null) bands += `<text class="axis" x="${((x1 + x2) / 2).toFixed(1)}" y="${top + 9}" text-anchor="middle" fill="${e.delta <= -0.4 ? '#ff6b8a' : 'var(--muted)'}">${e.delta > 0 ? '+' : ''}${e.delta}K</text>`;
+    // only label when there is horizontal room since the last label, so clustered
+    // openings don't stack into an unreadable blob
+    const cx = (x1 + x2) / 2;
+    if (e.delta != null && cx - lastLabelX >= 24) {
+      labels += `<text class="axis" x="${cx.toFixed(1)}" y="${top + 9}" text-anchor="middle" fill="${e.delta <= -0.4 ? '#ff6b8a' : 'var(--muted)'}">${e.delta > 0 ? '+' : ''}${e.delta}K</text>`;
+      lastLabelX = cx;
+    }
   });
+  bands += labels;   // draw labels above the bands
   let sep = '';
   for (let t = Math.ceil(t0 / 86400) * 86400; t <= t1; t += 86400) { const x = X(t); const wd = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'][new Date(t * 1000).getDay()]; sep += `<line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${top}" y2="${base}" stroke="var(--line)" stroke-dasharray="2 3"/><text class="axis" x="${(x + 3).toFixed(1)}" y="${h - 6}">${wd}</text>`; }
   let dl = '', pen = false;
@@ -2800,6 +2818,101 @@ function paintFlow(r) {
   if (note) note.innerHTML = (r.demo ? '<b>Demo-Daten</b>. ' : '') +
     'So stellst du vor: jeden Durchflussmesser am Verteiler auf den l/min-Wert bringen, dann über den <b>Hydraulischen Abgleich</b> ' +
     'feinjustieren. Ein Wert je Kreis; mehrere Schleifen in einem Raum → Wert gleichmäßig aufteilen. Startwerte, kein Norm-Nachweis.';
+}
+
+/* ---- Schrittweise Optimierung (Regelkreis): log steps, measure effect ----- */
+let _optData = null, _optBusy = false;
+async function renderOptimize(force) {
+  const card = $('opt-card'); if (!card) return;
+  if (_optData && !force) { paintOptimize(_optData); return; }
+  if (_optBusy) return;
+  _optBusy = true;
+  const rec = $('opt-rec');
+  if (force && rec) rec.innerHTML = '<div class="note">Empfehlung wird berechnet …</div>';
+  try { const r = await api('/api/optimize'); _optData = r; paintOptimize(r); }
+  catch (e) { if (rec) rec.innerHTML = '<div class="note">Nur mit laufender Bridge verfügbar.</div>'; }
+  finally { _optBusy = false; }
+}
+async function optAction(path, body) {
+  const note = $('opt-note'); if (note) note.textContent = '';
+  try {
+    const r = await postJSON(path, body || {});
+    if (r && r.ok) { _optData = r; paintOptimize(r); }
+    else if (note) note.textContent = (r && r.error) || 'Aktion fehlgeschlagen.';
+  } catch (e) { if (note) note.textContent = 'Nur möglich, wenn die Seite von der Bridge geöffnet ist.'; }
+}
+function optVerdictColor(v) {
+  if (v === 'wirksam' || v === 'ok') return '#4be0b0';
+  if (v === 'läuft') return 'var(--accent)';
+  if (v === 'kaum effekt') return '#ffb64d';
+  return '#ff6b8a';   // verschlechtert / zu weit gedrosselt / unbekannt
+}
+function paintOptimize(r) {
+  const head = $('opt-head'), rec = $('opt-rec'), eff = $('opt-eff'),
+    sel = $('opt-room'), stepsEl = $('opt-steps'), note = $('opt-note');
+  if (!r || !r.ok) { if (rec) rec.innerHTML = '<div class="note">Keine Daten.</div>'; return; }
+  if (head) head.innerHTML = `<span style="color:var(--muted)">${r.n_steps || 0} Schritt(e)${r.balanced ? ' · ausgeglichen' : ''}</span>`;
+
+  // the single next recommendation
+  if (rec) {
+    const k = (r.recommendation || {}).kind;
+    const col = k === 'done' ? '#4be0b0' : (k === 'open' ? '#ff6b8a' : (k === 'throttle' ? '#3ba9ff'
+      : (k === 'curve' ? '#b794f6' : 'var(--accent)')));
+    const icon = k === 'open' ? '🔺' : (k === 'throttle' ? '🔻' : (k === 'curve' ? '📉' : (k === 'done' ? '✅' : '⏳')));
+    rec.innerHTML = `<div style="border:1px solid ${col};background:${col}14;border-radius:12px;padding:12px">` +
+      `<div style="font-size:12px;color:var(--muted);margin-bottom:3px">Nächster Schritt</div>` +
+      `<div style="font-size:15px;font-weight:700;margin-bottom:4px">${icon} ${esc((r.recommendation || {}).title || '')}</div>` +
+      `<div style="font-size:13px;line-height:1.55">${(r.recommendation || {}).text || ''}</div></div>`;
+  }
+
+  // efficiency coupling panel
+  if (eff) {
+    const e = r.efficiency;
+    eff.innerHTML = e
+      ? `<div style="display:flex;gap:8px;flex-wrap:wrap">` +
+          `<div class="kpi sm"><div class="v">${e.over_k > 0 ? '+' : ''}${e.over_k} K</div><div class="l">Kurve vs. Ziel</div></div>` +
+          `<div class="kpi sm"><div class="v">${e.efficient ? 'effizient' : (e.saving_pct ? '~' + Math.round(e.saving_pct * 100) + '%' : '–')}</div><div class="l">${e.efficient ? 'Vorlauf niedrig' : 'Sparpotenzial'}</div></div>` +
+        `</div>` +
+        `<div class="note" style="margin-top:4px">${esc(e.verdict || '')} Der Effizienzgewinn kommt, wenn nach dem Abgleich die Heizkurve sinkt.</div>`
+      : '';
+  }
+
+  // room dropdown (keep current selection)
+  if (sel) {
+    const want = sel.value;
+    const opts = (r.rooms || []).map(x => {
+      const tag = x.category === 'under' ? ' ⚠︎ zu kalt' : (x.category === 'reserve' ? ' · Reserve' : '');
+      return `<option value="${esc(x.room)}">${esc(x.room)}${tag}</option>`;
+    }).join('');
+    if (sel.dataset.fill !== String((r.rooms || []).length) + (r.rooms || []).map(x => x.category).join('')) {
+      sel.innerHTML = opts; sel.dataset.fill = String((r.rooms || []).length) + (r.rooms || []).map(x => x.category).join('');
+      if (want) sel.value = want;
+    }
+  }
+
+  // step history with measured effect
+  if (stepsEl) {
+    const hs = r.steps || [];
+    stepsEl.innerHTML = hs.length
+      ? `<div style="font-weight:700;margin:4px 0 8px">Verlauf &amp; Wirkung</div>` + hs.map(s => {
+          const e = s.effect || {};
+          const vc = optVerdictColor(e.verdict);
+          const act = s.action === 'open' ? '🔺 aufgedreht' : '🔻 angedrosselt';
+          const delta = s.delta_lmin != null ? ` ${s.delta_lmin > 0 ? '+' : ''}${s.delta_lmin} l/min` : '';
+          const when = new Date(s.ts * 1000).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' });
+          return `<div style="border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:8px">` +
+            `<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px">` +
+              `<b>${esc(s.room)}</b><span style="font-size:12px;color:var(--muted)">${when} · ${act}${delta}</span></div>` +
+            (s.note ? `<div style="font-size:12px;color:var(--muted);margin-top:2px">„${esc(s.note)}"</div>` : '') +
+            `<div style="font-size:13px;line-height:1.5;margin-top:5px">` +
+              `<span style="color:${vc};font-weight:600">${esc(e.verdict || '')}</span>` +
+              (e.days != null ? ` <span style="color:var(--muted)">(${e.days} T)</span>` : '') +
+              ` – ${esc(e.line || '')}</div></div>`;
+        }).join('')
+      : '<div class="note">Noch keine Schritte protokolliert. Führe den empfohlenen Schritt am Verteiler aus und speichere ihn – dann messe ich die Wirkung.</div>';
+  }
+
+  if (note) note.innerHTML = (r.demo ? '<b>Demo-Daten</b>. ' : '') + esc(r.note || '');
 }
 
 /* ---- Verteiler & Heizkreise: layout + per-circuit flow (l/min) distribution */
@@ -6705,6 +6818,7 @@ function switchView(v) {
     if (typeof renderThermal === 'function') renderThermal(false);
     if (typeof renderHeatload === 'function') renderHeatload(false);
     if (typeof renderFlow === 'function') renderFlow(false);
+    if (typeof renderOptimize === 'function') renderOptimize(false);
     if (typeof renderHydronic === 'function') renderHydronic();
     if (typeof renderLayout === 'function') renderLayout();
     if (typeof initHpControls === 'function') initHpControls();
@@ -6878,6 +6992,16 @@ function init() {
   const hld = $('hl-design'); if (hld) hld.addEventListener('change', () => { renderHeatload(true); _flowData = null; renderFlow(true); });
   const flr = $('flow-refresh'); if (flr) flr.addEventListener('click', () => renderFlow(true));
   const fls = $('flow-spread'); if (fls) fls.addEventListener('change', () => renderFlow(true));
+  const optLog = $('opt-log');
+  if (optLog) optLog.addEventListener('click', () => {
+    const room = ($('opt-room') || {}).value; if (!room) return;
+    const body = { room, action: ($('opt-action') || {}).value || 'open' };
+    const d = parseFloat(($('opt-delta') || {}).value); if (!isNaN(d)) body.delta_lmin = d;
+    const nt = (($('opt-note') || {}).value || '').trim(); if (nt) body.note = nt;
+    optAction('/api/optimize/step', body).then(() => { const n = $('opt-note-inp'); if (n) n.value = ''; const di = $('opt-delta'); if (di) di.value = ''; });
+  });
+  const optUndo = $('opt-undo'); if (optUndo) optUndo.addEventListener('click', () => optAction('/api/optimize/undo', {}));
+  const optReset = $('opt-reset'); if (optReset) optReset.addEventListener('click', () => { if (confirm('Den gesamten Optimierungs-Verlauf löschen?')) optAction('/api/optimize/reset', {}); });
   const rtsSel = $('rts-room');
   if (rtsSel) rtsSel.addEventListener('change', () => { _rtsSel = rtsSel.value; if (_rtsData) paintRoomTs(_rtsData); });
   const rtsRange = $('rts-range');
