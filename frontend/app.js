@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-09 · WP-Steuerung lesbarer: Klartext-Namen + Erklärung je Parameter, gruppiert (Heizkurve/Heizung/Warmwasser); Heizkurve erklärt (witterungsgeführt)'
+const APP_VERSION = '2026-10-09 · Heizkurven-Grafik als klassische Kennlinie: X umgedreht (+20 °C links → −10 °C rechts), Y-Vorlauf fest 20–50 °C'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -2026,38 +2026,43 @@ function paintHeatingDiag(r) {
   if (typeof renderHydronic === 'function') renderHydronic();   // worklist uses the same room data
 }
 
-/* ---- Heizkurve: flow temperature vs. outdoor temperature (from history) --- */
+/* ---- Heizkurve: flow temp vs. outdoor temp, drawn as a classic Heizkennlinie:
+ * x reversed (warm +20 °C left → cold −10 °C right), y Vorlauf fixed 20–50 °C. */
+const HC_IDEAL = o => Math.max(28, Math.min(45, 30 + (18 - o) * 0.45));
 function curveChart(d) {
-  const h = 230, padL = 30, padR = 10, top = 12, base = h - 24;
-  const pts = d.points || [], ideal = d.ideal || [];
-  const xmin = d.xmin, xmax = d.xmax, xr = Math.max(0.1, xmax - xmin);
-  const allY = pts.map(p => p[1]).concat(ideal.map(p => p.y));
-  if (d.fit) allY.push(d.fit.a * xmin + d.fit.b, d.fit.a * xmax + d.fit.b);
-  if (!allY.length) return '<div class="note">Keine Daten.</div>';
-  let ymin = Math.floor(Math.min(...allY) - 2), ymax = Math.ceil(Math.max(...allY) + 2);
-  if (ymax - ymin < 8) ymax = ymin + 8;
-  const yr = ymax - ymin;
-  const X = x => padL + (x - xmin) / xr * (CW - padL - padR);
-  const Y = y => top + (ymax - y) / yr * (base - top);
+  const h = 230, padL = 30, padR = 10, top = 12, base = h - 26;
+  const pts = d.points || [];
+  const XL = 20, XR = -10, YB = 20, YT = 50;              // fixed domain
+  const plotW = CW - padL - padR, plotH = base - top;
+  const X = x => padL + (XL - x) / (XL - XR) * plotW;      // +20 at left, −10 at right
+  const Y = y => top + (YT - y) / (YT - YB) * plotH;       // 50 top, 20 bottom
+  const clampY = y => Math.max(YB, Math.min(YT, y));
+  // y grid 20/30/40/50
   let g = '';
-  for (let i = 0; i <= 3; i++) {
-    const yy = ymin + yr * i / 3, py = Y(yy);
+  for (let v = YB; v <= YT; v += 10) {
+    const py = Y(v);
     g += `<line class="gl" x1="${padL}" x2="${CW - padR}" y1="${py.toFixed(1)}" y2="${py.toFixed(1)}"/>`;
-    g += `<text class="axis" x="0" y="${(py + 3).toFixed(1)}">${Math.round(yy)}</text>`;
+    g += `<text class="axis" x="0" y="${(py + 3).toFixed(1)}">${v}</text>`;
   }
+  // x ticks 20…−10 (warm→cold)
   let xt = '';
-  for (let i = 0; i <= 6; i++) {
-    const xv = xmin + xr * i / 6, px = X(xv);
-    xt += `<text class="axis" x="${px.toFixed(1)}" y="${h - 7}" text-anchor="middle">${Math.round(xv)}°</text>`;
+  for (let v = XL; v >= XR; v -= 5) {
+    const px = X(v), anchor = v === XL ? 'start' : v === XR ? 'end' : 'middle';
+    xt += `<text class="axis" x="${px.toFixed(1)}" y="${h - 8}" text-anchor="${anchor}">${v}°</text>`;
   }
-  const poly = arr => arr.map((p, i) => `${i ? 'L' : 'M'}${X(p.x).toFixed(1)} ${Y(p.y).toFixed(1)}`).join(' ');
-  const idealPath = ideal.length ? `<path d="${poly(ideal)}" fill="none" stroke="#4be0b0" stroke-width="2.5"/>` : '';
+  // target band (green), full domain, clamped to the y range
+  let ip = '';
+  for (let v = XL; v >= XR; v -= 1) ip += `${v === XL ? 'M' : 'L'}${X(v).toFixed(1)} ${Y(clampY(HC_IDEAL(v))).toFixed(1)} `;
+  const idealPath = `<path d="${ip.trim()}" fill="none" stroke="#4be0b0" stroke-width="2.5"/>`;
+  // fitted actual curve (red)
   let fitPath = '';
   if (d.fit) {
-    const y1 = d.fit.a * xmin + d.fit.b, y2 = d.fit.a * xmax + d.fit.b;
-    fitPath = `<line x1="${X(xmin).toFixed(1)}" y1="${Y(y1).toFixed(1)}" x2="${X(xmax).toFixed(1)}" y2="${Y(y2).toFixed(1)}" stroke="#ff6b8a" stroke-width="2.5"/>`;
+    const y1 = clampY(d.fit.a * XL + d.fit.b), y2 = clampY(d.fit.a * XR + d.fit.b);
+    fitPath = `<line x1="${X(XL).toFixed(1)}" y1="${Y(y1).toFixed(1)}" x2="${X(XR).toFixed(1)}" y2="${Y(y2).toFixed(1)}" stroke="#ff6b8a" stroke-width="2.5"/>`;
   }
-  const dots = pts.map(p => `<circle cx="${X(p[0]).toFixed(1)}" cy="${Y(p[1]).toFixed(1)}" r="2.3" fill="var(--muted)" fill-opacity="0.5"/>`).join('');
+  // measured points within the visible domain
+  const dots = pts.filter(p => p[0] <= XL + 0.01 && p[0] >= XR - 0.01 && p[1] >= YB && p[1] <= YT)
+    .map(p => `<circle cx="${X(p[0]).toFixed(1)}" cy="${Y(p[1]).toFixed(1)}" r="2.3" fill="var(--muted)" fill-opacity="0.55"/>`).join('');
   return svg(h, g + xt + dots + idealPath + fitPath);
 }
 let _hcData = null, _hcBusy = false;
