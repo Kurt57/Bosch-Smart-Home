@@ -7126,6 +7126,14 @@ function init() {
     const b = e.target.closest('button[data-sw]'); if (!b) return;
     doSwitch(b.dataset.sw, b.dataset.on === '1', b.dataset.nm || 'Gerät');
   });
+  // "So nutzt du es" help box – remember open/closed (synced across devices)
+  const helpD = $('help-waerme');
+  if (helpD) {
+    try { helpD.open = localStorage.getItem('bhe_help_waerme') !== '0'; } catch (e) {}
+    helpD.addEventListener('toggle', () => {
+      try { localStorage.setItem('bhe_help_waerme', helpD.open ? '1' : '0'); } catch (e) {}
+    });
+  }
   const hpr = $('hp-refresh'); if (hpr) hpr.addEventListener('click', doHpRefresh);
   const hdr = $('hd-refresh'); if (hdr) hdr.addEventListener('click', () => { renderHeatingDiag(true); renderHeatingCurve(true); });
   // device heating-curve points (read off the heat pump), stored locally

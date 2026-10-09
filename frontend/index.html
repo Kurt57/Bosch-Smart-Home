@@ -346,6 +346,35 @@
 
   <!-- WÄRMEPUMPE ---------------------------------------------------------->
   <section class="view" id="v-heatpump">
+    <div class="card" id="help-card">
+      <details id="help-waerme">
+        <summary style="cursor:pointer;font-weight:700;font-size:15px">🧭 So nutzt du die Heiz-Analyse <span style="color:var(--muted);font-weight:400;font-size:12px">(antippen zum Ein-/Ausklappen)</span></summary>
+        <div class="note" style="margin:8px 0 12px;border-left:3px solid var(--warn);padding-left:10px">
+          Zwei Phasen – bitte nicht verwechseln. <b>Jetzt noch nichts auf 30 °C stellen und keine Ventile aufreißen</b> –
+          das überhitzt nur und bringt fürs Modell nichts.</div>
+        <div style="border-left:3px solid var(--accent);padding-left:12px;margin-bottom:14px">
+          <div style="font-weight:700;margin-bottom:4px">📊 Phase 1 – jetzt: Daten sammeln (läuft automatisch)</div>
+          <div style="font-size:13px;line-height:1.65">
+            Einfach <b>normal weiterleben</b>, Soll-Temperaturen auf deinen Wohlfühlwerten lassen.
+            Dann unten <b>🤖 Auto-Messung starten</b>: sie senkt nachts die Sollwerte selbst (erzwingt freies Auskühlen → daraus kommt τ)
+            und stellt morgens die <b>exakt vorherigen</b> Werte zurück – du musst an den Thermostaten nichts drehen.
+            <b>Voraussetzung:</b> Wärmepumpe/HomeCom verbunden (liefert die Außentemperatur). Einmalig die <b>Flächen</b> je Raum
+            in der Verteiler-Karte eintragen. Nach <b>3–5 Nächten</b> stehen τ, Heizlast&nbsp;(W), Ziel-Durchfluss&nbsp;(l/min) und die
+            Abgleich-Priorität belastbar da – Auto-Messung <b>stoppt dann von selbst</b>. Die „Geführte Beobachtungsphase" zeigt dir nur den Fortschritt.
+          </div>
+        </div>
+        <div style="border-left:3px solid var(--warn);padding-left:12px">
+          <div style="font-weight:700;margin-bottom:4px">🔧 Phase 2 – später: Abgleich am Verteiler (von Hand)</div>
+          <div style="font-size:13px;line-height:1.65">
+            <b>Erst hier</b> die Thermostate voll öffnen – und auch dann nur, damit der <b>Verteiler</b> (nicht die Einzelraumregelung)
+            die Verteilung bestimmt, nur für diese Einstell-Session, nicht als Dauerzustand. Dann 🚰 <b>Ziel-Durchfluss</b> an den
+            Durchflussmessern (Tacosetter) einstellen, über 🔁 <b>Schrittweise Optimierung</b> einen Kreis nach dem empfohlenen Schritt
+            nachjustieren (die App misst 1–2 Tage die Wirkung), und zuletzt die <b>Heizkurve absenken</b> – das ist der eigentliche
+            Effizienzgewinn. Danach die Thermostate wieder normal regeln lassen.
+          </div>
+        </div>
+      </details>
+    </div>
     <div class="card" id="hp-card">
       <h2>🔥 Wärmepumpe · Live</h2>
       <div id="hp-body"><div class="note">Noch nicht verbunden – im Setup koppeln.</div></div>
