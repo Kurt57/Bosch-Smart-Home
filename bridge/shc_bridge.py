@@ -749,6 +749,15 @@ class Store:
                 "CREATE TABLE IF NOT EXISTS window_log("
                 " ts INTEGER PRIMARY KEY, open_count INTEGER, rooms TEXT)"
             )
+            # per-room temperature / setpoint / valve over time (thermostats)
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS room_log("
+                " ts INTEGER, room TEXT, temp REAL, setpoint REAL, valve REAL,"
+                " PRIMARY KEY(ts,room))"
+            )
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_roomlog ON room_log(ts)"
+            )
             # AEG / Electrolux appliances (washer, dryer, …) and their readings
             self.conn.execute(
                 "CREATE TABLE IF NOT EXISTS aeg_appliances("
@@ -914,6 +923,25 @@ class Store:
                 "SELECT ts,temp FROM room_temp WHERE ts>=? AND temp IS NOT NULL ORDER BY ts ASC",
                 (since_ts,))
             return [dict(r) for r in cur.fetchall()]
+
+    def room_log_add_bulk(self, rows: list[tuple]):
+        """rows: (ts, room, temp, setpoint, valve)."""
+        with self.lock, self.conn:
+            self.conn.executemany(
+                "INSERT INTO room_log(ts,room,temp,setpoint,valve) VALUES(?,?,?,?,?)"
+                " ON CONFLICT(ts,room) DO UPDATE SET temp=excluded.temp,"
+                " setpoint=excluded.setpoint, valve=excluded.valve", rows)
+
+    def room_log_since(self, since_ts: int) -> list[dict]:
+        with self.lock:
+            cur = self.conn.execute(
+                "SELECT ts,room,temp,setpoint,valve FROM room_log WHERE ts>=? ORDER BY ts ASC",
+                (since_ts,))
+            return [dict(r) for r in cur.fetchall()]
+
+    def room_log_count(self) -> int:
+        with self.lock:
+            return self.conn.execute("SELECT COUNT(*) c FROM room_log").fetchone()["c"]
 
     def room_temp_at(self, ts: int, tol: int = 1800):
         """Logged indoor temp nearest to ts (within tol seconds), or None."""
@@ -1894,8 +1922,10 @@ def compute_heating_curve(store: "Store", days: int = 30, hp_live: dict | None =
         ("Niedriger Vorlauf = effizient. Falls ein Raum zu kühl bleibt, lieber erst den "
          "<b>hydraulischen Abgleich</b> prüfen, bevor du die ganze Kurve anhebst.")
 
+    # reference points at the Bosch heating-curve anchors (+20 °C and −10 °C),
+    # plus a midpoint, so the table lines up with the device's two curve points.
     ref = [{"outdoor": rx, "actual": round(a * rx + b, 1), "ideal": round(_ideal_flow(rx), 1)}
-           for rx in (-7, 0, 7)]
+           for rx in (20, 0, -10)]
     step = max(1, n // 300)
     return {"ok": True, "enough": True, "provisional": not full_fit, "basis": basis,
             "n": n, "csv_points": n_csv, "days_window": days,
@@ -2058,6 +2088,145 @@ def _demo_timeseries(days: int = 4) -> dict:
             "heating": round(heating, 2), "water": round(water, 2),
             "cop": round(heat / elec, 2) if elec > 0.05 else None})
     return _ts_derive(series, days)
+
+
+def _heat_intervals(hp_rows: list[dict], now: int) -> list[list]:
+    """Intervals [start,end] where the heat pump was space-heating (from mode)."""
+    ivs, cur = [], None
+    for s in sorted(hp_rows, key=lambda x: x.get("ts", 0)):
+        heating = (s.get("mode") or "").lower() in ("ch", "heating", "heat")
+        ts = s.get("ts", 0)
+        if heating:
+            if cur is None:
+                cur = [ts, ts]
+            else:
+                cur[1] = ts
+        elif cur is not None:
+            ivs.append(cur); cur = None
+    if cur is not None:
+        ivs.append(cur)
+    return ivs
+
+
+def compute_room_timeseries(store: "Store", days: int = 2) -> dict:
+    """Per-room temperature/setpoint/valve over time + the heat-pump heating
+    state – to see which room reaches its setpoint (valve closes), which never
+    does, how fast a room cools, and why heating switched off."""
+    now = int(time.time())
+    since = now - days * 86400
+    rows = store.room_log_since(since)
+    heat_iv = _heat_intervals(store.hp_samples_since(since), now)
+
+    rooms = {}
+    for r in rows:
+        rm = r.get("room") or "—"
+        rooms.setdefault(rm, []).append(r)
+
+    def med(xs):
+        s = sorted(xs); k = len(s)
+        return None if not k else (s[k // 2] if k % 2 else (s[k // 2 - 1] + s[k // 2]) / 2)
+
+    out_rooms, insights = [], []
+    never, reached_valve, cooldowns = [], [], []
+    palette = ["#3ba9ff", "#ff6b8a", "#4be0b0", "#ffb64d", "#b794f6", "#f78fb3", "#7ed6df", "#e77f67"]
+    for i, (rm, pts) in enumerate(sorted(rooms.items())):
+        pts.sort(key=lambda p: p["ts"])
+        temps = [p["temp"] for p in pts if p["temp"] is not None]
+        sps = [p["setpoint"] for p in pts if p["setpoint"] is not None]
+        if not temps:
+            continue
+        sp = round(med(sps), 1) if sps else None
+        tmax = max(temps)
+        reached = sp is not None and tmax >= sp - 0.1
+        below_always = sp is not None and tmax < sp - 0.5
+        # valve closes once warm? (temp near/over setpoint AND valve low)
+        valve_closes = any(p.get("valve") is not None and p["valve"] <= 30 and sp is not None
+                           and p["temp"] is not None and p["temp"] >= sp - 0.3 for p in pts)
+        # fastest cool-down (K/h) over a ~1 h sliding window
+        cd = 0.0
+        for a in range(len(pts)):
+            for b in range(a + 1, len(pts)):
+                dt = pts[b]["ts"] - pts[a]["ts"]
+                if dt < 2400 or dt > 5400:
+                    continue
+                if pts[a]["temp"] is None or pts[b]["temp"] is None:
+                    continue
+                rate = (pts[a]["temp"] - pts[b]["temp"]) / (dt / 3600.0)
+                if rate > cd:
+                    cd = rate
+                break
+        if cd > 0.05:
+            cooldowns.append((rm, round(cd, 1)))
+        if below_always:
+            never.append((rm, sp, round(tmax, 1)))
+        elif reached and valve_closes:
+            reached_valve.append(rm)
+        # downsample to ~160 points
+        step = max(1, len(pts) // 160)
+        out_rooms.append({
+            "room": rm, "color": palette[i % len(palette)], "setpoint": sp,
+            "reached": reached, "below_always": below_always, "valve_closes": valve_closes,
+            "cooldown": round(cd, 1) if cd > 0.05 else None,
+            "points": [{"ts": p["ts"], "temp": p["temp"], "setpoint": p["setpoint"],
+                        "valve": p["valve"]} for p in pts[::step]]})
+
+    if never:
+        insights.append("<b>Erreicht Soll nie:</b> " + ", ".join(
+            f"{rm} (max {mx} / Soll {sp:.0f} °C)" for rm, sp, mx in never) +
+            " – zu wenig Heizleistung/Durchfluss: beim hydraulischen Abgleich bevorzugen oder Vorlauf prüfen.")
+    if reached_valve:
+        insights.append("<b>Erreicht Soll & Ventil schließt:</b> " + ", ".join(reached_valve) +
+                        " – gut geregelt; sobald alle Räume so weit sind, hat die WP keine Abnahme mehr und schaltet ab.")
+    if cooldowns:
+        cooldowns.sort(key=lambda x: -x[1])
+        slow = cooldowns[-1]; fast = cooldowns[0]
+        insights.append(f"<b>Auskühlen:</b> am schnellsten {fast[0]} (~{fast[1]} K/h), "
+                        f"am trägsten {slow[0]} (~{slow[1]} K/h) – schnelles Auskühlen deutet auf "
+                        f"Zugluft/undichte Stellen oder große Fensterfläche.")
+    if heat_iv:
+        tot = sum(e[1] - e[0] for e in heat_iv) / 3600.0
+        insights.append(f"Wärmepumpe heizte im Zeitraum <b>{tot:.1f} h</b> in {len(heat_iv)} Phasen. "
+                        f"Heizpausen = alle Räume haben ihr Soll erreicht (Ventile zu) oder Warmwasser-Vorrang.")
+
+    return {"ok": True, "days_window": days, "rooms": out_rooms,
+            "heating": [[a, b] for a, b in heat_iv], "insights": insights}
+
+
+def _demo_room_timeseries(days: int = 2) -> dict:
+    """Synthetic per-room series: Bad reaches setpoint & valve closes, Büro never
+    reaches, plus a WP heating strip – for the demo."""
+    now = int(time.time())
+    base = now - days * 86400
+    rooms_def = [("Wohnzimmer", 22, 0.3, True), ("Bad", 24, 0.2, True),
+                 ("Büro", 21, 1.2, False), ("Schlafzimmer", 19, 0.5, True)]
+    out, heat = [], []
+    palette = ["#3ba9ff", "#ff6b8a", "#4be0b0", "#ffb64d"]
+    n = days * 24 * 3   # 20-min resolution
+    for idx, (rm, sp, deficit, reaches) in enumerate(rooms_def):
+        pts = []
+        for i in range(n):
+            t = base + i * 1200
+            h = datetime.fromtimestamp(t).hour + datetime.fromtimestamp(t).minute / 60.0
+            swing = 0.8 * math.sin((h - 15) / 24.0 * 2 * math.pi)
+            temp = sp - deficit + swing + (0.3 if reaches else -0.4)
+            valve = 10 if (reaches and temp >= sp - 0.2) else 80
+            pts.append({"ts": t, "temp": round(temp, 1), "setpoint": sp, "valve": valve})
+        out.append({"room": rm, "color": palette[idx], "setpoint": sp,
+                    "reached": reaches, "below_always": not reaches,
+                    "valve_closes": reaches, "cooldown": round(0.6 + 0.3 * idx, 1),
+                    "points": pts[::2]})
+    for d in range(days):
+        day0 = base + d * 86400
+        heat.append([day0 + 5 * 3600, day0 + 9 * 3600])
+        heat.append([day0 + 16 * 3600, day0 + 22 * 3600])
+    insights = [
+        "<b>Erreicht Soll nie:</b> Büro (max 19.9 / Soll 21 °C) – beim hydraulischen Abgleich bevorzugen.",
+        "<b>Erreicht Soll & Ventil schließt:</b> Wohnzimmer, Bad, Schlafzimmer – gut geregelt.",
+        "<b>Auskühlen:</b> am schnellsten Bad (~1.5 K/h), am trägsten Wohnzimmer (~0.6 K/h).",
+        "Wärmepumpe heizte im Zeitraum mehrere Phasen; Pausen = alle Räume am Soll (Ventile zu).",
+    ]
+    return {"ok": True, "demo": True, "days_window": days, "rooms": out,
+            "heating": heat, "insights": insights}
 
 
 def _window_events(log_rows: list[dict], now: int) -> list[dict]:
@@ -2614,16 +2783,25 @@ class Poller(threading.Thread):
         self.store.window_log_add(ts, len(open_rooms), ", ".join(open_rooms))
 
     def _log_room_temp(self, ts: int):
-        """Average measured room temperature across the heating rooms → store."""
+        """Measured temperature per room (+ setpoint, valve) → store. Also keeps
+        the average for the heat time-series overlay."""
         climate = self.client.list_climate()
-        temps, sets = [], []
+        temps, sets, per_room = [], [], []
         for r in climate:
             if str(r.get("roomControlMode") or "HEATING").upper() == "OFF" or r.get("summerMode"):
                 continue
-            if isinstance(r.get("temp"), (int, float)):
-                temps.append(r["temp"])
-            if isinstance(r.get("setpoint"), (int, float)):
-                sets.append(r["setpoint"])
+            t = r.get("temp") if isinstance(r.get("temp"), (int, float)) else None
+            sp = r.get("setpoint") if isinstance(r.get("setpoint"), (int, float)) else None
+            vv = r.get("valve") if isinstance(r.get("valve"), (int, float)) else None
+            if t is None:
+                continue
+            temps.append(t)
+            if sp is not None:
+                sets.append(sp)
+            per_room.append((ts, r.get("room") or "—", round(t, 1),
+                             round(sp, 1) if sp is not None else None, vv))
+        if per_room:
+            self.store.room_log_add_bulk(per_room)
         if temps:
             self.store.room_temp_add(ts, round(sum(temps) / len(temps), 1),
                                      round(sum(sets) / len(sets), 1) if sets else None)
@@ -4114,6 +4292,12 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send_json({"demo": True, **_demo_timeseries(td)})
                 return self._send_json({"demo": False,
                     **compute_heat_timeseries(self.store, td)})
+            if path == "/api/rooms/timeseries":
+                rd = int(qs.get("days", ["2"])[0])
+                if self.ctx.mode == "demo":
+                    return self._send_json(_demo_room_timeseries(rd))
+                return self._send_json({"demo": False,
+                    **compute_room_timeseries(self.store, rd)})
             if path == "/api/windows":
                 wd = int(qs.get("days", ["3"])[0])
                 if self.ctx.mode == "demo":

@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-09 · Neu: 🪟 Fenster & Lüften – Öffnungs-Events aus den Fensterkontakten, Timeline mit Innentemperatur-Reaktion (Awareness) + Heizen-bei-offenem-Fenster-Warnung'
+const APP_VERSION = '2026-10-09 · Neu: 🌡️ Räume & Heizbetrieb (pro Raum Temp/Soll/Ventil + WP-Streifen); Heizkurve-Tabelle an Bosch-Punkten (+20/−10); Verlauf: Achsen beschriftet + Hover-Werte'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -214,6 +214,11 @@ const INFO = {
     'Die Zahl im Band ist die Temperaturänderung während des Lüftens. <b>Rote</b> Bänder = die Wärmepumpe hat dabei geheizt ' +
     '(Heizen gegen offenes Fenster = reiner Verlust). Ziel: <b>kurzes Stoßlüften</b> statt Dauerkippen. Die App zeichnet die ' +
     'Öffnungen ab jetzt auf – die Timeline füllt sich über die nächsten Tage.',
+  'room-ts': () => '<b>Jeder Raum</b> als eigene Temperatur-Linie über die Zeit, gestrichelt der <b>Sollwert</b>, unten ein grüner ' +
+    'Streifen für den <b>WP-Heizbetrieb</b>. Damit siehst du: welcher Raum sein Soll <b>nie</b> erreicht (⚠︎), welcher es erreicht ' +
+    'und dann das <b>Ventil schließt</b>, wie schnell ein Raum nach Ventil-zu wieder <b>auskühlt</b> (K/h) und <b>warum</b> die WP ' +
+    'pausiert (meist: alle Räume am Soll → Ventile zu → keine Abnahme). Einen Raum wählen zeigt zusätzlich die Ventilöffnung ' +
+    'als Schattierung. Wird aus deinen Bosch-Raumthermostaten mitgeloggt (ab jetzt).',
   'hydronic': () => '<b>Hydraulischer Abgleich</b> verteilt das Heizwasser so auf die Heizkreise, dass jeder Raum ' +
     'genau die passende Menge bekommt. Ohne Abgleich bekommen kurze/nahe Kreise zu viel, lange/ferne zu wenig – ' +
     'man dreht dann den Vorlauf hoch, damit auch der kälteste Raum warm wird, und das kostet bei der Wärmepumpe viel Effizienz. ' +
@@ -2135,6 +2140,11 @@ function heatTimeChart(rows) {
     const y = yC(c);
     g += `<text class="axis" x="${CW - padR + 3}" y="${(y + 3).toFixed(1)}" text-anchor="start" fill="#4be0b0">${c}</text>`;
   }
+  // axis unit captions
+  g += `<text class="axis" x="2" y="${(tTop + 7).toFixed(1)}" style="opacity:.75">°C</text>`;
+  g += `<text class="axis" x="${CW - padR + 3}" y="${(eTop + 1).toFixed(1)}" text-anchor="start" fill="#4be0b0" style="opacity:.85">COP</text>`;
+  g += `<text class="axis" x="2" y="${(eTop + 6).toFixed(1)}" style="opacity:.75">kWh</text>`;
+  g += `<text class="axis" x="${CW - padR}" y="${(h - 6).toFixed(1)}" text-anchor="end" style="opacity:.7">Zeit →</text>`;
   // day separators + weekday labels at midnight
   const WD = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
   let sep = '';
@@ -2163,7 +2173,22 @@ function heatTimeChart(rows) {
   const supply = line('supply', '#ff6b8a', yT, 2);
   const indoor = line('indoor', '#b794f6', yT, 2);
   const cop = line('cop', '#4be0b0', yC, 2);
-  return svg(h, g + sep + bars + outdoor + indoor + supply + cop);
+  // transparent per-hour hit areas with a native hover tooltip (desktop) –
+  // shows that hour's values when the mouse is over the column.
+  const hw = plotW / n;
+  let hover = '';
+  rows.forEach((r, i) => {
+    const dt = new Date(r.ts * 1000), hh = String(dt.getHours()).padStart(2, '0');
+    const P = [`${WD[dt.getDay()]} ${hh}:00`];
+    if (r.outdoor != null) P.push(`Außen ${r.outdoor} °C`);
+    if (r.supply != null) P.push(`Vorlauf ${r.supply} °C`);
+    if (r.indoor != null) P.push(`Innen ${r.indoor} °C`);
+    const verb = (r.heating || 0) + (r.water || 0);
+    if (verb > 0) P.push(`Verbrauch ${verb.toFixed(2)} kWh (Heiz ${fmt(r.heating || 0, 2)} · WW ${fmt(r.water || 0, 2)})`);
+    if (r.cop != null) P.push(`COP ${r.cop}`);
+    hover += `<rect x="${(xi(i) - hw / 2).toFixed(1)}" y="${top}" width="${Math.max(1, hw).toFixed(1)}" height="${(h - top - 14).toFixed(1)}" fill="transparent" pointer-events="all"><title>${esc(P.join('\n'))}</title></rect>`;
+  });
+  return svg(h, g + sep + bars + outdoor + indoor + supply + cop + hover);
 }
 let _htsData = null, _htsBusy = false;
 async function renderHeatTimeseries(force) {
@@ -2257,6 +2282,72 @@ function paintWindows(r) {
     (r.insights || []).map(l => `<div style="font-size:13px;line-height:1.5;margin-bottom:5px">• ${l}</div>`).join('');
   if (note) note.innerHTML = (r.demo ? '<b>Demo-Daten</b>. ' : '') +
     'Band = Fenster offen (<span style="color:#ffb64d">amber</span>; <span style="color:#ff6b8a">rot</span> = dabei heizt die WP). Die Zahl im Band ist die Innentemperatur-Änderung während des Lüftens.';
+}
+
+/* ---- Räume & Heizbetrieb: per-room temperature + WP heating state ---------- */
+function roomChart(d, sel) {
+  const h = 250, padL = 26, padR = 34, top = 12, base = h - 40;
+  const now = Date.now() / 1000, t0 = now - (d.days_window || 2) * 86400, t1 = now;
+  const X = ts => padL + Math.max(0, Math.min(1, (ts - t0) / (t1 - t0))) * (CW - padL - padR);
+  const rooms = sel ? (d.rooms || []).filter(r => r.room === sel) : (d.rooms || []);
+  if (!rooms.length) return '<div class="note">Keine Raumdaten.</div>';
+  const temps = rooms.flatMap(r => r.points.map(p => p.temp)).filter(v => v != null);
+  const sps = rooms.map(r => r.setpoint).filter(v => v != null);
+  const all = temps.concat(sps);
+  let tmin = Math.floor(Math.min(...all) - 1), tmax = Math.ceil(Math.max(...all) + 1);
+  if (tmax - tmin < 4) tmax = tmin + 4;
+  const Y = v => top + (tmax - v) / (tmax - tmin) * (base - top);
+  let g = '';
+  for (let i = 0; i <= 2; i++) { const v = tmin + (tmax - tmin) * (1 - i / 2), y = Y(v); g += `<line class="gl" x1="${padL}" x2="${CW - padR}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}"/><text class="axis" x="0" y="${(y + 3).toFixed(1)}">${Math.round(v)}</text>`; }
+  g += `<text class="axis" x="2" y="${top + 4}" style="opacity:.75">°C</text>`;
+  // valve-open shading when a single room is selected (room calling for heat)
+  let band = '';
+  if (sel && rooms[0]) { const p = rooms[0].points; for (let i = 0; i < p.length - 1; i++) { if ((p[i].valve || 0) > 50) { const x1 = X(p[i].ts), x2 = X(p[i + 1].ts); band += `<rect x="${x1.toFixed(1)}" y="${top}" width="${Math.max(0.6, x2 - x1).toFixed(1)}" height="${(base - top).toFixed(1)}" fill="${rooms[0].color}" fill-opacity="0.09"/>`; } } }
+  // WP heating strip below the plot
+  const stripY = base + 10;
+  let strip = `<text class="axis" x="0" y="${stripY + 6}">WP</text>`;
+  (d.heating || []).forEach(iv => { const x1 = X(iv[0]), x2 = X(iv[1]); strip += `<rect x="${x1.toFixed(1)}" y="${stripY}" width="${Math.max(1, x2 - x1).toFixed(1)}" height="6" fill="#4be0b0" fill-opacity="0.85"/>`; });
+  // day separators
+  let sep = '';
+  for (let t = Math.ceil(t0 / 86400) * 86400; t <= t1; t += 86400) { const x = X(t), wd = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'][new Date(t * 1000).getDay()]; sep += `<line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${top}" y2="${base}" stroke="var(--line)" stroke-dasharray="2 3"/><text class="axis" x="${(x + 3).toFixed(1)}" y="${h - 6}">${wd}</text>`; }
+  // temp lines + setpoints
+  let lines = '';
+  rooms.forEach(r => {
+    let dl = '', pen = false;
+    r.points.forEach(p => { if (p.temp == null) { pen = false; return; } const x = X(p.ts), y = Y(p.temp); dl += (pen ? 'L' : 'M') + x.toFixed(1) + ' ' + y.toFixed(1) + ' '; pen = true; });
+    if (dl) lines += `<path d="${dl.trim()}" fill="none" stroke="${r.color}" stroke-width="${sel ? 2.4 : 1.8}"/>`;
+    if (r.setpoint != null) { const y = Y(r.setpoint); lines += `<line x1="${padL}" x2="${CW - padR}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="${r.color}" stroke-width="1" stroke-dasharray="4 3" opacity="${sel ? 0.85 : 0.3}"/>`; if (sel) lines += `<text class="axis" x="${CW - padR + 2}" y="${(y + 3).toFixed(1)}" fill="${r.color}" text-anchor="start">Soll ${r.setpoint}</text>`; }
+  });
+  return svg(h, g + band + sep + strip + lines);
+}
+let _rtsData = null, _rtsBusy = false, _rtsSel = '';
+async function renderRoomTs(force) {
+  const card = $('rts-card'); if (!card) return;
+  if (_rtsData && !force) { paintRoomTs(_rtsData); return; }
+  if (_rtsBusy) return;
+  _rtsBusy = true;
+  try { const r = await api('/api/rooms/timeseries?days=2'); _rtsData = r; paintRoomTs(r); }
+  catch (e) { const c = $('rts-chart'); if (c) c.innerHTML = '<div class="note">Nur mit laufender Bridge verfügbar.</div>'; }
+  finally { _rtsBusy = false; }
+}
+function paintRoomTs(r) {
+  const sel = $('rts-room'), chart = $('rts-chart'), leg = $('rts-legend'), logic = $('rts-logic'), head = $('rts-head'), note = $('rts-note');
+  if (!r || !r.ok) { if (chart) chart.innerHTML = '<div class="note">Keine Daten.</div>'; return; }
+  const list = r.rooms || [];
+  if (sel && sel.dataset.fill !== String(list.length)) {
+    sel.innerHTML = '<option value="">Alle Räume</option>' + list.map(x => `<option>${esc(x.room)}</option>`).join('');
+    sel.dataset.fill = String(list.length); sel.value = _rtsSel;
+  }
+  if (head) head.innerHTML = list.length ? `<span style="color:var(--muted)">${list.length} Räume · ${r.days_window || 2} Tage</span>` : '';
+  if (chart) chart.innerHTML = list.length
+    ? roomChart(r, _rtsSel || null)
+    : '<div class="note" style="padding:14px 0;text-align:center">🌡️ Noch keine Raumdaten – die App loggt ab jetzt pro Raum (Temperatur, Soll, Ventil).</div>';
+  if (leg) leg.innerHTML = list.map(x => `<div class="it"><span class="sw" style="background:${x.color}"></span>${esc(x.room)}${x.below_always ? ' <span style="color:#ff6b8a">⚠︎ nie Soll</span>' : x.reached ? ' <span style="color:#4be0b0">✓</span>' : ''}</div>`).join('') +
+    '<div class="it"><span class="sw" style="background:#4be0b0"></span>WP heizt</div>';
+  if (logic) logic.innerHTML = `<div style="font-weight:700;margin-bottom:6px">🧠 Pro-Raum-Analyse</div>` +
+    (r.insights || []).map(l => `<div style="font-size:13px;line-height:1.5;margin-bottom:5px">• ${l}</div>`).join('');
+  if (note) note.innerHTML = (r.demo ? '<b>Demo-Daten</b>. ' : '') +
+    'Einen Raum oben wählen zeigt zusätzlich den <b>Sollwert</b> (gestrichelt) und – als leichte Schattierung – wann sein <b>Ventil offen</b> ist (Raum verlangt Wärme). Wird pro Raum ab jetzt mitgeloggt.';
 }
 function hcDevice() {
   const g = k => { const v = parseFloat(localStorage.getItem(k)); return isFinite(v) ? v : null; };
@@ -6070,6 +6161,7 @@ function switchView(v) {
     if (typeof renderHeatingDiag === 'function') renderHeatingDiag(false);
     if (typeof renderHeatingCurve === 'function') renderHeatingCurve(false);
     if (typeof renderHeatTimeseries === 'function') renderHeatTimeseries(false);
+    if (typeof renderRoomTs === 'function') renderRoomTs(false);
     if (typeof renderWindows === 'function') renderWindows(false);
     if (typeof renderHydronic === 'function') renderHydronic();
     if (typeof initHpControls === 'function') initHpControls();
@@ -6236,6 +6328,8 @@ function init() {
       if (_hcData) paintHeatingCurve(_hcData); else renderHcDeviceNote(hcDevice());
     });
   });
+  const rtsSel = $('rts-room');
+  if (rtsSel) rtsSel.addEventListener('change', () => { _rtsSel = rtsSel.value; if (_rtsData) paintRoomTs(_rtsData); });
   const hcdr = $('hc-dev-read'); if (hcdr) hcdr.addEventListener('click', readDeviceCurve);
   const hpcl = $('hpctl-load'); if (hpcl) hpcl.addEventListener('click', () => fetchHpControls(true));
   const hpcb = $('hpctl-body');
