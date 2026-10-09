@@ -224,6 +224,16 @@ const INFO = {
     '– der praktische Startwert für die Durchflussmesser (Tacosetter) am Verteiler. Formel: Heizlast ≈ Fläche × spez. Last (W/m²), ' +
     'Durchfluss = Heizlast ÷ (1,16 × Spreizung ΔT). Länge ist nachrangig (beeinflusst den Pumpendruck, nicht den Ziel-Durchfluss). ' +
     'Danach feinjustieren über den <b>Hydraulischen Abgleich</b>. Alles nur lokal gespeichert.',
+  'thermal': () => '<b>Lernendes thermisches Raummodell.</b> Aus dem protokollierten Verlauf (Ist/Soll/Ventil je Raum + ' +
+    'Außentemperatur) schätze ich pro Raum ein RC-Modell: C·dT/dt = Q − UA·(T<sub>innen</sub>−T<sub>außen</sub>). Aus freien ' +
+    '<b>Auskühlphasen</b> (Ventil zu, keine Störung) ergibt sich die <b>Zeitkonstante τ = C/UA</b> (thermische Trägheit), aus ' +
+    '<b>Aufheizphasen</b> die Reaktion auf Wärmezufuhr. Räume, die <b>schnell auskühlen</b>, <b>langsam aufheizen</b> oder ihr ' +
+    '<b>Soll nie erreichen</b>, brauchen relativ <b>mehr Durchfluss</b> → Priorität für den Abgleich. ' +
+    '<b>Ehrlich:</b> Es gibt <b>keinen Messwert pro Heizkreis</b> (weder Durchfluss noch Vor-/Rücklauf je Raum), die an EINEN ' +
+    'Raum gelieferte Wärme ist also nicht direkt messbar. Werte sind als <span style="color:#4be0b0">gemessen</span>/' +
+    '<span style="color:#ffb64d">abgeleitet</span>/<span style="color:#f78fb3">geschätzt</span> gekennzeichnet; bei dünner ' +
+    'Datenlage steht der Raum in <b>Beobachtung</b>. Das ist eine <b>datenbasierte Optimierungshilfe</b>, kein ' +
+    'normgerechter hydraulischer Abgleich (Verfahren B/Heizlast → Fachbetrieb).',
   'hydronic': () => '<b>Hydraulischer Abgleich</b> verteilt das Heizwasser so auf die Heizkreise, dass jeder Raum ' +
     'genau die passende Menge bekommt. Ohne Abgleich bekommen kurze/nahe Kreise zu viel, lange/ferne zu wenig – ' +
     'man dreht dann den Vorlauf hoch, damit auch der kälteste Raum warm wird, und das kostet bei der Wärmepumpe viel Effizienz. ' +
@@ -2365,6 +2375,120 @@ function paintRoomTs(r) {
   if (note) note.innerHTML = (r.demo ? '<b>Demo-Daten</b>. ' : '') +
     'Einen Raum oben wählen zeigt zusätzlich den <b>Sollwert</b> (gestrichelt) und – als leichte Schattierung – wann sein <b>Ventil offen</b> ist (Raum verlangt Wärme). Wird pro Raum ab jetzt mitgeloggt.';
 }
+/* ---- Thermisches Raummodell (lernend): RC model + heat-demand ranking ---- */
+let _tmData = null, _tmBusy = false;
+async function renderThermal(force) {
+  const card = $('tm-card'); if (!card) return;
+  if (_tmData && !force) { paintThermal(_tmData); return; }
+  if (_tmBusy) return;
+  _tmBusy = true;
+  const assess = $('tm-assess');
+  if (force && assess) assess.innerHTML = '<div class="note">Modell wird aus dem protokollierten Verlauf berechnet …</div>';
+  try { const r = await api('/api/thermal?days=14'); _tmData = r; paintThermal(r); }
+  catch (e) { if (assess) assess.innerHTML = '<div class="note">Nur mit laufender Bridge verfügbar.</div>'; }
+  finally { _tmBusy = false; }
+}
+function tmConfColor(c) { return c === 'hoch' ? '#4be0b0' : (c === 'mittel' ? '#ffb64d' : '#f78fb3'); }
+function tmChip(txt, col) {
+  return `<span style="display:inline-block;background:${col}22;color:${col};border:1px solid ${col}66;border-radius:999px;padding:2px 9px;font-size:12px;font-weight:600">${txt}</span>`;
+}
+function paintThermal(r) {
+  const assess = $('tm-assess'), prio = $('tm-priority'), roomsEl = $('tm-rooms'),
+    logic = $('tm-logic'), nextEl = $('tm-next'), head = $('tm-head'), note = $('tm-note');
+  if (!r || !r.ok) { if (assess) assess.innerHTML = '<div class="note">Keine Daten.</div>'; return; }
+  const a = r.assessment || {};
+  const ready = (r.rooms || []).filter(x => x.status === 'bereit').length;
+  const total = (r.rooms || []).length;
+  if (head) head.innerHTML = `<span style="color:var(--muted)">${ready}/${total} bereit · ${a.span_days || 0} Tage</span>`;
+
+  // --- Bestandsaufnahme (what we have / what's missing) ---
+  if (assess) {
+    const mlist = (a.measured || []).filter(Boolean);
+    const tag = (arr, col) => (arr || []).map(x => tmChip(x, col)).join(' ');
+    assess.innerHTML =
+      `<div style="font-weight:700;margin-bottom:6px">📋 Bestandsaufnahme (Datenlage)</div>` +
+      `<div class="grid2" style="gap:8px;margin-bottom:8px">` +
+        `<div class="kpi sm"><div class="v">${a.span_days || 0}</div><div class="l">Tage Verlauf</div></div>` +
+        `<div class="kpi sm"><div class="v">${a.n_room_samples || 0}</div><div class="l">Messpunkte</div></div>` +
+        `<div class="kpi sm"><div class="v">${a.n_rooms || 0}</div><div class="l">Räume</div></div>` +
+        `<div class="kpi sm"><div class="v">${a.heating_phases || 0}</div><div class="l">WP-Heizphasen</div></div>` +
+      `</div>` +
+      `<div style="font-size:13px;line-height:1.9">` +
+        `<div><span style="color:#4be0b0;font-weight:600">gemessen:</span> ${tag(mlist, '#4be0b0')}</div>` +
+        `<div><span style="color:#ffb64d;font-weight:600">abgeleitet:</span> ${tag(a.derived, '#ffb64d')}</div>` +
+        `<div><span style="color:#f78fb3;font-weight:600">geschätzt:</span> ${tag(a.estimated, '#f78fb3')}</div>` +
+      `</div>` +
+      `<div class="note" style="margin-top:8px;border-left:3px solid var(--warn);padding-left:10px">⚠︎ <b>Messlücke:</b> ${esc(a.gap || '')}</div>`;
+  }
+
+  // --- priority ranking for the hydraulic balance ---
+  if (prio) {
+    const p = r.priority || [];
+    if (!p.length) { prio.innerHTML = ''; }
+    else {
+      const maxI = Math.max.apply(null, p.map(x => x.index || 0)) || 1;
+      prio.innerHTML = `<div style="font-weight:700;margin-bottom:6px">🎯 Priorität für den Abgleich <span style="font-weight:400;color:var(--muted);font-size:12px">(relativer Wärmebedarf, geschätzt)</span></div>` +
+        p.map(x => {
+          const w = Math.round((x.index / maxI) * 100);
+          const col = x.deficit >= 0.6 ? '#ff6b8a' : (x.deficit >= 0.3 ? '#ffb64d' : '#3ba9ff');
+          return `<div style="margin-bottom:7px"><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:2px">` +
+            `<b>${esc(x.room)}</b><span style="color:var(--muted)">Index ${x.index}${x.deficit ? ' · Defizit ' + x.deficit + ' K' : ''} · ${x.confidence}</span></div>` +
+            `<div style="background:var(--line);border-radius:6px;height:9px;overflow:hidden"><div style="width:${w}%;height:100%;background:${col}"></div></div></div>`;
+        }).join('');
+    }
+  }
+
+  // --- per-room model cards ---
+  if (roomsEl) {
+    roomsEl.innerHTML = `<div style="font-weight:700;margin-bottom:6px">🏠 Modell je Raum</div>` +
+      (r.rooms || []).map(x => {
+        const cc = tmConfColor(x.confidence);
+        const statusChip = x.status === 'bereit'
+          ? tmChip('✓ Modell belastbar', '#4be0b0')
+          : tmChip('⏳ Beobachtung', '#ffb64d');
+        const metric = (lbl, val, unit, kind) => {
+          const kc = kind === 'm' ? '#4be0b0' : (kind === 'd' ? '#ffb64d' : '#f78fb3');
+          return `<div style="flex:1;min-width:92px"><div style="font-size:11px;color:var(--muted)">` +
+            `<span style="color:${kc}">●</span> ${lbl}</div>` +
+            `<div style="font-weight:700;font-size:15px">${val == null ? '–' : val}${val == null ? '' : (unit || '')}</div></div>`;
+        };
+        return `<div style="border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:10px">` +
+          `<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:8px">` +
+            `<b style="font-size:15px">${esc(x.room)}</b>` +
+            `<div style="display:flex;gap:6px;align-items:center">${statusChip}` +
+            `<span style="font-size:12px;color:${cc};font-weight:600">Konfidenz ${x.confidence}</span></div></div>` +
+          `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px">` +
+            metric('Ist / Soll', (x.temp_now != null ? fmt(x.temp_now, 1) : '–') + (x.setpoint != null ? ' / ' + fmt(x.setpoint, 0) : ''), '°', 'm') +
+            metric('Trägheit τ', x.tau_h, ' h', 'd') +
+            metric('Auskühlrate', x.cooldown_kph, ' K/h', 'm') +
+            metric('Aufheizrate', x.heatup_kph, ' K/h', 'd') +
+            metric('Defizit', x.max_deficit, ' K', 'd') +
+          `</div>` +
+          `<div style="font-size:13px;line-height:1.5"><b>Befund:</b> ${esc(x.finding)}</div>` +
+          `<div style="font-size:13px;line-height:1.5;margin-top:3px"><b>Empfehlung:</b> ${esc(x.recommendation)}</div>` +
+          ((x.missing && x.missing.length)
+            ? `<div class="note" style="margin-top:6px">Noch nötig: ${x.missing.map(esc).join('; ')}.</div>` : '') +
+          `<div style="font-size:11px;color:var(--muted);margin-top:6px">Datenbasis: ${x.n} Punkte · ${x.n_tau}× τ · ${x.n_warm}× Aufheizen</div>` +
+          `</div>`;
+      }).join('');
+  }
+
+  if (logic) logic.innerHTML = (r.insights || []).length
+    ? `<div style="font-weight:700;margin-bottom:6px">🧠 Ableitung</div>` +
+      (r.insights || []).map(l => `<div style="font-size:13px;line-height:1.5;margin-bottom:5px">• ${l}</div>`).join('')
+    : '';
+
+  if (nextEl) nextEl.innerHTML = (r.next_observations || []).length
+    ? `<div style="font-weight:700;margin-bottom:6px">🔭 Als Nächstes beobachten (erhöht die Konfidenz)</div>` +
+      (r.next_observations || []).map(l => `<div style="font-size:13px;line-height:1.5;margin-bottom:5px">• ${esc(l)}</div>`).join('')
+    : '';
+
+  if (note) note.innerHTML = (r.demo ? '<b>Demo-Daten</b>. ' : '') +
+    'Das Modell lernt kontinuierlich mit: je länger protokolliert wird und je mehr ungestörte Auskühl-/Aufheizphasen vorliegen, ' +
+    'desto belastbarer τ und die Bedarfs-Reihenfolge. <b>Keine Scheingenauigkeit:</b> ohne Durchfluss-/Rücklauf-Messung je Kreis ' +
+    'bleiben die Durchfluss-Hinweise <i>relativ</i> und ersetzen keinen normgerechten Abgleich.';
+}
+
 /* ---- Verteiler & Heizkreise: layout + per-circuit flow (l/min) distribution */
 function layoutLoad() { try { return JSON.parse(localStorage.getItem('heatLayout')) || {}; } catch (e) { return {}; } }
 function layoutSave(l) { try { localStorage.setItem('heatLayout', JSON.stringify(l)); } catch (e) {} }
@@ -6264,6 +6388,7 @@ function switchView(v) {
     if (typeof renderHeatTimeseries === 'function') renderHeatTimeseries(false);
     if (typeof renderRoomTs === 'function') renderRoomTs(false);
     if (typeof renderWindows === 'function') renderWindows(false);
+    if (typeof renderThermal === 'function') renderThermal(false);
     if (typeof renderHydronic === 'function') renderHydronic();
     if (typeof renderLayout === 'function') renderLayout();
     if (typeof initHpControls === 'function') initHpControls();
@@ -6430,6 +6555,7 @@ function init() {
       if (_hcData) paintHeatingCurve(_hcData); else renderHcDeviceNote(hcDevice());
     });
   });
+  const tmr = $('tm-refresh'); if (tmr) tmr.addEventListener('click', () => renderThermal(true));
   const rtsSel = $('rts-room');
   if (rtsSel) rtsSel.addEventListener('change', () => { _rtsSel = rtsSel.value; if (_rtsData) paintRoomTs(_rtsData); });
   const rtsRange = $('rts-range');

@@ -2236,6 +2236,351 @@ def _demo_room_timeseries(days: int = 2) -> dict:
             "heating": heat, "insights": insights}
 
 
+# ===================================================================== #
+#  Intelligent heat-load analysis — module 1: learning thermal model     #
+# ===================================================================== #
+# Honest scope: from the SHC thermostats we measure, per room, the indoor
+# temperature, the setpoint and the valve position over time; from the heat
+# pump we get the OUTDOOR temperature and whether it is space-heating. We do
+# NOT have per-circuit flow rate or per-circuit supply/return temperature, so
+# the heat actually delivered to a single room cannot be measured directly.
+# Everything below is therefore split into:
+#   • MESSBAR   (measured)  – read straight from a sensor
+#   • ABGELEITET(derived)   – computed from measured data by a physical model
+#   • GESCHÄTZT (estimated) – a model assumption where a sensor is missing
+# and it is a DATA-BASED optimisation aid, not a norm-compliant hydraulic
+# balance (DIN EN 12831 / VdZ) which needs the heat-load calculation.
+
+def _outdoor_hourly_map(hp_rows: list[dict]) -> dict:
+    """hour-start ts -> mean outdoor °C, from the heat-pump samples."""
+    m: dict[int, list] = {}
+    for s in hp_rows:
+        o = s.get("outdoor_c")
+        if o is None:
+            continue
+        h = (int(s.get("ts", 0)) // 3600) * 3600
+        m.setdefault(h, []).append(o)
+    return {h: sum(v) / len(v) for h, v in m.items()}
+
+
+def _outdoor_at(omap: dict, ts: int):
+    """Nearest hourly outdoor temp to ts (within ±2 h), or None."""
+    h = (int(ts) // 3600) * 3600
+    for d in (0, -3600, 3600, -7200, 7200):
+        if (h + d) in omap:
+            return omap[h + d]
+    return None
+
+
+def _temp_runs(pts: list[dict], kind: str) -> list[list]:
+    """Maximal runs of consecutive samples that are cooling ('cool': valve low /
+    unknown and temperature flat-or-falling) or warming ('warm': valve open and
+    temperature flat-or-rising). A gap > 3 h breaks a run."""
+    runs, cur = [], None
+    for i in range(1, len(pts)):
+        a, b = pts[i - 1], pts[i]
+        dt = b["ts"] - a["ts"]
+        ta, tb = a.get("temp"), b.get("temp")
+        if dt <= 0 or dt > 3 * 3600 or ta is None or tb is None:
+            if cur and len(cur) >= 3:
+                runs.append(cur)
+            cur = None
+            continue
+        va = a.get("valve")
+        dtemp = tb - ta
+        if kind == "cool":
+            ok = dtemp <= 0.05 and (va is None or va <= 35)
+        else:
+            ok = dtemp >= -0.03 and (va is not None and va >= 45)
+        if ok:
+            cur = [a, b] if cur is None else cur + [b]
+        else:
+            if cur and len(cur) >= 3:
+                runs.append(cur)
+            cur = None
+    if cur and len(cur) >= 3:
+        runs.append(cur)
+    return runs
+
+
+def compute_thermal_model(store: "Store", days: int = 14) -> dict:
+    """Per-room learning thermal model (RC: C·dT/dt = Q − UA·(T_in − T_out)).
+
+    From the logged room thermostats + the outdoor temperature we DERIVE, per
+    room: the thermal time constant τ = C/UA (inertia) from free cool-down
+    phases, the heat-up responsiveness while the valve is open, and whether the
+    room reaches its setpoint. These feed a *relative* heat-demand ranking that
+    prioritises rooms for the hydraulic balance. Confidence grows with the data;
+    where it is thin the room is flagged as still in its observation phase."""
+    now = int(time.time())
+    since = now - int(days) * 86400
+    rows = store.room_log_since(since)
+    hp_rows = store.hp_samples_since(since)
+    omap = _outdoor_hourly_map(hp_rows)
+    heat_iv = _heat_intervals(hp_rows, now)
+    has_outdoor = len(omap) > 0
+    hist = store.hp_history_count()
+
+    byroom: dict[str, list] = {}
+    for r in rows:
+        byroom.setdefault(r.get("room") or "—", []).append(r)
+
+    span_s = (max(p["ts"] for p in rows) - min(p["ts"] for p in rows)) if rows else 0
+    span_days = span_s / 86400.0
+
+    def _median(xs):
+        s = sorted(xs)
+        k = len(s)
+        if not k:
+            return None
+        return s[k // 2] if k % 2 else (s[k // 2 - 1] + s[k // 2]) / 2.0
+
+    def _conf_word(score):
+        return "hoch" if score >= 0.66 else ("mittel" if score >= 0.33 else "niedrig")
+
+    out_rooms = []
+    for rm, pts in sorted(byroom.items()):
+        pts.sort(key=lambda p: p["ts"])
+        temps = [p["temp"] for p in pts if p.get("temp") is not None]
+        sps = [p["setpoint"] for p in pts if p.get("setpoint") is not None]
+        if not temps:
+            continue
+        sp = round(_median(sps), 1) if sps else None
+        temp_now = pts[-1].get("temp")
+
+        # --- cool-down phases -> τ (derived) + cool-down rate (measured) ---
+        taus, cool_rates = [], []
+        for run in _temp_runs(pts, "cool"):
+            dur_h = (run[-1]["ts"] - run[0]["ts"]) / 3600.0
+            drop = run[0]["temp"] - run[-1]["temp"]
+            if dur_h < 1.5 or drop < 0.4:
+                continue
+            cool_rates.append(drop / dur_h)
+            if has_outdoor:
+                xy = []
+                for p in run:
+                    o = _outdoor_at(omap, p["ts"])
+                    if o is None:
+                        continue
+                    d = p["temp"] - o
+                    if d <= 0.4:
+                        continue
+                    xy.append(((p["ts"] - run[0]["ts"]) / 3600.0, math.log(d)))
+                fit = _linfit(xy)
+                if fit and fit[0] < -1e-3:
+                    tau = -1.0 / fit[0]
+                    if 1.0 <= tau <= 400.0:
+                        taus.append(tau)
+
+        # --- heat-up phases -> responsiveness (derived) ---
+        warm_rates = []
+        for run in _temp_runs(pts, "warm"):
+            dur_h = (run[-1]["ts"] - run[0]["ts"]) / 3600.0
+            rise = run[-1]["temp"] - run[0]["temp"]
+            if dur_h < 0.5 or rise < 0.3:
+                continue
+            warm_rates.append(rise / dur_h)
+
+        tau_h = round(_median(taus), 1) if taus else None
+        cool_kph = round(_median(cool_rates), 2) if cool_rates else None
+        warm_kph = round(_median(warm_rates), 2) if warm_rates else None
+
+        # --- setpoint coverage (measured/derived) ---
+        reaches = sp is not None and max(temps) >= sp - 0.2
+        max_deficit = None
+        if sp is not None:
+            below = [sp - p["temp"] for p in pts
+                     if p.get("temp") is not None
+                     and any(a <= p["ts"] <= b for a, b in heat_iv)]
+            if not below:
+                below = [sp - t for t in temps]
+            md = max(below) if below else 0.0
+            max_deficit = round(md, 1) if md > 0.1 else 0.0
+
+        # --- confidence (derived) ---
+        n_tau, n_warm = len(taus), len(warm_rates)
+        score = (min(1.0, span_days / 7.0) * 0.4
+                 + min(1.0, n_tau / 3.0) * 0.35
+                 + min(1.0, n_warm / 3.0) * 0.25)
+        conf = _conf_word(score)
+
+        # --- relative heat-demand index (estimated) ---
+        # a room that cools fast (needs re-heating often), warms slowly (hard to
+        # satisfy) or never reaches its setpoint needs comparatively MORE flow.
+        demand = 0.0
+        if cool_kph is not None:
+            demand += min(1.5, cool_kph) / 1.5 * 0.4
+        if warm_kph is not None and warm_kph > 0:
+            demand += min(1.5, 1.0 / max(0.2, warm_kph)) / 1.5 * 0.3
+        if max_deficit:
+            demand += min(2.0, max_deficit) / 2.0 * 0.3
+        demand_index = round(demand, 2)
+
+        # --- status + finding + recommendation (honest, labelled) ---
+        missing = []
+        if n_tau < 2:
+            missing.append("1–2 ungestörte Auskühlphasen (Nacht-Absenkung, Fenster zu)")
+        if n_warm < 2:
+            missing.append("1–2 klare Aufheizphasen (Ventil offen)")
+        if span_days < 5:
+            missing.append(f"längerer Zeitraum (bisher {span_days:.1f} von ≥5 Tagen)")
+        status = "bereit" if (conf != "niedrig" and not missing) else "beobachtung"
+
+        if sp is not None and not reaches and (max_deficit or 0) >= 0.6:
+            category = "under"
+            finding = (f"Erreicht Soll nicht (Defizit bis {max_deficit:.1f} K)"
+                       + (f", heizt langsam auf (~{warm_kph:.2f} K/h)" if warm_kph else "") + ".")
+            recommendation = ("Kandidat für MEHR Durchfluss beim Abgleich (Ventil/Durchflussbegrenzer "
+                              "weiter öffnen) bzw. Vorlauf prüfen – datenbasierter Hinweis, kein "
+                              "Norm-Abgleich.")
+        elif reaches and cool_kph is not None and cool_kph <= 0.4 and (max_deficit or 0) < 0.3:
+            category = "reserve"
+            finding = (f"Erreicht Soll zügig, kühlt träge aus (~{cool_kph:.2f} K/h"
+                       + (f", τ≈{tau_h:.0f} h" if tau_h else "") + ") – gut versorgt.")
+            recommendation = ("Reserve vorhanden: Durchfluss ggf. leicht drosseln, dann steht den "
+                              "unterversorgten Räumen mehr zur Verfügung.")
+        elif reaches:
+            category = "balanced"
+            finding = ("Erreicht Soll"
+                       + (f", τ≈{tau_h:.0f} h" if tau_h else "")
+                       + (f", Auskühlen ~{cool_kph:.2f} K/h" if cool_kph else "") + ".")
+            recommendation = "Ausgewogen – vorerst keine Änderung, weiter beobachten."
+        else:
+            category = "observing"
+            finding = "Noch zu wenig verwertbare Phasen für eine belastbare Aussage."
+            recommendation = "Beobachtungsphase – Daten sammeln (siehe fehlende Phasen)."
+
+        out_rooms.append({
+            "room": rm, "n": len(pts), "setpoint": sp,
+            "temp_now": round(temp_now, 1) if temp_now is not None else None,
+            "reaches": reaches, "max_deficit": max_deficit,
+            "tau_h": tau_h, "cooldown_kph": cool_kph, "heatup_kph": warm_kph,
+            "n_cool": len(cool_rates), "n_warm": n_warm, "n_tau": n_tau,
+            "confidence": conf, "conf_score": round(score, 2),
+            "status": status, "missing": missing, "category": category,
+            "finding": finding, "recommendation": recommendation,
+            "demand_index": demand_index,
+        })
+
+    # relative priority ranking for the hydraulic balance (estimated)
+    ranked = sorted([r for r in out_rooms if r["demand_index"] > 0],
+                    key=lambda r: -r["demand_index"])
+    priority = [{"room": r["room"], "index": r["demand_index"],
+                 "deficit": r["max_deficit"], "confidence": r["confidence"]}
+                for r in ranked[:8]]
+
+    # overall insights (derived from the same per-room category, so the summary
+    # and the room cards never contradict each other)
+    insights = []
+    under = [r["room"] for r in out_rooms if r["category"] == "under"]
+    over = [r["room"] for r in out_rooms if r["category"] == "reserve"]
+    if under:
+        insights.append("<b>Unterversorgt (mehr Durchfluss):</b> " + ", ".join(under)
+                        + " – beim Abgleich zuerst diese Kreise öffnen.")
+    if over:
+        insights.append("<b>Reserve (ggf. drosseln):</b> " + ", ".join(over)
+                        + " – frei werdende Leistung geht an die unterversorgten Räume.")
+    ready = sum(1 for r in out_rooms if r["status"] == "bereit")
+    insights.append(f"{ready}/{len(out_rooms)} Räume mit belastbarem Modell "
+                    f"(Rest in Beobachtung). Zeitraum {span_days:.1f} Tage, "
+                    f"{len(rows)} Messpunkte" + ("" if has_outdoor else ", Außentemperatur fehlt → τ nicht bestimmbar") + ".")
+
+    # what to collect next to raise confidence
+    next_obs = []
+    if span_days < 5:
+        next_obs.append("Mindestens 5–7 Tage durchlaufen lassen (automatische Protokollierung läuft).")
+    if not has_outdoor:
+        next_obs.append("Wärmepumpe/HomeCom verbinden – ohne Außentemperatur lässt sich τ nicht ableiten.")
+    if any(r["n_tau"] < 2 for r in out_rooms):
+        next_obs.append("Nachts die Soll-Temperatur absenken: die freien Auskühlphasen liefern τ je Raum.")
+    if any(r["n_warm"] < 2 for r in out_rooms):
+        next_obs.append("Normale Aufheizphasen genügen – je mehr, desto genauer die Aufheizrate.")
+
+    return {
+        "ok": True, "days_window": int(days),
+        "assessment": {
+            "span_days": round(span_days, 1),
+            "n_room_samples": len(rows), "n_rooms": len(byroom),
+            "has_outdoor": has_outdoor, "heating_phases": len(heat_iv),
+            "csv_hours": hist.get("hours", 0),
+            "measured": ["Raumtemperatur", "Soll-Temperatur", "Ventilstellung",
+                         "Außentemperatur" if has_outdoor else None, "WP Heiz-Phasen"],
+            "derived": ["Zeitkonstante τ (Trägheit)", "Auskühlrate", "Aufheizrate",
+                        "Soll-Erreichung/Defizit"],
+            "estimated": ["relativer Wärmebedarf je Raum", "Priorität für den Abgleich"],
+            "gap": ("Kein Messwert pro Heizkreis: weder Durchfluss noch Vor-/Rücklauf "
+                    "je Raum werden erfasst. Die tatsächlich an EINEN Raum gelieferte "
+                    "Wärme ist daher nicht messbar – dies ist eine datenbasierte "
+                    "Optimierungshilfe, kein normgerechter hydraulischer Abgleich."),
+        },
+        "rooms": out_rooms, "priority": priority,
+        "insights": insights, "next_observations": next_obs,
+    }
+
+
+def _demo_thermal(days: int = 14) -> dict:
+    """Synthetic learning-model output for the demo."""
+    rooms = [
+        {"room": "Wohnzimmer", "n": 320, "setpoint": 22.0, "temp_now": 21.9,
+         "reaches": True, "max_deficit": 0.1, "tau_h": 48.0, "cooldown_kph": 0.35,
+         "heatup_kph": 0.55, "n_cool": 5, "n_warm": 6, "n_tau": 5,
+         "confidence": "hoch", "conf_score": 0.86, "status": "bereit", "missing": [],
+         "finding": "Erreicht Soll zügig, kühlt träge aus (~0.35 K/h, τ≈48 h) – gut versorgt.",
+         "recommendation": "Reserve vorhanden: Durchfluss ggf. leicht drosseln.",
+         "category": "reserve", "demand_index": 0.18},
+        {"room": "Büro", "n": 300, "setpoint": 21.0, "temp_now": 19.8,
+         "reaches": False, "max_deficit": 1.2, "tau_h": 22.0, "cooldown_kph": 0.9,
+         "heatup_kph": 0.2, "n_cool": 4, "n_warm": 3, "n_tau": 4,
+         "confidence": "hoch", "conf_score": 0.8, "status": "bereit", "missing": [],
+         "finding": "Erreicht Soll nicht (Defizit bis 1.2 K), heizt langsam auf (~0.20 K/h).",
+         "recommendation": "Kandidat für MEHR Durchfluss beim Abgleich – datenbasierter Hinweis.",
+         "category": "under", "demand_index": 0.78},
+        {"room": "Bad", "n": 280, "setpoint": 24.0, "temp_now": 23.8,
+         "reaches": True, "max_deficit": 0.2, "tau_h": 18.0, "cooldown_kph": 1.2,
+         "heatup_kph": 0.7, "n_cool": 4, "n_warm": 5, "n_tau": 4,
+         "confidence": "mittel", "conf_score": 0.6, "status": "bereit", "missing": [],
+         "finding": "Erreicht Soll, τ≈18 h, Auskühlen ~1.20 K/h.",
+         "recommendation": "Ausgewogen – weiter beobachten.",
+         "category": "balanced", "demand_index": 0.42},
+        {"room": "Schlafzimmer", "n": 120, "setpoint": 19.0, "temp_now": 19.1,
+         "reaches": True, "max_deficit": 0.0, "tau_h": None, "cooldown_kph": 0.5,
+         "heatup_kph": None, "n_cool": 2, "n_warm": 1, "n_tau": 1,
+         "confidence": "niedrig", "conf_score": 0.28, "status": "beobachtung",
+         "missing": ["1–2 klare Aufheizphasen (Ventil offen)"],
+         "finding": "Erreicht Soll, Auskühlen ~0.50 K/h.",
+         "recommendation": "Beobachtungsphase – mehr Aufheizphasen sammeln.",
+         "category": "balanced", "demand_index": 0.13},
+    ]
+    priority = [{"room": "Büro", "index": 0.78, "deficit": 1.2, "confidence": "hoch"},
+                {"room": "Bad", "index": 0.42, "deficit": 0.2, "confidence": "mittel"},
+                {"room": "Wohnzimmer", "index": 0.18, "deficit": 0.1, "confidence": "hoch"}]
+    return {
+        "ok": True, "demo": True, "days_window": days,
+        "assessment": {
+            "span_days": 12.0, "n_room_samples": 1020, "n_rooms": 4,
+            "has_outdoor": True, "heating_phases": 23, "csv_hours": 336,
+            "measured": ["Raumtemperatur", "Soll-Temperatur", "Ventilstellung",
+                         "Außentemperatur", "WP Heiz-Phasen"],
+            "derived": ["Zeitkonstante τ (Trägheit)", "Auskühlrate", "Aufheizrate",
+                        "Soll-Erreichung/Defizit"],
+            "estimated": ["relativer Wärmebedarf je Raum", "Priorität für den Abgleich"],
+            "gap": ("Kein Messwert pro Heizkreis: weder Durchfluss noch Vor-/Rücklauf "
+                    "je Raum werden erfasst. Datenbasierte Optimierungshilfe, kein "
+                    "normgerechter hydraulischer Abgleich."),
+        },
+        "rooms": rooms, "priority": priority,
+        "insights": [
+            "<b>Unterversorgt (mehr Durchfluss):</b> Büro – beim Abgleich zuerst diesen Kreis öffnen.",
+            "<b>Reserve (ggf. drosseln):</b> Wohnzimmer – frei werdende Leistung geht ans Büro.",
+            "3/4 Räume mit belastbarem Modell (Rest in Beobachtung). Zeitraum 12.0 Tage, 1020 Messpunkte.",
+        ],
+        "next_observations": [
+            "Nachts die Soll-Temperatur absenken: die Auskühlphasen liefern τ je Raum.",
+            "Normale Aufheizphasen genügen – je mehr, desto genauer die Aufheizrate.",
+        ],
+    }
+
+
 def _window_events(log_rows: list[dict], now: int) -> list[dict]:
     """Reconstruct open intervals from the window-log change rows."""
     events, cur = [], None
@@ -4343,6 +4688,21 @@ class Handler(BaseHTTPRequestHandler):
                     pass
                 return self._send_json({"demo": False,
                     **compute_room_timeseries(self.store, rd)})
+            if path == "/api/thermal":
+                # learning per-room thermal model (RC) + heat-demand ranking
+                try:
+                    tdy = max(1, min(60, int(qs.get("days", ["14"])[0])))
+                except ValueError:
+                    tdy = 14
+                if self.ctx.mode == "demo":
+                    return self._send_json(_demo_thermal(tdy))
+                try:
+                    if int(time.time()) - self.store.room_log_last_ts() >= 120:
+                        self._log_rooms_now()
+                except Exception:
+                    pass
+                return self._send_json({"demo": False,
+                    **compute_thermal_model(self.store, tdy)})
             if path == "/api/windows":
                 wd = int(qs.get("days", ["3"])[0])
                 if self.ctx.mode == "demo":
