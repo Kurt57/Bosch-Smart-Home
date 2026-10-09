@@ -386,6 +386,22 @@
       <div id="hc-ref" style="margin-top:10px"></div>
       <div class="note" id="hc-note" style="margin-top:8px"></div>
     </div>
+    <div class="card" id="hts-card">
+      <h2><span class="info" data-info="heat-timeseries" role="button" aria-label="Info">i</span>📉 Verlauf &amp; Effizienz <span class="r" id="hts-head"></span></h2>
+      <div class="note" style="margin-bottom:10px">Stündlich über die Zeit: <b>Außen-</b> &amp; <b>Vorlauftemperatur</b>, <b>Verbrauch</b>
+        (Heizung/Warmwasser) und die daraus abgeleitete <b>Arbeitszahl (COP)</b>. Darunter leite ich <b>Effizienz &amp; Regel-Logik</b> ab.</div>
+      <div id="hts-kpi"></div>
+      <div id="hts-chart" style="margin-top:10px"></div>
+      <div class="legend">
+        <div class="it"><span class="sw" style="background:#3ba9ff"></span>Außen °C</div>
+        <div class="it"><span class="sw" style="background:#ff6b8a"></span>Vorlauf °C</div>
+        <div class="it"><span class="sw" style="background:var(--hp)"></span>Heizung kWh</div>
+        <div class="it"><span class="sw" style="background:var(--heat)"></span>Warmwasser kWh</div>
+        <div class="it"><span class="sw" style="background:#4be0b0"></span>COP</div>
+      </div>
+      <div id="hts-logic" style="margin-top:12px"></div>
+      <div class="note" id="hts-note" style="margin-top:8px"></div>
+    </div>
     <div class="card" id="ha-card">
       <h2><span class="info" data-info="hydronic" role="button" aria-label="Info">i</span>⚖️ Hydraulischer Abgleich <span class="r" id="ha-head"></span></h2>
       <div class="note" style="margin-bottom:10px">Sorgt dafür, dass <b>jeder Heizkreis die richtige Wassermenge</b> bekommt – damit alle Räume

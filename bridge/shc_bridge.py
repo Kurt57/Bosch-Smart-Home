@@ -685,6 +685,11 @@ class Store:
                 " heating_kwh REAL, water_kwh REAL, outdoor_c REAL,"
                 " PRIMARY KEY(period,date))"
             )
+            # supply/water temperature per hourly row (for the time-series view)
+            hhcols = [r[1] for r in self.conn.execute("PRAGMA table_info(hp_history)")]
+            for col in ("supply_c", "water_c"):
+                if col not in hhcols:
+                    self.conn.execute(f"ALTER TABLE hp_history ADD COLUMN {col} REAL")
             # heating-curve points from an imported CSV: flow temp vs. outdoor
             # during SPACE HEATING hours (the CSV exposes Vorlauftemperatur hourly).
             # Separate from hp_samples so energy/COP analytics stay untouched.
@@ -778,14 +783,17 @@ class Store:
             return [dict(r) for r in cur.fetchall()]
 
     def hp_history_upsert(self, rows: list[tuple]) -> int:
-        """rows: (period,date,elec,heat,heating,water,outdoor). Replace on conflict."""
+        """rows: (period,date,elec,heat,heating,water,outdoor,supply,water_temp).
+        Replace on conflict."""
         with self.lock, self.conn:
             self.conn.executemany(
-                "INSERT INTO hp_history(period,date,elec_kwh,heat_kwh,heating_kwh,water_kwh,outdoor_c)"
-                " VALUES(?,?,?,?,?,?,?) ON CONFLICT(period,date) DO UPDATE SET"
+                "INSERT INTO hp_history(period,date,elec_kwh,heat_kwh,heating_kwh,water_kwh,"
+                "outdoor_c,supply_c,water_c)"
+                " VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(period,date) DO UPDATE SET"
                 " elec_kwh=excluded.elec_kwh, heat_kwh=excluded.heat_kwh,"
                 " heating_kwh=excluded.heating_kwh, water_kwh=excluded.water_kwh,"
-                " outdoor_c=excluded.outdoor_c", rows)
+                " outdoor_c=excluded.outdoor_c, supply_c=excluded.supply_c,"
+                " water_c=excluded.water_c", rows)
         return len(rows)
 
     def hp_history_count(self) -> dict:
@@ -1786,6 +1794,140 @@ def compute_heating_curve(store: "Store", days: int = 30, hp_live: dict | None =
             "xmin": round(xmin, 1), "xmax": round(xmax, 1),
             "over_k": over_k, "verdict": verdict, "saving_pct": saving_pct,
             "recommendation": rec, "ref": ref, "cycles": cyc}
+
+
+def _linfit(xy):
+    """Least-squares slope+intercept for [(x,y)], or None."""
+    n = len(xy)
+    if n < 3:
+        return None
+    mx = sum(p[0] for p in xy) / n
+    my = sum(p[1] for p in xy) / n
+    sxx = sum((p[0] - mx) ** 2 for p in xy)
+    if sxx < 1e-6:
+        return None
+    a = sum((p[0] - mx) * (p[1] - my) for p in xy) / sxx
+    return a, my - a * mx
+
+
+def compute_heat_timeseries(store: "Store", days: int = 4) -> dict:
+    """Hourly time-series from the imported CSV: outdoor + flow temperature,
+    consumption (heating/hot-water) and the derived COP – plus efficiency/logic
+    insights (how flow and consumption track the outside temperature)."""
+    rows = store.hp_history("hour")
+    cutoff = time.time() - days * 86400
+    series = []
+    for r in rows:
+        try:
+            ts = int(datetime.fromisoformat(str(r.get("date"))).timestamp())
+        except (ValueError, TypeError):
+            continue
+        if ts < cutoff:
+            continue
+        elec = r.get("elec_kwh")
+        heat = r.get("heat_kwh")
+        heating = r.get("heating_kwh") or 0
+        water = r.get("water_kwh") or 0
+        cop = round(heat / elec, 2) if (elec and elec > 0.05 and heat) else None
+        series.append({
+            "ts": ts, "hour": datetime.fromtimestamp(ts).hour,
+            "outdoor": r.get("outdoor_c"), "supply": r.get("supply_c"),
+            "water_t": r.get("water_c"),
+            "elec": round(elec, 2) if elec is not None else None,
+            "heat": round(heat, 2) if heat is not None else None,
+            "heating": round(heating, 2), "water": round(water, 2), "cop": cop})
+    series.sort(key=lambda s: s["ts"])
+    if not series:
+        return {"ok": True, "n": 0,
+                "note": "Noch keine Stundendaten. Importiere im Setup deinen HomeCom-CSV-Export – "
+                        "er enthält stündlich Außen-/Vorlauftemperatur und Verbrauch."}
+    return _ts_derive(series, days)
+
+
+def _ts_derive(series: list[dict], days: int) -> dict:
+    """Derive efficiency/logic insights from an hourly series (shared by the CSV
+    time-series and the demo)."""
+    tot_elec = sum(s["elec"] or 0 for s in series)
+    tot_heat = sum(s["heat"] or 0 for s in series)
+    tot_heating = sum(s["heating"] for s in series)
+    tot_water = sum(s["water"] for s in series)
+    avg_cop = round(tot_heat / tot_elec, 2) if tot_elec > 0.1 else None
+    # heating-hour relationships (space heating only – clean signal)
+    heat_hrs = [s for s in series if s["heating"] > 0.05 and s["outdoor"] is not None]
+    supply_fit = _linfit([(s["outdoor"], s["supply"]) for s in heat_hrs if s["supply"] is not None])
+    elec_fit = _linfit([(s["outdoor"], s["heating"]) for s in heat_hrs])
+    cop_pts = [(s["outdoor"], s["cop"]) for s in series if s["cop"] is not None and s["outdoor"] is not None]
+    cop_fit = _linfit(cop_pts)
+    best = max((s for s in series if s["cop"] is not None), key=lambda s: s["cop"], default=None)
+    worst = min((s for s in series if s["cop"] is not None), key=lambda s: s["cop"], default=None)
+
+    logic = []
+    if avg_cop is not None:
+        logic.append(f"Ø Arbeitszahl (COP) <b>{avg_cop}</b> im Zeitraum – aus "
+                     f"<b>{tot_elec:.1f} kWh</b> Strom wurden <b>{tot_heat:.1f} kWh</b> Wärme.")
+    if supply_fit and elec_fit:
+        logic.append(f"<b>Logik:</b> je <b>1 °C kälter</b> steigt der Vorlauf um "
+                     f"~<b>{abs(supply_fit[0]):.1f} K</b> und der Heizstrom um "
+                     f"~<b>{abs(elec_fit[0]):.2f} kWh/h</b> – die Regelung folgt der Außentemperatur.")
+    if cop_fit and abs(cop_fit[0]) > 0.01:
+        trend = "steigt" if cop_fit[0] > 0 else "sinkt"
+        logic.append(f"Die Effizienz <b>{trend}</b> mit wärmerer Luft (~{abs(cop_fit[0]):.2f} COP je °C) – "
+                     f"typisch für Wärmepumpen.")
+    if tot_water > 0 and (tot_heating + tot_water) > 0:
+        share = round(tot_water / (tot_heating + tot_water) * 100)
+        logic.append(f"<b>Warmwasser</b> macht ~<b>{share}%</b> des WP-Stroms aus "
+                     f"(Heizung {100 - share}%).")
+    if best and worst and best["cop"] and worst["cop"]:
+        logic.append(f"Bester Punkt: COP <b>{best['cop']}</b> bei {fmt_c(best['outdoor'])}, "
+                     f"schlechtester: COP <b>{worst['cop']}</b> bei {fmt_c(worst['outdoor'])}.")
+
+    return {"ok": True, "n": len(series), "days_window": days, "rows": series,
+            "stats": {"avg_cop": avg_cop, "tot_elec": round(tot_elec, 1),
+                      "tot_heat": round(tot_heat, 1), "tot_heating": round(tot_heating, 1),
+                      "tot_water": round(tot_water, 1),
+                      "supply_slope": round(supply_fit[0], 2) if supply_fit else None,
+                      "elec_slope": round(elec_fit[0], 3) if elec_fit else None},
+            "logic": logic}
+
+
+def fmt_c(v):
+    return f"{v:.0f} °C" if isinstance(v, (int, float)) else "–"
+
+
+def _demo_timeseries(days: int = 4) -> dict:
+    """Synthetic hourly series for the demo (outdoor diurnal + flow tracking +
+    heating/hot-water consumption + COP), run through the same derivation."""
+    now = datetime.now().replace(minute=0, second=0, microsecond=0)
+    series = []
+    hours = max(24, min(days, 7) * 24)
+    for i in range(hours, 0, -1):
+        t = now - timedelta(hours=i)
+        doy = t.timetuple().tm_yday
+        h = t.hour
+        seasonal = 9.0 - 12.0 * math.cos((doy - 20) / 365.0 * 2 * math.pi)
+        outdoor = round(seasonal + 4.0 * math.sin((h - 14) / 24.0 * 2 * math.pi), 1)
+        dhw = h in (6, 18)
+        heating = water = elec = heat = 0.0
+        supply = round(24 + max(0, 16 - outdoor) * 0.4, 1)
+        if dhw:
+            water = round(0.8 + 0.2 * math.sin(i), 2)
+            elec = water
+            cop = max(1.8, 2.0 + 0.07 * outdoor)
+            heat = round(water * cop, 2)
+            supply = round(48 + 4 * math.sin(i), 1)
+        elif outdoor < 16:
+            heating = round(0.2 + (16 - outdoor) * 0.06, 2)
+            elec = heating
+            cop = max(2.2, min(5.0, 2.6 + 0.12 * outdoor))
+            heat = round(heating * cop, 2)
+        series.append({
+            "ts": int(t.timestamp()), "hour": h, "outdoor": outdoor,
+            "supply": supply if (heating > 0 or dhw) else None,
+            "water_t": round(46 + 3 * math.sin(i / 3), 1),
+            "elec": round(elec, 2) or None, "heat": round(heat, 2) or None,
+            "heating": round(heating, 2), "water": round(water, 2),
+            "cop": round(heat / elec, 2) if elec > 0.05 else None})
+    return _ts_derive(series, days)
 
 
 def compute_heating_diag(climate: list[dict], hp: dict | None, cycles: dict | None = None) -> dict:
@@ -3313,14 +3455,15 @@ class Handler(BaseHTTPRequestHandler):
             outdoor = f(r.get("outdoor_c"))
             heating = f(r.get("heating_kwh"))
             water = f(r.get("water_kwh"))
+            supply = f(r.get("supply_c"))
+            water_t = f(r.get("water_c"))
             if elec is None and heat is None:
                 continue
-            clean.append((period, date, elec, heat, heating, water, outdoor))
+            clean.append((period, date, elec, heat, heating, water, outdoor, supply, water_t))
             # real heating-curve point: an HOUR with actual space-heating OUTPUT
             # (produced heating heat > 0 – excludes standby & hot-water hours where
             # the flow sensor still reads the hot tank), no hot water, flow+outdoor
             # present. Using produced heat, not the 0.1 kWh standby electricity.
-            supply = f(r.get("supply_c"))
             prod_heat = f(r.get("heat_heating_kwh"))
             active = (prod_heat or 0) > 0.1 if prod_heat is not None else (heating or 0) > 0.15
             if (period == "hour" and supply is not None and outdoor is not None
@@ -3682,6 +3825,12 @@ class Handler(BaseHTTPRequestHandler):
                 cd = int(qs.get("days", ["30"])[0])
                 return self._send_json({"demo": self.ctx.mode == "demo",
                     **compute_heating_curve(self.store, cd, self._hp_live())})
+            if path == "/api/heating/timeseries":
+                td = int(qs.get("days", ["4"])[0])
+                if self.ctx.mode == "demo":
+                    return self._send_json({"demo": True, **_demo_timeseries(td)})
+                return self._send_json({"demo": False,
+                    **compute_heat_timeseries(self.store, td)})
             if path == "/api/heating/devicecurve":
                 # read the device's configured 2-point heating curve from HomeCom
                 if self.ctx.mode == "demo":

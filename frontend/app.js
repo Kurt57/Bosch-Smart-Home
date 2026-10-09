@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-09 · Heizkurven-Empfehlung korrigiert: niedrige Kurve = effizient (nie „anheben" als Spar-Tipp); Widerspruch zum „sehr effizient"-Hinweis behoben'
+const APP_VERSION = '2026-10-09 · Neu: 📉 Verlauf & Effizienz (Wärme) – stündlich Außen/Vorlauf/Verbrauch/COP aus dem CSV, mit abgeleiteter Effizienz- & Regel-Logik'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -204,6 +204,11 @@ const INFO = {
     'Außentemperatur, daraus baut die App die Kurve sofort rückwirkend – es zählen nur echte Heizstunden (kein Warmwasser/Standby). ' +
     'Trägst du zusätzlich die <b>zwei Punkte deiner Geräte-Heizkurve</b> ein (Vorlauf bei +20 °C und −10 °C, wie am WP-Display), ' +
     'zeichne ich sie <b style="color:#3ba9ff">blau</b> mit ein und vergleiche sie direkt mit dem Zielband.',
+  'heat-timeseries': () => 'Stündlicher <b>Zeitverlauf</b> aus deinem CSV-Import. Oben <b>Außentemperatur</b> (blau) ' +
+    'und <b>Vorlauf</b> (rot); unten der <b>Verbrauch</b> als Balken (Heizung/Warmwasser, gestapelt) und die ' +
+    '<b>Arbeitszahl COP</b> (grün, rechte Achse). Daraus leite ich ab, <b>wie</b> die Regelung arbeitet: wie stark Vorlauf ' +
+    'und Stromverbrauch mit sinkender Außentemperatur steigen, wie die Effizienz vom Wetter abhängt und welchen Anteil ' +
+    'Warmwasser hat. <b>COP</b> = erzeugte Wärme ÷ eingesetzter Strom (höher = besser).',
   'hydronic': () => '<b>Hydraulischer Abgleich</b> verteilt das Heizwasser so auf die Heizkreise, dass jeder Raum ' +
     'genau die passende Menge bekommt. Ohne Abgleich bekommen kurze/nahe Kreise zu viel, lange/ferne zu wenig – ' +
     'man dreht dann den Vorlauf hoch, damit auch der kälteste Raum warm wird, und das kostet bei der Wärmepumpe viel Effizienz. ' +
@@ -2091,6 +2096,102 @@ function curveChart(d) {
       `<text class="axis" x="${(xm10 - 7).toFixed(1)}" y="${(ym10 - 5).toFixed(1)}" text-anchor="end" fill="#3ba9ff">${dv.pm10}</text>`;
   }
   return svg(h, g + xt + dots + idealPath + fitPath + devPath);
+}
+
+/* ---- Combined hourly time-series: temps (top) + consumption & COP (bottom) -- */
+function heatTimeChart(rows) {
+  const h = 280, padL = 26, padR = 28, top = 10;
+  const n = rows.length; if (!n) return '<div class="note">Keine Daten.</div>';
+  const plotW = CW - padL - padR;
+  const xi = i => padL + (n <= 1 ? plotW / 2 : i / (n - 1) * plotW);
+  // temperature region (top ~48%)
+  const tTop = top, tBase = Math.round(h * 0.48);
+  const temps = rows.flatMap(r => [r.outdoor, r.supply]).filter(v => v != null);
+  let tmin = Math.floor(Math.min(...temps) - 2), tmax = Math.ceil(Math.max(...temps) + 2);
+  if (tmax - tmin < 10) tmax = tmin + 10;
+  const yT = v => tTop + (tmax - v) / (tmax - tmin) * (tBase - tTop);
+  // energy + COP region (bottom)
+  const eTop = tBase + 24, eBase = h - 20;
+  const stacks = rows.map(r => (r.heating || 0) + (r.water || 0));
+  const emax = Math.max(0.3, ...stacks);
+  const yE = v => eBase - v / emax * (eBase - eTop);
+  const copMax = Math.max(3, Math.ceil(Math.max(...rows.map(r => r.cop || 0))));
+  const yC = v => eBase - v / copMax * (eBase - eTop);
+  // temp grid + left labels
+  let g = '';
+  for (let i = 0; i <= 2; i++) {
+    const v = tmin + (tmax - tmin) * (1 - i / 2), y = yT(v);
+    g += `<line class="gl" x1="${padL}" x2="${CW - padR}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}"/>`;
+    g += `<text class="axis" x="0" y="${(y + 3).toFixed(1)}">${Math.round(v)}</text>`;
+  }
+  // energy baseline + COP right labels
+  g += `<line class="gl" x1="${padL}" x2="${CW - padR}" y1="${eBase}" y2="${eBase}"/>`;
+  for (let c = 0; c <= copMax; c += Math.max(1, Math.round(copMax / 3))) {
+    const y = yC(c);
+    g += `<text class="axis" x="${CW - padR + 3}" y="${(y + 3).toFixed(1)}" text-anchor="start" fill="#4be0b0">${c}</text>`;
+  }
+  // day separators + weekday labels at midnight
+  const WD = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
+  let sep = '';
+  rows.forEach((r, i) => {
+    if (r.hour === 0) {
+      const x = xi(i);
+      sep += `<line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${top}" y2="${eBase}" stroke="var(--line)" stroke-dasharray="2 3"/>`;
+      sep += `<text class="axis" x="${(x + 3).toFixed(1)}" y="${h - 6}" text-anchor="start">${WD[new Date(r.ts * 1000).getDay()]}</text>`;
+    }
+  });
+  // consumption bars (stacked heating + water)
+  const bw = Math.max(1.2, plotW / n * 0.72);
+  let bars = '';
+  rows.forEach((r, i) => {
+    const x = xi(i) - bw / 2; let yb = eBase;
+    const seg = (val, col) => { if (!val || val <= 0) return; const hh = val / emax * (eBase - eTop); yb -= hh; bars += `<rect x="${x.toFixed(1)}" y="${yb.toFixed(1)}" width="${bw.toFixed(1)}" height="${hh.toFixed(1)}" fill="${col}"/>`; };
+    seg(r.heating, COL.hp); seg(r.water, COL.heat);
+  });
+  // temp lines (break on nulls) + COP line
+  const line = (key, col, yfn, w) => {
+    let d = '', pen = false;
+    rows.forEach((r, i) => { const v = r[key]; if (v == null) { pen = false; return; } const x = xi(i), y = yfn(v); d += (pen ? 'L' : 'M') + x.toFixed(1) + ' ' + y.toFixed(1) + ' '; pen = true; });
+    return d ? `<path d="${d.trim()}" fill="none" stroke="${col}" stroke-width="${w || 2}"/>` : '';
+  };
+  const outdoor = line('outdoor', '#3ba9ff', yT, 2);
+  const supply = line('supply', '#ff6b8a', yT, 2);
+  const cop = line('cop', '#4be0b0', yC, 2);
+  return svg(h, g + sep + bars + outdoor + supply + cop);
+}
+let _htsData = null, _htsBusy = false;
+async function renderHeatTimeseries(force) {
+  const card = $('hts-card'); if (!card) return;
+  if (_htsData && !force) { paintHeatTimeseries(_htsData); return; }
+  if (_htsBusy) return;
+  _htsBusy = true;
+  try { const r = await api('/api/heating/timeseries?days=4'); _htsData = r; paintHeatTimeseries(r); }
+  catch (e) { const c = $('hts-chart'); if (c) c.innerHTML = '<div class="note">Nur mit laufender Bridge verfügbar.</div>'; }
+  finally { _htsBusy = false; }
+}
+function paintHeatTimeseries(r) {
+  const head = $('hts-head'), chart = $('hts-chart'), kpi = $('hts-kpi'), logic = $('hts-logic'), note = $('hts-note');
+  if (!r || !r.ok || !r.n) {
+    if (head) head.textContent = '';
+    if (chart) chart.innerHTML = '<div class="note" style="padding:16px 0;text-align:center">📉 Noch keine Stundendaten – importiere im <b>Setup</b> deinen HomeCom-CSV-Export (stündlich Temperatur + Verbrauch).</div>';
+    if (kpi) kpi.innerHTML = ''; if (logic) logic.innerHTML = ''; if (note) note.innerHTML = '';
+    return;
+  }
+  const s = r.stats || {};
+  if (head) head.innerHTML = s.avg_cop != null ? `<span style="color:#4be0b0">Ø COP ${fmt(s.avg_cop, 2)}</span>` : '';
+  const tile = (l, v) => `<div style="background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:8px 10px;text-align:center"><div style="font-size:17px;font-weight:700">${v}</div><div style="font-size:11px;color:var(--muted)">${l}</div></div>`;
+  if (kpi) kpi.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(78px,1fr));gap:8px">` +
+    tile('Ø COP', s.avg_cop != null ? fmt(s.avg_cop, 2) : '–') +
+    tile('Strom', kwh(s.tot_elec, 1)) +
+    tile('Wärme', kwh(s.tot_heat, 1)) +
+    tile('Heizung', kwh(s.tot_heating, 1)) +
+    tile('Warmw.', kwh(s.tot_water, 1)) +
+    `</div>`;
+  if (chart) chart.innerHTML = heatTimeChart(r.rows || []);
+  if (logic) logic.innerHTML = `<div style="font-weight:700;margin-bottom:6px">🧠 Abgeleitete Effizienz &amp; Logik</div>` +
+    (r.logic || []).map(l => `<div style="font-size:13px;line-height:1.5;margin-bottom:5px">• ${l}</div>`).join('');
+  if (note) note.innerHTML = `${r.n} Stunden (${r.days_window || 4} Tage)` + (r.demo ? ' · <b>Demo-Daten</b>' : '') +
+    '. <b>Innentemperatur</b> ist in den HomeCom-Daten nicht enthalten – sag Bescheid, dann logge ich sie aus deinen Raumthermostaten mit.';
 }
 function hcDevice() {
   const g = k => { const v = parseFloat(localStorage.getItem(k)); return isFinite(v) ? v : null; };
@@ -5712,6 +5813,7 @@ function parseHomeComCsv(text) {
     waterEH: find(['verbrauchteenergie', 'elektrischerzuheizer', 'warmwasser']),
     outdoor: r2.findIndex(c => norm(c).includes('temperatur') && norm(c).includes('aussen') || norm(c).includes('außentemperatur')),
     supply: r2.findIndex(c => norm(c).includes('vorlauftemperatur')),
+    watert: r2.findIndex(c => norm(c).includes('warmwassertemperatur')),
   };
   if (idx.elecWP < 0) return { error: 'Spalte „Verbrauchte Energie · Wärmepumpe · Gesamt" nicht gefunden.' };
   const num = s => { s = (s || '').trim(); if (!s || s === '-') return null; const n = parseFloat(s.replace(/\./g, '').replace(',', '.')); return isNaN(n) ? null : n; };
@@ -5734,6 +5836,7 @@ function parseHomeComCsv(text) {
       heat_heating_kwh: add(at(c, idx.prodHeatWP), at(c, idx.prodHeatUmg)),  // produced space heat
       outdoor_c: at(c, idx.outdoor),
       supply_c: at(c, idx.supply),       // Vorlauftemperatur (for the heating curve)
+      water_c: at(c, idx.watert),        // Warmwassertemperatur (for the time-series)
     });
   }
   return { rows };
@@ -5901,6 +6004,7 @@ function switchView(v) {
   if (v === 'heatpump') {
     if (typeof renderHeatingDiag === 'function') renderHeatingDiag(false);
     if (typeof renderHeatingCurve === 'function') renderHeatingCurve(false);
+    if (typeof renderHeatTimeseries === 'function') renderHeatTimeseries(false);
     if (typeof renderHydronic === 'function') renderHydronic();
     if (typeof initHpControls === 'function') initHpControls();
   }
