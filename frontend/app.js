@@ -6545,6 +6545,18 @@ async function doAegConnect() {
   btn.disabled = false;
 }
 
+async function doAegDisconnect() {
+  const note = $('aeg-connect-note'), btn = $('aeg-disconnect');
+  if (!confirm('AEG/Electrolux deaktivieren und Zugangsdaten löschen? (Keine Fehlermeldungen mehr; später über „Verbinden" wieder aktivierbar.)')) return;
+  if (btn) btn.disabled = true; if (note) note.textContent = 'Deaktiviere …';
+  try {
+    const r = await postJSON('/api/electrolux/disconnect', {});
+    if (note) note.innerHTML = r && r.ok ? '✅ ' + esc(r.message || 'Deaktiviert.') : '⚠︎ ' + esc((r && r.error) || 'Fehlgeschlagen.');
+    setTimeout(loadAll, 1200);
+  } catch (e) { if (note) note.textContent = 'Fehler: ' + e.message + ' – Seite von der Bridge geöffnet?'; }
+  if (btn) btn.disabled = false;
+}
+
 async function doHaConnect() {
   const note = $('ha-note'), btn = $('ha-connect');
   const url = $('ha-url').value.trim(), token = $('ha-token').value.trim();
@@ -7344,6 +7356,7 @@ function init() {
   const aegD = $('aeg-dash');
   if (aegD) aegD.addEventListener('click', () => window.open('https://developer.electrolux.one/dashboard', '_blank'));
   const aegC = $('aeg-connect'); if (aegC) aegC.addEventListener('click', doAegConnect);
+  const aegDis = $('aeg-disconnect'); if (aegDis) aegDis.addEventListener('click', doAegDisconnect);
   const tibC = $('tibber-connect'); if (tibC) tibC.addEventListener('click', doTibberConnect);
   const haC = $('ha-connect'); if (haC) haC.addEventListener('click', doHaConnect);
   const aegP = $('aeg-probe'); if (aegP) aegP.addEventListener('click', doAegProbe);

@@ -4674,10 +4674,21 @@ class ElectroluxPoller(threading.Thread):
         self.last_poll = None
 
     def run(self):
+        auth_err = getattr(electrolux, "ElectroluxAuthError", ()) if electrolux else ()
         while not self._stop.is_set():
             try:
                 self._poll()
                 self.state["last_error"] = None
+            except auth_err as exc:
+                # expired/invalid token won't fix itself by retrying – log ONCE
+                # and stop the poller (no 5-min error spam). Reconnect or
+                # disable in Setup to use it again.
+                self.last_error = str(exc)
+                self.state["last_error"] = str(exc)
+                self.state["stopped_auth"] = True
+                print(f"[electrolux] Anmeldung ungültig – Poller gestoppt. Im Setup neu "
+                      f"verbinden oder AEG/Electrolux deaktivieren. ({exc})", file=sys.stderr)
+                return
             except Exception as exc:
                 self.last_error = str(exc)
                 self.state["last_error"] = str(exc)
@@ -4895,6 +4906,8 @@ class Runtime:
 
     def start_electrolux(self) -> bool:
         self.stop_electrolux()
+        if not self.cfg.get("electrolux_enabled", True):     # user disabled it
+            return False
         if not electrolux or not self.cfg.get("electrolux_api_key") \
                 or not self.cfg.get("electrolux_refresh_token"):
             return False
@@ -4918,7 +4931,7 @@ def save_config(cfg: dict, path: str):
             "price_per_kwh", "currency", "device_filter",
             "homecom_refresh_token", "homecom_gateway", "homecom_interval",
             "electrolux_api_key", "electrolux_refresh_token", "electrolux_interval",
-            "electrolux_kwh_per_cycle", "auto_update_interval",
+            "electrolux_kwh_per_cycle", "electrolux_enabled", "auto_update_interval",
             "spot_enabled", "spot_market", "spot_surcharge_ct", "spot_vat")
     data = {k: cfg[k] for k in keep if k in cfg and not str(k).startswith("_")}
     try:
@@ -5234,6 +5247,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._post_hp_write(body)
             if parsed.path == "/api/electrolux/connect":
                 return self._post_electrolux_connect(body)
+            if parsed.path == "/api/electrolux/disconnect":
+                return self._post_electrolux_disconnect(body)
             if parsed.path == "/api/electrolux/probe":
                 return self._post_electrolux_probe(body)
             if parsed.path == "/api/tibber/connect":
@@ -5612,11 +5627,27 @@ class Handler(BaseHTTPRequestHandler):
         save_config(self.cfg, self.cfg.get("_config_path", DEFAULT_CONFIG))
         for a in appliances:
             self.store.aeg_upsert_appliance(a)
+        self.cfg["electrolux_enabled"] = True
         started = self.ctx.start_electrolux()
         names = ", ".join(a.get("name", a["id"]) for a in appliances) or "keine"
         return self._send_json({"ok": True, "connected": True, "started": started,
                                 "appliances": appliances,
                                 "message": f"Verbunden. Geräte: {names}."})
+
+    def _post_electrolux_disconnect(self, body):
+        """Disable the AEG/Electrolux integration: stop the poller, clear the
+        credentials and remember it's off so it never starts again."""
+        self.ctx.stop_electrolux()
+        for k in ("electrolux_refresh_token", "electrolux_api_key"):
+            self.cfg[k] = ""
+        self.cfg["electrolux_enabled"] = False
+        try:
+            self.ctx.ael_state.clear()
+        except Exception:
+            pass
+        save_config(self.cfg, self.cfg.get("_config_path", DEFAULT_CONFIG))
+        return self._send_json({"ok": True, "connected": False,
+                                "message": "AEG/Electrolux deaktiviert."})
 
     def _post_tibber_connect(self, body):
         """Save + verify a Tibber personal token (real all-in tariff prices)."""
