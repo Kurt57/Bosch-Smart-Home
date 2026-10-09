@@ -2248,8 +2248,8 @@ function heatTimeChart(rows) {
   // temp grid + left labels (unit "°C" appended to the TOP label only, so no
   // separate caption collides with the top value)
   let g = '';
-  for (let i = 0; i <= 2; i++) {
-    const v = tmin + (tmax - tmin) * (1 - i / 2), y = yT(v);
+  for (let i = 0; i <= 4; i++) {                 // 5 lines → easier to read °C off the axis
+    const v = tmin + (tmax - tmin) * (1 - i / 4), y = yT(v);
     g += `<line class="gl" x1="${padL}" x2="${CW - padR}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}"/>`;
     g += `<text class="axis" x="0" y="${(y + (i === 0 ? 8 : 3)).toFixed(1)}">${Math.round(v)}${i === 0 ? ' °C' : ''}</text>`;
   }
@@ -2293,6 +2293,23 @@ function heatTimeChart(rows) {
   const supply = line('supply', '#ff6b8a', yT, 2);
   const indoor = line('indoor', '#b794f6', yT, 2);
   const cop = line('cop', '#4be0b0', yC, 2);
+  // value label at the end of each temp line (so the current °C is readable
+  // without hovering – important on the phone). Dots mark the point; the text
+  // labels are staggered so close values don't overlap.
+  const ends = [];
+  [['outdoor', '#3ba9ff'], ['supply', '#ff6b8a'], ['indoor', '#b794f6']].forEach(([key, col]) => {
+    for (let i = rows.length - 1; i >= 0; i--) {
+      if (rows[i][key] != null) { ends.push({ col, v: rows[i][key], x: xi(i), y: yT(rows[i][key]) }); break; }
+    }
+  });
+  let endLabels = ends.map(e => `<circle cx="${e.x.toFixed(1)}" cy="${e.y.toFixed(1)}" r="2.6" fill="${e.col}"/>`).join('');
+  ends.sort((a, b) => a.y - b.y);
+  let lastY = -1e9;
+  ends.forEach(e => {
+    const ly = Math.min(tBase - 1, Math.max(e.y - 3, lastY + 12));   // ≥12px apart, keep in region
+    lastY = ly;
+    endLabels += `<text x="${(e.x - 4).toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="end" fill="${e.col}" style="font-size:11px;font-weight:700">${fmt(e.v, 1)}°</text>`;
+  });
   // transparent per-hour hit areas with a native hover tooltip (desktop) –
   // shows that hour's values when the mouse is over the column.
   const hw = plotW / n;
@@ -2308,7 +2325,7 @@ function heatTimeChart(rows) {
     if (r.cop != null) P.push(`COP ${r.cop}`);
     hover += `<rect x="${(xi(i) - hw / 2).toFixed(1)}" y="${top}" width="${Math.max(1, hw).toFixed(1)}" height="${(h - top - 14).toFixed(1)}" fill="transparent" pointer-events="all"><title>${esc(P.join('\n'))}</title></rect>`;
   });
-  return svg(h, g + sep + bars + outdoor + indoor + supply + cop + hover);
+  return svg(h, g + sep + bars + outdoor + indoor + supply + cop + endLabels + hover);
 }
 let _htsData = null, _htsBusy = false;
 async function renderHeatTimeseries(force) {
@@ -2338,6 +2355,18 @@ function paintHeatTimeseries(r) {
     tile('Heizung', kwh(s.tot_heating, 1)) +
     tile('Warmw.', kwh(s.tot_water, 1)) +
     `</div>`;
+  // current (last available) temperatures/COP, big & readable – so you see the
+  // actual degrees without needing to hover a line on the phone
+  if (kpi) {
+    const lastVal = key => { const rr = r.rows || []; for (let i = rr.length - 1; i >= 0; i--) { if (rr[i][key] != null) return rr[i][key]; } return null; };
+    const lo = lastVal('outdoor'), ls = lastVal('supply'), li = lastVal('indoor'), lc = lastVal('cop');
+    const chip = (lbl, v, unit, col) => v == null ? '' :
+      `<span style="display:inline-flex;align-items:baseline;gap:4px"><span style="width:8px;height:8px;border-radius:50%;background:${col};display:inline-block"></span>${lbl} <b style="font-size:15px">${fmt(v, unit === '°' ? 1 : 2)}${unit}</b></span>`;
+    const chips = [chip('Außen', lo, '°', '#3ba9ff'), chip('Vorlauf', ls, '°', '#ff6b8a'),
+      chip('Innen', li, '°', '#b794f6'), chip('COP', lc, '', '#4be0b0')].filter(Boolean).join('');
+    if (chips) kpi.innerHTML += `<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-top:8px;font-size:13px">` +
+      `<span style="color:var(--muted)">🌡️ Zuletzt:</span>${chips}</div>`;
+  }
   if (chart) chart.innerHTML = heatTimeChart(r.rows || []);
   if (logic) logic.innerHTML = `<div style="font-weight:700;margin-bottom:6px">🧠 Abgeleitete Effizienz &amp; Logik</div>` +
     (r.logic || []).map(l => `<div style="font-size:13px;line-height:1.5;margin-bottom:5px">• ${l}</div>`).join('');
