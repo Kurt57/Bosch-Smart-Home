@@ -1,8 +1,15 @@
 /* Service worker: network-first so app updates always reach the browser when
  * online, with a cache fallback so the app still opens offline.
  * API responses are never cached (always fetched fresh from the bridge). */
-const CACHE = 'bhe-v129';
+const CACHE = 'bhe-v130';
 const SHELL = ['./', './index.html', './app.js', './manifest.webmanifest', './icon.svg'];
+
+// Let the page tell a freshly-installed worker to activate immediately instead
+// of waiting for all tabs to close. Paired with the controllerchange auto-reload
+// in app.js, this means new code reaches the user on the next load.
+self.addEventListener('message', (e) => {
+  if (e.data && e.data.type === 'SKIP_WAITING') self.skipWaiting();
+});
 
 self.addEventListener('install', (e) => {
   // pre-cache the shell for offline, but don't block; take over immediately

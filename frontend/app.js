@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-09 · Neu: 🧭 Verteiler & Heizkreise (l/min-Startverteilung); Räume & Heizbetrieb: Zeitachse 15 Min–7 Tage umschaltbar + Punkte sofort sichtbar'
+const APP_VERSION = 'v130 · 2026-10-09 · Fix: Einstellungen werden zuverlässig in der Bridge gespeichert (geräteübergreifend); App lädt neue Version automatisch nach (kein Cache-Hängenbleiben mehr)'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -7795,7 +7795,32 @@ function init() {
 
   loadAll();
   setInterval(refreshLive, 30000);
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  // Service worker: register, then actively check for a newer version and take
+  // it over automatically. Without the controllerchange auto-reload the browser
+  // keeps running the old app.js until the user manually clears the cache –
+  // which is exactly the "it still doesn't save" confusion we kept hitting.
+  if ('serviceWorker' in navigator) {
+    let _swReloaded = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (_swReloaded) return;          // reload exactly once when new code activates
+      _swReloaded = true;
+      location.reload();
+    });
+    navigator.serviceWorker.register('sw.js').then((reg) => {
+      try { reg.update(); } catch (e) {}
+      setInterval(() => { try { reg.update(); } catch (e) {} }, 60000);
+      reg.addEventListener('updatefound', () => {
+        const nw = reg.installing;
+        if (!nw) return;
+        nw.addEventListener('statechange', () => {
+          // a new worker is installed and an old one controls the page → switch now
+          if (nw.state === 'installed' && navigator.serviceWorker.controller) {
+            try { nw.postMessage({ type: 'SKIP_WAITING' }); } catch (e) {}
+          }
+        });
+      });
+    }).catch(() => {});
+  }
   // deep-link: #heatpump etc. opens that tab on load (also keeps the tab on reload)
   const openFromHash = () => {
     const h = (location.hash || '').replace(/^#/, '');
