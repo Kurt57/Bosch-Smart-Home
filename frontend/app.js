@@ -3179,13 +3179,13 @@ function computeLayoutResult() {
 // user triggers it; values are merged so manually changed rooms aren't lost
 // beyond the preset ones. Honest estimates – the user adjusts afterwards.
 const LAYOUT_PRESET = {
-  q: 40, dt: 6, manifolds: ['EG', 'OG'],
+  q: 40, dt: 6, manifolds: ['Küche', 'Schlafzimmer', 'OG'],
   rooms: {
-    'Wohnzimmer': { manifold: 'EG', area: 35, loops: 3 },
-    'Küche': { manifold: 'EG', area: 25, loops: 2 },
-    'Flur': { manifold: 'EG', area: 14, loops: 1 },
-    'Schlafzimmer': { manifold: 'EG', area: 20, loops: 2 },
-    'Bad': { manifold: 'EG', area: 6, loops: 1 },
+    'Wohnzimmer': { manifold: 'Küche', area: 35, loops: 3 },
+    'Küche': { manifold: 'Küche', area: 25, loops: 2 },
+    'Flur': { manifold: 'Küche', area: 14, loops: 1 },
+    'Bad': { manifold: 'Küche', area: 6, loops: 1 },
+    'Schlafzimmer': { manifold: 'Schlafzimmer', area: 20, loops: 2 },
     'Kinderzimmer 1': { manifold: 'OG', area: 30, loops: 2 },
     'Kinderzimmer 2': { manifold: 'OG', area: 30, loops: 2 },
   },
@@ -3193,8 +3193,13 @@ const LAYOUT_PRESET = {
 function layoutPresetMyHouse() {
   const l = layoutModel();
   l.q = LAYOUT_PRESET.q; l.dt = LAYOUT_PRESET.dt;
-  l.manifolds = [...new Set([...(l.manifolds || []), ...LAYOUT_PRESET.manifolds])];
   l.rooms = l.rooms || {};
+  // keep only custom manifolds still used by rooms NOT in the preset (drops the
+  // old EG/OG guess cleanly), then add the real ones
+  const presetRooms = Object.keys(LAYOUT_PRESET.rooms);
+  const keep = (l.manifolds || []).filter(m =>
+    Object.entries(l.rooms).some(([rm, cfg]) => cfg.manifold === m && !presetRooms.includes(rm)));
+  l.manifolds = [...new Set([...LAYOUT_PRESET.manifolds, ...keep])];
   Object.entries(LAYOUT_PRESET.rooms).forEach(([rm, v]) => { l.rooms[rm] = { ...(l.rooms[rm] || {}), ...v }; });
   layoutSave(l);
   _hlData = null; _flowData = null;
@@ -3202,9 +3207,9 @@ function layoutPresetMyHouse() {
   const n = $('lay-preset-note');
   if (n) {
     n.style.display = '';
-    n.innerHTML = '✓ Vorbefüllt. <b>Bitte prüfen/anpassen:</b> die Raum-<b>Namen</b> müssen deinen Bosch-Raumnamen entsprechen ' +
-      '(sonst verknüpft sich die Fläche nicht mit τ – ggf. umbenennen bzw. die echten Räume nehmen). Die <b>Verteiler-Zuordnung EG/OG</b> ' +
-      'ist geraten. Kinderzimmer-Fläche = beheizte Bodenfläche (nicht die Wohnfläche).';
+    n.innerHTML = '✓ Vorbefüllt – 3 Verteiler: <b>Küche</b> (Wohnzimmer, Küche, Flur, Bad), <b>Schlafzimmer</b>, <b>OG</b> (2 Kinderzimmer). ' +
+      '<b>Bitte noch prüfen:</b> die Raum-<b>Namen</b> müssen deinen Bosch-Raumnamen entsprechen (sonst verknüpft sich die Fläche nicht mit τ – ' +
+      'ggf. umbenennen bzw. die echten Räume nehmen). Kinderzimmer-Fläche = beheizte Bodenfläche (~30 m²), nicht die Wohnfläche.';
   }
 }
 function hcDevice() {
@@ -7251,7 +7256,7 @@ function init() {
       if (e.target.id === 'lay-room-add') { const v = ($('lay-room-name').value || '').trim(); if (v) { const l = layoutModel(); l.rooms[v] = l.rooms[v] || {}; layoutSave(l); renderLayout(); } return; }
       if (e.target.id === 'lay-rooms-load') { renderLayout(); return; }
       if (e.target.id === 'lay-preset') {
-        if (confirm('Verteiler-Layout mit deinen Hauswerten vorbefüllen (Flächen, Kreise, Verteiler EG/OG)? Bestehende Angaben zu diesen Räumen werden überschrieben.'))
+        if (confirm('Verteiler-Layout mit deinen Hauswerten vorbefüllen (Flächen, Stränge, Verteiler Küche/Schlafzimmer/OG)? Bestehende Angaben zu diesen Räumen werden überschrieben.'))
           layoutPresetMyHouse();
         return;
       }
