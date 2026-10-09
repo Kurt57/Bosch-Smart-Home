@@ -3674,6 +3674,21 @@ class Handler(BaseHTTPRequestHandler):
                 cd = int(qs.get("days", ["30"])[0])
                 return self._send_json({"demo": self.ctx.mode == "demo",
                     **compute_heating_curve(self.store, cd, self._hp_live())})
+            if path == "/api/heating/devicecurve":
+                # read the device's configured 2-point heating curve from HomeCom
+                if self.ctx.mode == "demo":
+                    return self._send_json({"ok": True, "demo": True, "found": True,
+                        "path": "/resource/heatingCircuits/hc1/heatingCurve",
+                        "points": [{"outdoor": 20, "flow": 22}, {"outdoor": -10, "flow": 39}],
+                        "p20": 22, "pm10": 39})
+                client = self.ctx.homecom_client()
+                if not client:
+                    return self._send_json({"ok": False, "error": "nicht mit HomeCom verbunden"}, 200)
+                gid = qs.get("gateway", [self.cfg.get("homecom_gateway", "")])[0]
+                try:
+                    return self._send_json({"ok": True, **client.read_curve(gid)})
+                except Exception as exc:
+                    return self._send_json({"ok": False, "error": str(exc)}, 200)
             if path == "/api/heatpump":
                 st = dict(self.ctx.hp_state)
                 st["available"] = bool(st) and st.get("energy_kwh") is not None or bool(st.get("last_poll"))

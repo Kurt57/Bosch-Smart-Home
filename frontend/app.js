@@ -86,7 +86,7 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_VERSION = '2026-10-09 · Geräte-Heizkurve eintragen (2 Punkte wie am WP-Display, +20/−10 °C): wird blau eingezeichnet und mit dem Zielband verglichen'
+const APP_VERSION = '2026-10-09 · Geräte-Heizkurve „Vom Gerät lesen": versucht die konfigurierte Heizkurve per HomeCom-API auszulesen (mit Diagnose, falls die Struktur abweicht)'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -2103,6 +2103,33 @@ function renderHcDeviceNote(device) {
   else advice = '<span style="color:#4be0b0">Deine Kurve liegt gut im effizienten Bereich.</span>';
   el.innerHTML = `🔵 <b>Deine Geräte-Kurve:</b> +20 °C → ${device.p20} °C · −10 °C → ${device.pm10} °C ` +
     `<span style="color:var(--muted)">(~${fmt(slope10, 1)} K Vorlauf je 10 K kälter)</span>. ${advice}`;
+}
+// Try to read the configured heating curve straight from the heat pump.
+async function readDeviceCurve() {
+  const btn = $('hc-dev-read'), el = $('hc-dev-note');
+  if (btn) btn.disabled = true;
+  if (el) el.innerHTML = 'Lese Heizkurve von der Wärmepumpe …';
+  try {
+    const r = await api('/api/heating/devicecurve');
+    if (r && r.ok && r.found && r.p20 != null && r.pm10 != null) {
+      try { localStorage.setItem('hc_dev_p20', r.p20); localStorage.setItem('hc_dev_pm10', r.pm10); } catch (e) {}
+      if ($('hc-p20')) $('hc-p20').value = r.p20;
+      if ($('hc-pm10')) $('hc-pm10').value = r.pm10;
+      if (_hcData) paintHeatingCurve(_hcData); else renderHcDeviceNote(hcDevice());
+      if (el) el.innerHTML = `✅ Von der Anlage gelesen (${esc(r.path || 'Heizkurve')}).` +
+        (r.demo ? ' <b>(Demo)</b>' : '') + ' Du kannst die Werte oben noch anpassen.';
+    } else if (r && r.ok && !r.found) {
+      // diagnostic: show candidate resources so the parser can be refined
+      const cands = (r.candidates || []).map(c => `<div style="margin-top:4px"><code style="font-size:11px">${esc(c.path)}</code><br><small style="color:var(--muted)">${esc(c.raw || '')}</small></div>`).join('');
+      if (el) el.innerHTML = `⚠︎ Konnte die Heizkurve nicht automatisch erkennen (${r.scanned || 0} Ressourcen gescannt). ` +
+        `Trag die zwei Punkte oben von Hand ein. ` +
+        (cands ? `<details style="margin-top:6px"><summary style="cursor:pointer;color:var(--accent)">Gefundene Kandidaten (zum Weitergeben)</summary>${cands}</details>` : '');
+    } else {
+      if (el) el.innerHTML = '⚠︎ ' + esc((r && r.error) || 'Nicht gelesen.') + ' Trag die zwei Punkte oben von Hand ein.';
+    }
+  } catch (e) {
+    if (el) el.innerHTML = 'Nur möglich, wenn die Seite von der Bridge geöffnet ist. Trag die Werte oben von Hand ein.';
+  } finally { if (btn) btn.disabled = false; }
 }
 let _hcData = null, _hcBusy = false;
 async function renderHeatingCurve(force) {
@@ -6025,6 +6052,7 @@ function init() {
       if (_hcData) paintHeatingCurve(_hcData); else renderHcDeviceNote(hcDevice());
     });
   });
+  const hcdr = $('hc-dev-read'); if (hcdr) hcdr.addEventListener('click', readDeviceCurve);
   const hpcl = $('hpctl-load'); if (hpcl) hpcl.addEventListener('click', () => fetchHpControls(true));
   const hpcb = $('hpctl-body');
   if (hpcb) hpcb.addEventListener('click', e => {

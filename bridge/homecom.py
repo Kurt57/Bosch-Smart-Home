@@ -408,6 +408,108 @@ class HomeComClient:
         res = self._api_get(f"{API_BASE}{gateway_id}{resource_path}")
         return self._control_desc(res) if isinstance(res, dict) else None
 
+    @staticmethod
+    def _num_by_keys(item: dict, keys) -> float | None:
+        if not isinstance(item, dict):
+            return None
+        low = {str(k).lower(): v for k, v in item.items()}
+        for k in keys:
+            v = low.get(k)
+            if isinstance(v, (int, float)):
+                return float(v)
+            if isinstance(v, dict) and isinstance(v.get("value"), (int, float)):
+                return float(v["value"])
+        return None
+
+    @classmethod
+    def _extract_curve_points(cls, res):
+        """Best-effort: pull (outdoor, flow) point pairs out of a resource whose
+        value is a heating curve (shapes vary by firmware)."""
+        OUT = ("outdoor", "outdoortemp", "outdoortemperature", "outside", "ambient",
+               "temperature", "x", "tout", "t_out", "taussen", "out", "at")
+        FLOW = ("flow", "flowtemp", "flowtemperature", "supply", "setpoint", "vorlauf",
+                "y", "value", "temp", "ft")
+        if not isinstance(res, dict):
+            return None
+        val = res.get("value")
+        lists = []
+        if isinstance(val, list):
+            lists.append(val)
+        if isinstance(val, dict):
+            for k in ("points", "coordinates", "curve", "values", "nodes", "entries"):
+                if isinstance(val.get(k), list):
+                    lists.append(val[k])
+        for lst in lists:
+            pts = []
+            for item in lst:
+                o = cls._num_by_keys(item, OUT)
+                f = cls._num_by_keys(item, FLOW)
+                if o is not None and f is not None and 10 <= f <= 80 and -40 <= o <= 40:
+                    pts.append((o, f))
+            if len(pts) >= 2:
+                pts.sort(key=lambda x: x[0])
+                return pts
+        return None
+
+    def read_curve(self, gateway_id: str, max_nodes: int = 120) -> dict:
+        """Find the configured heating curve on the device and return its two
+        reference points (+20 °C and −10 °C). Crawls heatingCircuits collecting
+        ALL resources (scalar + structured); on failure returns the structured
+        candidates (raw) so the parser can be refined. Read-only."""
+        prefix = f"{API_BASE}{gateway_id}"
+
+        def norm(pid):
+            if not isinstance(pid, str) or not pid.startswith("/"):
+                return None
+            return pid if pid.startswith("/resource/") else "/resource" + pid
+
+        seen, collected, budget = set(), [], max_nodes
+        queue = ["/resource/heatingCircuits"]
+        # curated hints, in case the crawl misses the curve leaf
+        queue += [f"/resource/heatingCircuits/hc1/{s}" for s in
+                  ("heatingCurve", "heatcurve", "heatCurve", "curve", "heatingCurveParameters",
+                   "temperatureCurve", "characteristicCurve")]
+        while queue and budget > 0:
+            p = queue.pop(0)
+            if p in seen:
+                continue
+            seen.add(p)
+            budget -= 1
+            try:
+                res = self._api_get(prefix + p)
+            except HomeComError:
+                res = None
+            if not isinstance(res, dict):
+                continue
+            refs = res.get("references")
+            if isinstance(refs, list):
+                for r in refs:
+                    rid = norm(r.get("id") if isinstance(r, dict) else None)
+                    if rid and rid not in seen:
+                        queue.append(rid)
+                continue
+            collected.append((norm(res.get("id")) or p, res))
+
+        # 1) prefer a resource whose path mentions "curve"
+        ordered = sorted(collected, key=lambda c: 0 if "curve" in c[0].lower() else 1)
+        for path, res in ordered:
+            pts = self._extract_curve_points(res)
+            if pts:
+                cold, warm = pts[0], pts[-1]
+                a = ((warm[1] - cold[1]) / (warm[0] - cold[0])) if warm[0] != cold[0] else 0.0
+                b = cold[1] - a * cold[0]
+                return {"found": True, "path": path,
+                        "points": [{"outdoor": o, "flow": f} for o, f in pts],
+                        "p20": round(a * 20 + b, 1), "pm10": round(a * (-10) + b, 1)}
+
+        # 2) not found → return structured/curve-ish candidates for diagnosis
+        cand = []
+        for path, res in collected:
+            v = res.get("value")
+            if isinstance(v, (list, dict)) or "curve" in path.lower():
+                cand.append({"path": path, "raw": json.dumps(res)[:500]})
+        return {"found": False, "candidates": cand[:20], "scanned": len(collected)}
+
     def put(self, gateway_id: str, resource_path: str, value) -> tuple[int, str]:
         """Write a value to a resource (PUT {"value": …}). Returns (status, body).
         Caller is responsible for validating the resource is writeable first."""
