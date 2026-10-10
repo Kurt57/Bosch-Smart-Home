@@ -86,8 +86,8 @@ const COL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v131';   // short tag shown always-on in the header
-const APP_VERSION = 'v131 · 2026-10-09 · App-Stand jetzt oben im Kopf immer sichtbar; Einstellungen werden zuverlässig in der Bridge gespeichert (geräteübergreifend); App lädt neue Version automatisch nach (kein Cache-Hängenbleiben mehr)'
+const APP_BUILD = 'v132';   // short tag shown always-on in the header
+const APP_VERSION = 'v132 · 2026-10-09 · Fix: Einstellungen speichern jetzt auch in Safari (browser-unabhängige Synchronisation, nicht mehr abhängig vom localStorage-Hook); PV-Eingaben flüssiger (Neuberechnung entzerrt); App-Stand oben im Kopf sichtbar'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -119,52 +119,79 @@ function isAppSettingKey(k) {
   if (SETTINGS_LOCAL_ONLY.has(k)) return false;
   return k.startsWith('bhe_') || k === 'heatLayout' || k === 'hc_dev_p20' || k === 'hc_dev_pm10';
 }
-let _settingsReady = false, _pendingSettings = {}, _settingsTimer = null;
-const _rawSet = localStorage.setItem.bind(localStorage);
-const _rawRemove = localStorage.removeItem.bind(localStorage);
-function _flushSettings() {
-  const batch = _pendingSettings; _pendingSettings = {}; _settingsTimer = null;
-  if (!Object.keys(batch).length) return;
-  if (typeof postJSON === 'function') postJSON('/api/settings', { settings: batch }).catch(() => {});
+let _settingsReady = false;
+let _lastSynced = {};                 // last snapshot we successfully pushed to the bridge
+let _sweepTimer = null;
+function _settingsUrl() { return ((typeof STATE !== 'undefined' && STATE.base) || '') + '/api/settings'; }
+// Read every app-setting key currently in localStorage.
+function _collectAppSettings() {
+  const out = {};
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (isAppSettingKey(k)) out[k] = localStorage.getItem(k);
+    }
+  } catch (e) { /* localStorage blocked (private mode) */ }
+  return out;
 }
-function _pushSetting(key, val) {
-  _pendingSettings[key] = val;                 // val null = delete
-  if (_settingsTimer) clearTimeout(_settingsTimer);
-  _settingsTimer = setTimeout(_flushSettings, 400);
+// Compare current localStorage against the last-synced snapshot and push only
+// the differences to the bridge. This is BROWSER-INDEPENDENT on purpose: it does
+// NOT rely on intercepting localStorage.setItem, which silently fails in Safari
+// (WebKit treats `localStorage.setItem = …` as storing a key, not overriding the
+// method) and was the reason settings saved in Chrome but not in Safari.
+function _syncSweep(useBeacon) {
+  if (!_settingsReady) return;
+  const cur = _collectAppSettings();
+  const changed = {};
+  for (const k in cur) if (cur[k] !== _lastSynced[k]) changed[k] = cur[k];
+  for (const k in _lastSynced) if (!(k in cur)) changed[k] = null;   // deletions
+  const keys = Object.keys(changed);
+  if (!keys.length) return;
+  const prev = Object.assign({}, _lastSynced);
+  keys.forEach(k => { if (changed[k] === null) delete _lastSynced[k]; else _lastSynced[k] = changed[k]; });
+  const body = JSON.stringify({ settings: changed });
+  if (useBeacon) {
+    try {
+      if (navigator.sendBeacon && navigator.sendBeacon(_settingsUrl(), new Blob([body], { type: 'application/json' }))) return;
+    } catch (e) {}
+    try { fetch(_settingsUrl(), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: true }).catch(() => {}); return; } catch (e) {}
+  }
+  if (typeof postJSON === 'function') {
+    postJSON('/api/settings', { settings: changed }).catch(() => { _lastSynced = prev; });  // retry next sweep on failure
+  } else {
+    _lastSynced = prev;
+  }
+}
+// coalesce rapid writes into one push shortly after typing stops
+function _scheduleSweep() {
+  if (_sweepTimer) return;
+  _sweepTimer = setTimeout(() => { _sweepTimer = null; _syncSweep(false); }, 400);
 }
 // force an immediate push (use after structural changes like deleting a room,
-// so a quick reload can't lose it before the 400 ms debounce fires)
+// so a quick reload can't lose it before the debounce fires)
 function _flushSettingsNow() {
-  if (_settingsTimer) { clearTimeout(_settingsTimer); _settingsTimer = null; }
-  _flushSettings();
+  if (_sweepTimer) { clearTimeout(_sweepTimer); _sweepTimer = null; }
+  _syncSweep(false);
 }
-// reliably persist pending changes when the page is hidden/closed/reloaded –
-// otherwise syncSettings() on the next load would overwrite them from the bridge
 function _beaconFlush() {
-  if (_settingsTimer) { clearTimeout(_settingsTimer); _settingsTimer = null; }
-  if (!Object.keys(_pendingSettings).length) return;
-  const body = JSON.stringify({ settings: _pendingSettings });
-  _pendingSettings = {};
-  const url = ((typeof STATE !== 'undefined' && STATE.base) || '') + '/api/settings';
-  try {
-    if (navigator.sendBeacon && navigator.sendBeacon(url, new Blob([body], { type: 'application/json' }))) return;
-  } catch (e) {}
-  try { fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: true }).catch(() => {}); } catch (e) {}
+  if (_sweepTimer) { clearTimeout(_sweepTimer); _sweepTimer = null; }
+  _syncSweep(true);
 }
 try {
   window.addEventListener('pagehide', _beaconFlush);
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') _beaconFlush(); });
+  // Periodic safety net: guarantees changes reach the bridge within a few seconds
+  // in EVERY browser, independent of any localStorage.setItem hook.
+  setInterval(() => _syncSweep(false), 3000);
 } catch (e) {}
-// transparently mirror app-setting writes to the bridge
+// Best-effort instant trigger where the browser allows overriding the method
+// (Chrome/Firefox). In Safari this assignment is a harmless no-op and the
+// periodic sweep above does the work instead.
 try {
-  localStorage.setItem = function (k, v) {
-    _rawSet(k, v);
-    if (_settingsReady && isAppSettingKey(k)) _pushSetting(k, String(v));
-  };
-  localStorage.removeItem = function (k) {
-    _rawRemove(k);
-    if (_settingsReady && isAppSettingKey(k)) _pushSetting(k, null);
-  };
+  const _rawSet = localStorage.setItem.bind(localStorage);
+  const _rawRemove = localStorage.removeItem.bind(localStorage);
+  localStorage.setItem = function (k, v) { _rawSet(k, v); if (_settingsReady && isAppSettingKey(k)) _scheduleSweep(); };
+  localStorage.removeItem = function (k) { _rawRemove(k); if (_settingsReady && isAppSettingKey(k)) _scheduleSweep(); };
 } catch (e) { /* localStorage may be unavailable (private mode) */ }
 // Pull the bridge's settings into localStorage BEFORE the first render. If the
 // bridge has none yet, seed it from this device's current settings (migration).
@@ -173,19 +200,17 @@ async function syncSettings() {
     const r = await (typeof api === 'function' ? api('/api/settings') : Promise.resolve(null));
     const srv = (r && r.settings) || {};
     if (Object.keys(srv).length) {
-      Object.keys(srv).forEach(k => { if (isAppSettingKey(k)) _rawSet(k, srv[k]); });
+      Object.keys(srv).forEach(k => { if (isAppSettingKey(k)) { try { localStorage.setItem(k, srv[k]); } catch (e) {} } });
     } else {
       // migrate: push this device's existing app settings up to the bridge
-      const up = {};
-      for (let i = 0; i < localStorage.length; i++) {
-        const k = localStorage.key(i);
-        if (isAppSettingKey(k)) up[k] = localStorage.getItem(k);
-      }
+      const up = _collectAppSettings();
       if (Object.keys(up).length && typeof postJSON === 'function') {
         try { await postJSON('/api/settings', { settings: up }); } catch (e) {}
       }
     }
   } catch (e) { /* offline / demo file:// – fall back to local values */ }
+  // Baseline so the first sweep doesn't re-push everything we just pulled/seeded.
+  _lastSynced = _collectAppSettings();
   _settingsReady = true;
 }
 
@@ -5977,6 +6002,14 @@ function renderPvGridFree(p) {
     `Mehr bringt es kaum: die dunklen <b>Wintermonate</b> bekommst du mit PV allein nie netzfrei ` +
     `(zu wenig Sonne). Dort hilft nur Netzbezug – idealerweise günstig über einen <b>Börsentarif</b>.`;
 }
+// Debounced PV render for live typing: renderPv() is heavy (full simulation +
+// charts), so running it on every keystroke made the PV inputs feel frozen.
+// Saving still happens immediately; only the visual recompute is coalesced.
+let _renderPvTimer = null;
+function renderPvSoon() {
+  if (_renderPvTimer) clearTimeout(_renderPvTimer);
+  _renderPvTimer = setTimeout(() => { _renderPvTimer = null; renderPv(); }, 200);
+}
 function renderPv() {
   if (!$('pv-yield')) return;
   const haveData = shAvgDaily() > 0 || hpAvgDaily() > 0;
@@ -7431,7 +7464,7 @@ function init() {
   ].forEach(([id, key]) => {
     const el = $(id); if (!el) return;
     const s = localStorage.getItem(key); if (s !== null && s !== '') el.value = s;
-    el.addEventListener('input', () => { try { localStorage.setItem(key, el.value); } catch (e) {} renderPv(); });
+    el.addEventListener('input', () => { try { localStorage.setItem(key, el.value); } catch (e) {} renderPvSoon(); });
   });
   const adoptInvest = (total) => {
     try { localStorage.setItem(FIN_LS.invest, String(Math.round(total))); localStorage.setItem(PV_LS.invest, String(Math.round(total))); } catch (e) {}
@@ -7503,7 +7536,7 @@ function init() {
     const el = $(id); if (!el) return;
     const saved = localStorage.getItem(key);
     if (saved !== null) el.value = saved;
-    el.addEventListener('input', () => { try { localStorage.setItem(key, el.value); } catch (e) {} renderPv(); });
+    el.addEventListener('input', () => { try { localStorage.setItem(key, el.value); } catch (e) {} renderPvSoon(); });
   });
   const v2h = $('pv-v2h');
   if (v2h) {
