@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v133';   // short tag shown always-on in the header
-const APP_VERSION = 'v133 · 2026-10-10 · Neu: Auf Grafik tippen/fahren zeigt den genauen Wert an der Stelle (mit Markierungslinie) – gilt für alle Balken-/Flächen-Charts; x-Achsen-Details beim Antippen'
+const APP_BUILD = 'v134';   // short tag shown always-on in the header
+const APP_VERSION = 'v134 · 2026-10-10 · y-Achsen mit runden Stufen (0·2·4·6·8) + Einheit statt krummer Werte; dazu: Antippen zeigt genauen Wert mit Markierungslinie'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -1169,8 +1169,39 @@ try {
   document.addEventListener('pointermove', e => { if (e.pointerType !== 'mouse' && !(e.buttons & 1)) return; _chartReadout(e); });
 } catch (e) {}
 
-function gridLines(h, top, base, pad, max) {
+// Round a data max up to a "nice" axis maximum with an even step, so gridlines
+// read as 0·2·4·6·8 instead of 0·3,65·7,3. target = desired number of divisions.
+function niceScale(max, target = 4) {
+  if (!(max > 0) || !isFinite(max)) return { max: 1, step: 0.5 };
+  const rough = max / target;
+  const mag = Math.pow(10, Math.floor(Math.log10(rough)));
+  const norm = rough / mag;
+  const mult = norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 2.5 ? 2.5 : norm <= 5 ? 5 : 10;
+  const step = mult * mag;
+  return { max: Math.ceil(max / step - 1e-9) * step, step };
+}
+// Horizontal gridlines + y-axis labels. Backwards compatible: called with just
+// `max` it keeps the old 3-line look. Pass opts.step for evenly-spaced "nice"
+// ticks (0..max) and opts.unit to tag the top label with a unit.
+function gridLines(h, top, base, pad, max, opts) {
+  opts = opts || {};
   let g = '';
+  if (opts.step && opts.step > 0 && max > 0) {
+    const step = opts.step;
+    let dec = 0;                                   // exact decimals for this step (0.25 → 2, 2.5 → 1, 2 → 0)
+    for (let d = 0; d <= 3; d++) { const f = step * Math.pow(10, d); if (Math.abs(f - Math.round(f)) < 1e-6) { dec = d; break; } dec = d; }
+    const eps = step * 1e-6;
+    const vals = [];
+    for (let v = 0; v <= max + eps; v += step) vals.push(v);
+    vals.forEach((val, i) => {
+      const y = base - (base - top) * (val / max);
+      g += `<line class="gl" x1="${pad}" x2="${CW - 4}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}"/>`;
+      const isTop = i === vals.length - 1;
+      const lbl = fmt(val, dec) + (isTop && opts.unit ? ' ' + opts.unit : '');
+      g += `<text class="axis" x="0" y="${(y + 3).toFixed(1)}">${lbl}</text>`;
+    });
+    return g;
+  }
   for (let i = 0; i <= 2; i++) {
     const y = top + (base - top) * (i / 2);
     const val = max * (1 - i / 2);
@@ -1183,7 +1214,7 @@ function gridLines(h, top, base, pad, max) {
 function barChart(values, opts = {}) {
   const h = opts.h || 200, pad = 26, top = 12, base = h - 22;
   const n = values.length || 1;
-  const max = Math.max(0.0001, ...values.map(v => v.v));
+  const sc = niceScale(Math.max(0.0001, ...values.map(v => v.v))), max = sc.max;
   const bw = (CW - pad * 2) / n, iw = Math.max(2, bw * 0.62);
   let bars = '', labels = '';
   values.forEach((d, i) => {
@@ -1194,14 +1225,14 @@ function barChart(values, opts = {}) {
       labels += `<text class="axis" x="${(x + iw / 2).toFixed(1)}" y="${h - 8}" text-anchor="middle">${d.label}</text>`;
   });
   const tips = values.map(d => d.tip || `<b>${esc(d.full || d.label || '')}</b>: <b>${fmt(d.v, d.v >= 10 ? 0 : 1)}${opts.unit ? (' ' + esc(opts.unit)) : ''}</b>`);
-  return svg(h, gridLines(h, top, base, pad, max) + bars + labels, { kind: 'bar', pad, n, h, tips });
+  return svg(h, gridLines(h, top, base, pad, max, { step: sc.step, unit: opts.unit }) + bars + labels, { kind: 'bar', pad, n, h, tips });
 }
 
 function stackedBar(rows, series, opts = {}) {
   const h = opts.h || 210, pad = 26, top = 12, base = h - 22;
   const n = rows.length || 1;
   const totals = rows.map(r => series.reduce((a, s) => a + Math.max(0, r.values[s.key] || 0), 0));
-  const max = Math.max(0.0001, ...totals);
+  const sc = niceScale(Math.max(0.0001, ...totals)), max = sc.max;
   const bw = (CW - pad * 2) / n, iw = Math.max(2, bw * 0.62);
   let bars = '', labels = '';
   rows.forEach((r, i) => {
@@ -1219,7 +1250,7 @@ function stackedBar(rows, series, opts = {}) {
       labels += `<text class="axis" x="${(x + iw / 2).toFixed(1)}" y="${h - 8}" text-anchor="middle">${r.label}</text>`;
   });
   const tips = rows.map(r => _seriesTip(r, series, opts));
-  return svg(h, gridLines(h, top, base, pad, max) + bars + labels, { kind: 'bar', pad, n, h, tips });
+  return svg(h, gridLines(h, top, base, pad, max, { step: sc.step, unit: opts.unit }) + bars + labels, { kind: 'bar', pad, n, h, tips });
 }
 
 // shared detail string for stacked/grouped bars: x-label + each series value
@@ -1234,7 +1265,7 @@ function _seriesTip(r, series, opts) {
 function groupedBar(rows, series, opts = {}) {
   const h = opts.h || 200, pad = 26, top = 12, base = h - 22;
   const n = rows.length || 1;
-  const max = Math.max(0.0001, ...rows.map(r => Math.max(...series.map(s => r.values[s.key] || 0))));
+  const sc = niceScale(Math.max(0.0001, ...rows.map(r => Math.max(...series.map(s => r.values[s.key] || 0))))), max = sc.max;
   const gw = (CW - pad * 2) / n, iw = Math.max(1.5, (gw * 0.7) / series.length);
   let bars = '', labels = '';
   rows.forEach((r, i) => {
@@ -1248,13 +1279,13 @@ function groupedBar(rows, series, opts = {}) {
       labels += `<text class="axis" x="${(gx + series.length * iw / 2).toFixed(1)}" y="${h - 8}" text-anchor="middle">${r.label}</text>`;
   });
   const tips = rows.map(r => _seriesTip(r, series, opts));
-  return svg(h, gridLines(h, top, base, pad, max) + bars + labels, { kind: 'bar', pad, n, h, tips });
+  return svg(h, gridLines(h, top, base, pad, max, { step: sc.step, unit: opts.unit }) + bars + labels, { kind: 'bar', pad, n, h, tips });
 }
 
 function areaChart(values, opts = {}) {
   const h = opts.h || 200, pad = 26, top = 12, base = h - 22;
   const n = values.length;
-  const max = Math.max(0.0001, ...values.map(v => v.v));
+  const sc = niceScale(Math.max(0.0001, ...values.map(v => v.v))), max = sc.max;
   const X = i => pad + (CW - pad - 6) * (n <= 1 ? 0 : i / (n - 1));
   const Y = v => top + (base - top) * (1 - v / max);
   let line = '';
@@ -1266,7 +1297,7 @@ function areaChart(values, opts = {}) {
       labels += `<text class="axis" x="${X(i).toFixed(1)}" y="${h - 8}" text-anchor="middle">${d.label}</text>`;
   });
   const tips = values.map(d => d.tip || `<b>${esc(d.full || d.label || '')}</b>: <b>${fmt(d.v, d.v >= 10 ? 0 : 1)}${opts.unit ? (' ' + esc(opts.unit)) : ''}</b>`);
-  return svg(h, gridLines(h, top, base, pad, max) +
+  return svg(h, gridLines(h, top, base, pad, max, { step: sc.step, unit: opts.unit }) +
     `<path d="${area}" fill="${opts.fill || 'url(#gArea)'}" opacity="0.55"/>` +
     `<path d="${line}" fill="none" stroke="${opts.stroke || 'url(#g1)'}" stroke-width="2.5" stroke-linejoin="round"/>` +
     labels, { kind: 'area', pad, n, h, tips });
@@ -4736,7 +4767,7 @@ function renderHeatpump() {
 function renderProfile() {
   const data = STATE.data; if (!data) return;
   const prof = data.hourly_profile;
-  $('chart-hourly').innerHTML = areaChart(prof.map(h => ({ v: h.avg_w, label: h.hour % 3 === 0 ? h.hour + '' : '', full: h.hour + ':00 Uhr', tip: `<b>${h.hour}:00 Uhr</b>: Ø <b>${fmt(h.avg_w, 0)} W</b>` })), { h: 190 });
+  $('chart-hourly').innerHTML = areaChart(prof.map(h => ({ v: h.avg_w, label: h.hour % 3 === 0 ? h.hour + '' : '', full: h.hour + ':00 Uhr', tip: `<b>${h.hour}:00 Uhr</b>: Ø <b>${fmt(h.avg_w, 0)} W</b>` })), { h: 190, unit: 'W' });
   const peak = prof.reduce((a, b) => b.avg_w > a.avg_w ? b : a);
   const low = prof.reduce((a, b) => b.avg_w < a.avg_w ? b : a);
   const nDays = (data.daily || []).length;

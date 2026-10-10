@@ -1,7 +1,7 @@
 /* Service worker: network-first so app updates always reach the browser when
  * online, with a cache fallback so the app still opens offline.
  * API responses are never cached (always fetched fresh from the bridge). */
-const CACHE = 'bhe-v133';
+const CACHE = 'bhe-v134';
 const SHELL = ['./', './index.html', './app.js', './manifest.webmanifest', './icon.svg'];
 
 // Let the page tell a freshly-installed worker to activate immediately instead
