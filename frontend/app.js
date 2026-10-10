@@ -84,10 +84,17 @@ const COL = {
   batt: '#a970ff',  // Batterie – violett
   away: '#ff6b8a',  // Abwesenheit – rosa-rot
 };
+// Fallback names for chart series keys, used by the tap/hover readout when a
+// series carries no explicit label (keeps tooltips from showing "undefined").
+const SERIES_LABEL = {
+  sh: 'Hausstrom', hp: 'Wärmepumpe', heat: 'Wärme', e: 'Strom', h: 'Wärme',
+  pv: 'PV', ev: 'E-Auto', ac: 'Klima', batt: 'Batterie', away: 'Abwesenheit',
+  hp_heating: 'WP Heizen', hp_water: 'WP Warmwasser', hp_other: 'WP sonstiges', heatpump: 'Wärmepumpe',
+};
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v132';   // short tag shown always-on in the header
-const APP_VERSION = 'v132 · 2026-10-09 · Fix: Einstellungen speichern jetzt auch in Safari (browser-unabhängige Synchronisation, nicht mehr abhängig vom localStorage-Hook); PV-Eingaben flüssiger (Neuberechnung entzerrt); App-Stand oben im Kopf sichtbar'
+const APP_BUILD = 'v133';   // short tag shown always-on in the header
+const APP_VERSION = 'v133 · 2026-10-10 · Neu: Auf Grafik tippen/fahren zeigt den genauen Wert an der Stelle (mit Markierungslinie) – gilt für alle Balken-/Flächen-Charts; x-Achsen-Details beim Antippen'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -1108,7 +1115,59 @@ function setMode(m) {
 
 /* -------------------------------------------------------------- SVG charts */
 const CW = 520;
-function svg(h, inner) { return `<svg viewBox="0 0 ${CW} ${h}" preserveAspectRatio="none" role="img">${inner}</svg>`; }
+// Embed per-index detail so a single global handler can show the exact value on
+// tap/hover for ANY chart (see _chartReadout). meta = {kind, pad, n, h, tips[]}.
+function _cdAttr(meta) {
+  return JSON.stringify(meta).replace(/&/g, '&amp;').replace(/'/g, '&#39;').replace(/</g, '&lt;');
+}
+function svg(h, inner, meta) {
+  const attr = meta ? ` data-cd='${_cdAttr(meta)}'` : '';
+  return `<svg viewBox="0 0 ${CW} ${h}" preserveAspectRatio="none" role="img"${attr}>${inner}</svg>`;
+}
+// Tap/hover anywhere on a chart → read the exact value at that x-position in the
+// bottom toast, with a vertical marker line on the chart. Works for every chart
+// drawn through the generic builders (they attach data-cd via svg()). Browser-
+// independent; one delegated listener instead of per-chart wiring.
+function _cdClear() { try { document.querySelectorAll('svg .cd-cursor').forEach(l => l.remove()); } catch (e) {} }
+function _chartReadout(e) {
+  const el = e.target && e.target.closest && e.target.closest('svg[data-cd]');
+  if (!el) return;
+  let meta; try { meta = JSON.parse(el.dataset.cd); } catch (err) { return; }
+  if (!meta || !meta.tips || !meta.tips.length) return;
+  const rect = el.getBoundingClientRect(); if (!rect.width) return;
+  const cx = (e.touches && e.touches[0] ? e.touches[0].clientX : e.clientX);
+  const px = Math.min(1, Math.max(0, (cx - rect.left) / rect.width)) * CW;  // viewBox x
+  const n = meta.n, pad = meta.pad || 26;
+  let i, mark;
+  if (meta.kind === 'area') {
+    const span = Math.max(1, CW - pad - 6);
+    i = Math.round((px - pad) / span * (n - 1));
+    i = Math.min(n - 1, Math.max(0, i));
+    mark = pad + span * (n <= 1 ? 0 : i / (n - 1));
+  } else {
+    const bw = (CW - pad * 2) / Math.max(1, n);
+    i = Math.floor((px - pad) / bw);
+    i = Math.min(n - 1, Math.max(0, i));
+    mark = pad + i * bw + bw / 2;
+  }
+  const tip = meta.tips[i]; if (tip == null) return;
+  const t = $('toast');
+  if (t) { t.innerHTML = tip; t.hidden = false; clearTimeout(_toastT); _toastT = setTimeout(() => { t.hidden = true; _cdClear(); }, 6000); }
+  _cdClear();
+  try {
+    const vbH = (el.viewBox && el.viewBox.baseVal && el.viewBox.baseVal.height) || meta.h || 200;
+    const ln = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    ln.setAttribute('class', 'cd-cursor');
+    ln.setAttribute('x1', mark.toFixed(1)); ln.setAttribute('x2', mark.toFixed(1));
+    ln.setAttribute('y1', '0'); ln.setAttribute('y2', String(vbH));
+    el.appendChild(ln);
+  } catch (err) {}
+  e.stopPropagation();
+}
+try {
+  document.addEventListener('pointerdown', _chartReadout);
+  document.addEventListener('pointermove', e => { if (e.pointerType !== 'mouse' && !(e.buttons & 1)) return; _chartReadout(e); });
+} catch (e) {}
 
 function gridLines(h, top, base, pad, max) {
   let g = '';
@@ -1134,7 +1193,8 @@ function barChart(values, opts = {}) {
     if (d.label && (n <= 16 || i % Math.ceil(n / 12) === 0))
       labels += `<text class="axis" x="${(x + iw / 2).toFixed(1)}" y="${h - 8}" text-anchor="middle">${d.label}</text>`;
   });
-  return svg(h, gridLines(h, top, base, pad, max) + bars + labels);
+  const tips = values.map(d => d.tip || `<b>${esc(d.full || d.label || '')}</b>: <b>${fmt(d.v, d.v >= 10 ? 0 : 1)}${opts.unit ? (' ' + esc(opts.unit)) : ''}</b>`);
+  return svg(h, gridLines(h, top, base, pad, max) + bars + labels, { kind: 'bar', pad, n, h, tips });
 }
 
 function stackedBar(rows, series, opts = {}) {
@@ -1158,7 +1218,17 @@ function stackedBar(rows, series, opts = {}) {
     if (r.label && (n <= 16 || i % Math.ceil(n / 12) === 0))
       labels += `<text class="axis" x="${(x + iw / 2).toFixed(1)}" y="${h - 8}" text-anchor="middle">${r.label}</text>`;
   });
-  return svg(h, gridLines(h, top, base, pad, max) + bars + labels);
+  const tips = rows.map(r => _seriesTip(r, series, opts));
+  return svg(h, gridLines(h, top, base, pad, max) + bars + labels, { kind: 'bar', pad, n, h, tips });
+}
+
+// shared detail string for stacked/grouped bars: x-label + each series value
+function _seriesTip(r, series, opts) {
+  const parts = series.map(s => {
+    const name = s.label || SERIES_LABEL[s.key] || s.key;
+    return `<span style="color:${s.color}">●</span> ${esc(name)} <b>${fmt(r.values[s.key] || 0, 1)}${opts.unit ? (' ' + esc(opts.unit)) : ''}</b>`;
+  });
+  return `<b>${esc(r.full || r.label || '')}</b><div class="note" style="margin-top:2px">${parts.join(' · ')}</div>`;
 }
 
 function groupedBar(rows, series, opts = {}) {
@@ -1177,7 +1247,8 @@ function groupedBar(rows, series, opts = {}) {
     if (r.label && (n <= 16 || i % Math.ceil(n / 12) === 0))
       labels += `<text class="axis" x="${(gx + series.length * iw / 2).toFixed(1)}" y="${h - 8}" text-anchor="middle">${r.label}</text>`;
   });
-  return svg(h, gridLines(h, top, base, pad, max) + bars + labels);
+  const tips = rows.map(r => _seriesTip(r, series, opts));
+  return svg(h, gridLines(h, top, base, pad, max) + bars + labels, { kind: 'bar', pad, n, h, tips });
 }
 
 function areaChart(values, opts = {}) {
@@ -1194,10 +1265,11 @@ function areaChart(values, opts = {}) {
     if (d.label && i % Math.ceil(n / 8) === 0)
       labels += `<text class="axis" x="${X(i).toFixed(1)}" y="${h - 8}" text-anchor="middle">${d.label}</text>`;
   });
+  const tips = values.map(d => d.tip || `<b>${esc(d.full || d.label || '')}</b>: <b>${fmt(d.v, d.v >= 10 ? 0 : 1)}${opts.unit ? (' ' + esc(opts.unit)) : ''}</b>`);
   return svg(h, gridLines(h, top, base, pad, max) +
     `<path d="${area}" fill="${opts.fill || 'url(#gArea)'}" opacity="0.55"/>` +
     `<path d="${line}" fill="none" stroke="${opts.stroke || 'url(#g1)'}" stroke-width="2.5" stroke-linejoin="round"/>` +
-    labels);
+    labels, { kind: 'area', pad, n, h, tips });
 }
 
 function heatmap(grid) {
@@ -3697,7 +3769,7 @@ function renderOverview() {
   const w = filledDaily(new Date(now.getTime() - 13 * 86400000), now);
   $('ov-daily').innerHTML = stackedBar(
     w.map(d => ({ label: shortDay(d.day), estimated: d.estimated, values: { sh: d.sh, hp: d.hp } })),
-    [{ key: 'sh', color: COL.sh }, { key: 'hp', color: COL.hp }], { h: 200 });
+    [{ key: 'sh', color: COL.sh }, { key: 'hp', color: COL.hp }], { h: 200, unit: 'kWh' });
   const estN = w.filter(d => d.estimated).length;
   const dn = $('ov-daily-note');
   if (dn) {
@@ -3908,8 +3980,8 @@ function renderToday() {
   const hrs = ov.today_hourly || [];
   const hasData = hrs.some(h => h.smarthome_kwh > 0 || h.heatpump_kwh > 0);
   $('t-hourly').innerHTML = hasData ? stackedBar(
-    hrs.map(h => ({ label: h.hour % 3 === 0 ? h.hour + '' : '', values: { sh: h.smarthome_kwh, hp: h.heatpump_kwh } })),
-    [{ key: 'sh', color: COL.sh }, { key: 'hp', color: COL.hp }], { h: 190 })
+    hrs.map(h => ({ label: h.hour % 3 === 0 ? h.hour + '' : '', full: h.hour + ':00 Uhr', values: { sh: h.smarthome_kwh, hp: h.heatpump_kwh } })),
+    [{ key: 'sh', color: COL.sh }, { key: 'hp', color: COL.hp }], { h: 190, unit: 'kWh' })
     : '<div class="note">Der Stundenverlauf füllt sich im Lauf des Tages.</div>';
   if (hasData) {
     const peak = hrs.reduce((a, b) => (b.smarthome_kwh + b.heatpump_kwh) > (a.smarthome_kwh + a.heatpump_kwh) ? b : a);
@@ -4327,9 +4399,9 @@ function renderHeatDemand() {
     // high-contrast, well-separated hues (orange / blue / violet)
     const COLT = '#ff9f40', COLP = '#3d8bff', COLE = '#b07cff';
     const series = [];
-    if (on('thm-t')) series.push({ key: 't', color: COLT });
-    if (pOn) series.push({ key: 'p', color: COLP });
-    if (on('thm-e')) series.push({ key: 'e', color: COLE });
+    if (on('thm-t')) series.push({ key: 't', color: COLT, label: 'Theorie' });
+    if (pOn) series.push({ key: 'p', color: COLP, label: 'Gemessen' });
+    if (on('thm-e')) series.push({ key: 'e', color: COLE, label: 'Erwartet' });
     const rows = MON.map((lbl2, m) => ({
       label: lbl2, values: {
         t: theoryMonth[m],
@@ -4521,7 +4593,7 @@ function renderHeatpump() {
   const daily = (A.daily || []).slice(-30);
   $('hp-daily').innerHTML = daily.length ? groupedBar(
     daily.map(d => ({ label: shortDay(d.day), values: { e: d.elec_kwh, h: d.heat_kwh } })),
-    [{ key: 'e', color: COL.hp }, { key: 'h', color: COL.heat }], { h: 200 })
+    [{ key: 'e', color: COL.hp }, { key: 'h', color: COL.heat }], { h: 200, unit: 'kWh' })
     : '<div class="note">Noch keine Historie – die Bridge baut sie beim Pollen auf.</div>';
 
   const cops = daily.filter(d => d.cop != null);
@@ -4566,7 +4638,7 @@ function renderHeatpump() {
   const m = A.monthly || [];
   $('hp-monthly').innerHTML = m.length ? groupedBar(
     m.map(x => ({ label: MON[parseInt(x.month.slice(5), 10) - 1], values: { e: x.elec_kwh, h: x.heat_kwh } })),
-    [{ key: 'e', color: COL.hp }, { key: 'h', color: COL.heat }], { h: 180 })
+    [{ key: 'e', color: COL.hp }, { key: 'h', color: COL.heat }], { h: 180, unit: 'kWh' })
     : '<div class="note">Noch keine vollen Monate.</div>';
 
   // COP per month (efficiency over the year)
@@ -4664,7 +4736,7 @@ function renderHeatpump() {
 function renderProfile() {
   const data = STATE.data; if (!data) return;
   const prof = data.hourly_profile;
-  $('chart-hourly').innerHTML = areaChart(prof.map(h => ({ v: h.avg_w, label: h.hour % 3 === 0 ? h.hour + '' : '' })), { h: 190 });
+  $('chart-hourly').innerHTML = areaChart(prof.map(h => ({ v: h.avg_w, label: h.hour % 3 === 0 ? h.hour + '' : '', full: h.hour + ':00 Uhr', tip: `<b>${h.hour}:00 Uhr</b>: Ø <b>${fmt(h.avg_w, 0)} W</b>` })), { h: 190 });
   const peak = prof.reduce((a, b) => b.avg_w > a.avg_w ? b : a);
   const low = prof.reduce((a, b) => b.avg_w < a.avg_w ? b : a);
   const nDays = (data.daily || []).length;
