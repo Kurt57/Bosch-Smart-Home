@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v134';   // short tag shown always-on in the header
-const APP_VERSION = 'v134 · 2026-10-10 · y-Achsen mit runden Stufen (0·2·4·6·8) + Einheit statt krummer Werte; dazu: Antippen zeigt genauen Wert mit Markierungslinie'
+const APP_BUILD = 'v135';   // short tag shown always-on in the header
+const APP_VERSION = 'v135 · 2026-10-11 · Räume & Heizbetrieb + Verlauf-Charts: Antippen zeigt Werte (Smartphone-tauglich) mit Markierungslinie; mehr Hilfslinien und dichtere Zeit-Beschriftung auf der x-Achse'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -1120,9 +1120,13 @@ const CW = 520;
 function _cdAttr(meta) {
   return JSON.stringify(meta).replace(/&/g, '&amp;').replace(/'/g, '&#39;').replace(/</g, '&lt;');
 }
-function svg(h, inner, meta) {
-  const attr = meta ? ` data-cd='${_cdAttr(meta)}'` : '';
-  return `<svg viewBox="0 0 ${CW} ${h}" preserveAspectRatio="none" role="img"${attr}>${inner}</svg>`;
+function svg(h, inner, meta, tsMeta) {
+  let attr = meta ? ` data-cd='${_cdAttr(meta)}'` : '';
+  if (tsMeta) attr += ` data-ts='${_cdAttr(tsMeta)}'`;
+  // transparent hit layer so a tap/hover anywhere on the plot (not only on a bar
+  // or line) triggers the value readout; harmless when no readout is attached
+  const hit = (meta || tsMeta) ? `<rect x="0" y="0" width="${CW}" height="${h}" fill="transparent" pointer-events="all"/>` : '';
+  return `<svg viewBox="0 0 ${CW} ${h}" preserveAspectRatio="none" role="img"${attr}>${hit}${inner}</svg>`;
 }
 // Tap/hover anywhere on a chart → read the exact value at that x-position in the
 // bottom toast, with a vertical marker line on the chart. Works for every chart
@@ -1140,7 +1144,7 @@ function _chartReadout(e) {
   const n = meta.n, pad = meta.pad || 26;
   let i, mark;
   if (meta.kind === 'area') {
-    const span = Math.max(1, CW - pad - 6);
+    const span = Math.max(1, CW - pad - (meta.padR != null ? meta.padR : 6));
     i = Math.round((px - pad) / span * (n - 1));
     i = Math.min(n - 1, Math.max(0, i));
     mark = pad + span * (n <= 1 ? 0 : i / (n - 1));
@@ -1164,9 +1168,52 @@ function _chartReadout(e) {
   } catch (err) {}
   e.stopPropagation();
 }
+// Time-series readout: for charts whose x-axis is real time with irregular
+// points (room temperatures, WP history). Carries data-ts = {t0,t1,padL,padR,
+// series:[{name,color,unit,pts:[[ts,val],…]}]}. Tap/hover → nearest value per
+// series at that moment, a weekday+clock title, and a vertical marker line.
+function _tsReadout(e) {
+  const el = e.target && e.target.closest && e.target.closest('svg[data-ts]');
+  if (!el) return;
+  let m; try { m = JSON.parse(el.dataset.ts); } catch (err) { return; }
+  if (!m || !m.series || !m.series.length || !(m.t1 > m.t0)) return;
+  const rect = el.getBoundingClientRect(); if (!rect.width) return;
+  const cx = (e.touches && e.touches[0] ? e.touches[0].clientX : e.clientX);
+  const px = Math.min(1, Math.max(0, (cx - rect.left) / rect.width)) * CW;
+  const padL = m.padL != null ? m.padL : 26, padR = m.padR != null ? m.padR : 10;
+  const plotW = Math.max(1, CW - padL - padR);
+  const frac = Math.min(1, Math.max(0, (px - padL) / plotW));
+  const t = m.t0 + frac * (m.t1 - m.t0);
+  const tol = (m.t1 - m.t0) * 0.08;             // only report a series with a point near the cursor
+  const parts = [];
+  m.series.forEach(s => {
+    let best = null, bd = Infinity;
+    for (const p of (s.pts || [])) { const d = Math.abs(p[0] - t); if (d < bd) { bd = d; best = p; } }
+    if (best && bd <= tol) parts.push(`<span style="color:${s.color}">●</span> ${esc(s.name)} <b>${fmt(best[1], 1)}${s.unit || ''}</b>`);
+  });
+  if (!parts.length) return;
+  const WD = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
+  const dt = new Date(t * 1000), p2 = x => String(x).padStart(2, '0');
+  const title = `${WD[dt.getDay()]} ${p2(dt.getHours())}:${p2(dt.getMinutes())}`;
+  const t2 = $('toast');
+  if (t2) { t2.innerHTML = `<b>${title}</b><div class="note" style="margin-top:2px">${parts.join(' · ')}</div>`; t2.hidden = false; clearTimeout(_toastT); _toastT = setTimeout(() => { t2.hidden = true; _cdClear(); }, 6000); }
+  _cdClear();
+  try {
+    const vbH = (el.viewBox && el.viewBox.baseVal && el.viewBox.baseVal.height) || m.h || 200;
+    const markX = padL + frac * plotW;
+    const ln = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    ln.setAttribute('class', 'cd-cursor');
+    ln.setAttribute('x1', markX.toFixed(1)); ln.setAttribute('x2', markX.toFixed(1));
+    ln.setAttribute('y1', '0'); ln.setAttribute('y2', String(vbH));
+    el.appendChild(ln);
+  } catch (err) {}
+  e.stopPropagation();
+}
 try {
-  document.addEventListener('pointerdown', _chartReadout);
-  document.addEventListener('pointermove', e => { if (e.pointerType !== 'mouse' && !(e.buttons & 1)) return; _chartReadout(e); });
+  const onDown = e => { _chartReadout(e); _tsReadout(e); };
+  const onMove = e => { if (e.pointerType !== 'mouse' && !(e.buttons & 1)) return; _chartReadout(e); _tsReadout(e); };
+  document.addEventListener('pointerdown', onDown);
+  document.addEventListener('pointermove', onMove);
 } catch (e) {}
 
 // Round a data max up to a "nice" axis maximum with an even step, so gridlines
@@ -2466,6 +2513,7 @@ function heatTimeChart(rows) {
   // shows that hour's values when the mouse is over the column.
   const hw = plotW / n;
   let hover = '';
+  const tips = [];
   rows.forEach((r, i) => {
     const dt = new Date(r.ts * 1000), hh = String(dt.getHours()).padStart(2, '0');
     const P = [`${WD[dt.getDay()]} ${hh}:00`];
@@ -2476,8 +2524,17 @@ function heatTimeChart(rows) {
     if (verb > 0) P.push(`Verbrauch ${verb.toFixed(2)} kWh (Heiz ${fmt(r.heating || 0, 2)} · WW ${fmt(r.water || 0, 2)})`);
     if (r.cop != null) P.push(`COP ${r.cop}`);
     hover += `<rect x="${(xi(i) - hw / 2).toFixed(1)}" y="${top}" width="${Math.max(1, hw).toFixed(1)}" height="${(h - top - 14).toFixed(1)}" fill="transparent" pointer-events="all"><title>${esc(P.join('\n'))}</title></rect>`;
+    // same content as an on-tap toast (works on the phone, where <title> doesn't)
+    const parts = [];
+    if (r.outdoor != null) parts.push(`<span style="color:#3ba9ff">●</span> Außen <b>${fmt(r.outdoor, 1)}°</b>`);
+    if (r.supply != null) parts.push(`<span style="color:#ff6b8a">●</span> Vorlauf <b>${fmt(r.supply, 1)}°</b>`);
+    if (r.indoor != null) parts.push(`<span style="color:#b794f6">●</span> Innen <b>${fmt(r.indoor, 1)}°</b>`);
+    if (verb > 0) parts.push(`🔥 <b>${fmt(verb, 2)} kWh</b>`);
+    if (r.cop != null) parts.push(`<span style="color:#4be0b0">●</span> COP <b>${fmt(r.cop, 2)}</b>`);
+    tips.push(`<b>${WD[dt.getDay()]} ${hh}:00</b><div class="note" style="margin-top:2px">${parts.join(' · ')}</div>`);
   });
-  return svg(h, g + sep + bars + outdoor + indoor + supply + cop + endLabels + hover);
+  return svg(h, g + sep + bars + outdoor + indoor + supply + cop + endLabels + hover,
+    { kind: 'area', pad: padL, padR, n, h, tips });
 }
 let _htsData = null, _htsBusy = false;
 async function renderHeatTimeseries(force) {
@@ -2606,9 +2663,14 @@ function roomChart(d, sel) {
   let tmin = Math.floor(Math.min(...all) - 1), tmax = Math.ceil(Math.max(...all) + 1);
   if (tmax - tmin < 4) tmax = tmin + 4;
   const Y = v => top + (tmax - v) / (tmax - tmin) * (base - top);
+  // y grid: a gridline every 1 °C (small range) up to 5 °C (large range), so you
+  // can read the temperature off the axis without tapping
   let g = '';
-  for (let i = 0; i <= 2; i++) { const v = tmin + (tmax - tmin) * (1 - i / 2), y = Y(v); g += `<line class="gl" x1="${padL}" x2="${CW - padR}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}"/><text class="axis" x="0" y="${(y + 3).toFixed(1)}">${Math.round(v)}</text>`; }
-  g += `<text class="axis" x="2" y="${top + 4}" style="opacity:.75">°C</text>`;
+  const rng = tmax - tmin, stepC = rng <= 6 ? 1 : rng <= 12 ? 2 : rng <= 25 ? 5 : 10;
+  for (let v = Math.ceil(tmin / stepC) * stepC; v <= tmax + 1e-6; v += stepC) {
+    const y = Y(v);
+    g += `<line class="gl" x1="${padL}" x2="${CW - padR}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}"/><text class="axis" x="0" y="${(y + 3).toFixed(1)}">${v}°</text>`;
+  }
   // valve-open shading when a single room is selected (room calling for heat)
   let band = '';
   if (sel && rooms[0]) { const p = rooms[0].points; for (let i = 0; i < p.length - 1; i++) { if ((p[i].valve || 0) > 50) { const x1 = X(p[i].ts), x2 = X(p[i + 1].ts); band += `<rect x="${x1.toFixed(1)}" y="${top}" width="${Math.max(0.6, x2 - x1).toFixed(1)}" height="${(base - top).toFixed(1)}" fill="${rooms[0].color}" fill-opacity="0.09"/>`; } } }
@@ -2616,17 +2678,20 @@ function roomChart(d, sel) {
   const stripY = base + 10;
   let strip = `<text class="axis" x="0" y="${stripY + 6}">WP</text>`;
   (d.heating || []).forEach(iv => { const x1 = X(iv[0]), x2 = X(iv[1]); strip += `<rect x="${x1.toFixed(1)}" y="${stripY}" width="${Math.max(1, x2 - x1).toFixed(1)}" height="6" fill="#4be0b0" fill-opacity="0.85"/>`; });
-  // time grid: weekdays for multi-day ranges, hours for short ranges
-  const span = t1 - t0;
+  // time grid with adaptive, denser labels: weekday at midnight, otherwise the
+  // hour (or HH:MM for very short ranges). More ticks than before so the x-axis
+  // actually tells you when, not just "Mo / Di".
+  const span = t1 - t0, spanH = span / 3600;
   const WD = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
   let sep = '';
   const twoD = n => String(n).padStart(2, '0');
-  if (span > 1.6 * 86400) {
-    for (let t = Math.ceil(t0 / 86400) * 86400; t <= t1; t += 86400) { const x = X(t); sep += `<line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${top}" y2="${base}" stroke="var(--line)" stroke-dasharray="2 3"/><text class="axis" x="${(x + 3).toFixed(1)}" y="${h - 6}">${WD[new Date(t * 1000).getDay()]}</text>`; }
-  } else {
-    const stepH = span <= 3600 ? 1 / 6 : span <= 6 * 3600 ? 1 : span <= 13 * 3600 ? 3 : 6; // hours between ticks
-    const stepS = stepH * 3600;
-    for (let t = Math.ceil(t0 / stepS) * stepS; t <= t1; t += stepS) { const x = X(t), dd = new Date(t * 1000); const lbl = stepH < 1 ? `${twoD(dd.getHours())}:${twoD(dd.getMinutes())}` : `${twoD(dd.getHours())}:00`; sep += `<line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${top}" y2="${base}" stroke="var(--line)" stroke-dasharray="2 3"/><text class="axis" x="${(x + 2).toFixed(1)}" y="${h - 6}">${lbl}</text>`; }
+  const stepH = spanH <= 1 ? 1 / 6 : spanH <= 6 ? 1 : spanH <= 13 ? 2 : spanH <= 30 ? 4 : spanH <= 52 ? 6 : spanH <= 24 * 4 ? 12 : 24;
+  const stepS = stepH * 3600;
+  for (let t = Math.ceil(t0 / stepS) * stepS; t <= t1; t += stepS) {
+    const x = X(t), dd = new Date(t * 1000);
+    const mid = dd.getHours() === 0 && dd.getMinutes() === 0;
+    const lbl = mid ? WD[dd.getDay()] : (stepH < 1 ? `${twoD(dd.getHours())}:${twoD(dd.getMinutes())}` : `${twoD(dd.getHours())}h`);
+    sep += `<line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${top}" y2="${base}" stroke="var(--line)" stroke-dasharray="2 3"${mid ? ' opacity="0.9"' : ' opacity="0.5"'}/><text class="axis" x="${(x + 2).toFixed(1)}" y="${h - 6}"${mid ? ' style="font-weight:700"' : ''}>${lbl}</text>`;
   }
   // temp lines + setpoints + current dot
   let lines = '';
@@ -2638,7 +2703,12 @@ function roomChart(d, sel) {
     if (pv.length) { const last = pv[pv.length - 1]; lines += `<circle cx="${X(last.ts).toFixed(1)}" cy="${Y(last.temp).toFixed(1)}" r="${sel ? 3.2 : 2.6}" fill="${r.color}"/>`; }
     if (r.setpoint != null) { const y = Y(r.setpoint); lines += `<line x1="${padL}" x2="${CW - padR}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="${r.color}" stroke-width="1" stroke-dasharray="4 3" opacity="${sel ? 0.85 : 0.3}"/>`; if (sel) lines += `<text class="axis" x="${CW - padR + 2}" y="${(y + 3).toFixed(1)}" fill="${r.color}" text-anchor="start">Soll ${r.setpoint}</text>`; }
   });
-  return svg(h, g + band + sep + strip + lines);
+  // per-room series for the tap/hover readout (temperature over time)
+  const tsSeries = rooms.map(r => ({
+    name: r.room, color: r.color, unit: '°',
+    pts: r.points.filter(p => p.temp != null && p.ts >= t0).map(p => [p.ts, Math.round(p.temp * 10) / 10]),
+  })).filter(s => s.pts.length);
+  return svg(h, g + band + sep + strip + lines, null, { t0, t1, padL, padR, h, series: tsSeries });
 }
 let _rtsData = null, _rtsBusy = false, _rtsSel = '', _rtsDays = 2;
 async function renderRoomTs(force) {
