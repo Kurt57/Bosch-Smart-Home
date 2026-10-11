@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v136';   // short tag shown always-on in the header
-const APP_VERSION = 'v136 · 2026-10-11 · Verteiler & Heizkreise: aktuellen Tacosetter-Ist-Wert je Raum eintragen → direkter Vergleich zur Empfehlung (Abweichung + oranger Strich im Balken), geräteübergreifend gespeichert'
+const APP_BUILD = 'v137';   // short tag shown always-on in the header
+const APP_VERSION = 'v137 · 2026-10-11 · Wärme-Tab in Unter-Tabs aufgeteilt: 🔥 Heizung · ⚖️ Abgleich · 📊 Effizienz · ⚙️ Einstellung – übersichtlicher statt einer langen Liste'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -120,7 +120,7 @@ async function hardRefresh() {
  *   • on startup we pull the bridge's stored settings into localStorage, and
  *   • every write to an app-setting key is pushed back to the bridge.
  * Only the connection/mode keys (bridge URL, demo flag) stay device-local.  */
-const SETTINGS_LOCAL_ONLY = new Set(['bhe_base', 'bhe_demo']);
+const SETTINGS_LOCAL_ONLY = new Set(['bhe_base', 'bhe_demo', 'bhe_heat_sub']);
 function isAppSettingKey(k) {
   if (typeof k !== 'string') return false;
   if (SETTINGS_LOCAL_ONLY.has(k)) return false;
@@ -7323,6 +7323,33 @@ async function doPair() {
   btn.disabled = false;
 }
 
+/* Wärme-Tab in sinnvolle Cluster aufgeteilt (Unter-Tabs). Karten werden per
+ * data-hs einem Cluster zugeordnet; CSS blendet die nicht-aktiven aus. Alle
+ * Renders laufen beim Öffnen des Tabs weiter – die Unter-Tabs sind nur Ansicht. */
+const HEAT_SUBS = ['heizung', 'abgleich', 'effizienz', 'einstellung'];
+const HEAT_SUB_MAP = {
+  'help-card': 'abgleich',
+  'hp-card': 'heizung', 'hd-card': 'heizung', 'hts-card': 'heizung', 'rts-card': 'heizung', 'win-card': 'heizung',
+  'obs-card': 'abgleich', 'am-card': 'abgleich', 'tm-card': 'abgleich', 'hl-card': 'abgleich',
+  'flow-card': 'abgleich', 'opt-card': 'abgleich', 'ha-card': 'abgleich', 'layout-card': 'abgleich',
+  'hc-card': 'einstellung', 'hpctl-card': 'einstellung',
+  // everything else in the Wärme view (COP/stats/theory charts) → Effizienz
+};
+function assignHeatSubs() {
+  const sec = document.getElementById('v-heatpump'); if (!sec) return;
+  [...sec.children].forEach(el => {
+    if (!el.classList || !el.classList.contains('card')) return;
+    el.dataset.hs = HEAT_SUB_MAP[el.id] || 'effizienz';
+  });
+}
+function setHeatSub(sub) {
+  if (HEAT_SUBS.indexOf(sub) < 0) sub = 'heizung';
+  const sec = document.getElementById('v-heatpump'); if (!sec) return;
+  HEAT_SUBS.forEach(s => sec.classList.toggle('hsa-' + s, s === sub));
+  document.querySelectorAll('#heat-subnav button').forEach(b => b.classList.toggle('on', b.dataset.hs === sub));
+  try { localStorage.setItem('bhe_heat_sub', sub); } catch (e) {}
+  try { window.scrollTo({ top: 0, behavior: 'instant' in window ? 'instant' : 'auto' }); } catch (e) {}
+}
 function switchView(v) {
   document.querySelectorAll('.view').forEach(s => s.classList.toggle('on', s.id === 'v-' + v));
   document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
@@ -7359,6 +7386,10 @@ function init() {
   window.addEventListener('orientationchange', () => setTimeout(setHdrH, 200));
 
   document.querySelectorAll('#nav button').forEach(b => b.addEventListener('click', () => switchView(b.dataset.v)));
+  // Wärme sub-tabs: assign cards to clusters, wire the bar, restore last choice
+  assignHeatSubs();
+  document.querySelectorAll('#heat-subnav button').forEach(b => b.addEventListener('click', () => setHeatSub(b.dataset.hs)));
+  setHeatSub((() => { try { return localStorage.getItem('bhe_heat_sub') || 'heizung'; } catch (e) { return 'heizung'; } })());
   document.addEventListener('click', e => {
     const i = e.target.closest('.info');
     if (i) { e.stopPropagation(); showInfo(i.dataset.info); return; }

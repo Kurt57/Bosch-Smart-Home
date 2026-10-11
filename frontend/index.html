@@ -130,6 +130,15 @@
   nav button svg{width:21px; height:21px}
   .view{display:none} .view.on{display:block; animation:fade .25s}
   @keyframes fade{from{opacity:0; transform:translateY(6px)}to{opacity:1}}
+  /* sub-tab bar inside a view (e.g. Wärme split into clusters) */
+  .subnav{display:flex; gap:6px; overflow-x:auto; padding:2px 0 12px; -webkit-overflow-scrolling:touch; scrollbar-width:none}
+  .subnav::-webkit-scrollbar{display:none}
+  .subnav button{flex:0 0 auto; padding:7px 13px; border-radius:999px; border:1px solid var(--line); background:var(--card2); color:var(--muted); font-size:13px; font-weight:600; white-space:nowrap; cursor:pointer}
+  .subnav button.on{background:var(--accent); border-color:var(--accent); color:#06142e}
+  #v-heatpump.hsa-heizung > .card:not([data-hs="heizung"]),
+  #v-heatpump.hsa-abgleich > .card:not([data-hs="abgleich"]),
+  #v-heatpump.hsa-effizienz > .card:not([data-hs="effizienz"]),
+  #v-heatpump.hsa-einstellung > .card:not([data-hs="einstellung"]){display:none !important}
   .info{display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px;
     border-radius:50%; border:1px solid var(--line); background:var(--card2); color:var(--muted);
     font-size:10px; font-style:italic; font-weight:700; cursor:pointer; vertical-align:middle;
@@ -349,6 +358,12 @@
 
   <!-- WÄRMEPUMPE ---------------------------------------------------------->
   <section class="view" id="v-heatpump">
+    <div class="subnav" id="heat-subnav">
+      <button data-hs="heizung" class="on">🔥 Heizung</button>
+      <button data-hs="abgleich">⚖️ Abgleich</button>
+      <button data-hs="effizienz">📊 Effizienz</button>
+      <button data-hs="einstellung">⚙️ Einstellung</button>
+    </div>
     <div class="card" id="help-card">
       <details id="help-waerme">
         <summary style="cursor:pointer;font-weight:700;font-size:15px">🧭 So nutzt du die Heiz-Analyse <span style="color:var(--muted);font-weight:400;font-size:12px">(antippen zum Ein-/Ausklappen)</span></summary>
