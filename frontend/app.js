@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v135';   // short tag shown always-on in the header
-const APP_VERSION = 'v135 · 2026-10-11 · Räume & Heizbetrieb + Verlauf-Charts: Antippen zeigt Werte (Smartphone-tauglich) mit Markierungslinie; mehr Hilfslinien und dichtere Zeit-Beschriftung auf der x-Achse'
+const APP_BUILD = 'v136';   // short tag shown always-on in the header
+const APP_VERSION = 'v136 · 2026-10-11 · Verteiler & Heizkreise: aktuellen Tacosetter-Ist-Wert je Raum eintragen → direkter Vergleich zur Empfehlung (Abweichung + oranger Strich im Balken), geräteübergreifend gespeichert'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -3145,6 +3145,19 @@ function flowLoopsOf(room) {
   const l = (typeof layoutModel === 'function') ? layoutModel() : { rooms: {} };
   return Math.max(1, Math.round(parseFloat(((l.rooms || {})[room] || {}).loops) || 1));
 }
+// Current (actual) tacosetter reading per room [l/min per circuit], entered by
+// the user. Stored device-independently in the bridge (bhe_ prefix → synced).
+function tacoKey(room) { return 'bhe_taco_' + room; }
+function tacoGet(room) { try { const v = parseFloat(localStorage.getItem(tacoKey(room))); return isFinite(v) ? v : null; } catch (e) { return null; } }
+// Compare actual vs recommended per-circuit flow → {txt, col} for display.
+function tacoDelta(ist, soll) {
+  if (ist == null) return { txt: '', col: 'var(--muted)' };
+  const diff = ist - soll, pct = soll > 0 ? diff / soll * 100 : 0;
+  const col = Math.abs(pct) <= 15 ? '#4be0b0' : Math.abs(pct) <= 40 ? '#ffb64d' : '#ff6b8a';
+  const word = Math.abs(pct) <= 15 ? 'passt' : (diff > 0 ? 'zu hoch' : 'zu niedrig');
+  const sign = diff >= 0 ? '+' : '';
+  return { txt: `${sign}${fmt(diff, 1)} l/min · ${word}`, col };
+}
 async function renderFlow(force) {
   const card = $('flow-card'); if (!card) return;
   if (_flowData && !force) { paintFlow(_flowData); return; }
@@ -3195,7 +3208,7 @@ function paintFlow(r) {
       // the Tacosetter value is PER LOOP: a room's flow splits over its loops
       const perLoop = x => (x.flow_lmin || 0) / flowLoopsOf(x.room);
       const fmax = Math.max.apply(null, ok.map(x => (x.flow_hi || x.flow_lmin || 0) / flowLoopsOf(x.room))) || 1;
-      let h = '';
+      let h = '', gi = 0;
       Object.keys(groups).sort().forEach(mf => {
         const items = groups[mf];
         const sub = items.filter(x => x.flow_lmin != null).reduce((s, x) => s + x.flow_lmin, 0);
@@ -3213,6 +3226,11 @@ function paintFlow(r) {
           const pl = Math.round(perLoop(x) * 100) / 100;
           const plLo = Math.round(x.flow_lo / loops * 100) / 100, plHi = Math.round(x.flow_hi / loops * 100) / 100;
           const w = (v) => Math.max(0, Math.min(100, (v / fmax) * 100));
+          const idx = gi++;
+          const ist = tacoGet(x.room);
+          const d = tacoDelta(ist, pl);
+          const istMark = ist != null
+            ? `<div style="position:absolute;left:${w(ist)}%;top:-2px;width:3px;height:16px;background:#ffb64d;border-radius:2px"></div>` : '';
           h += `<div style="margin-bottom:10px">` +
             `<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:3px">` +
               `<b>${esc(x.room)}${loops > 1 ? ` <span style="color:var(--muted);font-weight:400;font-size:12px">${loops} Kreise</span>` : ''}</b>` +
@@ -3220,6 +3238,14 @@ function paintFlow(r) {
             `<div style="position:relative;background:var(--line);border-radius:6px;height:12px">` +
               `<div style="position:absolute;left:${w(plLo)}%;width:${Math.max(1, w(plHi) - w(plLo))}%;top:0;height:100%;background:#3ba9ff;opacity:.3;border-radius:6px"></div>` +
               `<div style="position:absolute;left:${w(pl)}%;top:-2px;width:3px;height:16px;background:#3ba9ff;border-radius:2px"></div>` +
+              `<div id="taco-m-${idx}">${istMark}</div>` +
+            `</div>` +
+            // actual (Ist) tacosetter input + comparison to the recommendation
+            `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:5px;font-size:12px">` +
+              `<label style="color:var(--muted)">Ist (je Schlauch):</label>` +
+              `<input class="taco-in" data-room="${esc(x.room)}" data-idx="${idx}" data-soll="${pl}" data-fmax="${fmax.toFixed(3)}" type="text" inputmode="decimal" placeholder="z. B. ${pl}" value="${ist != null ? fmt(ist, 1) : ''}" ` +
+                `style="width:76px;padding:4px 6px;border-radius:8px;border:1px solid var(--line);background:var(--card2);color:var(--ink);font-size:13px"> l/min` +
+              `<span id="taco-d-${idx}" style="color:${d.col};font-weight:600">${d.txt}</span>` +
             `</div>` +
             `<div style="font-size:11px;color:var(--muted);margin-top:3px">` +
               (loops > 1 ? `Raum gesamt ${x.flow_lmin} l/min · ` : '') +
@@ -3227,14 +3253,18 @@ function paintFlow(r) {
             `</div>`;
         });
       });
+      // legend for the two bar markers
+      h += `<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:11px;color:var(--muted);margin-top:4px">` +
+        `<span><span style="display:inline-block;width:3px;height:12px;background:#3ba9ff;vertical-align:middle;margin-right:4px"></span>Empfehlung</span>` +
+        `<span><span style="display:inline-block;width:3px;height:12px;background:#ffb64d;vertical-align:middle;margin-right:4px"></span>dein Ist-Wert</span></div>`;
       body.innerHTML = h;
     }
   }
 
   if (note) note.innerHTML = (r.demo ? '<b>Demo-Daten</b>. ' : '') +
-    'Der <b>blaue Wert ist pro Schlauch/Kreis</b> – genau das stellst du am jeweiligen Durchflussmesser (Tacosetter) ein. Hat ein Raum ' +
-    'mehrere Schläuche, ist seine Gesamtmenge bereits gleichmäßig aufgeteilt (Kreise in der Verteiler-Karte eintragen). Startwerte, ' +
-    'dann über die <b>Schrittweise Optimierung</b> feinjustieren – kein Norm-Nachweis.';
+    'Der <b style="color:#3ba9ff">blaue Wert/Strich ist die Empfehlung pro Schlauch/Kreis</b> – genau das stellst du am jeweiligen Durchflussmesser (Tacosetter) ein. ' +
+    'Trage deinen <b style="color:#ffb64d">aktuellen Ist-Wert</b> ein, dann siehst du direkt die Abweichung (grün = passt, gelb/rot = zu hoch/niedrig) und den orangen Strich im Balken. ' +
+    'Hat ein Raum mehrere Schläuche, ist die Gesamtmenge bereits gleichmäßig aufgeteilt. Startwerte, dann über die <b>Schrittweise Optimierung</b> feinjustieren – kein Norm-Nachweis.';
 }
 
 /* ---- Schrittweise Optimierung (Regelkreis): log steps, measure effect ----- */
@@ -7498,6 +7528,25 @@ function init() {
   const hld = $('hl-design'); if (hld) hld.addEventListener('change', () => { renderHeatload(true); _flowData = null; renderFlow(true); });
   const flr = $('flow-refresh'); if (flr) flr.addEventListener('click', () => renderFlow(true));
   const fls = $('flow-spread'); if (fls) fls.addEventListener('change', () => renderFlow(true));
+  // Tacosetter Ist-Werte: live comparison to the recommendation, saved per room
+  const fb = $('flow-body');
+  if (fb) {
+    const updTaco = (el) => {
+      const room = el.dataset.room, idx = el.dataset.idx;
+      const soll = parseFloat(el.dataset.soll) || 0, fmax = parseFloat(el.dataset.fmax) || 1;
+      const raw = (el.value || '').trim().replace(',', '.');
+      const ist = raw === '' ? null : parseFloat(raw);
+      const valid = ist != null && isFinite(ist) && ist >= 0;
+      try { if (!valid) localStorage.removeItem(tacoKey(room)); else localStorage.setItem(tacoKey(room), String(ist)); } catch (e) {}
+      const d = tacoDelta(valid ? ist : null, soll);
+      const ds = document.getElementById('taco-d-' + idx); if (ds) { ds.textContent = d.txt; ds.style.color = d.col; }
+      const mk = document.getElementById('taco-m-' + idx);
+      if (mk) mk.innerHTML = valid
+        ? `<div style="position:absolute;left:${Math.max(0, Math.min(100, ist / fmax * 100))}%;top:-2px;width:3px;height:16px;background:#ffb64d;border-radius:2px"></div>` : '';
+    };
+    fb.addEventListener('input', e => { const el = e.target.closest && e.target.closest('.taco-in'); if (el) updTaco(el); });
+    fb.addEventListener('change', e => { const el = e.target.closest && e.target.closest('.taco-in'); if (el) { updTaco(el); if (typeof _flushSettingsNow === 'function') _flushSettingsNow(); } });
+  }
   const optLog = $('opt-log');
   if (optLog) optLog.addEventListener('click', () => {
     const room = ($('opt-room') || {}).value; if (!room) return;
