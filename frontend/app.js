@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v137';   // short tag shown always-on in the header
-const APP_VERSION = 'v137 · 2026-10-11 · Wärme-Tab in Unter-Tabs aufgeteilt: 🔥 Heizung · ⚖️ Abgleich · 📊 Effizienz · ⚙️ Einstellung – übersichtlicher statt einer langen Liste'
+const APP_BUILD = 'v138';   // short tag shown always-on in the header
+const APP_VERSION = 'v138 · 2026-10-11 · Durchfluss: unrealistisch niedrige Empfehlungen (Raum kühlt kaum aus → τ zu dünn) werden mit ⚠︎ markiert und nicht mehr als echter Sollwert dargestellt'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -3227,6 +3227,13 @@ function paintFlow(r) {
           const plLo = Math.round(x.flow_lo / loops * 100) / 100, plHi = Math.round(x.flow_hi / loops * 100) / 100;
           const w = (v) => Math.max(0, Math.min(100, (v / fmax) * 100));
           const idx = gi++;
+          // Two separate data-quality flags, each shown with ⚠︎:
+          //  • veryLow: a room that barely cools → too-large τ → near-zero heat
+          //    load → near-zero flow (0.04). A thin-data artefact, not a set-point.
+          //  • implausible: spec. load (W/m²) outside a sane range → area/τ off.
+          const veryLow = pl < 0.3;
+          const implausible = x.plausible === false;
+          const flagged = veryLow || implausible;
           const ist = tacoGet(x.room);
           const d = tacoDelta(ist, pl);
           const istMark = ist != null
@@ -3234,7 +3241,7 @@ function paintFlow(r) {
           h += `<div style="margin-bottom:10px">` +
             `<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:3px">` +
               `<b>${esc(x.room)}${loops > 1 ? ` <span style="color:var(--muted);font-weight:400;font-size:12px">${loops} Kreise</span>` : ''}</b>` +
-              `<span><b style="color:#3ba9ff">${pl} l/min</b>${loops > 1 ? ' <span style="color:var(--muted);font-size:11px">je Schlauch</span>' : ''} <span style="color:var(--muted)">(${plLo}–${plHi})</span></span></div>` +
+              `<span><b style="color:${flagged ? '#ffb64d' : '#3ba9ff'}">${pl} l/min</b>${flagged ? ' ⚠︎' : ''}${loops > 1 ? ' <span style="color:var(--muted);font-size:11px">je Schlauch</span>' : ''} <span style="color:var(--muted)">(${plLo}–${plHi})</span></span></div>` +
             `<div style="position:relative;background:var(--line);border-radius:6px;height:12px">` +
               `<div style="position:absolute;left:${w(plLo)}%;width:${Math.max(1, w(plHi) - w(plLo))}%;top:0;height:100%;background:#3ba9ff;opacity:.3;border-radius:6px"></div>` +
               `<div style="position:absolute;left:${w(pl)}%;top:-2px;width:3px;height:16px;background:#3ba9ff;border-radius:2px"></div>` +
@@ -3250,6 +3257,12 @@ function paintFlow(r) {
             `<div style="font-size:11px;color:var(--muted);margin-top:3px">` +
               (loops > 1 ? `Raum gesamt ${x.flow_lmin} l/min · ` : '') +
               `Heizlast ${x.q_design} W · ${x.area} m² · Konfidenz ${esc(x.confidence)}</div>` +
+            (veryLow ? `<div style="font-size:11px;color:#ffb64d;margin-top:4px;line-height:1.4">⚠︎ <b>Sehr niedrig – noch nicht als Sollwert übernehmen.</b> ` +
+              `Dieser Raum kühlt kaum aus, daher ist die Auskühl-Messung (τ) noch zu dünn und die Heizlast wird zu niedrig geschätzt. ` +
+              `Lass den Kreis vorerst bei <b>mindestens ~0,5 l/min</b> und sammle mehr Auskühlphasen (nachts, Fenster zu).</div>`
+              : implausible ? `<div style="font-size:11px;color:#ffb64d;margin-top:4px;line-height:1.4">⚠︎ <b>Wert noch unsicher.</b> ` +
+                `Spezifische Last ${x.spec != null ? '≈ <b>' + fmt(x.spec, 0) + ' W/m²</b> ' : ''}außerhalb des üblichen Bereichs (10–120) – ` +
+                `meist stimmt die <b>Fläche</b> (Verteiler-Karte) oder das <b>τ</b> noch nicht. Erst prüfen, dann als Startwert nehmen.</div>` : '') +
             `</div>`;
         });
       });
@@ -3264,7 +3277,8 @@ function paintFlow(r) {
   if (note) note.innerHTML = (r.demo ? '<b>Demo-Daten</b>. ' : '') +
     'Der <b style="color:#3ba9ff">blaue Wert/Strich ist die Empfehlung pro Schlauch/Kreis</b> – genau das stellst du am jeweiligen Durchflussmesser (Tacosetter) ein. ' +
     'Trage deinen <b style="color:#ffb64d">aktuellen Ist-Wert</b> ein, dann siehst du direkt die Abweichung (grün = passt, gelb/rot = zu hoch/niedrig) und den orangen Strich im Balken. ' +
-    'Hat ein Raum mehrere Schläuche, ist die Gesamtmenge bereits gleichmäßig aufgeteilt. Startwerte, dann über die <b>Schrittweise Optimierung</b> feinjustieren – kein Norm-Nachweis.';
+    'Hat ein Raum mehrere Schläuche, ist die Gesamtmenge bereits gleichmäßig aufgeteilt. Startwerte, dann über die <b>Schrittweise Optimierung</b> feinjustieren – kein Norm-Nachweis. ' +
+    '<b style="color:#ffb64d">⚠︎-Werte</b> sind noch unsicher: entweder unrealistisch niedrig (Raum kühlt kaum aus → τ zu dünn → Kreis offen lassen ~0,5 l/min) oder die spezifische Last (W/m²) ist unplausibel (Fläche/τ prüfen) – nicht 1:1 übernehmen.';
 }
 
 /* ---- Schrittweise Optimierung (Regelkreis): log steps, measure effect ----- */
