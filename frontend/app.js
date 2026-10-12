@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v148';   // short tag shown always-on in the header
-const APP_VERSION = 'v148 · 2026-10-12 · neue Karte „Lohnt sich Börsenstrom für dich?" – vergleicht Festtarif vs. Börsen-Preisform (Stunde×Monat) mit deinem echten Verbrauch + PV/Speicher aus dem PV-Tab, inkl. Speicher-statt-Börse-Hinweis, Lastverschiebe-Potenzial und Handy-Tipps'
+const APP_BUILD = 'v149';   // short tag shown always-on in the header
+const APP_VERSION = 'v149 · 2026-10-12 · Fenster-/Tür-Kontakte & Twinguard-Luftqualität je Raum (neue Tabellenspalten + Lüften-Empfehlung) · offene Fenster werden aus der Auskühl-/τ-Messung ausgeklammert · Aufheizphasen jetzt auch für Fußbodenheizung (ohne Ventil-%) erkannt · „sehr träge" klarer erklärt'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -618,8 +618,8 @@ function rateMetric(key, v) {
   };
   // band metrics: list of [lo, hi, level, word]; outside all → warn
   const BAND = {
-    tau: [[[8, 90, 'good', 'normal'], [0, 8, 'ok', 'reagiert schnell'], [90, 150, 'ok', 'sehr träge']], 'normal 10–90 h',
-          'Thermische Trägheit: wie lange der Raum Wärme hält. Sehr hoch (>150 h) heißt meist: kühlt kaum aus → Messung noch unsicher.'],
+    tau: [[[8, 90, 'good', 'normal'], [0, 8, 'ok', 'reagiert schnell'], [90, 150, 'ok', 'sehr träge – gut gedämmt']], 'normal 10–90 h',
+          'Thermische Trägheit: wie lange der Raum Wärme hält. Hoch/sehr träge ist eigentlich <b>gut</b> (gut gedämmt, hält lange warm). Gelb steht hier NICHT für ein Problem, sondern dafür, dass sich τ bei so langsamem Auskühlen schwerer exakt messen lässt. Über ~150 h kühlt der Raum kaum aus → Messung noch unsicher.'],
     spec: [[[15, 70, 'good', 'normal'], [70, 110, 'ok', 'eher hoch'], [10, 15, 'ok', 'eher niedrig']], 'normal 15–70 W/m²',
            'Heizlast je m². Typisch 15–70 (gut saniert weniger). Weit außerhalb → Fläche oder Messung prüfen.'],
     balance: [[[10, 16, 'good', 'normal'], [8, 18, 'ok', 'ok']], 'normal 10–16 °C',
@@ -648,6 +648,43 @@ function statusLegendHtml() {
   return `<div class="note" style="margin-top:4px">🟢 <b style="color:${RATE_COL.good}">gut</b> · ` +
     `🟡 <b style="color:${RATE_COL.ok}">ok / beobachten</b> · 🔴 <b style="color:${RATE_COL.warn}">prüfen</b> · ` +
     `⚪ noch zu wenig Daten. <span style="color:var(--muted)">Tipp auf einen farbigen Wert zeigt den Normalbereich, auf einen <u>unterstrichenen</u> Begriff die Erklärung.</span></div>`;
+}
+// Twinguard air-quality rating (combinedRating GOOD/MEDIUM/BAD) + VOC purity.
+function airRate(air, purity) {
+  const a = String(air || '').toUpperCase();
+  if (a === 'GOOD') return { lvl: 'good', word: 'gut' };
+  if (a === 'MEDIUM') return { lvl: 'ok', word: 'mittel' };
+  if (a === 'BAD') return { lvl: 'warn', word: 'schlecht' };
+  // no categorical rating – fall back to the VOC value if present
+  if (purity != null) return purity < 1000 ? { lvl: 'good', word: 'gut' }
+    : purity < 1400 ? { lvl: 'ok', word: 'mittel' } : { lvl: 'warn', word: 'schlecht' };
+  return { lvl: 'na', word: '—' };
+}
+// Lüften: combine humidity + air quality + window state into a short verdict –
+// both "→ lüften" (recommend) and "✓ reicht / schließen" (enough) logic.
+function ventAdvice(rm) {
+  const hum = (typeof rm.humidity === 'number') ? rm.humidity : null;
+  const ar = airRate(rm.air, rm.air_purity);
+  const open = (rm.windows_open || 0) > 0;
+  const heating = rm.heating === true;
+  const humBad = hum != null && hum >= 65;
+  const humHigh = hum != null && hum >= 60;
+  const airBad = ar.lvl === 'warn';
+  const airMid = ar.lvl === 'ok';
+  if (open) {
+    if (heating)
+      return { lvl: 'warn', txt: '⚠️ Fenster offen & Heizung an – kurz stoßlüften, dann schließen' };
+    if (!humBad && !airBad && !humHigh && !airMid)
+      return { lvl: 'good', txt: '✓ reicht – Fenster wieder schließen' };
+    return { lvl: 'ok', txt: '🪟 offen – noch kurz weiter lüften' };
+  }
+  // window closed
+  if (humBad && airBad) return { lvl: 'warn', txt: '→ lüften: zu feucht & Luft schlecht' };
+  if (humBad) return { lvl: 'warn', txt: '→ lüften: Luftfeuchte hoch (Schimmelrisiko)' };
+  if (airBad) return { lvl: 'warn', txt: '→ lüften: Luftqualität schlecht' };
+  if (humHigh || airMid) return { lvl: 'ok', txt: '→ bald lüften' };
+  if (hum == null && ar.lvl === 'na') return { lvl: 'na', txt: '' };
+  return { lvl: 'good', txt: '✓ ok' };
 }
 function showRate(key, v, label) {
   const t = $('toast'); if (!t) return;
@@ -2582,6 +2619,26 @@ function paintHeatingDiag(r) {
       const rt = rateMetric('humidity', rm.humidity);
       return `<span class="ratebadge" style="color:${RATE_COL[rt.lvl]};white-space:nowrap;cursor:pointer" data-rk="humidity" data-rv="${rm.humidity}" data-rl="Luftfeuchte">${fmt(rm.humidity, 0)} %</span>`;
     };
+    // window/door state (auto-read from Bosch – each contact carries its room)
+    const winCell = rm => {
+      const ws = rm.windows || [];
+      if (!ws.length) return '<span style="color:var(--muted)">–</span>';
+      const open = ws.filter(w => w.open);
+      if (!open.length) return `<span style="color:var(--muted);white-space:nowrap" title="${ws.map(w => esc(w.name)).join(', ')}">✓ zu</span>`;
+      const door = open.some(w => w.door);
+      const icon = door ? '🚪' : '🪟';
+      const lbl = open.length > 1 ? `${open.length} offen` : (door ? 'Tür offen' : 'offen');
+      return `<span style="color:#ffb64d;white-space:nowrap" title="${open.map(w => esc(w.name)).join(', ')}">${icon} ${lbl}</span>`;
+    };
+    // Twinguard air quality (tap for the VOC value)
+    const airCell = rm => {
+      if (!rm.air && rm.air_purity == null) return '<span style="color:var(--muted)">–</span>';
+      const ar = airRate(rm.air, rm.air_purity);
+      const t = rm.air_purity != null ? `VOC ≈ ${rm.air_purity} ppm` : 'Luftqualität (Twinguard)';
+      return `<span style="color:${RATE_COL[ar.lvl]};white-space:nowrap;cursor:pointer" title="${t}">● ${ar.word}</span>`;
+    };
+    const anyWin = rooms.some(rm => (rm.windows || []).length);
+    const anyAir = rooms.some(rm => rm.air || rm.air_purity != null);
     const rowsHtml = rooms.map(rm => {
       const cold = rm.setpoint != null && rm.temp != null && rm.temp <= rm.setpoint - 1.5;
       const flag = hit.has(rm.room) ? 'border-left:3px solid #ffb64d' : 'border-left:3px solid transparent';
@@ -2591,21 +2648,42 @@ function paintHeatingDiag(r) {
         `<td style="padding:6px 8px;text-align:right;color:${istCol}">${rm.temp != null ? fmt(rm.temp, 1) + '°' : '–'}</td>` +
         `<td style="padding:6px 8px;text-align:right">${ventilCell(rm)}</td>` +
         `<td style="padding:6px 8px;text-align:right">${humCell(rm)}</td>` +
+        (anyWin ? `<td style="padding:6px 8px;text-align:right">${winCell(rm)}</td>` : '') +
+        (anyAir ? `<td style="padding:6px 8px;text-align:right">${airCell(rm)}</td>` : '') +
         `<td style="padding:6px 8px;text-align:right;color:var(--muted)">${modeOf(rm)}</td></tr>`;
     }).join('');
-    const anyHum = rooms.some(rm => rm.humidity != null);
-    $('hd-rooms').innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px">` +
+    const th = t => `<th style="text-align:right;padding:4px 8px;font-weight:600">${t}</th>`;
+    $('hd-rooms').innerHTML = `<div style="overflow-x:auto;-webkit-overflow-scrolling:touch"><table style="width:100%;border-collapse:collapse;font-size:13px">` +
       `<thead><tr style="color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.3px">` +
-      `<th style="text-align:left;padding:4px 8px;font-weight:600">Raum</th><th style="text-align:right;padding:4px 8px;font-weight:600">Soll</th>` +
-      `<th style="text-align:right;padding:4px 8px;font-weight:600">Ist</th><th style="text-align:right;padding:4px 8px;font-weight:600">Ventil/Heizt</th>` +
-      `<th style="text-align:right;padding:4px 8px;font-weight:600">Feuchte</th>` +
-      `<th style="text-align:right;padding:4px 8px;font-weight:600">Modus</th></tr></thead><tbody>${rowsHtml}</tbody></table>`;
+      `<th style="text-align:left;padding:4px 8px;font-weight:600">Raum</th>` + th('Soll') + th('Ist') + th('Ventil/Heizt') + th('Feuchte') +
+      (anyWin ? th('Fenster') : '') + (anyAir ? th('Luft') : '') + th('Modus') +
+      `</tr></thead><tbody>${rowsHtml}</tbody></table></div>`;
+    // ---- Lüften: recommend + "reicht/schließen" per room --------------------
+    const ventEl = $('hd-vent');
+    if (ventEl) {
+      const items = rooms.map(rm => ({ rm, a: ventAdvice(rm) }))
+        .filter(x => x.a.lvl !== 'na' && x.a.lvl !== 'good');     // only rooms needing attention
+      if (!anyWin && !anyAir && !rooms.some(rm => rm.humidity != null)) {
+        ventEl.innerHTML = '';
+      } else if (!items.length) {
+        ventEl.innerHTML = `<div style="font-weight:700;margin:12px 0 4px">🌬️ Lüften</div>` +
+          `<div class="note">Überall ok – aktuell kein Lüften nötig (Feuchte & Luftqualität im grünen Bereich, Fenster passend).</div>`;
+      } else {
+        ventEl.innerHTML = `<div style="font-weight:700;margin:12px 0 4px">🌬️ Lüften</div>` +
+          items.map(x => `<div style="display:flex;justify-content:space-between;gap:10px;font-size:13px;padding:3px 0">` +
+            `<b>${esc(x.rm.room)}</b><span style="color:${RATE_COL[x.a.lvl]};text-align:right">${x.a.txt}</span></div>`).join('') +
+          `<div class="note" style="margin-top:5px">Stoßlüften (5–10 min, Fenster ganz auf) ist wirksamer und sparsamer als Dauerkippen. ` +
+          `Bei aktiver Heizung erst Thermostat/Ventil kurz runter.</div>`;
+      }
+    }
   } else {
     $('hd-rooms').innerHTML = '<div class="note">Keine Raumthermostate gefunden.</div>';
   }
   const note = $('hd-note');
   if (note) note.innerHTML = (r.demo ? '<b>Demo-Daten</b> (Beispielräume). ' : '') +
     'Betriebswerte sind eine Momentaufnahme – am aussagekräftigsten an einem kalten Heiztag. Einstellungen gelten dauerhaft. ' +
+    'Spalten <b>Fenster</b> (Tür-/Fensterkontakte) und <b>Luft</b> (Twinguard) werden automatisch aus Bosch gelesen – ' +
+    'jeder Kontakt/Sensor bringt seinen Raum selbst mit, eine manuelle Zuordnung ist nicht nötig. ' +
     '€-Werte sind grobe Schätzungen (Sparanteil × WP-Jahresverbrauch × Strompreis).';
   if (typeof renderHydronic === 'function') renderHydronic();   // worklist uses the same room data
 }

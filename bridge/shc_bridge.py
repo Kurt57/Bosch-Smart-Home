@@ -718,7 +718,8 @@ class SHCClient:
                 "valves": [], "operationMode": None, "roomControlMode": None,
                 "boost": False, "summerMode": False, "low": False, "offset": None,
                 "childLock": False, "faults": [], "devices": 0, "rcc_device": None,
-                "heating": None, "heating_src": None, "away": False, "humidity": None})
+                "heating": None, "heating_src": None, "away": False, "humidity": None,
+                "windows": [], "windows_open": 0, "air": None, "air_purity": None})
 
         for dev in devices:
             did = dev.get("id")
@@ -789,8 +790,38 @@ class SHCClient:
                 if fs and fs not in rec["faults"]:
                     rec["faults"].append(fs)
 
+        # second pass: window/door contacts + air-quality (Twinguard) per room,
+        # from the same bulk service snapshot (no extra round-trips). Rooms are
+        # matched by roomId to the thermostat records built above – the SHC
+        # already carries each contact's/sensor's room, so no manual assignment.
+        door_kw = ("haustür", "haustuer", "tür", "tuer", "eingang", "door", "entrance")
+        for dev in devices:
+            sids = set(dev.get("deviceServiceIds") or [])
+            rid = dev.get("roomId")
+            rec = by_room.get(rid if rid in by_room else (rooms.get(rid) or rid))
+            st = svc.get(dev.get("id"), {})
+            if "ShutterContact" in sids and rec is not None:
+                val = str((st.get("ShutterContact") or {}).get("value") or "").upper()
+                nm = dev.get("name") or ""
+                is_door = any(k in nm.lower() for k in door_kw)
+                rec["windows"].append({"name": nm, "open": val == "OPEN", "door": is_door})
+            if "AirQualityLevel" in sids and rec is not None:
+                aq = st.get("AirQualityLevel") or {}
+                rating = str(aq.get("combinedRating") or "").upper() or None
+                if rating:
+                    rec["air"] = rating                       # GOOD / MEDIUM / BAD
+                pur = num(aq, "purity")
+                if pur is not None:
+                    rec["air_purity"] = int(round(pur))       # VOC-equivalent (ppm)
+                # the Twinguard also reports humidity/temperature – fill gaps
+                if rec.get("humidity") is None:
+                    h2 = num(aq, "humidity") or num(st.get("HumidityLevel") or {}, "humidity")
+                    if h2 is not None:
+                        rec["humidity"] = round(h2, 1)
+
         out = []
         for rec in by_room.values():
+            rec["windows_open"] = sum(1 for w in rec["windows"] if w.get("open"))
             if rec["valves"]:
                 rec["valve"] = max(rec["valves"])   # the most-open valve drives flow demand
             # "heizt gerade?" – from a reported flag if present, else the valve,
@@ -2346,6 +2377,15 @@ def compute_room_timeseries(store: "Store", days: int = 2) -> dict:
     since = now - days * 86400
     rows = store.room_log_since(since)
     heat_iv = _heat_intervals(store.hp_samples_since(since), now)
+    # per-room window-open intervals – an open window is ventilation, not the
+    # room's natural heat loss, so it must not count as "fast cool-down".
+    win_by_room: dict[str, list] = {}
+    for e in _window_events(store.window_log_since(since), now):
+        for rm in e.get("rooms") or []:
+            win_by_room.setdefault(rm, []).append((e["start"], e["end"]))
+
+    def _in_any(ts, ivs):
+        return any(a <= ts <= b for a, b in ivs)
 
     rooms = {}
     for r in rows:
@@ -2372,7 +2412,12 @@ def compute_room_timeseries(store: "Store", days: int = 2) -> dict:
         # valve closes once warm? (temp near/over setpoint AND valve low)
         valve_closes = any(p.get("valve") is not None and p["valve"] <= 30 and sp is not None
                            and p["temp"] is not None and p["temp"] >= sp - 0.3 for p in pts)
-        # fastest cool-down (K/h) over a ~1 h sliding window
+        # fastest cool-down (K/h) over a ~1 h sliding window, EXCLUDING any
+        # period where a window in this room was open (that's airing out, not
+        # the wall losing heat – otherwise an open bathroom window looks like a
+        # draughty/leaky room).
+        rm_wins = win_by_room.get(rm, [])
+        win_open_now = bool(rm_wins) and _in_any(pts[-1]["ts"], rm_wins)
         cd = 0.0
         for a in range(len(pts)):
             for b in range(a + 1, len(pts)):
@@ -2381,6 +2426,8 @@ def compute_room_timeseries(store: "Store", days: int = 2) -> dict:
                     continue
                 if pts[a]["temp"] is None or pts[b]["temp"] is None:
                     continue
+                if rm_wins and (_in_any(pts[a]["ts"], rm_wins) or _in_any(pts[b]["ts"], rm_wins)):
+                    break          # ventilation window → skip this pair
                 rate = (pts[a]["temp"] - pts[b]["temp"]) / (dt / 3600.0)
                 if rate > cd:
                     cd = rate
@@ -2397,6 +2444,7 @@ def compute_room_timeseries(store: "Store", days: int = 2) -> dict:
             "room": rm, "color": palette[i % len(palette)], "setpoint": sp,
             "reached": reached, "below_always": below_always, "valve_closes": valve_closes,
             "cooldown": round(cd, 1) if cd > 0.05 else None,
+            "window_open": win_open_now,
             "points": [{"ts": p["ts"], "temp": p["temp"], "setpoint": p["setpoint"],
                         "valve": p["valve"]} for p in pts[::step]]})
 
@@ -2410,9 +2458,13 @@ def compute_room_timeseries(store: "Store", days: int = 2) -> dict:
     if cooldowns:
         cooldowns.sort(key=lambda x: -x[1])
         slow = cooldowns[-1]; fast = cooldowns[0]
+        excluded_any = any(win_by_room.get(rm) for rm, _ in cooldowns)
         insights.append(f"<b>Auskühlen:</b> am schnellsten {fast[0]} (~{fast[1]} K/h), "
-                        f"am trägsten {slow[0]} (~{slow[1]} K/h) – schnelles Auskühlen deutet auf "
-                        f"Zugluft/undichte Stellen oder große Fensterfläche.")
+                        f"am trägsten {slow[0]} (~{slow[1]} K/h) – schnelles Auskühlen (bei "
+                        f"geschlossenem Fenster) deutet auf Zugluft/undichte Stellen oder große "
+                        f"Fensterfläche." +
+                        (" Offene-Fenster-Phasen sind dabei ausgeklammert (Lüften ≠ Wärmeverlust der Wand)."
+                         if excluded_any else ""))
     if heat_iv:
         tot = sum(e[1] - e[0] for e in heat_iv) / 3600.0
         insights.append(f"Wärmepumpe heizte im Zeitraum <b>{tot:.1f} h</b> in {len(heat_iv)} Phasen. "
@@ -2514,9 +2566,15 @@ def _temp_runs(pts: list[dict], kind: str) -> list[list]:
         va = a.get("valve")
         dtemp = tb - ta
         if kind == "cool":
-            ok = dtemp <= 0.05 and (va is None or va <= 35)
+            # cooling: valve low/unknown AND no open window in this room (an open
+            # window is ventilation, not the room's natural heat loss → excluded)
+            ok = (dtemp <= 0.05 and (va is None or va <= 35)
+                  and not a.get("_win") and not b.get("_win"))
         else:
-            ok = dtemp >= -0.03 and (va is not None and va >= 45)
+            # warming: valve open, OR – for floor heating without a valve reading –
+            # the heat pump was heating while the room temperature rose.
+            gate = (va >= 45) if va is not None else bool(a.get("_heat") and b.get("_heat"))
+            ok = dtemp >= -0.03 and gate
         if ok:
             cur = [a, b] if cur is None else cur + [b]
         else:
@@ -2546,6 +2604,17 @@ def compute_thermal_model(store: "Store", days: int = 14) -> dict:
     has_outdoor = len(omap) > 0
     hist = store.hp_history_count()
 
+    # per-room window-open intervals (so ventilation is excluded from the
+    # cool-down / τ measurement) – reconstructed from the window change-log.
+    win_events = _window_events(store.window_log_since(since), now)
+    win_by_room: dict[str, list] = {}
+    for e in win_events:
+        for rm in e.get("rooms") or []:
+            win_by_room.setdefault(rm, []).append((e["start"], e["end"]))
+
+    def _in_any(ts, ivs):
+        return any(a <= ts <= b for a, b in ivs)
+
     byroom: dict[str, list] = {}
     for r in rows:
         byroom.setdefault(r.get("room") or "—", []).append(r)
@@ -2566,6 +2635,17 @@ def compute_thermal_model(store: "Store", days: int = 14) -> dict:
     out_rooms = []
     for rm, pts in sorted(byroom.items()):
         pts.sort(key=lambda p: p["ts"])
+        # annotate each sample: was a window open in this room, and was the heat
+        # pump heating? (used to exclude ventilation from τ and to detect heat-up
+        # phases on floor heating, where there is no valve % to key off.)
+        rm_wins = win_by_room.get(rm, [])
+        n_win_excluded = 0
+        for p in pts:
+            wopen = _in_any(p["ts"], rm_wins) if rm_wins else False
+            p["_win"] = wopen
+            p["_heat"] = _in_any(p["ts"], heat_iv) if heat_iv else False
+            if wopen:
+                n_win_excluded += 1
         temps = [p["temp"] for p in pts if p.get("temp") is not None]
         sps = [p["setpoint"] for p in pts if p.get("setpoint") is not None]
         if not temps:
@@ -2693,7 +2773,7 @@ def compute_thermal_model(store: "Store", days: int = 14) -> dict:
             "confidence": conf, "conf_score": round(score, 2),
             "status": status, "missing": missing, "category": category,
             "finding": finding, "recommendation": recommendation,
-            "demand_index": demand_index,
+            "demand_index": demand_index, "win_excluded": n_win_excluded,
         })
 
     # relative priority ranking for the hydraulic balance (estimated)
@@ -4611,14 +4691,23 @@ def _demo_climate() -> list[dict]:
              "boost": False, "summerMode": False, "low": False, "offset": None,
              "childLock": False, "faults": [], "devices": 1,
              "humidity": round(42 + (hash(room) % 20), 1),
+             "windows": [], "windows_open": 0, "air": None, "air_purity": None,
              "heating": temp < setpoint - 0.1, "heating_src": "gemeldet"}
         d.update(kw)
+        d["windows_open"] = sum(1 for w in d.get("windows") or [] if w.get("open"))
         return d
     return [
-        rec("Wohnzimmer", 22.0, 21.7, 95),
-        rec("Küche", 21.0, 21.2, 85),
-        rec("Bad", 24.0, 23.1, 100, offset=0.0),            # setpoint spread driver
-        rec("Schlafzimmer", 18.0, 19.0, 25),                # throttled valve
+        # Wohnzimmer: Haustür-Kontakt (Türkontakt, mittelbar) + Twinguard-Luftqualität
+        rec("Wohnzimmer", 22.0, 21.7, 95, air="MEDIUM", air_purity=1150,
+            windows=[{"name": "Haustür", "open": False, "door": True},
+                     {"name": "Fenster Süd", "open": False, "door": False}]),
+        rec("Küche", 21.0, 21.2, 85, humidity=58.0,
+            windows=[{"name": "Küchenfenster", "open": False, "door": False}]),
+        # Bad: Fenster offen -> schnelles „Auskühlen" ist in Wahrheit Lüften
+        rec("Bad", 24.0, 23.1, 100, offset=0.0, humidity=71.0, air="BAD", air_purity=1850,
+            windows=[{"name": "Badfenster", "open": True, "door": False}]),
+        rec("Schlafzimmer", 18.0, 19.0, 25, air="GOOD", air_purity=780,
+            windows=[{"name": "Schlafzimmerfenster", "open": False, "door": False}]),
         rec("Arbeitszimmer", 20.0, 18.2, 100),              # cold despite open valve
         rec("Gäste-WC", 19.0, 20.5, 20, offset=2.0),        # throttled + offset
         rec("Flur", 19.0, 19.5, 40),                        # throttled
