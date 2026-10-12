@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v140';   // short tag shown always-on in the header
-const APP_VERSION = 'v140 · 2026-10-12 · Ampel-System für Fachzahlen: farbiger Punkt + Klartext (gut/ok/prüfen) neben COP, τ, Auskühlrate, W/m², Konfidenz … – Antippen zeigt Normalbereich und Erklärung'
+const APP_BUILD = 'v141';   // short tag shown always-on in the header
+const APP_VERSION = 'v141 · 2026-10-12 · Heizlast-Zusammenfassung im Flächen-Modus bereinigt: kein "null" bei UA, kein unrealistischer Bilanzpunkt mehr als Kachel; Summe-Hinweis sagt ehrlich "aus Fläche geschätzt"'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -3146,23 +3146,31 @@ function paintHeatload(r) {
     logic = $('hl-logic'), note = $('hl-note');
   if (!r || !r.ok) { if (sum) sum.innerHTML = '<div class="note">Keine Daten.</div>'; return; }
   const ok = (r.rooms || []).filter(x => x.status === 'ok');
+  const areaMode = r.method === 'area';
   if (head) head.innerHTML = r.q_total_design
-    ? `<span style="color:var(--muted)">${r.q_total_design} W @ ${r.design_c}°C</span>` : '';
+    ? `<span style="color:var(--muted)">${r.q_total_design} W @ ${r.design_c}°C${areaMode ? ' · geschätzt' : ''}</span>` : '';
 
   if (sum) {
     if (!r.q_total_design) {
-      sum.innerHTML = '<div class="note">Noch keine <b>Gebäude-Wärmekennlinie</b> – importiere im Setup den HomeCom-CSV '
-        + 'oder lass die Wärmepumpe länger mitlaufen (Heizleistung über Außentemperatur).</div>';
+      sum.innerHTML = '<div class="note">Noch keine Daten – trage je Raum eine <b>Fläche</b> in der Verteiler-Karte ein '
+        + '(dann Schätzung aus der Fläche; eine gemessene Kennlinie macht es später genauer).</div>';
     } else {
-      sum.innerHTML =
-        `<div class="grid2" style="gap:8px">` +
-          `<div class="kpi sm"><div class="v">${r.q_total_design} W</div><div class="l">Gesamt @ ${r.design_c}°C</div></div>` +
-          `<div class="kpi sm"><div class="v">${r.ua_total}</div><div class="l">Gebäude-UA (W/K)</div></div>` +
-          `<div class="kpi sm"><div class="v">${r.balance_c != null ? r.balance_c + '°C' : '–'}</div><div class="l">Bilanzpunkt</div></div>` +
-          `<div class="kpi sm"><div class="v">${Math.round((r.coverage || 0) * 100)}%</div><div class="l">Fläche erfasst</div></div>` +
-        `</div>` +
+      const kpi = (v, l) => `<div class="kpi sm"><div class="v">${v}</div><div class="l">${l}</div></div>`;
+      // In area mode the measured UA/Bilanzpunkt are NOT trustworthy (that was the
+      // whole reason for the fallback) – don't show them as if they were.
+      const tiles = areaMode
+        ? kpi(`${r.q_total_design} W`, `Gesamt @ ${r.design_c}°C`) +
+          kpi(`${r.spec_wm2 != null ? fmt(r.spec_wm2, 0) : 40} W/m²`, 'angenommene Last') +
+          kpi(`${Math.round((r.coverage || 0) * 100)}%`, 'Fläche erfasst') +
+          kpi('📐 Fläche', 'Methode')
+        : kpi(`${r.q_total_design} W`, `Gesamt @ ${r.design_c}°C`) +
+          kpi(`${r.ua_total != null ? r.ua_total : '–'}`, 'Gebäude-UA (W/K)') +
+          kpi(`${r.balance_c != null ? r.balance_c + '°C' : '–'}`, 'Bilanzpunkt') +
+          kpi(`${Math.round((r.coverage || 0) * 100)}%`, 'Fläche erfasst');
+      sum.innerHTML = `<div class="grid2" style="gap:8px">${tiles}</div>` +
         (r.signature ? `<div class="note" style="margin-top:6px">Kennlinie: ${r.signature.n} Punkte (${r.signature.src === 'csv' ? 'CSV' : 'Live'})`
-          + (r.signature.rel != null ? `, Streuung ±${Math.round(r.signature.rel * 100)}%` : '') + '.</div>' : '');
+          + (r.signature.rel != null ? `, Streuung ±${Math.round(r.signature.rel * 100)}%` : '')
+          + (areaMode ? ' – <b style="color:#ffb64d">noch nicht belastbar</b>, daher Flächen-Schätzung' : '') + '.</div>' : '');
     }
   }
 
@@ -3198,7 +3206,7 @@ function paintHeatload(r) {
             `</div>`;
         }).join('') +
         (r.sum_q_design ? `<div class="note" style="margin-top:4px">Summe der Raum-Lasten: <b>${r.sum_q_design} W</b> `
-          + `(auf die gemessene Gesamtlast kalibriert).</div>` : '');
+          + (r.method === 'area' ? '(aus Fläche × spez. Last geschätzt).' : '(auf die gemessene Gesamtlast kalibriert).') + `</div>` : '');
     }
   }
 
