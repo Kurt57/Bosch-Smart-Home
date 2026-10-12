@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v142';   // short tag shown always-on in the header
-const APP_VERSION = 'v142 · 2026-10-12 · Fachbegriffe erklärt: Antippen eines unterstrichenen Begriffs (Bilanzpunkt, Gebäude-UA, spez. Last, Spreizung ΔT, Fläche erfasst …) zeigt eine Klartext-Erklärung'
+const APP_BUILD = 'v143';   // short tag shown always-on in the header
+const APP_VERSION = 'v143 · 2026-10-12 · Glossar erweitert (COP/JAZ, Vorlauf, Heizkurve, Spreizung, Taktung …) + Ampel bei COP/JAZ; iOS-Textauswahl auf Charts unterdrückt'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -661,6 +661,13 @@ const GLOSS = {
   spread_k: ['Spreizung ΔT', 'Temperatur-Unterschied zwischen Vor- und Rücklauf. Je Kreis der Auslege-Zielwert (Fußboden typ. 4–7 K); bestimmt den nötigen Durchfluss.'],
   tau: ['Trägheit τ (Tau)', 'Zeitkonstante: wie lange der Raum Wärme speichert. Hoch = träge (hält lange warm). Sehr hoch (>150 h) heißt meist: kühlt kaum aus → Messung noch unsicher.'],
   flow_lmin: ['Durchfluss (l/min)', 'Wassermenge pro Minute durch einen Heizkreis – das stellst du am Durchflussmesser (Tacosetter) ein. Mehr Durchfluss = mehr Wärme in den Raum.'],
+  cop: ['COP / Arbeitszahl', 'Wie viel Wärme aus 1 kWh Strom wird. COP 4 = aus 1 kWh Strom 4 kWh Wärme. Höher = günstiger. Gute Luft-Wärmepumpe im Winter 3–4.'],
+  jaz: ['JAZ (Jahresarbeitszahl)', 'Der COP übers ganze Jahr gemittelt – die ehrlichste Effizienz-Zahl der Wärmepumpe. Gut ab ~3,5.'],
+  vorlauf: ['Vorlauftemperatur', 'Temperatur des Heizwassers, das zu den Heizflächen fließt. Niedriger = effizienter (die WP muss weniger hoch heizen). Fußbodenheizung kommt oft mit 28–38 °C aus; jedes +1 K kostet ~2–3 % Strom.'],
+  heizkurve: ['Heizkurve (Heizkennlinie)', 'Regel, wie hoch der Vorlauf bei welcher Außentemperatur sein soll: kälter draußen → wärmerer Vorlauf. So flach/niedrig wie möglich einstellen, solange alle Räume noch warm werden = sparsamste Einstellung.'],
+  heizgradtage: ['Heizgradtage', 'Maß, wie kalt ein Jahr war (Summe der täglichen Differenz Raum↔außen über alle Heiztage). Deutschland ~3500/Jahr. Mehr = höherer Heizbedarf.'],
+  u_wert: ['U-Wert (W/m²K)', 'Wärmeverlust eines Bauteils (Wand, Fenster, Dach) je m² und Grad. Niedrig = gut gedämmt. Alte Wand ~1,4; saniert ~0,2.'],
+  taktung: ['Taktung', 'Wie oft die Wärmepumpe pro Stunde an-/ausschaltet. Wenige lange Läufe = gut (schonend, effizient). Häufiges Takten deutet auf zu viel Leistung / zu wenig abgenommene Wärme.'],
 };
 function showGloss(key) {
   const g = GLOSS[key]; const t = $('toast'); if (!g || !t) return;
@@ -2402,11 +2409,11 @@ function paintHeatingDiag(r) {
     `<div style="font-weight:700;color:${verdictCol};margin-bottom:10px">${esc(r.verdict || '')}${saveBadge}</div>` +
     `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(84px,1fr));gap:8px">` +
     tile('Außen', u(K.outdoor_c, '°C'), '') +
-    tile('Vorlauf', u(K.supply_c, '°C'), flowCol) +
+    tile(glossV('Vorlauf', 'vorlauf'), u(K.supply_c, '°C'), flowCol) +
     tile('Rücklauf', u(K.return_c, '°C'), '') +
-    tile('Spreizung', u(K.spread_k, 'K', 1), spreadCol) +
+    tile(glossV('Spreizung', 'spread_k'), u(K.spread_k, 'K', 1), spreadCol) +
     tile('Modus', modeTxt, '') +
-    tile('Ø Takt', K.cycle_min != null ? fmt(K.cycle_min, 0) + ' min' : '–', '') +
+    tile(glossV('Ø Takt', 'taktung'), K.cycle_min != null ? fmt(K.cycle_min, 0) + ' min' : '–', '') +
     `</div>`;
   // findings (high/warn/info as cards, ok as a compact green line)
   const main = F.filter(f => f.severity !== 'ok');
@@ -2645,7 +2652,7 @@ function paintHeatTimeseries(r) {
     return;
   }
   const s = r.stats || {};
-  if (head) head.innerHTML = s.avg_cop != null ? `<span style="color:#4be0b0">Ø COP ${fmt(s.avg_cop, 2)}</span>` : '';
+  if (head) head.innerHTML = s.avg_cop != null ? `<span style="color:#4be0b0">${glossV('Ø COP', 'cop')} ${fmt(s.avg_cop, 2)}</span> ${rateBadge('cop', s.avg_cop, 'Ø COP')}` : '';
   const tile = (l, v) => `<div style="background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:8px 10px;text-align:center"><div style="font-size:17px;font-weight:700">${v}</div><div style="font-size:11px;color:var(--muted)">${l}</div></div>`;
   if (kpi) kpi.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(78px,1fr));gap:8px">` +
     tile('Ø COP', (s.avg_cop != null ? fmt(s.avg_cop, 2) : '–') + (s.avg_cop != null ? '<br>' + rateBadge('cop', s.avg_cop, 'Ø COP') : '')) +
@@ -4039,7 +4046,7 @@ function renderOverview() {
   if (ov.heatpump_connected) {
     card.hidden = false;
     $('ov-hp-cop').innerHTML = ov.heatpump.seasonal_cop
-      ? 'JAZ ' + fmt(ov.heatpump.seasonal_cop, 2) + ' ' + rateBadge('jaz', ov.heatpump.seasonal_cop, 'JAZ (Jahresarbeitszahl)') : '';
+      ? glossV('JAZ', 'jaz') + ' ' + fmt(ov.heatpump.seasonal_cop, 2) + ' ' + rateBadge('jaz', ov.heatpump.seasonal_cop, 'JAZ (Jahresarbeitszahl)') : '';
     const l = ov.heatpump.live || {};
     const rows = [
       statusRow('Strom heute', kwh(ov.today.heatpump_kwh, 2)),
