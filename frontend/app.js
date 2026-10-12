@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v143';   // short tag shown always-on in the header
-const APP_VERSION = 'v143 · 2026-10-12 · Glossar erweitert (COP/JAZ, Vorlauf, Heizkurve, Spreizung, Taktung …) + Ampel bei COP/JAZ; iOS-Textauswahl auf Charts unterdrückt'
+const APP_BUILD = 'v144';   // short tag shown always-on in the header
+const APP_VERSION = 'v144 · 2026-10-12 · Verteiler-Karte: Haustyp-Buttons (Passivhaus/Neubau/saniert/teilsaniert/Altbau) für die spez. Heizlast – statt W/m² raten; Heizlast + Durchfluss rechnen sofort neu'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -3533,6 +3533,19 @@ function layoutTargets() {
   }
   return out;
 }
+// Building-type quick picks for the specific heat load (W/m²) – so a layperson
+// taps their house type instead of guessing a number. Used when there is no
+// reliable measured signature yet (area-based estimate).
+const SPEC_PRESETS = [['Passivhaus ~15', 15], ['Neubau/KfW ~40', 40], ['saniert ~55', 55], ['teilsaniert ~80', 80], ['Altbau ~100', 100]];
+let _specRefreshT = null;
+function specRefresh() {
+  clearTimeout(_specRefreshT);
+  _specRefreshT = setTimeout(() => {
+    _hlData = null; _flowData = null;
+    if (typeof renderHeatload === 'function') renderHeatload(true);
+    if (typeof renderFlow === 'function') renderFlow(true);
+  }, 500);
+}
 function renderLayout() {
   const body = $('lay-body'); if (!body) return;
   const l = layoutModel();
@@ -3553,6 +3566,13 @@ function renderLayout() {
       `<label>Spez. Heizlast <input type="number" id="lay-q" value="${esc(String(l.q))}" style="width:58px;padding:4px 6px;margin:0"> W/m²</label>` +
       `<label>Spreizung ΔT <input type="number" id="lay-dt" value="${esc(String(l.dt))}" style="width:48px;padding:4px 6px;margin:0"> K</label>` +
     `</div>` +
+    `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:-2px 0 10px">` +
+      `<span style="color:var(--muted);font-size:12px">Haustyp:</span>` +
+      SPEC_PRESETS.map(([lbl, v]) => { const on = Math.round(parseFloat(l.q)) === v;
+        return `<button class="btn sec specpre" data-sp="${v}" style="width:auto;padding:4px 10px;margin:0;font-size:12px${on ? ';border-color:var(--accent);color:var(--accent)' : ''}">${esc(lbl)}</button>`; }).join('') +
+    `</div>` +
+    `<div class="note" style="margin:-4px 0 10px">Bestimmt die geschätzte Heizlast (Fläche × W/m²), solange noch keine belastbare Messung da ist. ` +
+      `<b>Altes saniertes Haus → eher „saniert" (55) oder „teilsaniert" (80).</b></div>` +
     `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:10px">` +
       `<b style="font-size:13px">Verteiler:</b> ` +
       l.manifolds.map(m => `<span style="background:var(--card2);border:1px solid var(--line);border-radius:999px;padding:3px 9px;font-size:12px">${esc(m)} <a href="#" data-mfdel="${esc(m)}" style="color:var(--away);text-decoration:none;font-weight:700">×</a></span>`).join('') +
@@ -7735,8 +7755,8 @@ function init() {
   if (layCard) {
     layCard.addEventListener('input', e => {
       const t = e.target;
-      if (t.id === 'lay-q') { const l = layoutModel(); l.q = t.value; layoutSave(l); computeLayoutResult(); }
-      else if (t.id === 'lay-dt') { const l = layoutModel(); l.dt = t.value; layoutSave(l); computeLayoutResult(); }
+      if (t.id === 'lay-q') { const l = layoutModel(); l.q = t.value; layoutSave(l); computeLayoutResult(); specRefresh(); }
+      else if (t.id === 'lay-dt') { const l = layoutModel(); l.dt = t.value; layoutSave(l); computeLayoutResult(); specRefresh(); }
       else if (t.dataset.lay && t.dataset.room) {
         layoutSet(t.dataset.room, t.dataset.lay, t.value); computeLayoutResult();
         if (t.dataset.lay === 'area' || t.dataset.lay === 'loops') { _hlData = null; _flowData = null; }
@@ -7747,6 +7767,16 @@ function init() {
       if (t.dataset.lay === 'manifold' && t.dataset.room) { layoutSet(t.dataset.room, 'manifold', t.value); computeLayoutResult(); _flowData = null; }
     });
     layCard.addEventListener('click', e => {
+      const sp = e.target.closest('.specpre');
+      if (sp) {
+        e.preventDefault();
+        const v = parseFloat(sp.dataset.sp); if (!isFinite(v)) return;
+        const l = layoutModel(); l.q = v; layoutSave(l);
+        const qin = $('lay-q'); if (qin) qin.value = v;
+        document.querySelectorAll('.specpre').forEach(b => { const on = Math.round(parseFloat(b.dataset.sp)) === v; b.style.borderColor = on ? 'var(--accent)' : ''; b.style.color = on ? 'var(--accent)' : ''; });
+        computeLayoutResult(); specRefresh();
+        return;
+      }
       const rdel = e.target.closest('[data-roomdel]');
       if (rdel) {
         e.preventDefault(); const rm = rdel.dataset.roomdel;
