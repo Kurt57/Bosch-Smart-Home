@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v147';   // short tag shown always-on in the header
-const APP_VERSION = 'v147 · 2026-10-12 · Luftfeuchte je Raum (mit Schimmel-Ampel) + hydraulischer Abgleich nutzt jetzt den echten Heiz-Bedarf (hasDemand) statt Ventil-% – aufdrehen/androsseln auch ohne Ventil-Rückmeldung'
+const APP_BUILD = 'v148';   // short tag shown always-on in the header
+const APP_VERSION = 'v148 · 2026-10-12 · neue Karte „Lohnt sich Börsenstrom für dich?" – vergleicht Festtarif vs. Börsen-Preisform (Stunde×Monat) mit deinem echten Verbrauch + PV/Speicher aus dem PV-Tab, inkl. Speicher-statt-Börse-Hinweis, Lastverschiebe-Potenzial und Handy-Tipps'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -245,6 +245,13 @@ function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<':
 const INFO = {
   wofuer: () => 'Aufteilung des heutigen Stroms nach Quelle. Die Wärmepumpe wird nach ' +
     '<b>Heizung</b> und <b>Warmwasser</b> getrennt (aus ihrem Betriebsmodus), dazu jedes Smart-Home-Gerät.',
+  'spot-worth': () => 'Lohnt sich ein <b>Börsenstrom-Tarif</b> (dynamisch) für <b>dich</b>? Die App nimmt dein ' +
+    'gemessenes Verbrauchsprofil und – falls eingetragen – deine <b>PV & Speicher aus dem PV-Tab</b> und rechnet die ' +
+    'Jahreskosten einmal mit deinem <b>Festtarif</b> und einmal mit der <b>saisonalen Börsen-Preisform</b> (Stunde × ' +
+    'Monat) über die vorhandene Preis-Historie. <b>Wichtig:</b> Mit PV wandert dein Netzbezug in die teuren Abend-/' +
+    'Winterstunden – dann lohnt Börse oft <b>nicht</b>, und ein <b>größerer Speicher</b> bringt meist mehr als der ' +
+    'Tarifwechsel. Die Lastverschiebung zeigt, was zusätzlich drin wäre, wenn du WP/E-Auto konsequent in die ' +
+    'günstigsten Stunden legst. Grobe Realitäts-Schätzung, kein Vertragsangebot.',
   'ov-month': () => 'Hochrechnung für den laufenden Monat: dein durchschnittlicher Tagesverbrauch ' +
     '(Smart Home aus dem Zählerstand, Wärmepumpe aus dem Zählerwachstum) – <b>saisonal</b> für diesen ' +
     'Monat gewichtet und mit deinem kWh-Preis multipliziert.',
@@ -1185,7 +1192,17 @@ function applyDemo(mode) {
     m = Math.max(-2, m);
     prices.push({ ts, market_ct: Math.round(m * 10) / 10, consumer_ct: Math.round((m * (1 + sv / 100) + sc) * 100) / 100 });
   }
-  STATE.spot = { enabled: true, demo: true, market: 'demo', surcharge_ct: sc, vat: sv, prices };
+  // synthetic 12×24 market-price grid (ct/kWh, pre-tax) so the "lohnt sich?" card
+  // has seasonal shape in demo: winter dearer, midday cheap (PV/wind), peaks am/pm.
+  const mBase = [11, 10.5, 9.5, 8, 7, 6.5, 6.5, 7, 8.5, 9.5, 10.5, 11.5];
+  const hShape = [];
+  for (let h = 0; h < 24; h++) {
+    hShape.push(1 + 0.55 * Math.exp(-((h - 8) ** 2) / 4) + 0.65 * Math.exp(-((h - 19) ** 2) / 6)
+      - 0.45 * Math.exp(-((h - 13) ** 2) / 10) - 0.35 * Math.exp(-((h - 3) ** 2) / 14));
+  }
+  const month_hour_ct = mBase.map(b => hShape.map(f => Math.round(Math.max(-2, b * f) * 10) / 10));
+  STATE.spot = { enabled: true, demo: true, market: 'demo', surcharge_ct: sc, vat: sv, prices,
+    month_hour_ct, hist_hours: 400 * 24 };
   STATE.carbon = demoCarbon();
   // synthetic whole-house consumption (as Tibber would report)
   const tNodes = [];
@@ -1734,10 +1751,110 @@ function renderNowSignal(nowP, lo, hi) {
     `<div class="note" style="margin-top:2px">${verdict}</div></div></div>`;
 }
 
+// Consumer price grid (12×24, ct/kWh) from the stored market-price shape, with
+// gap-filling, so the spot-tariff cost model covers a realistic seasonal day.
+function spotPriceGrid() {
+  const sp = STATE.spot;
+  if (!sp || !sp.month_hour_ct) return null;
+  const vat = (sp.vat != null ? sp.vat : 19) / 100;
+  const surch = (sp.surcharge_ct != null ? sp.surcharge_ct : 15);
+  const raw = sp.month_hour_ct;
+  let allSum = 0, allN = 0; const mAvg = [];
+  for (let m = 0; m < 12; m++) {
+    let s = 0, n = 0;
+    for (let h = 0; h < 24; h++) { const v = raw[m] ? raw[m][h] : null; if (v != null) { s += v; n++; allSum += v; allN++; } }
+    mAvg[m] = n ? s / n : null;
+  }
+  const overall = allN ? allSum / allN : (sp.hist_market_ct || sp.typical_market_ct || 8);
+  const grid = [];
+  for (let m = 0; m < 12; m++) {
+    grid[m] = [];
+    for (let h = 0; h < 24; h++) {
+      let v = raw[m] ? raw[m][h] : null;
+      if (v == null) v = (mAvg[m] != null ? mAvg[m] : overall);
+      grid[m][h] = v * (1 + vat) + surch;           // consumer ct/kWh
+    }
+  }
+  return { grid, hours: sp.hist_hours || 0 };
+}
+// Is a dynamic (spot) tariff worth it for THIS household? Uses the real load
+// profile + PV/battery (current PV-tab dimensions) and the seasonal price shape.
+function spotWorthIt() {
+  const pg = spotPriceGrid(); if (!pg) return null;
+  const p = pvInputs();
+  const fixPrice = STATE.price || 0.35;              // €/kWh fixed tariff
+  const base = Object.assign({}, p, { priceGrid: pg.grid });
+  const withPv = simulatePv(base);
+  const noPv = simulatePv(Object.assign({}, base, { kwp: 0, batt: 0 }));
+  const hasPv = p.kwp > 0;
+  const mk = sim => ({ grid: sim.grid_kwh, fix: sim.grid_kwh * fixPrice, spot: sim.spot_cost });
+  const withCost = mk(withPv), noCost = mk(noPv);
+  const cur = hasPv ? withCost : noCost;
+  const spotSwitch = cur.fix - cur.spot;             // €/yr saved by switching to spot
+  const diffNoPv = noCost.fix - noCost.spot;
+  let battExtra = null;
+  if (hasPv) {
+    const bb = simulatePv(Object.assign({}, base, { batt: p.batt + 3 }));
+    battExtra = bb.benefit - withPv.benefit;         // €/yr extra self-use from +3 kWh
+  }
+  // price spread & load-shift potential (cheapest 6 h per day vs daily average)
+  let sumAll = 0, nAll = 0, cheapSum = 0, cheapN = 0;
+  for (let m = 0; m < 12; m++) {
+    const row = pg.grid[m].slice().sort((a, b) => a - b);
+    for (let h = 0; h < 24; h++) { sumAll += pg.grid[m][h]; nAll++; }
+    for (let h = 0; h < 6; h++) { cheapSum += row[h]; cheapN++; }
+  }
+  const avgCt = sumAll / nAll, cheapCt = cheapSum / cheapN;
+  const hpAnnual = (typeof hpAvgDaily === 'function' ? hpAvgDaily() : 0) * 365;
+  const flexible = Math.max(0, Math.min(cur.grid, 0.7 * (hpAnnual + p.evAnnual)));
+  const shiftSave = flexible * (avgCt - cheapCt) / 100;
+  return { pg, hasPv, withCost, noCost, cur, spotSwitch, diffNoPv, battExtra,
+    fixPrice, avgCt, cheapCt, spread: avgCt - cheapCt, flexible, shiftSave, batt: p.batt };
+}
+function renderBorseWorth() {
+  const card = $('borse-worth-card'); if (!card) return;
+  let w; try { w = spotWorthIt(); } catch (e) { w = null; }
+  if (!w) { card.hidden = true; return; }
+  card.hidden = false;
+  const kpi = (val, lbl, col) => `<div class="kpi sm"><div class="v"${col ? ` style="color:${col}"` : ''}>${val}</div><div class="l">${lbl}</div></div>`;
+  const diff = w.spotSwitch, absFix = w.cur.fix || 1;
+  let head, hcol;
+  if (diff > Math.max(30, 0.04 * absFix)) { head = `✅ Börsenstrom spart dir ~<b>${money(diff)}/Jahr</b>`; hcol = '#4be0b0'; }
+  else if (diff < -Math.max(20, 0.02 * absFix)) { head = `❌ Börsenstrom ist ~<b>${money(-diff)}/Jahr teurer</b> – lohnt sich für dich <b>nicht</b>`; hcol = '#ff6b8a'; }
+  else { head = `➖ Börse ≈ Festtarif (±${money(Math.abs(diff))}/Jahr) – lohnt sich <b>kaum</b>`; hcol = '#ffb64d'; }
+  $('borse-worth-verdict').innerHTML = `<div style="font-weight:700;font-size:15px;color:${hcol};line-height:1.4">${head}</div>` +
+    `<div class="note" style="margin-top:3px">Verglichen mit deinem Festtarif (${fmt(w.fixPrice * 100, 1)} ct/kWh), bei deinem Verbrauch${w.hasPv ? ' + deiner PV/Speicher' : ' (ohne PV)'}.</div>`;
+  const effCt = w.cur.grid > 0 ? w.cur.spot / w.cur.grid * 100 : w.avgCt;
+  $('borse-worth-kpi').innerHTML = `<div class="grid2" style="gap:8px">` +
+    kpi(money(w.cur.fix), 'Festtarif €/Jahr') +
+    kpi(money(w.cur.spot), 'Börse €/Jahr', hcol) +
+    kpi(`${fmt(w.cur.grid, 0)} kWh`, 'Netzbezug/Jahr') +
+    kpi(`${fmt(effCt, 1)} ct`, 'dein Ø Börsenpreis (gewichtet)') +
+    `</div>`;
+  const items = [];
+  if (w.hasPv) {
+    items.push(`☀️ <b>PV-Effekt:</b> Mit deiner PV wandert der Netzbezug in teure <b>Abend-/Winterstunden</b> – das macht Börse weniger attraktiv. ` +
+      `Ohne PV wäre Börse ${w.diffNoPv > diff + 20 ? '<b>eher lohnend</b>' : 'ähnlich'} (${w.diffNoPv >= 0 ? '+' : ''}${money(w.diffNoPv)}/Jahr).`);
+  }
+  if (w.battExtra != null) {
+    const spotGain = Math.max(0, diff);
+    if (w.battExtra > spotGain + 20) {
+      items.push(`🔋 <b>Speicher schlägt Börse:</b> Ein größerer Speicher (+3 kWh) bringt ~<b>${money(w.battExtra)}/Jahr</b> (mehr Eigenverbrauch) – deutlich mehr als der Börsenwechsel (~${money(spotGain)}/Jahr). <b>Nimm lieber den größeren Speicher.</b>`);
+    } else {
+      items.push(`🔋 <b>Speicher:</b> +3 kWh brächten ~${money(w.battExtra)}/Jahr Eigenverbrauch. Ein größerer Speicher senkt den Netzbezug weiter – dann lohnt der Tarifwechsel noch weniger.`);
+    }
+  }
+  items.push(`🕒 <b>Lastverschiebung:</b> Schiebst du WP/E-Auto gezielt in die günstigsten Stunden (Ø <b>${fmt(w.cheapCt, 1)}</b> statt ${fmt(w.avgCt, 1)} ct), sind zusätzlich bis ~<b>${money(w.shiftSave)}/Jahr</b> möglich – aber nur mit konsequenter Umstellung (sonst 0).`);
+  items.push(`📱 <b>Mit dem Handy vorbereiten:</b> WP-Zeitfenster/Smart-Grid in HomeCom auf die günstigen Nachtstunden legen; Waschmaschine/Trockner/Spülmaschine per Startzeit-Vorwahl nachts; E-Auto-Laden aufs günstige Fenster timen. Den <b>Smart-Timer</b> unten nutzen.`);
+  $('borse-worth-body').innerHTML = items.map(t => `<div style="font-size:13px;line-height:1.5;margin-bottom:7px">${t}</div>`).join('');
+  $('borse-worth-note').innerHTML = `Modell aus deinem gemessenen Verbrauchsprofil + Börsen-Preisform über <b>${w.pg.hours >= 48 ? Math.round(w.pg.hours / 24) + ' Tage' : w.pg.hours + ' h'}</b> Historie` +
+    (w.pg.hours < 240 ? ' (noch dünn – verfeinert sich über die nächsten Wochen)' : '') +
+    `. Spread Tag↔günstigste Stunden: <b>${fmt(w.spread, 1)} ct/kWh</b>. Grobe Realitäts-Schätzung, kein Vertragsangebot.`;
+}
 function renderBorse() {
   const sp = STATE.spot;
   const off = $('borse-off-card');
-  const cards = ['borse-now-card', 'borse-price-card', 'borse-best-card', 'borse-cost-card', 'borse-batt-card'];
+  const cards = ['borse-now-card', 'borse-worth-card', 'borse-price-card', 'borse-best-card', 'borse-cost-card', 'borse-batt-card'];
   if (!sp || !sp.enabled || !(sp.prices && sp.prices.length)) {
     if (off) off.hidden = false;
     cards.forEach(id => { const el = $(id); if (el) el.hidden = true; });
@@ -1745,6 +1862,7 @@ function renderBorse() {
   }
   if (off) off.hidden = true;
   cards.forEach(id => { const el = $(id); if (el) el.hidden = false; });
+  try { renderBorseWorth(); } catch (e) {}
   const now = Date.now() / 1000;
   const P = sp.prices;
   const cons = P.map(p => p.consumer_ct);
@@ -5309,6 +5427,8 @@ function simulatePv(p) {
   const hpAnnual = hpDaily * 365;
   const pvShare = p.pvShareMonth || pvMonth(), hpSeas = normFrac(HP_SEASON);
   const pvHourFn = p.pvHourFn || pvHourFractions;
+  const PG = p.priceGrid || null;        // 12×24 consumer ct/kWh for spot-cost model
+  let spotCt = 0;                         // Σ grid import × spot price (ct)
   let Y = 0, S = 0, F = 0, G = 0, L = 0, repDay = null, repDayW = null;
   const monthly = [];
   const evDayBase = p.evAnnual / 365;
@@ -5346,6 +5466,7 @@ function simulatePv(p) {
         let carDis = 0;
         if (av > 0) { carDis = Math.min(deficit, carBatt) * av; carBatt -= carDis; deficit -= carDis; }
         const grid = deficit;
+        if (PG && grid > 0) { const row = PG[m]; if (row && row[h] != null) spotCt += grid * row[h]; }
         mDirect += direct; mBatt += dis + carDis; mFeed += feed; mGrid += grid; mPv += pv; mLoad += load;
         if ((m === 6 || m === 0) && d === Math.floor(days / 2)) { capturePv.push(pv); captureLoad.push(load); }
       }
@@ -5366,6 +5487,7 @@ function simulatePv(p) {
     curtail_kwh: C, curtail_loss: C * p.feedin,
     self_rate: Y > 0 ? S / Y : 0, autarky: L > 0 ? S / L : 0,
     savings: S * STATE.price, feed_rev: feedFinal * p.feedin, benefit: S * STATE.price + feedFinal * p.feedin,
+    spot_cost: PG ? spotCt / 100 : null,       // €/year on a spot tariff (grid import, hourly-weighted)
     monthly, repDay, repDayW,
   };
 }
@@ -6535,6 +6657,9 @@ function renderPv() {
   renderBuildCompare(p);
   renderPvOrient();
   renderSurfaces();
+  // the Börse "lohnt sich?" card depends on the PV/battery dimensions here –
+  // keep it in sync when they change (it reads pvInputs() live).
+  try { if (typeof renderBorseWorth === 'function') renderBorseWorth(); } catch (e) {}
 }
 // Render the orientation/sizing recommendation.
 function renderPvOrient() {
