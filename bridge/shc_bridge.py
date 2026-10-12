@@ -613,6 +613,45 @@ class SHCClient:
         out.sort(key=lambda d: (d["room"], d["name"]))
         return out
 
+    def climate_raw(self) -> list[dict]:
+        """Diagnostic: raw service states of all climate-related devices, so we
+        can see exactly which fields a thermostat reports (e.g. a heating-demand
+        flag) without guessing. Read-only; used by /api/climate/raw."""
+        devices = self.get("/smarthome/devices") or []
+        rooms = {}
+        try:
+            raw = self.get("/smarthome/rooms") or []
+            if isinstance(raw, dict):
+                raw = raw.get("rooms") or raw.get("items") or []
+            for r in raw:
+                if isinstance(r, dict):
+                    rooms[r.get("id")] = r.get("name")
+        except Exception:
+            pass
+        svc = {}
+        try:
+            bulk = self.get("/smarthome/services")
+            if isinstance(bulk, list):
+                for s in bulk:
+                    if isinstance(s, dict) and s.get("deviceId") and s.get("id"):
+                        svc.setdefault(s["deviceId"], {})[s["id"]] = s.get("state") or {}
+        except Exception:
+            pass
+        climate_sids = {"RoomClimateControl", "ValveTappet", "Thermostat",
+                        "TemperatureLevel", "TemperatureOffset", "ChildLock"}
+        out = []
+        for dev in devices:
+            sids = set(dev.get("deviceServiceIds") or [])
+            if not (climate_sids & sids):
+                continue
+            out.append({
+                "device": dev.get("id"), "model": dev.get("deviceModel") or dev.get("@type"),
+                "name": dev.get("name"), "room": rooms.get(dev.get("roomId")) or dev.get("roomId"),
+                "serviceIds": sorted(sids),
+                "states": svc.get(dev.get("id"), {}),
+            })
+        return out
+
     def list_climate(self) -> list[dict]:
         """Per-room climate/thermostat snapshot for the heating diagnostics.
 
@@ -678,7 +717,8 @@ class SHCClient:
                 "room": name, "setpoint": None, "temp": None, "valve": None,
                 "valves": [], "operationMode": None, "roomControlMode": None,
                 "boost": False, "summerMode": False, "low": False, "offset": None,
-                "childLock": False, "faults": [], "devices": 0, "rcc_device": None})
+                "childLock": False, "faults": [], "devices": 0, "rcc_device": None,
+                "heating": None, "heating_src": None})
 
         for dev in devices:
             did = dev.get("id")
@@ -705,6 +745,19 @@ class SHCClient:
                 rec["boost"] = bool(rcc.get("boostMode")) or rec["boost"]
                 rec["summerMode"] = bool(rcc.get("summerMode")) or rec["summerMode"]
                 rec["low"] = bool(rcc.get("low")) or rec["low"]
+                # If the controller reports its heating demand directly, use it.
+                for hk in ("heatingDemand", "operationState", "callForHeat", "heating", "valveState"):
+                    hv = rcc.get(hk)
+                    if isinstance(hv, bool):
+                        rec["heating"] = hv; rec["heating_src"] = "gemeldet"
+                    elif isinstance(hv, (int, float)):
+                        rec["heating"] = hv > 5; rec["heating_src"] = "gemeldet"
+                    elif isinstance(hv, str):
+                        up = hv.upper()
+                        if up in ("HEATING", "ON", "ACTIVE", "OPEN"):
+                            rec["heating"] = True; rec["heating_src"] = "gemeldet"
+                        elif up in ("IDLE", "OFF", "INACTIVE", "CLOSED"):
+                            rec["heating"] = False; rec["heating_src"] = "gemeldet"
             tl = num(st.get("TemperatureLevel") or {}, "temperature")
             if tl is not None:
                 # prefer the room-control device's reading; else take any
@@ -728,6 +781,17 @@ class SHCClient:
         for rec in by_room.values():
             if rec["valves"]:
                 rec["valve"] = max(rec["valves"])   # the most-open valve drives flow demand
+            # "heizt gerade?" – from a reported flag if present, else the valve,
+            # else inferred like the thermostat itself (Soll > Ist, Heizmodus).
+            if rec["heating"] is None:
+                if rec["valve"] is not None:
+                    rec["heating"] = rec["valve"] > 5
+                    rec["heating_src"] = "ventil"
+                elif (not rec["summerMode"]
+                      and str(rec["roomControlMode"] or "HEATING").upper() != "OFF"
+                      and rec["setpoint"] is not None and rec["temp"] is not None):
+                    rec["heating"] = rec["temp"] < rec["setpoint"] - 0.1
+                    rec["heating_src"] = "abgeleitet"
             out.append(rec)
         out.sort(key=lambda r: r["room"])
         return out
@@ -6151,6 +6215,23 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send_json({"ok": False, "error": str(exc)}, 200)
                 return self._send_json({"demo": False,
                     **compute_heating_diag(climate, hp, cyc)})
+            if path == "/api/climate/raw":
+                # diagnostic: raw thermostat service states, to find the exact
+                # heating-demand field for this user's devices.
+                if self.ctx.mode == "demo":
+                    return self._send_json({"demo": True, "devices": [
+                        {"device": "demo-rcc-wz", "model": "ROOM_CLIMATE_CONTROL", "name": "Wohnzimmer",
+                         "room": "Wohnzimmer", "serviceIds": ["RoomClimateControl", "TemperatureLevel"],
+                         "states": {"RoomClimateControl": {"@type": "climateControlState", "setpointTemperature": 23.0,
+                                     "operationMode": "MANUAL", "roomControlMode": "HEATING", "summerMode": False},
+                                    "TemperatureLevel": {"@type": "temperatureLevelState", "temperature": 21.1}}}]})
+                if self.ctx.mode != "live":
+                    return self._send_json({"ok": False, "error": "nur im Live-Modus verfügbar"}, 400)
+                try:
+                    client = SHCClient(self.cfg.get("shc_ip", ""), self.cfg["cert"], self.cfg["key"])
+                    return self._send_json({"ok": True, "demo": False, "devices": client.climate_raw()})
+                except Exception as exc:
+                    return self._send_json({"ok": False, "error": str(exc)}, 200)
             if path == "/api/heating/curve":
                 # the real heating curve (flow vs. outdoor) from logged samples
                 # plus the live operating point, with a concrete recommendation

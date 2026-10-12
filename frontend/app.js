@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v144';   // short tag shown always-on in the header
-const APP_VERSION = 'v144 · 2026-10-12 · Verteiler-Karte: Haustyp-Buttons (Passivhaus/Neubau/saniert/teilsaniert/Altbau) für die spez. Heizlast – statt W/m² raten; Heizlast + Durchfluss rechnen sofort neu'
+const APP_BUILD = 'v145';   // short tag shown always-on in the header
+const APP_VERSION = 'v145 · 2026-10-12 · Gebäudemodell liefert jetzt die spez. Heizlast (ein Tipp); Raumthermostat: Heiz-Zustand (heizt/aus) wird gezeigt wenn kein Ventil-% kommt, plus Thermostat-Rohdaten-Ansicht'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -2446,6 +2446,14 @@ function paintHeatingDiag(r) {
       return `<span style="display:inline-flex;align-items:center;gap:6px"><span style="display:inline-block;width:38px;height:6px;border-radius:3px;background:var(--line);position:relative">` +
         `<span style="position:absolute;left:0;top:0;height:6px;border-radius:3px;width:${Math.max(4, v)}%;background:${col}"></span></span>${v}%</span>`;
     };
+    // Ventil-%, wenn vorhanden; sonst der Heiz-Zustand des Raumthermostats
+    // (🔥 heizt / ⏸ aus). "~" = abgeleitet (Soll>Ist), ohne = vom Gerät gemeldet.
+    const ventilCell = rm => {
+      if (rm.valve != null) return vbar(rm.valve);
+      if (rm.heating === true) return `<span style="color:#ff6b8a;white-space:nowrap" title="${rm.heating_src === 'abgeleitet' ? 'abgeleitet aus Soll/Ist' : 'vom Thermostat gemeldet'}">🔥 heizt${rm.heating_src === 'abgeleitet' ? ' <span style="color:var(--muted)">~</span>' : ''}</span>`;
+      if (rm.heating === false) return `<span style="color:#4be0b0;white-space:nowrap" title="${rm.heating_src === 'abgeleitet' ? 'abgeleitet aus Soll/Ist' : 'vom Thermostat gemeldet'}">⏸ aus${rm.heating_src === 'abgeleitet' ? ' <span style="color:var(--muted)">~</span>' : ''}</span>`;
+      return '<span style="color:var(--muted)">–</span>';
+    };
     const rowsHtml = rooms.map(rm => {
       const cold = rm.setpoint != null && rm.temp != null && rm.temp <= rm.setpoint - 1.5;
       const flag = hit.has(rm.room) ? 'border-left:3px solid #ffb64d' : 'border-left:3px solid transparent';
@@ -2453,13 +2461,13 @@ function paintHeatingDiag(r) {
       return `<tr style="${flag}"><td style="padding:6px 8px">${esc(rm.room)}</td>` +
         `<td style="padding:6px 8px;text-align:right">${rm.setpoint != null ? fmt(rm.setpoint, 0) + '°' : '–'}</td>` +
         `<td style="padding:6px 8px;text-align:right;color:${istCol}">${rm.temp != null ? fmt(rm.temp, 1) + '°' : '–'}</td>` +
-        `<td style="padding:6px 8px;text-align:right">${vbar(rm.valve)}</td>` +
+        `<td style="padding:6px 8px;text-align:right">${ventilCell(rm)}</td>` +
         `<td style="padding:6px 8px;text-align:right;color:var(--muted)">${modeOf(rm)}</td></tr>`;
     }).join('');
     $('hd-rooms').innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px">` +
       `<thead><tr style="color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.3px">` +
       `<th style="text-align:left;padding:4px 8px;font-weight:600">Raum</th><th style="text-align:right;padding:4px 8px;font-weight:600">Soll</th>` +
-      `<th style="text-align:right;padding:4px 8px;font-weight:600">Ist</th><th style="text-align:right;padding:4px 8px;font-weight:600">Ventil</th>` +
+      `<th style="text-align:right;padding:4px 8px;font-weight:600">Ist</th><th style="text-align:right;padding:4px 8px;font-weight:600">Ventil/Heizt</th>` +
       `<th style="text-align:right;padding:4px 8px;font-weight:600">Modus</th></tr></thead><tbody>${rowsHtml}</tbody></table>`;
   } else {
     $('hd-rooms').innerHTML = '<div class="note">Keine Raumthermostate gefunden.</div>';
@@ -3566,13 +3574,19 @@ function renderLayout() {
       `<label>Spez. Heizlast <input type="number" id="lay-q" value="${esc(String(l.q))}" style="width:58px;padding:4px 6px;margin:0"> W/m²</label>` +
       `<label>Spreizung ΔT <input type="number" id="lay-dt" value="${esc(String(l.dt))}" style="width:48px;padding:4px 6px;margin:0"> K</label>` +
     `</div>` +
-    `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:-2px 0 10px">` +
+    `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:-2px 0 8px">` +
       `<span style="color:var(--muted);font-size:12px">Haustyp:</span>` +
       SPEC_PRESETS.map(([lbl, v]) => { const on = Math.round(parseFloat(l.q)) === v;
         return `<button class="btn sec specpre" data-sp="${v}" style="width:auto;padding:4px 10px;margin:0;font-size:12px${on ? ';border-color:var(--accent);color:var(--accent)' : ''}">${esc(lbl)}</button>`; }).join('') +
     `</div>` +
-    `<div class="note" style="margin:-4px 0 10px">Bestimmt die geschätzte Heizlast (Fläche × W/m²), solange noch keine belastbare Messung da ist. ` +
-      `<b>Altes saniertes Haus → eher „saniert" (55) oder „teilsaniert" (80).</b></div>` +
+    (() => {
+      const bs = (typeof buildingSpec === 'function') ? buildingSpec(parseFloat(($('hl-design') || {}).value) || -12) : null;
+      if (!bs || bs < 10 || bs > 200) return '';
+      const on = Math.round(parseFloat(l.q)) === bs;
+      return `<div style="margin:0 0 8px"><button class="btn sec specpre" data-sp="${bs}" style="width:auto;padding:5px 12px;margin:0;font-size:12px;border-color:var(--accent2)${on ? ';background:var(--accent2);color:#06121f' : ';color:var(--accent2)'}">📐 Aus meinem Gebäudemodell (~${bs} W/m²)</button></div>`;
+    })() +
+    `<div class="note" style="margin:-2px 0 10px">Bestimmt die geschätzte Heizlast (Fläche × W/m²), solange noch keine belastbare Messung da ist. ` +
+      `Am genauesten: <b>dein Gebäudemodell</b> (Theorie vs. Praxis). Sonst Haustyp wählen – altes saniertes Haus → eher „saniert" (55) oder „teilsaniert" (80).</div>` +
     `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:10px">` +
       `<b style="font-size:13px">Verteiler:</b> ` +
       l.manifolds.map(m => `<span style="background:var(--card2);border:1px solid var(--line);border-radius:999px;padding:3px 9px;font-size:12px">${esc(m)} <a href="#" data-mfdel="${esc(m)}" style="color:var(--away);text-decoration:none;font-weight:700">×</a></span>`).join('') +
@@ -4540,6 +4554,28 @@ function computeHeat(b) {
   const qHeat = gross * (1 - b.gain);          // minus solar/internal gains
   const eHeat = qHeat / b.cop_heat, eDhw = b.dhw / b.cop_dhw;
   return { factor, items, gross, qHeat, eHeat, eDhw, eTotal: eHeat + eDhw, qTotal: qHeat + b.dhw };
+}
+// Building UA (W/K) from the Theorie-vs-Praxis component model (ΣU·A·f + ventilation).
+function buildingUA() {
+  const b = buildData();
+  let ua = 0;
+  (b.comps || []).forEach(c => { ua += (c.u || 0) * (c.a || 0) * (c.f == null ? 1 : c.f); });
+  ua += 0.34 * (b.n || 0) * ((b.area || 0) * (b.height || 0));   // ventilation UA
+  return ua;
+}
+// Effective specific heat load (W/m²) implied by the building model at the design
+// temperature – so the detailed Gebäudemodell can drive the heat-load estimate
+// with one tap instead of a blanket assumption.
+function buildingSpec(designC) {
+  const ua = buildingUA();
+  if (!(ua > 0)) return null;
+  const dc = (designC == null || !isFinite(designC)) ? -12 : designC;
+  const qDesign = ua * (20 - dc);                 // W at design temp (indoor 20 °C)
+  let area = 0;
+  try { const o = (typeof hlAreas === 'function') ? hlAreas() : {}; area = Object.values(o).reduce((s, v) => s + (parseFloat(v) || 0), 0); } catch (e) {}
+  if (!(area > 0)) { const b = buildData(); area = b.area || 0; }
+  if (!(area > 0)) return null;
+  return Math.round(qDesign / area);
 }
 // Sensible post-renovation U-values and rough insulation cost (€/m²) per part.
 const RENO = {
@@ -7695,6 +7731,15 @@ function init() {
   }
   const hpr = $('hp-refresh'); if (hpr) hpr.addEventListener('click', doHpRefresh);
   const hdr = $('hd-refresh'); if (hdr) hdr.addEventListener('click', () => { renderHeatingDiag(true); renderHeatingCurve(true); });
+  const hdRaw = $('hd-raw-btn');
+  if (hdRaw) hdRaw.addEventListener('click', async () => {
+    const pre = $('hd-raw'); if (!pre) return;
+    pre.hidden = false; pre.textContent = 'Lese Thermostat-Rohdaten …';
+    try {
+      const r = await api('/api/climate/raw');
+      pre.textContent = JSON.stringify(r.devices || r, null, 2);
+    } catch (e) { pre.textContent = 'Nur mit laufender Bridge im Live-Modus verfügbar.'; }
+  });
   // device heating-curve points (read off the heat pump), stored locally
   [['hc-p20', 'hc_dev_p20'], ['hc-pm10', 'hc_dev_pm10']].forEach(([id, key]) => {
     const el = $(id); if (!el) return;
