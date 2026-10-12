@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v141';   // short tag shown always-on in the header
-const APP_VERSION = 'v141 · 2026-10-12 · Heizlast-Zusammenfassung im Flächen-Modus bereinigt: kein "null" bei UA, kein unrealistischer Bilanzpunkt mehr als Kachel; Summe-Hinweis sagt ehrlich "aus Fläche geschätzt"'
+const APP_BUILD = 'v142';   // short tag shown always-on in the header
+const APP_VERSION = 'v142 · 2026-10-12 · Fachbegriffe erklärt: Antippen eines unterstrichenen Begriffs (Bilanzpunkt, Gebäude-UA, spez. Last, Spreizung ΔT, Fläche erfasst …) zeigt eine Klartext-Erklärung'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -638,7 +638,7 @@ function rateBadge(key, v, label) {
 function statusLegendHtml() {
   return `<div class="note" style="margin-top:4px">🟢 <b style="color:${RATE_COL.good}">gut</b> · ` +
     `🟡 <b style="color:${RATE_COL.ok}">ok / beobachten</b> · 🔴 <b style="color:${RATE_COL.warn}">prüfen</b> · ` +
-    `⚪ noch zu wenig Daten. <span style="color:var(--muted)">Tipp auf einen farbigen Wert zeigt den Normalbereich.</span></div>`;
+    `⚪ noch zu wenig Daten. <span style="color:var(--muted)">Tipp auf einen farbigen Wert zeigt den Normalbereich, auf einen <u>unterstrichenen</u> Begriff die Erklärung.</span></div>`;
 }
 function showRate(key, v, label) {
   const t = $('toast'); if (!t) return;
@@ -648,6 +648,28 @@ function showRate(key, v, label) {
     (r.range ? `<div class="note" style="margin-top:2px">Normalbereich: <b>${esc(r.range)}</b></div>` : '') +
     (r.why ? `<div class="note" style="margin-top:2px">${r.why}</div>` : '');
   t.hidden = false; clearTimeout(_toastT); _toastT = setTimeout(() => { t.hidden = true; }, 9000);
+}
+// Glossar: Klartext-Erklärung für Fachbegriffe, die man nicht aus dem Alltag
+// kennt. Antippen einer so markierten Kennzahl zeigt die Erklärung unten.
+const GLOSS = {
+  bilanzpunkt: ['Bilanzpunkt (Heizgrenze)', 'Die Außentemperatur, ab der überhaupt geheizt werden muss. Darüber reichen Sonne + innere Wärme (Menschen, Geräte). Üblich 12–16 °C; gut gedämmt niedriger.'],
+  ua: ['Gebäude-UA (W/K)', 'Wärmeverlust des ganzen Hauses je 1 Grad Unterschied innen↔außen. Niedrig = gut gedämmt. Mal dem Temperaturunterschied ergibt die Heizlast.'],
+  spec_wm2: ['Spezifische Heizlast (W/m²)', 'Heizleistung je Quadratmeter bei Auslegungs-Kälte. Grob: Passivhaus ~10–15, saniert ~30–50, Altbau 70–120.'],
+  coverage: ['Fläche erfasst', 'Wie viel deiner Wohnfläche schon Raum-Daten (Fläche + Messung) hat. Höher = die Aufteilung der Gesamtlast ist verlässlicher.'],
+  qtotal: ['Gesamt-Heizlast', 'Wie viel Heizleistung (Watt) das ganze Haus bei der kältesten Auslegungstemperatur braucht – Grundlage für WP-Größe und Durchfluss.'],
+  design_c: ['Auslegungstemperatur', 'Die kälteste Außentemperatur, für die geplant wird (regional, z. B. −12 °C). Bei ihr muss die Heizung die volle Heizlast schaffen.'],
+  spread_k: ['Spreizung ΔT', 'Temperatur-Unterschied zwischen Vor- und Rücklauf. Je Kreis der Auslege-Zielwert (Fußboden typ. 4–7 K); bestimmt den nötigen Durchfluss.'],
+  tau: ['Trägheit τ (Tau)', 'Zeitkonstante: wie lange der Raum Wärme speichert. Hoch = träge (hält lange warm). Sehr hoch (>150 h) heißt meist: kühlt kaum aus → Messung noch unsicher.'],
+  flow_lmin: ['Durchfluss (l/min)', 'Wassermenge pro Minute durch einen Heizkreis – das stellst du am Durchflussmesser (Tacosetter) ein. Mehr Durchfluss = mehr Wärme in den Raum.'],
+};
+function showGloss(key) {
+  const g = GLOSS[key]; const t = $('toast'); if (!g || !t) return;
+  t.innerHTML = `<b>${esc(g[0])}</b><div class="note" style="margin-top:3px">${g[1]}</div>`;
+  t.hidden = false; clearTimeout(_toastT); _toastT = setTimeout(() => { t.hidden = true; }, 11000);
+}
+// a KPI value that is tappable for a plain-language explanation (dotted underline)
+function glossV(v, key) {
+  return GLOSS[key] ? `<span class="gloss" data-g="${esc(key)}" style="cursor:help;border-bottom:1px dotted currentColor">${v}</span>` : v;
 }
 function shortDay(s) { const d = new Date(s + 'T00:00'); return d.getDate() + '.'; }
 function longDay(s) { const d = new Date(s + 'T00:00'); return WD[(d.getDay() + 6) % 7] + ' ' + d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }); }
@@ -3155,18 +3177,19 @@ function paintHeatload(r) {
       sum.innerHTML = '<div class="note">Noch keine Daten – trage je Raum eine <b>Fläche</b> in der Verteiler-Karte ein '
         + '(dann Schätzung aus der Fläche; eine gemessene Kennlinie macht es später genauer).</div>';
     } else {
-      const kpi = (v, l) => `<div class="kpi sm"><div class="v">${v}</div><div class="l">${l}</div></div>`;
+      // label tappable (dotted) → plain-language explanation via glossV/showGloss
+      const kpi = (v, l, g) => `<div class="kpi sm"><div class="v">${v}</div><div class="l">${g ? glossV(l, g) : l}</div></div>`;
       // In area mode the measured UA/Bilanzpunkt are NOT trustworthy (that was the
       // whole reason for the fallback) – don't show them as if they were.
       const tiles = areaMode
-        ? kpi(`${r.q_total_design} W`, `Gesamt @ ${r.design_c}°C`) +
-          kpi(`${r.spec_wm2 != null ? fmt(r.spec_wm2, 0) : 40} W/m²`, 'angenommene Last') +
-          kpi(`${Math.round((r.coverage || 0) * 100)}%`, 'Fläche erfasst') +
+        ? kpi(`${r.q_total_design} W`, `Gesamt @ ${r.design_c}°C`, 'qtotal') +
+          kpi(`${r.spec_wm2 != null ? fmt(r.spec_wm2, 0) : 40} W/m²`, 'angenommene Last', 'spec_wm2') +
+          kpi(`${Math.round((r.coverage || 0) * 100)}%`, 'Fläche erfasst', 'coverage') +
           kpi('📐 Fläche', 'Methode')
-        : kpi(`${r.q_total_design} W`, `Gesamt @ ${r.design_c}°C`) +
-          kpi(`${r.ua_total != null ? r.ua_total : '–'}`, 'Gebäude-UA (W/K)') +
-          kpi(`${r.balance_c != null ? r.balance_c + '°C' : '–'}`, 'Bilanzpunkt') +
-          kpi(`${Math.round((r.coverage || 0) * 100)}%`, 'Fläche erfasst');
+        : kpi(`${r.q_total_design} W`, `Gesamt @ ${r.design_c}°C`, 'qtotal') +
+          kpi(`${r.ua_total != null ? r.ua_total : '–'}`, 'Gebäude-UA (W/K)', 'ua') +
+          kpi(`${r.balance_c != null ? r.balance_c + '°C' : '–'}`, 'Bilanzpunkt', 'bilanzpunkt') +
+          kpi(`${Math.round((r.coverage || 0) * 100)}%`, 'Fläche erfasst', 'coverage');
       sum.innerHTML = `<div class="grid2" style="gap:8px">${tiles}</div>` +
         (r.signature ? `<div class="note" style="margin-top:6px">Kennlinie: ${r.signature.n} Punkte (${r.signature.src === 'csv' ? 'CSV' : 'Live'})`
           + (r.signature.rel != null ? `, Streuung ±${Math.round(r.signature.rel * 100)}%` : '')
@@ -3267,9 +3290,9 @@ function paintFlow(r) {
     const cs = r.central_spread;
     ctx.innerHTML =
       `<div style="display:flex;gap:8px;flex-wrap:wrap">` +
-        `<div class="kpi sm"><div class="v">${r.spread_k} K</div><div class="l">Auslege-ΔT je Kreis (gewählt)</div></div>` +
+        `<div class="kpi sm"><div class="v">${r.spread_k} K</div><div class="l">${glossV('Auslege-ΔT je Kreis', 'spread_k')} (gewählt)</div></div>` +
         `<div class="kpi sm"><div class="v">${cs ? cs.spread_k + ' K' : '–'}</div><div class="l">zentral gemessen (System)</div></div>` +
-        (r.total_flow_lmin != null ? `<div class="kpi sm"><div class="v">${r.total_flow_lmin}</div><div class="l">Σ l/min (Auslegung)</div></div>` : '') +
+        (r.total_flow_lmin != null ? `<div class="kpi sm"><div class="v">${r.total_flow_lmin}</div><div class="l">${glossV('Σ l/min', 'flow_lmin')} (Auslegung)</div></div>` : '') +
       `</div>` +
       `<div class="note" style="margin-top:6px">Die <b>Kreis-Spreizung</b> (${r.spread_k} K) ist der Auslege-Zielwert je Kreis – ` +
       `<b>nicht</b> die zentral gemessene System-Spreizung${cs ? ` (${cs.spread_k} K)` : ''}. Beide stimmen erst überein, ` +
@@ -7500,6 +7523,8 @@ function init() {
     if (i) { e.stopPropagation(); showInfo(i.dataset.info); return; }
     const rb = e.target.closest('.ratebadge');
     if (rb) { e.stopPropagation(); showRate(rb.dataset.rk, rb.dataset.rv === '' ? null : rb.dataset.rv, rb.dataset.rl); return; }
+    const gl = e.target.closest('.gloss');
+    if (gl) { e.stopPropagation(); showGloss(gl.dataset.g); return; }
     const t = $('toast'); if (t && !t.hidden) t.hidden = true;
   });
   $('hist-range').addEventListener('click', e => {
