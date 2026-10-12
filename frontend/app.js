@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v139';   // short tag shown always-on in the header
-const APP_VERSION = 'v139 · 2026-10-12 · Heizlast/Durchfluss: unbelastbare Wärmekennlinie (z. B. Bilanzpunkt 31 °C) wird erkannt → flächenbasierte Schätzung statt Mini-Werten; beide Karten zeigen jetzt konsistente l/min'
+const APP_BUILD = 'v140';   // short tag shown always-on in the header
+const APP_VERSION = 'v140 · 2026-10-12 · Ampel-System für Fachzahlen: farbiger Punkt + Klartext (gut/ok/prüfen) neben COP, τ, Auskühlrate, W/m², Konfidenz … – Antippen zeigt Normalbereich und Erklärung'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -581,6 +581,74 @@ function showInfo(key) {
   clearTimeout(_toastT); _toastT = setTimeout(() => { t.hidden = true; }, 9000);
 }
 function iBtn(key) { return `<span class="info" data-info="${key}" role="button" aria-label="Info">i</span>`; }
+
+/* ---- "Ist das okay?"-System für Fachzahlen (Ampel + Klartext) --------------
+ * Ordnet eine Fachkennzahl einem Level zu (gut / ok / beobachten / unklar) mit
+ * farbigem Punkt, Klartext-Wort und – beim Antippen – Normalbereich + Erklärung,
+ * damit man ohne SHK-Wissen sofort sieht, ob ein Wert in Ordnung ist. */
+const RATE_COL = { good: '#4be0b0', ok: '#ffb64d', warn: '#ff6b8a', na: '#93a2c4' };
+function rateMetric(key, v) {
+  const mk = (lvl, word, range, why) => ({ lvl, word, range, why });
+  if (key === 'confidence') {
+    const s = String(v == null ? '' : v).toLowerCase();
+    if (s === 'hoch') return mk('good', 'belastbar', 'hoch · mittel · niedrig', 'Genug saubere Messphasen – die Werte sind verlässlich.');
+    if (s === 'mittel') return mk('ok', 'ok', 'hoch · mittel · niedrig', 'Brauchbar, aber mehr Messphasen machen es sicherer.');
+    if (s === 'niedrig') return mk('warn', 'noch dünn', 'hoch · mittel · niedrig', 'Noch wenig Daten – Wert mit Vorsicht, weiter messen.');
+    return mk('na', '—', '', 'Noch keine Einstufung.');
+  }
+  const n = (typeof v === 'number') ? v : parseFloat(v);
+  if (n == null || !isFinite(n)) return mk('na', '—', '', 'Dafür fehlen noch Daten.');
+  // higher-is-better metrics: {good, ok}
+  const HI = {
+    cop: [3.5, 2.8, 'gut ab 3,5 · ok ab 2,8', 'Wärme je kWh Strom – höher = günstiger. Gute Luft-Wärmepumpe im Winter 3–4.'],
+    jaz: [3.5, 2.8, 'gut ab 3,5 · ok ab 2,8', 'Jahres-Wirkungsgrad der Wärmepumpe – höher = günstiger.'],
+    heatup: [0.5, 0.2, 'gut ab 0,5 · ok ab 0,2 K/h', 'Wie schnell der Raum aufheizt. Höher = kräftig versorgt.'],
+  };
+  // lower-is-better metrics: {good, ok}
+  const LO = {
+    cooldown: [0.3, 0.6, 'gut < 0,3 · ok < 0,6 K/h', 'Wie schnell es ohne Heizung abkühlt. Niedrig = gut gedämmt; hoch (>0,6) deutet auf Zugluft/undichte Stellen.'],
+    deficit: [0.5, 1.5, 'gut < 0,5 · ok < 1,5 K', 'Wie weit die Ist-Temperatur unter dem Soll bleibt. Klein = Raum wird gut warm.'],
+  };
+  // band metrics: list of [lo, hi, level, word]; outside all → warn
+  const BAND = {
+    tau: [[[8, 90, 'good', 'normal'], [0, 8, 'ok', 'reagiert schnell'], [90, 150, 'ok', 'sehr träge']], 'normal 10–90 h',
+          'Thermische Trägheit: wie lange der Raum Wärme hält. Sehr hoch (>150 h) heißt meist: kühlt kaum aus → Messung noch unsicher.'],
+    spec: [[[15, 70, 'good', 'normal'], [70, 110, 'ok', 'eher hoch'], [10, 15, 'ok', 'eher niedrig']], 'normal 15–70 W/m²',
+           'Heizlast je m². Typisch 15–70 (gut saniert weniger). Weit außerhalb → Fläche oder Messung prüfen.'],
+    balance: [[[10, 16, 'good', 'normal'], [8, 18, 'ok', 'ok']], 'normal 10–16 °C',
+              'Ab welcher Außentemperatur geheizt werden muss. Üblich 10–16 °C; viel höher ist unplausibel.'],
+  };
+  if (HI[key]) { const [g, o, r, w] = HI[key]; return mk(n >= g ? 'good' : n >= o ? 'ok' : 'warn', n >= g ? 'gut' : n >= o ? 'ok' : 'niedrig', r, w); }
+  if (LO[key]) { const [g, o, r, w] = LO[key]; return mk(n <= g ? 'good' : n <= o ? 'ok' : 'warn', n <= g ? 'gut' : n <= o ? 'ok' : 'hoch', r, w); }
+  if (BAND[key]) {
+    const [bands, r, w] = BAND[key];
+    for (const [lo, hi, lvl, word] of bands) if (n >= lo && n < hi) return mk(lvl, word, r, w);
+    return mk('warn', 'unplausibel', r, w);
+  }
+  return mk('na', '—', '', '');
+}
+// small inline badge: colored dot + verdict word, tappable for the explanation
+function rateBadge(key, v, label) {
+  const r = rateMetric(key, v);
+  const dot = r.lvl === 'na' ? '○' : '●';
+  const data = ` data-rk="${esc(key)}" data-rv="${v == null ? '' : esc(String(v))}" data-rl="${esc(label || '')}" role="button"`;
+  return `<span class="ratebadge" style="color:${RATE_COL[r.lvl]};cursor:pointer;white-space:nowrap"${data}>${dot} ${esc(r.word)}</span>`;
+}
+// one-time legend explaining the colour system
+function statusLegendHtml() {
+  return `<div class="note" style="margin-top:4px">🟢 <b style="color:${RATE_COL.good}">gut</b> · ` +
+    `🟡 <b style="color:${RATE_COL.ok}">ok / beobachten</b> · 🔴 <b style="color:${RATE_COL.warn}">prüfen</b> · ` +
+    `⚪ noch zu wenig Daten. <span style="color:var(--muted)">Tipp auf einen farbigen Wert zeigt den Normalbereich.</span></div>`;
+}
+function showRate(key, v, label) {
+  const t = $('toast'); if (!t) return;
+  const r = rateMetric(key, v);
+  const words = { good: 'gut ✓', ok: 'ok – im Blick behalten', warn: 'auffällig – prüfen', na: 'noch zu wenig Daten' };
+  t.innerHTML = `<b>${esc(label || key)}: <span style="color:${RATE_COL[r.lvl]}">${words[r.lvl] || r.word}</span></b>` +
+    (r.range ? `<div class="note" style="margin-top:2px">Normalbereich: <b>${esc(r.range)}</b></div>` : '') +
+    (r.why ? `<div class="note" style="margin-top:2px">${r.why}</div>` : '');
+  t.hidden = false; clearTimeout(_toastT); _toastT = setTimeout(() => { t.hidden = true; }, 9000);
+}
 function shortDay(s) { const d = new Date(s + 'T00:00'); return d.getDate() + '.'; }
 function longDay(s) { const d = new Date(s + 'T00:00'); return WD[(d.getDay() + 6) % 7] + ' ' + d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }); }
 function round(n, d) { const f = 10 ** d; return Math.round(n * f) / f; }
@@ -2558,7 +2626,7 @@ function paintHeatTimeseries(r) {
   if (head) head.innerHTML = s.avg_cop != null ? `<span style="color:#4be0b0">Ø COP ${fmt(s.avg_cop, 2)}</span>` : '';
   const tile = (l, v) => `<div style="background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:8px 10px;text-align:center"><div style="font-size:17px;font-weight:700">${v}</div><div style="font-size:11px;color:var(--muted)">${l}</div></div>`;
   if (kpi) kpi.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(78px,1fr));gap:8px">` +
-    tile('Ø COP', s.avg_cop != null ? fmt(s.avg_cop, 2) : '–') +
+    tile('Ø COP', (s.avg_cop != null ? fmt(s.avg_cop, 2) : '–') + (s.avg_cop != null ? '<br>' + rateBadge('cop', s.avg_cop, 'Ø COP') : '')) +
     tile('Strom', kwh(s.tot_elec, 1)) +
     tile('Wärme', kwh(s.tot_heat, 1)) +
     tile('Heizung', kwh(s.tot_heating, 1)) +
@@ -2991,29 +3059,35 @@ function paintThermal(r) {
 
   // --- per-room model cards ---
   if (roomsEl) {
-    roomsEl.innerHTML = `<div style="font-weight:700;margin-bottom:6px">🏠 Modell je Raum</div>` +
+    // metric tile with the "ist das okay?"-rating (colored dot + verdict word),
+    // tappable for the normal range + plain explanation.
+    const metric = (lbl, disp, unit, rk, rv) => {
+      const r = rateMetric(rk, rv);
+      const col = RATE_COL[r.lvl];
+      const dot = r.lvl === 'na' ? '○' : '●';
+      return `<div class="ratebadge" style="flex:1;min-width:92px;cursor:pointer" data-rk="${esc(rk)}" data-rv="${rv == null ? '' : esc(String(rv))}" data-rl="${esc(lbl)}">` +
+        `<div style="font-size:11px;color:var(--muted)"><span style="color:${col}">${dot}</span> ${lbl}` +
+        (r.lvl !== 'na' ? ` <span style="color:${col};font-weight:600">${esc(r.word)}</span>` : '') + `</div>` +
+        `<div style="font-weight:700;font-size:15px">${disp == null ? '–' : disp}${disp == null ? '' : (unit || '')}</div></div>`;
+    };
+    roomsEl.innerHTML = `<div style="font-weight:700;margin-bottom:4px">🏠 Modell je Raum</div>` + statusLegendHtml() +
       (r.rooms || []).map(x => {
-        const cc = tmConfColor(x.confidence);
+        const cc = RATE_COL[rateMetric('confidence', x.confidence).lvl];
         const statusChip = x.status === 'bereit'
           ? tmChip('✓ Modell belastbar', '#4be0b0')
           : tmChip('⏳ Beobachtung', '#ffb64d');
-        const metric = (lbl, val, unit, kind) => {
-          const kc = kind === 'm' ? '#4be0b0' : (kind === 'd' ? '#ffb64d' : '#f78fb3');
-          return `<div style="flex:1;min-width:92px"><div style="font-size:11px;color:var(--muted)">` +
-            `<span style="color:${kc}">●</span> ${lbl}</div>` +
-            `<div style="font-weight:700;font-size:15px">${val == null ? '–' : val}${val == null ? '' : (unit || '')}</div></div>`;
-        };
+        const defV = (x.setpoint != null && x.temp_now != null) ? (x.setpoint - x.temp_now) : null;
         return `<div style="border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:10px">` +
           `<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:8px">` +
             `<b style="font-size:15px">${esc(x.room)}</b>` +
             `<div style="display:flex;gap:6px;align-items:center">${statusChip}` +
-            `<span style="font-size:12px;color:${cc};font-weight:600">Konfidenz ${x.confidence}</span></div></div>` +
+            `<span class="ratebadge" style="font-size:12px;color:${cc};font-weight:600;cursor:pointer" data-rk="confidence" data-rv="${esc(String(x.confidence))}" data-rl="Konfidenz">Konfidenz ${esc(x.confidence)}</span></div></div>` +
           `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px">` +
-            metric('Ist / Soll', (x.temp_now != null ? fmt(x.temp_now, 1) : '–') + (x.setpoint != null ? ' / ' + fmt(x.setpoint, 0) : ''), '°', 'm') +
-            metric('Trägheit τ', x.tau_h, ' h', 'd') +
-            metric('Auskühlrate', x.cooldown_kph, ' K/h', 'm') +
-            metric('Aufheizrate', x.heatup_kph, ' K/h', 'd') +
-            metric('Defizit', x.max_deficit, ' K', 'd') +
+            metric('Ist / Soll', (x.temp_now != null ? fmt(x.temp_now, 1) : '–') + (x.setpoint != null ? ' / ' + fmt(x.setpoint, 0) : ''), '°', 'deficit', defV) +
+            metric('Trägheit τ', x.tau_h, ' h', 'tau', x.tau_h) +
+            metric('Auskühlrate', x.cooldown_kph, ' K/h', 'cooldown', x.cooldown_kph) +
+            metric('Aufheizrate', x.heatup_kph, ' K/h', 'heatup', x.heatup_kph) +
+            metric('Defizit', x.max_deficit, ' K', 'deficit', x.max_deficit) +
           `</div>` +
           `<div style="font-size:13px;line-height:1.5"><b>Befund:</b> ${esc(x.finding)}</div>` +
           `<div style="font-size:13px;line-height:1.5;margin-top:3px"><b>Empfehlung:</b> ${esc(x.recommendation)}</div>` +
@@ -3101,7 +3175,7 @@ function paintHeatload(r) {
         : '';
     } else {
       const qmax = Math.max.apply(null, ok.map(x => x.q_hi || x.q_design || 0)) || 1;
-      roomsEl.innerHTML = `<div style="font-weight:700;margin-bottom:6px">Heizlast je Raum (± Unsicherheit)</div>` +
+      roomsEl.innerHTML = `<div style="font-weight:700;margin-bottom:4px">Heizlast je Raum (± Unsicherheit)</div>` + statusLegendHtml() +
         r.rooms.map(x => {
           if (x.status !== 'ok') {
             return `<div class="devrow"><div class="nm"><b>${esc(x.room)}</b><small>${(x.missing || []).map(esc).join(' · ')}</small></div>` +
@@ -3120,7 +3194,7 @@ function paintHeatload(r) {
             `</div>` +
             `<div style="font-size:11px;color:var(--muted);margin-top:3px">` +
               `${x.area} m² · τ ${x.tau_h != null ? x.tau_h + ' h' : '–'} · UA ${x.ua} W/K · ` +
-              `<span style="color:${specCol}">${x.spec} W/m²${x.plausible ? '' : ' ⚠︎'}</span> · Konfidenz ${esc(x.confidence)}</div>` +
+              `${x.spec} W/m² ${rateBadge('spec', x.spec, 'Spez. Last (W/m²)')} · ${rateBadge('confidence', x.confidence, 'Konfidenz')}</div>` +
             `</div>`;
         }).join('') +
         (r.sum_q_design ? `<div class="note" style="margin-top:4px">Summe der Raum-Lasten: <b>${r.sum_q_design} W</b> `
@@ -3933,7 +4007,8 @@ function renderOverview() {
   const card = $('ov-hp-card');
   if (ov.heatpump_connected) {
     card.hidden = false;
-    $('ov-hp-cop').textContent = ov.heatpump.seasonal_cop ? 'JAZ ' + fmt(ov.heatpump.seasonal_cop, 2) : '';
+    $('ov-hp-cop').innerHTML = ov.heatpump.seasonal_cop
+      ? 'JAZ ' + fmt(ov.heatpump.seasonal_cop, 2) + ' ' + rateBadge('jaz', ov.heatpump.seasonal_cop, 'JAZ (Jahresarbeitszahl)') : '';
     const l = ov.heatpump.live || {};
     const rows = [
       statusRow('Strom heute', kwh(ov.today.heatpump_kwh, 2)),
@@ -7415,6 +7490,8 @@ function init() {
   document.addEventListener('click', e => {
     const i = e.target.closest('.info');
     if (i) { e.stopPropagation(); showInfo(i.dataset.info); return; }
+    const rb = e.target.closest('.ratebadge');
+    if (rb) { e.stopPropagation(); showRate(rb.dataset.rk, rb.dataset.rv === '' ? null : rb.dataset.rv, rb.dataset.rl); return; }
     const t = $('toast'); if (t && !t.hidden) t.hidden = true;
   });
   $('hist-range').addEventListener('click', e => {
