@@ -718,7 +718,7 @@ class SHCClient:
                 "valves": [], "operationMode": None, "roomControlMode": None,
                 "boost": False, "summerMode": False, "low": False, "offset": None,
                 "childLock": False, "faults": [], "devices": 0, "rcc_device": None,
-                "heating": None, "heating_src": None})
+                "heating": None, "heating_src": None, "away": False})
 
         for dev in devices:
             did = dev.get("id")
@@ -745,19 +745,28 @@ class SHCClient:
                 rec["boost"] = bool(rcc.get("boostMode")) or rec["boost"]
                 rec["summerMode"] = bool(rcc.get("summerMode")) or rec["summerMode"]
                 rec["low"] = bool(rcc.get("low")) or rec["low"]
-                # If the controller reports its heating demand directly, use it.
-                for hk in ("heatingDemand", "operationState", "callForHeat", "heating", "valveState"):
-                    hv = rcc.get(hk)
-                    if isinstance(hv, bool):
-                        rec["heating"] = hv; rec["heating_src"] = "gemeldet"
-                    elif isinstance(hv, (int, float)):
-                        rec["heating"] = hv > 5; rec["heating_src"] = "gemeldet"
-                    elif isinstance(hv, str):
-                        up = hv.upper()
-                        if up in ("HEATING", "ON", "ACTIVE", "OPEN"):
-                            rec["heating"] = True; rec["heating_src"] = "gemeldet"
-                        elif up in ("IDLE", "OFF", "INACTIVE", "CLOSED"):
-                            rec["heating"] = False; rec["heating_src"] = "gemeldet"
+                # Bosch RoomClimateControl reports the real call-for-heat here:
+                # hasDemand = the controller's command toward the actuator (true =
+                # heizt). This is the authoritative value, better than any guess.
+                if isinstance(rcc.get("hasDemand"), bool):
+                    rec["heating"] = rcc["hasDemand"]
+                    rec["heating_src"] = "gemeldet"
+                if isinstance(rcc.get("away"), bool):
+                    rec["away"] = rcc["away"]
+                # Other controllers may name it differently – try a few as fallback.
+                if rec["heating"] is None:
+                    for hk in ("heatingDemand", "operationState", "callForHeat", "heating", "valveState"):
+                        hv = rcc.get(hk)
+                        if isinstance(hv, bool):
+                            rec["heating"] = hv; rec["heating_src"] = "gemeldet"
+                        elif isinstance(hv, (int, float)):
+                            rec["heating"] = hv > 5; rec["heating_src"] = "gemeldet"
+                        elif isinstance(hv, str):
+                            up = hv.upper()
+                            if up in ("HEATING", "ON", "ACTIVE", "OPEN"):
+                                rec["heating"] = True; rec["heating_src"] = "gemeldet"
+                            elif up in ("IDLE", "OFF", "INACTIVE", "CLOSED"):
+                                rec["heating"] = False; rec["heating_src"] = "gemeldet"
             tl = num(st.get("TemperatureLevel") or {}, "temperature")
             if tl is not None:
                 # prefer the room-control device's reading; else take any
@@ -6223,7 +6232,8 @@ class Handler(BaseHTTPRequestHandler):
                         {"device": "demo-rcc-wz", "model": "ROOM_CLIMATE_CONTROL", "name": "Wohnzimmer",
                          "room": "Wohnzimmer", "serviceIds": ["RoomClimateControl", "TemperatureLevel"],
                          "states": {"RoomClimateControl": {"@type": "climateControlState", "setpointTemperature": 23.0,
-                                     "operationMode": "MANUAL", "roomControlMode": "HEATING", "summerMode": False},
+                                     "operationMode": "MANUAL", "roomControlMode": "HEATING", "summerMode": False,
+                                     "hasDemand": True, "away": False},
                                     "TemperatureLevel": {"@type": "temperatureLevelState", "temperature": 21.1}}}]})
                 if self.ctx.mode != "live":
                     return self._send_json({"ok": False, "error": "nur im Live-Modus verfügbar"}, 400)

@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v145';   // short tag shown always-on in the header
-const APP_VERSION = 'v145 · 2026-10-12 · Gebäudemodell liefert jetzt die spez. Heizlast (ein Tipp); Raumthermostat: Heiz-Zustand (heizt/aus) wird gezeigt wenn kein Ventil-% kommt, plus Thermostat-Rohdaten-Ansicht'
+const APP_BUILD = 'v146';   // short tag shown always-on in the header
+const APP_VERSION = 'v146 · 2026-10-12 · Echter Heiz-Zustand vom Bosch-Regler (hasDemand): zeigt zuverlässig heizt/aus je Raum (gemeldet statt abgeleitet)'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
