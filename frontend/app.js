@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v138';   // short tag shown always-on in the header
-const APP_VERSION = 'v138 · 2026-10-11 · Durchfluss: unrealistisch niedrige Empfehlungen (Raum kühlt kaum aus → τ zu dünn) werden mit ⚠︎ markiert und nicht mehr als echter Sollwert dargestellt'
+const APP_BUILD = 'v139';   // short tag shown always-on in the header
+const APP_VERSION = 'v139 · 2026-10-12 · Heizlast/Durchfluss: unbelastbare Wärmekennlinie (z. B. Bilanzpunkt 31 °C) wird erkannt → flächenbasierte Schätzung statt Mini-Werten; beide Karten zeigen jetzt konsistente l/min'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -3061,7 +3061,7 @@ async function renderHeatload(force) {
   if (force && sum) sum.innerHTML = '<div class="note">Heizlast wird aus Kennlinie + τ + Flächen berechnet …</div>';
   const design = parseFloat(($('hl-design') || {}).value || '-12');
   try {
-    const r = await postJSON('/api/heatload', { areas: hlAreas(), design_c: design });
+    const r = await postJSON('/api/heatload', { areas: hlAreas(), design_c: design, spec_wm2: (parseFloat(layoutModel().q) || 40) });
     _hlData = r; paintHeatload(r);
   } catch (e) {
     if (sum) sum.innerHTML = '<div class="note">Nur mit laufender Bridge verfügbar.</div>';
@@ -3168,7 +3168,7 @@ async function renderFlow(force) {
   const spread = parseFloat(($('flow-spread') || {}).value || '5');
   const design = parseFloat(($('hl-design') || {}).value || '-12');
   try {
-    const r = await postJSON('/api/heatload', { areas: hlAreas(), design_c: design, spread_k: spread });
+    const r = await postJSON('/api/heatload', { areas: hlAreas(), design_c: design, spread_k: spread, spec_wm2: (parseFloat(layoutModel().q) || 40) });
     _flowData = r; paintFlow(r);
   } catch (e) { if (body) body.innerHTML = '<div class="note">Nur mit laufender Bridge verfügbar.</div>'; }
   finally { _flowBusy = false; }
@@ -3199,6 +3199,14 @@ function paintFlow(r) {
       body.innerHTML = '<div class="note">Noch keine Heizlast je Raum vorhanden – erst <b>Beobachtung</b> (τ), <b>Flächen</b> '
         + '(Verteiler-Karte) und die <b>Gesamt-Wärmekennlinie</b>. Danach erscheinen hier die l/min-Einstellwerte.</div>';
     } else {
+      // banner when values are area-estimated (no reliable measured signature yet)
+      let banner = '';
+      if (r.method === 'area') {
+        banner = `<div style="background:#3ba9ff18;border:1px solid #3ba9ff55;border-radius:10px;padding:9px 11px;margin-bottom:10px;font-size:12px;line-height:1.45">` +
+          `📐 <b>Flächenbasierte Schätzung</b> (Annahme ${r.spec_wm2 != null ? fmt(r.spec_wm2, 0) : 40} W/m², anpassbar in der Verteiler-Karte). ` +
+          `Die gemessene Wärmekennlinie ist noch nicht belastbar – sobald genug Kaltwetter-Daten und Auskühlphasen (τ) da sind, ` +
+          `rechnet die App automatisch genauer. Die Werte hier passen jetzt zur Verteiler-Tabelle.</div>`;
+      }
       // group by manifold
       const groups = {};
       r.rooms.forEach(x => {
@@ -3270,7 +3278,7 @@ function paintFlow(r) {
       h += `<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:11px;color:var(--muted);margin-top:4px">` +
         `<span><span style="display:inline-block;width:3px;height:12px;background:#3ba9ff;vertical-align:middle;margin-right:4px"></span>Empfehlung</span>` +
         `<span><span style="display:inline-block;width:3px;height:12px;background:#ffb64d;vertical-align:middle;margin-right:4px"></span>dein Ist-Wert</span></div>`;
-      body.innerHTML = h;
+      body.innerHTML = banner + h;
     }
   }
 

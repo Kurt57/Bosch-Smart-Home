@@ -3023,8 +3023,19 @@ def _energy_signature(store: "Store") -> dict | None:
     rss = sum((y - (a * x + b)) ** 2 for x, y in pts)
     sigma = (rss / max(1, n - 2)) ** 0.5
     rel = (sigma / mean_y) if mean_y > 0 else None
+    xs = [x for x, _ in pts]
+    span = max(xs) - min(xs)                        # outdoor-temp range covered
+    balance_c = (-b / a) if a else None
+    # A fit is only trustworthy if the data spans a decent outdoor range AND the
+    # implied balance point is physically sane. Mild/narrow data gives a nearly
+    # flat slope → absurd extrapolation (e.g. UA 11 W/K, balance 31 °C, whole-
+    # house load 489 W). Flag those so the heat-load falls back to area-based.
+    reliable = (span >= 6.0
+                and balance_c is not None and 5.0 <= balance_c <= 22.0
+                and (rel is None or rel <= 0.7))
     return {"a": a, "b": b, "n": n, "src": src, "sigma": sigma, "rel": rel,
-            "balance_c": (-b / a) if a else None, "mean_w": mean_y}
+            "span": round(span, 1), "reliable": bool(reliable),
+            "balance_c": balance_c, "mean_w": mean_y}
 
 
 def _central_spread(store: "Store") -> dict | None:
@@ -3049,7 +3060,7 @@ def _central_spread(store: "Store") -> dict | None:
 
 def compute_heatload(store: "Store", areas: dict | None = None,
                      design_c: float = DESIGN_OUTDOOR_C,
-                     spread_k: float = 5.0) -> dict:
+                     spread_k: float = 5.0, spec_wm2: float = 40.0) -> dict:
     """Per-room heat load in watts (at the design outdoor temp) with a
     confidence band, calibrated to the measured whole-house energy signature –
     plus the physically correct per-circuit target flow l/min = Q/(1.163·60·ΔT).
@@ -3068,13 +3079,20 @@ def compute_heatload(store: "Store", areas: dict | None = None,
     except (TypeError, ValueError):
         spread_k = 5.0
     spread_k = max(3.0, min(10.0, spread_k))
+    try:
+        spec_wm2 = float(spec_wm2)
+    except (TypeError, ValueError):
+        spec_wm2 = 40.0
+    spec_wm2 = max(10.0, min(120.0, spec_wm2))
     areas = areas or {}
 
     tm = compute_thermal_model(store, days=21)
     sig = _energy_signature(store)
     q_total_design = None
     ua_total = None
-    if sig:
+    # Only calibrate to the measured signature when the fit is trustworthy.
+    # An unreliable fit (narrow/noisy data) would otherwise yield absurd loads.
+    if sig and sig.get("reliable"):
         q = sig["a"] * design_c + sig["b"]
         if q > 0:
             q_total_design = q
@@ -3107,6 +3125,23 @@ def compute_heatload(store: "Store", areas: dict | None = None,
     covered_area = sum(w["area"] for w in covered) or 0.0
     coverage = round(covered_area / total_area, 2) if total_area else 0.0
 
+    # Without a trustworthy calibration we estimate the load straight from area ×
+    # a typical specific load (same method as the Verteiler card) so the flows
+    # stay sensible and the two cards agree, instead of near-zero τ artefacts.
+    area_mode = not can_abs
+    method = "calibrated" if can_abs else ("area" if any(w["area"] and w["dt"] for w in rooms) else "none")
+
+    def _flow_row(base, q, band, spec, confidence_extra=None):
+        base.update({"status": "ok", "q_design": round(q),
+                     "q_lo": round(max(0.0, q - band)), "q_hi": round(q + band),
+                     "spec": round(spec, 1),
+                     "plausible": 10 <= spec <= 120,
+                     "flow_lmin": round(q / (1.163 * spread_k) / 60.0, 2),
+                     "flow_lo": round(max(0.0, q - band) / (1.163 * spread_k) / 60.0, 2),
+                     "flow_hi": round((q + band) / (1.163 * spread_k) / 60.0, 2)})
+        if confidence_extra:
+            base["confidence"] = confidence_extra
+
     out, sum_q = [], 0.0
     for w in rooms:
         rm = w["room"]
@@ -3122,24 +3157,21 @@ def compute_heatload(store: "Store", areas: dict | None = None,
             rel = max(0.15, min(0.6, rel))
             band = q * rel
             sum_q += q
-            # per-circuit target flow: l/h = Q/(1.163·ΔT); l/min = /60
-            flow_lmin = q / (1.163 * spread_k) / 60.0
-            flow_lo = (q - band) / (1.163 * spread_k) / 60.0
-            flow_hi = (q + band) / (1.163 * spread_k) / 60.0
-            base.update({"status": "ok", "ua": round(ua, 1), "q_design": round(q),
-                         "q_lo": round(q - band), "q_hi": round(q + band),
-                         "spec": round(spec, 1), "rel": round(rel, 2),
-                         "plausible": 10 <= spec <= 120,
-                         "flow_lmin": round(flow_lmin, 2),
-                         "flow_lo": round(flow_lo, 2), "flow_hi": round(flow_hi, 2)})
+            base["ua"] = round(ua, 1); base["rel"] = round(rel, 2)
+            _flow_row(base, q, band, spec)
+        elif area_mode and w["area"] and w["dt"] and w["dt"] > 0:
+            # area-based estimate: Q = area × spec_wm2 (independent of τ)
+            q = w["area"] * spec_wm2
+            band = q * 0.30
+            sum_q += q
+            base["ua"] = round(q / w["dt"], 1); base["rel"] = 0.3; base["estimated"] = True
+            _flow_row(base, q, band, spec_wm2, confidence_extra="geschätzt (Fläche)")
         else:
             miss = []
             if not w["area"]:
                 miss.append("Fläche in der Verteiler-Karte eintragen")
-            if not w["tau_h"]:
-                miss.append("mehr Auskühlphasen (τ fehlt)")
-            if w["area"] and w["tau_h"] and not can_abs:
-                miss.append("Gesamt-Wärmekennlinie (mehr Heizdaten/HomeCom)")
+            if w["setpoint"] is None:
+                miss.append("Sollwert fehlt")
             base.update({"status": "missing", "missing": miss})
         out.append(base)
 
@@ -3147,13 +3179,8 @@ def compute_heatload(store: "Store", areas: dict | None = None,
     out.sort(key=lambda x: (x["status"] != "ok", -(x.get("q_design") or 0)))
 
     insights = []
-    if not sig:
-        insights.append("Noch keine <b>Gesamt-Wärmekennlinie</b>: dafür brauche ich Heizleistung über "
-                        "der Außentemperatur (HomeCom-CSV importieren oder die WP länger mitlaufen lassen).")
-    elif not can_abs:
-        insights.append("Kennlinie vorhanden, aber noch keine Raum-Absolutwerte – es fehlen <b>Flächen</b> "
-                        "(Verteiler-Karte) und/oder <b>τ</b> (Beobachtungsphase).")
-    else:
+    sig_unreliable = bool(sig and not sig.get("reliable"))
+    if method == "calibrated":
         insights.append(f"Gesamt-Heizlast bei {design_c:.0f} °C ≈ <b>{round(q_total_design):d} W</b> "
                         f"(aus der gemessenen Kennlinie, Quelle: {'CSV' if sig['src']=='csv' else 'Live'}). "
                         f"Gebäude-UA ≈ {ua_total:.0f} W/K, Bilanzpunkt ≈ {sig['balance_c']:.1f} °C.")
@@ -3165,12 +3192,27 @@ def compute_heatload(store: "Store", areas: dict | None = None,
         if odd:
             insights.append("Unplausible spezifische Last (W/m²) bei: <b>" + ", ".join(odd) +
                             "</b> – Fläche prüfen oder τ noch unsicher.")
+    elif method == "area":
+        if sig_unreliable:
+            insights.append(f"⚠︎ Die gemessene <b>Wärmekennlinie ist noch nicht belastbar</b> "
+                            f"(zu wenig Kaltwetter / zu große Streuung: Bilanzpunkt käme auf "
+                            f"{sig['balance_c']:.0f} °C, unrealistisch). Daher <b>Schätzung aus der Fläche</b>.")
+        else:
+            insights.append("Noch keine belastbare <b>Gesamt-Wärmekennlinie</b> – daher <b>Schätzung aus der "
+                            "Fläche</b> (Heizleistung über Außentemperatur sammeln: WP länger mitlaufen "
+                            "lassen oder HomeCom-CSV importieren).")
+        insights.append(f"Annahme: <b>{spec_wm2:.0f} W/m²</b> spezifische Heizlast (anpassbar in der "
+                        f"Verteiler-Karte). Die Werte verfeinern sich automatisch, sobald eine saubere "
+                        f"Kennlinie + Auskühlphasen (τ) vorliegen.")
+    else:
+        insights.append("Noch keine Daten: trage je Raum eine <b>Fläche</b> (Verteiler-Karte) ein.")
 
     total_flow = sum(r.get("flow_lmin") or 0 for r in out if r.get("status") == "ok")
     central = _central_spread(store)
-    if can_abs:
+    if method in ("calibrated", "area"):
         flow_msg = (f"Ziel-Durchfluss gesamt ≈ <b>{total_flow:.1f} l/min</b> bei Auslege-Spreizung "
-                    f"<b>{spread_k:.0f} K</b> je Kreis.")
+                    f"<b>{spread_k:.0f} K</b> je Kreis"
+                    + (" (flächenbasiert geschätzt)." if method == "area" else "."))
         if central:
             flow_msg += (f" Aktuell <b>zentral gemessene</b> Spreizung ≈ {central['spread_k']} K "
                          f"(System, nicht je Kreis) – die beiden sind erst bei vollständig "
@@ -3178,19 +3220,22 @@ def compute_heatload(store: "Store", areas: dict | None = None,
         insights.append(flow_msg)
 
     return {
-        "ok": True, "design_c": design_c, "spread_k": spread_k,
-        "q_total_design": round(q_total_design) if q_total_design else None,
+        "ok": True, "design_c": design_c, "spread_k": spread_k, "spec_wm2": spec_wm2,
+        "method": method,
+        "q_total_design": round(q_total_design) if q_total_design else (round(sum_q) if method == "area" and sum_q else None),
         "ua_total": round(ua_total, 1) if ua_total else None,
         "balance_c": round(sig["balance_c"], 1) if sig and sig.get("balance_c") is not None else None,
-        "signature": ({"src": sig["src"], "n": sig["n"], "rel": round(sig["rel"], 2) if sig["rel"] else None}
+        "signature": ({"src": sig["src"], "n": sig["n"], "reliable": sig.get("reliable"),
+                       "rel": round(sig["rel"], 2) if sig["rel"] else None}
                       if sig else None),
         "coverage": coverage, "sum_q_design": round(sum_q) if sum_q else None,
         "total_flow_lmin": round(total_flow, 1) if total_flow else None,
         "central_spread": central,
         "rooms": out, "insights": insights,
         "note": ("Datenbasierte Schätzung, kein normgerechter Heizlast-Nachweis (DIN EN 12831). "
-                 "Fläche = eingegeben, τ = abgeleitet, Gesamtlast = gemessen; Annahme gleicher "
-                 "Estrich-Speichermasse je m². Ersetzt keine Fachplanung."),
+                 + ("Gesamtlast = gemessen, τ = abgeleitet; " if method == "calibrated"
+                    else "Hier aus Fläche × spez. Last geschätzt; ") +
+                 "ersetzt keine Fachplanung."),
     }
 
 
@@ -5898,6 +5943,10 @@ class Handler(BaseHTTPRequestHandler):
             sk = float(body.get("spread_k")) if body.get("spread_k") is not None else 5.0
         except (TypeError, ValueError):
             sk = 5.0
+        try:
+            sw = float(body.get("spec_wm2")) if body.get("spec_wm2") is not None else 40.0
+        except (TypeError, ValueError):
+            sw = 40.0
         if self.ctx.mode == "demo":
             return self._send_json(_demo_heatload(dc, sk))
         try:
@@ -5906,7 +5955,7 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             pass
         return self._send_json({"ok": True, "demo": False,
-            **compute_heatload(self.store, areas, dc, sk)})
+            **compute_heatload(self.store, areas, dc, sk, sw)})
 
     def _post_optimize(self, kind, body):
         """Log/undo/reset a balancing step. Logging captures a baseline snapshot
