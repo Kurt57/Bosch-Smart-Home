@@ -718,7 +718,7 @@ class SHCClient:
                 "valves": [], "operationMode": None, "roomControlMode": None,
                 "boost": False, "summerMode": False, "low": False, "offset": None,
                 "childLock": False, "faults": [], "devices": 0, "rcc_device": None,
-                "heating": None, "heating_src": None, "away": False})
+                "heating": None, "heating_src": None, "away": False, "humidity": None})
 
         for dev in devices:
             did = dev.get("id")
@@ -775,6 +775,9 @@ class SHCClient:
             vt = num(st.get("ValveTappet") or {}, "position", "value")
             if vt is not None:
                 rec["valves"].append(int(round(vt)))
+            hum = num(st.get("HumidityLevel") or {}, "humidity")
+            if hum is not None:
+                rec["humidity"] = round(hum, 1)
             off = num(st.get("TemperatureOffset") or {}, "offset")
             if off is not None and abs(off) > abs(rec["offset"] or 0):
                 rec["offset"] = off
@@ -4606,7 +4609,9 @@ def _demo_climate() -> list[dict]:
         d = {"room": room, "setpoint": setpoint, "temp": temp, "valve": valve,
              "valves": [valve], "operationMode": "AUTOMATIC", "roomControlMode": "HEATING",
              "boost": False, "summerMode": False, "low": False, "offset": None,
-             "childLock": False, "faults": [], "devices": 1}
+             "childLock": False, "faults": [], "devices": 1,
+             "humidity": round(42 + (hash(room) % 20), 1),
+             "heating": temp < setpoint - 0.1, "heating_src": "gemeldet"}
         d.update(kw)
         return d
     return [

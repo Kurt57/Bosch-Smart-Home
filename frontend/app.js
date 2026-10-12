@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v146';   // short tag shown always-on in the header
-const APP_VERSION = 'v146 · 2026-10-12 · Echter Heiz-Zustand vom Bosch-Regler (hasDemand): zeigt zuverlässig heizt/aus je Raum (gemeldet statt abgeleitet)'
+const APP_BUILD = 'v147';   // short tag shown always-on in the header
+const APP_VERSION = 'v147 · 2026-10-12 · Luftfeuchte je Raum (mit Schimmel-Ampel) + hydraulischer Abgleich nutzt jetzt den echten Heiz-Bedarf (hasDemand) statt Ventil-% – aufdrehen/androsseln auch ohne Ventil-Rückmeldung'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -617,6 +617,8 @@ function rateMetric(key, v) {
            'Heizlast je m². Typisch 15–70 (gut saniert weniger). Weit außerhalb → Fläche oder Messung prüfen.'],
     balance: [[[10, 16, 'good', 'normal'], [8, 18, 'ok', 'ok']], 'normal 10–16 °C',
               'Ab welcher Außentemperatur geheizt werden muss. Üblich 10–16 °C; viel höher ist unplausibel.'],
+    humidity: [[[35, 55, 'good', 'ideal'], [55, 65, 'ok', 'etwas hoch'], [30, 35, 'ok', 'etwas trocken']], 'ideal 40–55 %',
+               'Raumluftfeuchte. Dauerhaft über 65 % begünstigt Schimmel (vor allem an kalten Wänden) – mehr lüften/heizen. Unter 35 % ist die Luft eher trocken.'],
   };
   if (HI[key]) { const [g, o, r, w] = HI[key]; return mk(n >= g ? 'good' : n >= o ? 'ok' : 'warn', n >= g ? 'gut' : n >= o ? 'ok' : 'niedrig', r, w); }
   if (LO[key]) { const [g, o, r, w] = LO[key]; return mk(n <= g ? 'good' : n <= o ? 'ok' : 'warn', n <= g ? 'gut' : n <= o ? 'ok' : 'hoch', r, w); }
@@ -668,6 +670,8 @@ const GLOSS = {
   heizgradtage: ['Heizgradtage', 'Maß, wie kalt ein Jahr war (Summe der täglichen Differenz Raum↔außen über alle Heiztage). Deutschland ~3500/Jahr. Mehr = höherer Heizbedarf.'],
   u_wert: ['U-Wert (W/m²K)', 'Wärmeverlust eines Bauteils (Wand, Fenster, Dach) je m² und Grad. Niedrig = gut gedämmt. Alte Wand ~1,4; saniert ~0,2.'],
   taktung: ['Taktung', 'Wie oft die Wärmepumpe pro Stunde an-/ausschaltet. Wenige lange Läufe = gut (schonend, effizient). Häufiges Takten deutet auf zu viel Leistung / zu wenig abgenommene Wärme.'],
+  humidity: ['Luftfeuchte', 'Relative Raumluftfeuchte. Ideal ~40–55 %. Dauerhaft über 65 % begünstigt Schimmel (besonders an kalten Wänden) – lüften und ausreichend heizen.'],
+  heating: ['Heizt gerade?', 'Ob der Raumregler aktuell Wärme anfordert (Befehl zum Stellantrieb). „gemeldet" = direkt vom Bosch-Regler (hasDemand), „~" = aus Soll/Ist abgeleitet.'],
 };
 function showGloss(key) {
   const g = GLOSS[key]; const t = $('toast'); if (!g || !t) return;
@@ -2454,6 +2458,12 @@ function paintHeatingDiag(r) {
       if (rm.heating === false) return `<span style="color:#4be0b0;white-space:nowrap" title="${rm.heating_src === 'abgeleitet' ? 'abgeleitet aus Soll/Ist' : 'vom Thermostat gemeldet'}">⏸ aus${rm.heating_src === 'abgeleitet' ? ' <span style="color:var(--muted)">~</span>' : ''}</span>`;
       return '<span style="color:var(--muted)">–</span>';
     };
+    // room humidity with mold-risk rating (tap for the normal range)
+    const humCell = rm => {
+      if (rm.humidity == null) return '<span style="color:var(--muted)">–</span>';
+      const rt = rateMetric('humidity', rm.humidity);
+      return `<span class="ratebadge" style="color:${RATE_COL[rt.lvl]};white-space:nowrap;cursor:pointer" data-rk="humidity" data-rv="${rm.humidity}" data-rl="Luftfeuchte">${fmt(rm.humidity, 0)} %</span>`;
+    };
     const rowsHtml = rooms.map(rm => {
       const cold = rm.setpoint != null && rm.temp != null && rm.temp <= rm.setpoint - 1.5;
       const flag = hit.has(rm.room) ? 'border-left:3px solid #ffb64d' : 'border-left:3px solid transparent';
@@ -2462,12 +2472,15 @@ function paintHeatingDiag(r) {
         `<td style="padding:6px 8px;text-align:right">${rm.setpoint != null ? fmt(rm.setpoint, 0) + '°' : '–'}</td>` +
         `<td style="padding:6px 8px;text-align:right;color:${istCol}">${rm.temp != null ? fmt(rm.temp, 1) + '°' : '–'}</td>` +
         `<td style="padding:6px 8px;text-align:right">${ventilCell(rm)}</td>` +
+        `<td style="padding:6px 8px;text-align:right">${humCell(rm)}</td>` +
         `<td style="padding:6px 8px;text-align:right;color:var(--muted)">${modeOf(rm)}</td></tr>`;
     }).join('');
+    const anyHum = rooms.some(rm => rm.humidity != null);
     $('hd-rooms').innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px">` +
       `<thead><tr style="color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.3px">` +
       `<th style="text-align:left;padding:4px 8px;font-weight:600">Raum</th><th style="text-align:right;padding:4px 8px;font-weight:600">Soll</th>` +
       `<th style="text-align:right;padding:4px 8px;font-weight:600">Ist</th><th style="text-align:right;padding:4px 8px;font-weight:600">Ventil/Heizt</th>` +
+      `<th style="text-align:right;padding:4px 8px;font-weight:600">Feuchte</th>` +
       `<th style="text-align:right;padding:4px 8px;font-weight:600">Modus</th></tr></thead><tbody>${rowsHtml}</tbody></table>`;
   } else {
     $('hd-rooms').innerHTML = '<div class="note">Keine Raumthermostate gefunden.</div>';
@@ -3790,19 +3803,27 @@ function renderHydronic() {
   if (rooms) {
     const heat = rooms.filter(r => String(r.roomControlMode || 'HEATING').toUpperCase() !== 'OFF' && !r.summerMode
       && r.setpoint != null && r.temp != null);
+    // Use the controller's real heat demand (hasDemand → r.heating) where we have
+    // it; fall back to the valve % otherwise. dem: true=fordert Wärme an,
+    // false=satt, null=unbekannt.
     heat.forEach(r => {
       const d = r.temp - r.setpoint;                 // <0 = zu kalt
-      if (d <= -0.5 && (r.valve == null || r.valve >= 85)) under.push(r);
-      else if (d >= -0.2 && r.valve != null && r.valve <= 60) over.push(r);
+      const dem = (typeof r.heating === 'boolean') ? r.heating : null;
+      // undersupplied: clearly cold AND still calling for heat (or valve open)
+      if (d <= -0.5 && dem !== false && (r.valve == null || r.valve >= 85)) under.push(r);
+      // oversupplied: at/above target AND satisfied (no demand), or valve throttled
+      else if (d >= -0.2 && (dem === false || (r.valve != null && r.valve <= 60))) over.push(r);
     });
     under.sort((a, b) => (a.temp - a.setpoint) - (b.temp - b.setpoint));   // coldest first
-    over.sort((a, b) => (a.valve || 0) - (b.valve || 0));                  // most-throttled first
+    over.sort((a, b) => (b.temp - b.setpoint) - (a.temp - a.setpoint));    // most-overshooting first
     lead = under[0] || null;
   }
   const chip = (txt, col) => `<span style="display:inline-block;background:${col}22;color:${col};border:1px solid ${col}66;border-radius:999px;padding:2px 9px;font-size:12px;font-weight:600">${txt}</span>`;
+  const demTxt = r => (typeof r.heating === 'boolean')
+    ? (r.heating ? ' · 🔥 heizt' : ' · ⏸ aus') : '';
   const roomLine = (r, action, col) =>
     `<div class="devrow"><div class="nm"><b>${esc(r.room)}</b>` +
-    `<small>Soll ${fmt(r.setpoint, 0)}° · Ist ${fmt(r.temp, 1)}° · Ventil ${r.valve != null ? r.valve + '%' : '–'}</small></div>` +
+    `<small>Soll ${fmt(r.setpoint, 0)}° · Ist ${fmt(r.temp, 1)}°${r.valve != null ? ' · Ventil ' + r.valve + '%' : ''}${demTxt(r)}</small></div>` +
     `<div class="val">${chip(action, col)}</div></div>`;
   if (head) head.innerHTML = rooms ? (under.length || over.length
     ? `<span style="color:#ffb64d">${under.length + over.length} Raum/Räume justieren</span>`
