@@ -572,8 +572,13 @@ class SHCClient:
         out.sort(key=lambda d: (d["room"], d["name"]))
         return out
 
-    def list_window_contacts(self) -> list[dict]:
-        """Door/window contacts (ShutterContact service) with OPEN/CLOSED state."""
+    def list_window_contacts(self, room_map: dict | None = None) -> list[dict]:
+        """Door/window contacts (ShutterContact service) with OPEN/CLOSED state.
+
+        ``room_map`` optionally overrides a contact's room (keyed by device id or
+        by lower-cased device name) – e.g. to let a front-door contact that sits
+        in a hallway/vestibule count for the adjacent living room."""
+        room_map = room_map or {}
         devices = self.get("/smarthome/devices") or []
         rooms = {}
         try:
@@ -607,8 +612,12 @@ class SHCClient:
                 except Exception:
                     st = {}
             val = str(st.get("value") or "").upper()
-            out.append({"id": did, "name": dev.get("name") or did,
-                        "room": rooms.get(dev.get("roomId"), ""),
+            nm = dev.get("name") or did
+            shc_room = rooms.get(dev.get("roomId"), "")
+            ov = room_map.get(did) or room_map.get(str(nm).lower())
+            out.append({"id": did, "name": nm,
+                        "room": ov or shc_room, "shc_room": shc_room,
+                        "moved": bool(ov),
                         "open": val == "OPEN", "state": val or "UNKNOWN"})
         out.sort(key=lambda d: (d["room"], d["name"]))
         return out
@@ -652,13 +661,15 @@ class SHCClient:
             })
         return out
 
-    def list_climate(self) -> list[dict]:
+    def list_climate(self, room_map: dict | None = None) -> list[dict]:
         """Per-room climate/thermostat snapshot for the heating diagnostics.
 
         Combines the virtual per-room ``RoomClimateControl`` (setpoint, mode) with
         the physical radiator thermostats' ``ValveTappet`` (valve %), measured
         ``TemperatureLevel`` and ``TemperatureOffset`` – grouped by room. Reads all
         service states in one bulk call where supported, else per device.
+        ``room_map`` optionally re-homes a window/door contact to another room
+        (keyed by device id or lower-cased name).
         """
         devices = self.get("/smarthome/devices") or []
         rooms = {}
@@ -794,17 +805,24 @@ class SHCClient:
         # from the same bulk service snapshot (no extra round-trips). Rooms are
         # matched by roomId to the thermostat records built above – the SHC
         # already carries each contact's/sensor's room, so no manual assignment.
+        room_map = room_map or {}
+        by_name = {rec["room"]: rec for rec in by_room.values()}
         door_kw = ("haustür", "haustuer", "tür", "tuer", "eingang", "door", "entrance")
         for dev in devices:
             sids = set(dev.get("deviceServiceIds") or [])
             rid = dev.get("roomId")
             rec = by_room.get(rid if rid in by_room else (rooms.get(rid) or rid))
             st = svc.get(dev.get("id"), {})
-            if "ShutterContact" in sids and rec is not None:
-                val = str((st.get("ShutterContact") or {}).get("value") or "").upper()
-                nm = dev.get("name") or ""
-                is_door = any(k in nm.lower() for k in door_kw)
-                rec["windows"].append({"name": nm, "open": val == "OPEN", "door": is_door})
+            if "ShutterContact" in sids:
+                did = dev.get("id"); nm = dev.get("name") or ""
+                # optional override: re-home this contact to another room
+                ov = room_map.get(did) or room_map.get(nm.lower())
+                target = by_name.get(ov) if ov else rec
+                if target is not None:
+                    val = str((st.get("ShutterContact") or {}).get("value") or "").upper()
+                    is_door = bool(ov) or any(k in nm.lower() for k in door_kw)
+                    target["windows"].append({"name": nm, "open": val == "OPEN",
+                                              "door": is_door, "moved": bool(ov)})
             if "AirQualityLevel" in sids and rec is not None:
                 aq = st.get("AirQualityLevel") or {}
                 rating = str(aq.get("combinedRating") or "").upper() or None
@@ -3270,7 +3288,11 @@ def compute_heatload(store: "Store", areas: dict | None = None,
         usable = bool(tau and area and dt and dt > 0 and r["n_tau"] >= 1)
         rooms.append({"room": rm, "tau_h": tau, "tau_cv": r.get("tau_cv"),
                       "n_tau": r["n_tau"], "setpoint": sp, "area": area,
-                      "dt": dt, "confidence": r["confidence"], "usable": usable})
+                      "dt": dt, "confidence": r["confidence"], "usable": usable,
+                      # the thermal model's verdict on the CURRENT state, so the
+                      # flow card can reconcile ("Reserve → nicht hochdrehen")
+                      # with its design-load recommendation instead of contradicting it.
+                      "category": r.get("category"), "reco": r.get("recommendation")})
 
     covered = [w for w in rooms if w["usable"]]
     sumL = sum((w["area"] / w["tau_h"]) * w["dt"] for w in covered)
@@ -3303,7 +3325,7 @@ def compute_heatload(store: "Store", areas: dict | None = None,
         rm = w["room"]
         base = {"room": rm, "area": w["area"], "tau_h": w["tau_h"],
                 "setpoint": w["setpoint"], "confidence": w["confidence"],
-                "n_tau": w["n_tau"]}
+                "n_tau": w["n_tau"], "category": w.get("category"), "reco": w.get("reco")}
         if w["usable"] and can_abs:
             ua = k * (w["area"] / w["tau_h"])          # W/K
             q = ua * w["dt"]                            # W at design
@@ -3408,15 +3430,17 @@ def _demo_heatload(design_c: float = DESIGN_OUTDOOR_C, spread_k: float = 5.0) ->
         {"room": "Wohnzimmer", "area": 32.0, "tau_h": 48.0, "setpoint": 22.0,
          "confidence": "hoch", "n_tau": 5, "status": "ok", "ua": 62.0, "q_design": 2108,
          "q_lo": 1750, "q_hi": 2466, "spec": 65.9, "rel": 0.17, "plausible": True,
-         "manifold": "EG"},
+         "manifold": "EG", "category": "reserve",
+         "reco": "Reserve vorhanden: Durchfluss ggf. leicht drosseln."},
         {"room": "Büro", "area": 14.0, "tau_h": 22.0, "setpoint": 21.0,
          "confidence": "hoch", "n_tau": 4, "status": "ok", "ua": 59.0, "q_design": 1947,
          "q_lo": 1460, "q_hi": 2434, "spec": 139.1, "rel": 0.25, "plausible": False,
-         "manifold": "EG"},
+         "manifold": "EG", "category": "under",
+         "reco": "Kandidat für mehr Durchfluss beim Abgleich."},
         {"room": "Bad", "area": 8.0, "tau_h": 18.0, "setpoint": 24.0,
          "confidence": "mittel", "n_tau": 4, "status": "ok", "ua": 41.0, "q_design": 1476,
          "q_lo": 1040, "q_hi": 1912, "spec": 184.5, "rel": 0.30, "plausible": False,
-         "manifold": "OG"},
+         "manifold": "OG", "category": "balanced"},
         {"room": "Schlafzimmer", "area": 16.0, "tau_h": None, "setpoint": 19.0,
          "confidence": "niedrig", "n_tau": 1, "status": "missing",
          "missing": ["mehr Auskühlphasen (τ fehlt)"], "manifold": "OG"},
@@ -4502,7 +4526,7 @@ class Poller(threading.Thread):
 
     def _log_windows(self, ts: int):
         """Record a row whenever the set of open windows changes."""
-        contacts = self.client.list_window_contacts()
+        contacts = self.client.list_window_contacts(self.cfg.get("contact_room_map"))
         open_rooms = sorted({(c.get("room") or c.get("name") or "?") for c in contacts if c.get("open")})
         sig = tuple(open_rooms)
         if sig == self._win_sig:
@@ -4513,7 +4537,7 @@ class Poller(threading.Thread):
     def _log_room_temp(self, ts: int):
         """Measured temperature per room (+ setpoint, valve) → store. Also keeps
         the average for the heat time-series overlay."""
-        climate = self.client.list_climate()
+        climate = self.client.list_climate(self.cfg.get("contact_room_map"))
         temps, sets, per_room = [], [], []
         for r in climate:
             if str(r.get("roomControlMode") or "HEATING").upper() == "OFF" or r.get("summerMode"):
@@ -5313,7 +5337,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.ctx.mode != "live":
             return
         client = SHCClient(self.cfg.get("shc_ip", ""), self.cfg["cert"], self.cfg["key"])
-        climate = client.list_climate()
+        climate = client.list_climate(self.cfg.get("contact_room_map"))
         ts = int(time.time())
         per_room, temps, sets = [], [], []
         for r in climate:
@@ -5576,6 +5600,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._post_mode(body)
             if parsed.path == "/api/device-name":
                 return self._post_device_name(body)
+            if parsed.path == "/api/contacts/map":
+                return self._post_contacts_map(body)
             if parsed.path == "/api/homecom/connect":
                 return self._post_homecom_connect(body)
             if parsed.path == "/api/homecom/import":
@@ -5750,6 +5776,24 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json({"ok": False, "error": "device id fehlt"}, 400)
         self.store.set_custom_name(dev_id, body.get("name"))
         return self._send_json({"ok": True})
+
+    def _post_contacts_map(self, body):
+        """Set/clear a window/door-contact → room override. Body: {id|name, room}.
+        An empty/false room removes the override. Keyed by device id (preferred)
+        or lower-cased name, matching list_window_contacts/list_climate."""
+        key = str(body.get("id") or body.get("name") or "").strip()
+        if not key:
+            return self._send_json({"ok": False, "error": "Kontakt-id/-name fehlt"}, 400)
+        key = key.lower() if not body.get("id") else key
+        room = str(body.get("room") or "").strip()
+        cmap = dict(self.cfg.get("contact_room_map") or {})
+        if room:
+            cmap[key] = room
+        else:
+            cmap.pop(key, None)
+        self.cfg["contact_room_map"] = cmap
+        save_config(self.cfg, self.cfg.get("_config_path", DEFAULT_CONFIG))
+        return self._send_json({"ok": True, "map": cmap})
 
     def _post_homecom_connect(self, body):
         if not homecom:
@@ -6313,7 +6357,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send_json({"ok": False, "error": "nur im Live-Modus verfügbar"}, 400)
                 try:
                     client = SHCClient(self.cfg.get("shc_ip", ""), self.cfg["cert"], self.cfg["key"])
-                    climate = client.list_climate()
+                    climate = client.list_climate(self.cfg.get("contact_room_map"))
                 except Exception as exc:
                     return self._send_json({"ok": False, "error": str(exc)}, 200)
                 return self._send_json({"demo": False,
@@ -6424,11 +6468,39 @@ class Handler(BaseHTTPRequestHandler):
                 current = None
                 try:
                     client = SHCClient(self.cfg.get("shc_ip", ""), self.cfg["cert"], self.cfg["key"])
-                    current = client.list_window_contacts()
+                    current = client.list_window_contacts(self.cfg.get("contact_room_map"))
                 except Exception:
                     current = None
                 return self._send_json({"demo": False,
                     **compute_window_awareness(self.store, wd, current)})
+            if path == "/api/contacts":
+                # window/door contacts + their (effective) room, for the
+                # "re-home a contact" mapping UI. Rooms list = thermostat rooms.
+                cmap = self.cfg.get("contact_room_map") or {}
+                if self.ctx.mode == "demo":
+                    dc = _demo_climate()
+                    contacts = []
+                    for r in dc:
+                        for w in (r.get("windows") or []):
+                            did = f"demo-{w['name']}"
+                            ov = cmap.get(did) or cmap.get(w["name"].lower())
+                            contacts.append({"id": did, "name": w["name"],
+                                             "room": ov or r["room"], "shc_room": r["room"],
+                                             "moved": bool(ov), "open": w.get("open", False),
+                                             "door": w.get("door", False)})
+                    rooms_list = [r["room"] for r in dc]
+                    return self._send_json({"demo": True, "contacts": contacts,
+                                            "rooms": rooms_list, "map": cmap})
+                if self.ctx.mode != "live":
+                    return self._send_json({"ok": False, "error": "nur im Live-Modus verfügbar"}, 400)
+                try:
+                    client = SHCClient(self.cfg.get("shc_ip", ""), self.cfg["cert"], self.cfg["key"])
+                    contacts = client.list_window_contacts(cmap)
+                    rooms_list = sorted({r["room"] for r in client.list_climate(cmap)})
+                except Exception as exc:
+                    return self._send_json({"ok": False, "error": str(exc)}, 200)
+                return self._send_json({"demo": False, "contacts": contacts,
+                                        "rooms": rooms_list, "map": cmap})
             if path == "/api/heating/devicecurve":
                 # read the device's configured 2-point heating curve from HomeCom
                 if self.ctx.mode == "demo":

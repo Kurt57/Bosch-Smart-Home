@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v149';   // short tag shown always-on in the header
-const APP_VERSION = 'v149 · 2026-10-12 · Fenster-/Tür-Kontakte & Twinguard-Luftqualität je Raum (neue Tabellenspalten + Lüften-Empfehlung) · offene Fenster werden aus der Auskühl-/τ-Messung ausgeklammert · Aufheizphasen jetzt auch für Fußbodenheizung (ohne Ventil-%) erkannt · „sehr träge" klarer erklärt'
+const APP_BUILD = 'v150';   // short tag shown always-on in the header
+const APP_VERSION = 'v150 · 2026-10-15 · Durchfluss-Karte versöhnt mit dem Raum-Modell (Reserve → nicht hochdrehen, unterversorgt → aufdrehen) · Fenster-/Tür-Kontakte einem anderen Raum zuordnen (z. B. Haustür → Wohnzimmer) · neues Wohn-Dashboard (Vollbild fürs Wand-iPad, #dash): Räume, Lüften-Hinweise, „jetzt waschen?" aus Börse/PV'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -2523,6 +2523,129 @@ const HD_SEV = {
 };
 const HD_MODE = { ch: 'Heizen', heating: 'Heizen', heat: 'Heizen', dhw: 'Warmwasser', off: 'Standby' };
 let _hdData = null, _hdBusy = false;
+// Fenster-/Tür-Kontakt → Raum-Zuordnung: lets a contact (e.g. the front door in
+// a hallway) be re-homed to the adjacent room so its open/close counts there.
+async function renderContactsMap() {
+  const box = $('hd-map'); if (!box) return;
+  box.innerHTML = '<div class="note">Lade Kontakte …</div>';
+  let r;
+  try { r = await api('/api/contacts'); } catch (e) { r = null; }
+  if (!r || (!r.contacts && r.ok === false)) {
+    box.innerHTML = '<div class="note">Nur mit laufender Bridge verfügbar (Live oder Demo).</div>';
+    return;
+  }
+  const contacts = r.contacts || [];
+  const rooms = r.rooms || [];
+  if (!contacts.length) {
+    box.innerHTML = '<div class="note">Keine Fenster-/Türkontakte gefunden.</div>';
+    return;
+  }
+  const opt = (sel) => '<option value="">— automatisch (Bosch) —</option>' +
+    rooms.map(rm => `<option value="${esc(rm)}"${rm === sel ? ' selected' : ''}>${esc(rm)}</option>`).join('');
+  box.innerHTML = `<div class="note" style="margin-bottom:6px">Jeder Kontakt bringt seinen Raum automatisch aus Bosch mit. ` +
+    `Nur wenn ein Kontakt für einen <b>anderen</b> Raum zählen soll (z. B. die <b>Haustür</b> im Windfang → Wohnzimmer), hier umhängen.</div>` +
+    contacts.map(c => {
+      const eff = c.moved ? c.room : '';
+      return `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:13px;padding:4px 0;border-bottom:1px solid var(--line)">` +
+        `<span>${c.door ? '🚪' : '🪟'} <b>${esc(c.name)}</b>` +
+        `<span style="color:var(--muted);font-size:11px"> · in Bosch: ${esc(c.shc_room || '–')}${c.open ? ' · offen' : ''}</span></span>` +
+        `<select class="contact-map" data-id="${esc(c.id)}" style="padding:4px 6px;border-radius:8px;border:1px solid var(--line);background:var(--card2);color:var(--ink);font-size:12px">${opt(eff)}</select>` +
+        `</div>`;
+    }).join('') +
+    `<div id="hd-map-msg" class="note" style="margin-top:6px"></div>`;
+  box.querySelectorAll('.contact-map').forEach(sel => {
+    sel.addEventListener('change', async () => {
+      const msg = $('hd-map-msg'); if (msg) msg.textContent = 'Speichere …';
+      try {
+        await postJSON('/api/contacts/map', { id: sel.dataset.id, room: sel.value });
+        if (msg) msg.innerHTML = '<span style="color:#4be0b0">✓ gespeichert</span> – wirkt beim nächsten Heizungs-Check.';
+        _hdData = null;   // force a reload so the Fenster column picks up the change
+      } catch (e) { if (msg) msg.innerHTML = '<span style="color:#ff6b8a">Speichern fehlgeschlagen.</span>'; }
+    });
+  });
+}
+/* ---- Wohn-Dashboard (Kiosk, Vollbild für ein Wand-iPad) ------------------- */
+let _kioskClockT = null, _kioskDataT = null, _kioskRooms = null;
+function kioskWashAdvice() {
+  const sp = STATE.spot;
+  const now = Date.now() / 1000;
+  let out = { line: '', sub: '', bg: '#3ba9ff22', fg: '#9ec7ff', bd: '#3ba9ff55' };
+  if (sp && sp.enabled && sp.prices && sp.prices.length) {
+    const cons = sp.prices.map(p => p.consumer_ct);
+    const lo = Math.min(...cons), hi = Math.max(...cons), avg = mean(cons);
+    const nowP = sp.prices.find(p => p.ts <= now && p.ts + 3600 > now) || sp.prices[0];
+    const c = nowP.consumer_ct;
+    if (c <= avg * 0.9) { out = { bg: '#4be0b022', fg: '#4be0b0', bd: '#4be0b055' }; out.line = '🟢 Jetzt günstig – guter Moment für Waschmaschine, Trockner, Spüler & E-Auto.'; }
+    else if (c >= avg * 1.15) { out = { bg: '#ff6b8a22', fg: '#ff6b8a', bd: '#ff6b8a55' }; out.line = '🔴 Strom gerade teuer – große Verbraucher besser später laufen lassen.'; }
+    else { out = { bg: '#ffb64d22', fg: '#ffb64d', bd: '#ffb64d55' }; out.line = '🟡 Strompreis mittel – kein Schnäppchen, aber kein Grund zu warten.'; }
+    out.sub = `Börse jetzt <b>${fmt(c, 1)} ct</b> · heute ${fmt(lo, 1)}–${fmt(hi, 1)} ct (Ø ${fmt(avg, 1)})`;
+  } else {
+    out.line = 'ℹ️ Kein Börsentarif aktiv – ohne dynamische Preise keine „jetzt-waschen"-Empfehlung.';
+    out.sub = 'Im Setup „Dynamischer Börsentarif" aktivieren.';
+  }
+  // PV midday hint (heuristic from the PV-tab sizing, not a live meter)
+  let kwp = 0; try { kwp = Math.max(0, parseFloat(($('pv-kwp') || {}).value) || 0); } catch (e) {}
+  const h = new Date().getHours();
+  if (kwp > 0 && h >= 10 && h <= 15) out.sub += ' · ☀️ Mittags läuft die PV – Eigenverbrauch lohnt jetzt besonders.';
+  return out;
+}
+function paintKiosk() {
+  const rooms = _kioskRooms || [];
+  const out = kioskWashAdvice();
+  const ban = $('kiosk-banner');
+  if (ban) { ban.style.background = out.bg; ban.style.border = '1px solid ' + out.bd; ban.style.color = out.fg;
+    ban.innerHTML = `${out.line}<div class="b-sub" style="color:var(--ink)">${out.sub}</div>`; }
+  const og = $('kiosk-out');
+  const hp = (_hdData && _hdData.kpis) || {};
+  if (og) og.innerHTML = hp.outdoor_c != null ? `🌡️ außen ${fmt(hp.outdoor_c, 0)}°${hp.heating_now ? ' · WP heizt' : ''}` : '';
+  const grid = $('kiosk-rooms');
+  if (grid) grid.innerHTML = rooms.map(rm => {
+    const tags = [];
+    if ((rm.windows_open || 0) > 0) tags.push(`<span style="color:#ffb64d">🪟 offen</span>`);
+    if (rm.air) { const ar = airRate(rm.air, rm.air_purity); tags.push(`<span style="color:${RATE_COL[ar.lvl]}">● Luft ${ar.word}</span>`); }
+    if (rm.humidity != null) { const hr = rateMetric('humidity', rm.humidity); tags.push(`<span style="color:${RATE_COL[hr.lvl]}">${fmt(rm.humidity, 0)}%</span>`); }
+    const va = ventAdvice(rm);
+    if (va.lvl === 'warn') tags.push(`<span style="color:#ff6b8a">🌬️ lüften</span>`);
+    const heat = rm.heating === true ? ' 🔥' : '';
+    const cold = rm.setpoint != null && rm.temp != null && rm.temp <= rm.setpoint - 1.0;
+    return `<div class="kroom"><div class="kr-name"><span>${esc(rm.room)}</span><span>${heat}</span></div>` +
+      `<div class="kr-temp" style="color:${cold ? '#ffb64d' : 'var(--ink)'}">${rm.temp != null ? fmt(rm.temp, 1) + '°' : '–'}</div>` +
+      `<div class="kr-set">Soll ${rm.setpoint != null ? fmt(rm.setpoint, 0) + '°' : '–'}</div>` +
+      (tags.length ? `<div class="kr-tags">${tags.join('')}</div>` : '') + `</div>`;
+  }).join('') || '<div class="k-sub">Keine Raumdaten – läuft die Bridge?</div>';
+  // ventilation one-liner
+  const vent = rooms.filter(rm => ventAdvice(rm).lvl === 'warn').map(rm => esc(rm.room));
+  const ve = $('kiosk-vent');
+  if (ve) ve.innerHTML = vent.length ? `🌬️ <b>Lüften empfohlen:</b> ${vent.join(', ')} (kurz stoßlüften).` : '✓ Lüften: überall ok.';
+  const up = $('kiosk-updated'); if (up) up.textContent = 'aktualisiert ' + new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+}
+async function kioskLoadData() {
+  try {
+    const r = await api('/api/heating/diag');
+    if (r && (r.rooms || r.ok !== false)) { _hdData = r; _kioskRooms = r.rooms || []; }
+  } catch (e) { /* keep whatever we had */ }
+  try { if (!STATE.spot) STATE.spot = await api('/api/spot'); } catch (e) {}
+  paintKiosk();
+}
+function kioskTick() {
+  const c = $('kiosk-clock'), d = $('kiosk-date');
+  const now = new Date();
+  if (c) c.textContent = now.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+  if (d) d.textContent = now.toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long' });
+}
+function openKiosk() {
+  const k = $('kiosk'); if (!k) return;
+  k.hidden = false;
+  try { if (location.hash !== '#dash') history.replaceState(null, '', '#dash'); } catch (e) {}
+  kioskTick(); paintKiosk(); kioskLoadData();
+  clearInterval(_kioskClockT); _kioskClockT = setInterval(kioskTick, 1000);
+  clearInterval(_kioskDataT); _kioskDataT = setInterval(kioskLoadData, 60000);
+}
+function closeKiosk() {
+  const k = $('kiosk'); if (k) k.hidden = true;
+  clearInterval(_kioskClockT); clearInterval(_kioskDataT); _kioskClockT = _kioskDataT = null;
+  try { if (location.hash === '#dash') history.replaceState(null, '', location.pathname + location.search); } catch (e) {}
+}
 async function renderHeatingDiag(force) {
   const card = $('hd-card'); if (!card) return;
   if (_hdData && !force) { paintHeatingDiag(_hdData); return; }
@@ -3479,11 +3602,18 @@ function flowLoopsOf(room) {
 function tacoKey(room) { return 'bhe_taco_' + room; }
 function tacoGet(room) { try { const v = parseFloat(localStorage.getItem(tacoKey(room))); return isFinite(v) ? v : null; } catch (e) { return null; } }
 // Compare actual vs recommended per-circuit flow → {txt, col} for display.
-function tacoDelta(ist, soll) {
+function tacoDelta(ist, soll, cat) {
   if (ist == null) return { txt: '', col: 'var(--muted)' };
   const diff = ist - soll, pct = soll > 0 ? diff / soll * 100 : 0;
-  const col = Math.abs(pct) <= 15 ? '#4be0b0' : Math.abs(pct) <= 40 ? '#ffb64d' : '#ff6b8a';
-  const word = Math.abs(pct) <= 15 ? 'passt' : (diff > 0 ? 'zu hoch' : 'zu niedrig');
+  let col = Math.abs(pct) <= 15 ? '#4be0b0' : Math.abs(pct) <= 40 ? '#ffb64d' : '#ff6b8a';
+  let word = Math.abs(pct) <= 15 ? 'passt' : (diff > 0 ? 'zu hoch' : 'zu niedrig');
+  // Reconcile with the thermal model's verdict on the CURRENT state so the two
+  // cards don't contradict each other: a room the model calls "Reserve" already
+  // reaches its setpoint and cools slowly → being below the design recommendation
+  // is fine (don't open it up); an "under" room below the recommendation is the
+  // real candidate to open up.
+  if (cat === 'reserve' && diff < 0) { word = 'unter Empfehlung – Raum ist aber versorgt, Hochdrehen nicht nötig'; col = '#4be0b0'; }
+  else if (cat === 'under' && diff < 0) { word = 'zu niedrig – hier aufdrehen'; col = '#ff6b8a'; }
   const sign = diff >= 0 ? '+' : '';
   return { txt: `${sign}${fmt(diff, 1)} l/min · ${word}`, col };
 }
@@ -3572,12 +3702,21 @@ function paintFlow(r) {
           const implausible = x.plausible === false;
           const flagged = veryLow || implausible;
           const ist = tacoGet(x.room);
-          const d = tacoDelta(ist, pl);
+          const d = tacoDelta(ist, pl, x.category);
+          // the thermal model's verdict on the CURRENT state – shown next to the
+          // room so the design-load recommendation doesn't read as a contradiction
+          const CAT = {
+            under: { t: '⚠︎ zu kalt', c: '#ff6b8a' },
+            reserve: { t: '✓ Reserve', c: '#4be0b0' },
+            balanced: { t: '✓ ausgewogen', c: '#4be0b0' },
+          };
+          const catInfo = CAT[x.category] || null;
+          const catChip = catInfo ? ` <span style="color:${catInfo.c};font-weight:400;font-size:11px">${catInfo.t}</span>` : '';
           const istMark = ist != null
             ? `<div style="position:absolute;left:${w(ist)}%;top:-2px;width:3px;height:16px;background:#ffb64d;border-radius:2px"></div>` : '';
           h += `<div style="margin-bottom:10px">` +
             `<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:3px">` +
-              `<b>${esc(x.room)}${loops > 1 ? ` <span style="color:var(--muted);font-weight:400;font-size:12px">${loops} Kreise</span>` : ''}</b>` +
+              `<b>${esc(x.room)}${catChip}${loops > 1 ? ` <span style="color:var(--muted);font-weight:400;font-size:12px">${loops} Kreise</span>` : ''}</b>` +
               `<span><b style="color:${flagged ? '#ffb64d' : '#3ba9ff'}">${pl} l/min</b>${flagged ? ' ⚠︎' : ''}${loops > 1 ? ' <span style="color:var(--muted);font-size:11px">je Schlauch</span>' : ''} <span style="color:var(--muted)">(${plLo}–${plHi})</span></span></div>` +
             `<div style="position:relative;background:var(--line);border-radius:6px;height:12px">` +
               `<div style="position:absolute;left:${w(plLo)}%;width:${Math.max(1, w(plHi) - w(plLo))}%;top:0;height:100%;background:#3ba9ff;opacity:.3;border-radius:6px"></div>` +
@@ -3587,7 +3726,7 @@ function paintFlow(r) {
             // actual (Ist) tacosetter input + comparison to the recommendation
             `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:5px;font-size:12px">` +
               `<label style="color:var(--muted)">Ist (je Schlauch):</label>` +
-              `<input class="taco-in" data-room="${esc(x.room)}" data-idx="${idx}" data-soll="${pl}" data-fmax="${fmax.toFixed(3)}" type="text" inputmode="decimal" placeholder="z. B. ${pl}" value="${ist != null ? fmt(ist, 1) : ''}" ` +
+              `<input class="taco-in" data-room="${esc(x.room)}" data-idx="${idx}" data-soll="${pl}" data-cat="${esc(x.category || '')}" data-fmax="${fmax.toFixed(3)}" type="text" inputmode="decimal" placeholder="z. B. ${pl}" value="${ist != null ? fmt(ist, 1) : ''}" ` +
                 `style="width:76px;padding:4px 6px;border-radius:8px;border:1px solid var(--line);background:var(--card2);color:var(--ink);font-size:13px"> l/min` +
               `<span id="taco-d-${idx}" style="color:${d.col};font-weight:600">${d.txt}</span>` +
             `</div>` +
@@ -3600,6 +3739,12 @@ function paintFlow(r) {
               : implausible ? `<div style="font-size:11px;color:#ffb64d;margin-top:4px;line-height:1.4">⚠︎ <b>Wert noch unsicher.</b> ` +
                 `Spezifische Last ${x.spec != null ? '≈ <b>' + fmt(x.spec, 0) + ' W/m²</b> ' : ''}außerhalb des üblichen Bereichs (10–120) – ` +
                 `meist stimmt die <b>Fläche</b> (Verteiler-Karte) oder das <b>τ</b> noch nicht. Erst prüfen, dann als Startwert nehmen.</div>` : '') +
+            // reconcile with the room model: don't tell a well-supplied room to open up
+            (x.category === 'reserve' ? `<div style="font-size:11px;color:#4be0b0;margin-top:4px;line-height:1.4">✓ <b>Modell: gut versorgt (Reserve).</b> ` +
+              `Der Raum erreicht sein Soll und kühlt träge aus – die Zahl oben ist der rechnerische Auslege-Wert, aber du musst <b>nicht</b> auf ihn hochdrehen. ` +
+              `Eher leicht drosseln, dann bleibt mehr für unterversorgte Räume.</div>`
+              : x.category === 'under' ? `<div style="font-size:11px;color:#ff6b8a;margin-top:4px;line-height:1.4">⚠︎ <b>Modell: unterversorgt.</b> ` +
+                `Erreicht sein Soll nicht – hier beim Abgleich <b>zuerst aufdrehen</b> (Richtung Empfehlung).</div>` : '') +
             `</div>`;
         });
       });
@@ -7964,6 +8109,17 @@ function init() {
       pre.textContent = JSON.stringify(r.devices || r, null, 2);
     } catch (e) { pre.textContent = 'Nur mit laufender Bridge im Live-Modus verfügbar.'; }
   });
+  const hdMap = $('hd-map-btn');
+  if (hdMap) hdMap.addEventListener('click', () => {
+    const box = $('hd-map'); if (!box) return;
+    box.hidden = !box.hidden;
+    if (!box.hidden) renderContactsMap();
+  });
+  // Wohn-Dashboard (Kiosk)
+  const ok = $('open-kiosk'); if (ok) ok.addEventListener('click', openKiosk);
+  const kx = $('kiosk-exit'); if (kx) kx.addEventListener('click', closeKiosk);
+  window.addEventListener('hashchange', () => { if (location.hash === '#dash') openKiosk(); });
+  if (location.hash === '#dash') setTimeout(openKiosk, 300);
   // device heating-curve points (read off the heat pump), stored locally
   [['hc-p20', 'hc_dev_p20'], ['hc-pm10', 'hc_dev_pm10']].forEach(([id, key]) => {
     const el = $(id); if (!el) return;
@@ -7997,7 +8153,7 @@ function init() {
       const ist = raw === '' ? null : parseFloat(raw);
       const valid = ist != null && isFinite(ist) && ist >= 0;
       try { if (!valid) localStorage.removeItem(tacoKey(room)); else localStorage.setItem(tacoKey(room), String(ist)); } catch (e) {}
-      const d = tacoDelta(valid ? ist : null, soll);
+      const d = tacoDelta(valid ? ist : null, soll, el.dataset.cat);
       const ds = document.getElementById('taco-d-' + idx); if (ds) { ds.textContent = d.txt; ds.style.color = d.col; }
       const mk = document.getElementById('taco-m-' + idx);
       if (mk) mk.innerHTML = valid
