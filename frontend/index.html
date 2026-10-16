@@ -219,7 +219,21 @@
   .kf-val{fill:var(--k-ink); font-weight:700; font-size:12px; letter-spacing:-.3px}
   .kf-lbl{fill:var(--k-sub); font-weight:600; font-size:8.5px; letter-spacing:.3px; text-transform:uppercase}
   .kf-sub{fill:var(--k-sub); font-size:8px}
-  @media (prefers-reduced-motion:reduce){#kiosk-flow .kf-dot{display:none}}
+  @media (prefers-reduced-motion:reduce){#kiosk-flow .kf-dot{display:none}
+    #kiosk-flow line[style*="drop-shadow"] animate{display:none}}
+  /* Top-Verbraucher jetzt */
+  #kiosk-loads:not(:empty){margin:16px 0; background:var(--k-card); border:.5px solid var(--k-sep);
+    border-radius:22px; padding:16px 18px; box-shadow:var(--k-shadow);
+    -webkit-backdrop-filter:var(--k-blur); backdrop-filter:var(--k-blur)}
+  .kl-title{font-size:12px; font-weight:600; color:var(--k-sub); text-transform:uppercase; letter-spacing:.06em; margin-bottom:12px}
+  .kl-row{display:flex; align-items:center; gap:11px; padding:5px 0}
+  .kl-ic{font-size:20px; flex:0 0 auto; width:24px; text-align:center}
+  .kl-main{flex:1 1 auto; min-width:0}
+  .kl-nm{font-size:14px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  .kl-rm{color:var(--k-sub); font-weight:400; font-size:12px}
+  .kl-bar{height:6px; border-radius:3px; background:var(--k-card2); margin-top:5px; overflow:hidden}
+  .kl-bar span{display:block; height:100%; border-radius:3px; transition:width .5s ease}
+  .kl-w{flex:0 0 auto; font-size:15px; font-weight:700; letter-spacing:-.3px; min-width:62px; text-align:right}
 </style>
 </head>
 <body>
@@ -1625,6 +1639,7 @@
   <div id="kiosk-warn"></div>
   <div id="kiosk-banner"></div>
   <div id="kiosk-flow"></div>
+  <div id="kiosk-loads"></div>
   <div id="kiosk-rooms"></div>
   <div id="kiosk-vent" class="k-sub"></div>
 </div>

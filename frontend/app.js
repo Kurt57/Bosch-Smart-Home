@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v153';   // short tag shown always-on in the header
-const APP_VERSION = 'v153 · 2026-10-16 · Wohn-Dashboard: animierte Energiefluss-Grafik (PV ☀️ → Haus 🏠 ↔ Batterie 🔋 ↔ Netz ⚡ mit fließenden Punkten, Richtung/Tempo ∝ Leistung) – Apple-Look, in Hell & Dunkel'
+const APP_BUILD = 'v154';   // short tag shown always-on in the header
+const APP_VERSION = 'v154 · 2026-10-16 · Dashboard: Top-5 Live-Verbraucher (inkl. Luft-Wärmepumpe in W/kW) + Energiefluss mit glühenden/pulsierenden Linien und 🚗 E-Auto-Knoten (bei V2H)'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -2566,6 +2566,7 @@ async function renderContactsMap() {
 }
 /* ---- Wohn-Dashboard (Kiosk, Vollbild für ein Wand-iPad) ------------------- */
 let _kioskClockT = null, _kioskDataT = null, _kioskRooms = null;
+let _kioskLive = null, _kioskHp = null;   // light live-power snapshot (kiosk only)
 let _kioskAway = (() => { try { return localStorage.getItem('bhe_kiosk_away') === '1'; } catch (e) { return false; } })();
 // Average household+heat-pump load in the current hour (kW ≈ kWh/h), from the
 // measured hourly profile and the daily averages.
@@ -2642,17 +2643,27 @@ function renderEnergyFlow() {
   const el = $('kiosk-flow'); if (!el) return;
   const pvE = pvNowEstimate();
   const load = loadNowKw();
-  let battKwh = 0; try { battKwh = Math.max(0, parseFloat(($('pv-batt') || {}).value) || 0); } catch (e) {}
+  const inp = pvInputs();
+  const battKwh = inp.batt, haveBatt = battKwh > 0;
+  const haveCar = !!inp.v2h && inp.carKwh > 0;
   const havePv = !!pvE, pv = pvE ? Math.max(0, pvE.pvKw) : 0;
   const directPV = Math.min(pv, load);
   let surplus = pv - directPV, deficit = load - directPV;
-  const cap = 3.0;                                  // assumed max (dis)charge kW
-  let charge = 0, discharge = 0, exp = 0, imp = 0;
-  if (surplus > 0.02) { charge = battKwh > 0 ? Math.min(surplus, cap) : 0; exp = surplus - charge; }
-  if (deficit > 0.02) { discharge = battKwh > 0 ? Math.min(deficit, cap) : 0; imp = deficit - discharge; }
+  // storage chain: home battery first, then the car (if V2H)
+  let bCh = 0, bDis = 0, cCh = 0, cDis = 0, exp = 0, imp = 0;
+  const capB = 3.0, capC = 7.0;
+  if (surplus > 0.02) {
+    if (haveBatt) { bCh = Math.min(surplus, capB); surplus -= bCh; }
+    if (haveCar && surplus > 0.02) { cCh = Math.min(surplus, capC); surplus -= cCh; }
+    exp = surplus;
+  }
+  if (deficit > 0.02) {
+    if (haveBatt) { bDis = Math.min(deficit, capB); deficit -= bDis; }
+    if (haveCar && deficit > 0.02) { cDis = Math.min(deficit, capC); deficit -= cDis; }
+    imp = deficit;
+  }
 
-  // geometry (SVG units)
-  const HX = 150, HY = 135, R = 27;
+  const R = 27;
   const dots = (path, color, kw) => {
     if (kw < 0.04) return '';
     const n = Math.max(1, Math.min(4, Math.round(kw / 0.6)));
@@ -2664,6 +2675,14 @@ function renderEnergyFlow() {
       s += `<circle class="kf-dot" r="3.1" fill="${color}"><animateMotion dur="${dur}s" begin="-${(i * dur / n).toFixed(2)}s" repeatCount="indefinite" path="${path}" calcMode="linear"/></circle>`;
     return s;
   };
+  // base grey line + (when active) a pulsing, glowing colour overlay
+  const seg = (x1, y1, x2, y2, color, active) => {
+    let s = `<line class="kf-line" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>`;
+    if (active) s += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${color}" stroke-width="3" ` +
+      `stroke-linecap="round" fill="none" style="filter:drop-shadow(0 0 4px ${color})">` +
+      `<animate attributeName="opacity" values="0.35;0.8;0.35" dur="2.2s" repeatCount="indefinite"/></line>`;
+    return s;
+  };
   const node = (cx, cy, icon, val, label, dim, labelAbove) => {
     const op = dim ? ' opacity="0.4"' : '';
     const ly = labelAbove ? cy - R - 7 : cy + R + 13;
@@ -2672,27 +2691,59 @@ function renderEnergyFlow() {
       `<text class="kf-val" x="${cx}" y="${cy + 15}" text-anchor="middle">${val}</text>` +
       `<text class="kf-lbl" x="${cx}" y="${ly}" text-anchor="middle">${label}</text></g>`;
   };
-  const battVal = battKwh <= 0 ? '–' : charge > 0.04 ? `+${fmt(charge, 1)}` : discharge > 0.04 ? `−${fmt(discharge, 1)}` : '0';
+  const storeVal = (kwh, ch, dis) => kwh <= 0 ? '–' : ch > 0.04 ? `+${fmt(ch, 1)}` : dis > 0.04 ? `−${fmt(dis, 1)}` : '0';
   const gridVal = imp > 0.04 ? `↓${fmt(imp, 1)}` : exp > 0.04 ? `↑${fmt(exp, 1)}` : '0';
+  const pvActive = pv > 0.04, battActive = bCh > 0.04 || bDis > 0.04, gridActive = imp > 0.04 || exp > 0.04;
+  const vh = haveCar ? 282 : 216;
   const svg =
-    `<svg viewBox="0 -6 300 216" role="img" aria-label="Energiefluss">` +
-    // connector lines
-    `<line class="kf-line" x1="150" y1="69" x2="150" y2="108"/>` +
-    `<line class="kf-line" x1="79" y1="135" x2="123" y2="135"/>` +
-    `<line class="kf-line" x1="221" y1="135" x2="177" y2="135"/>` +
-    // animated dots
-    dots('M150,69 L150,108', 'var(--kb-sun)', directPV + charge + exp) +
-    (charge > 0 ? dots('M123,135 L79,135', 'var(--kb-teal)', charge) : dots('M79,135 L123,135', 'var(--kb-teal)', discharge)) +
+    `<svg viewBox="0 -6 300 ${vh}" role="img" aria-label="Energiefluss">` +
+    // connector lines (base + glow) + animated dots
+    seg(150, 69, 150, 108, 'var(--kb-sun)', pvActive) +
+    seg(79, 135, 123, 135, 'var(--kb-teal)', battActive) +
+    seg(221, 135, 177, 135, imp > 0 ? 'var(--kb-blue)' : 'var(--kb-green)', gridActive) +
+    (haveCar ? seg(150, 162, 150, 201, 'var(--kb-teal)', cCh > 0.04 || cDis > 0.04) : '') +
+    dots('M150,69 L150,108', 'var(--kb-sun)', directPV + bCh + cCh + exp) +
+    (bCh > 0 ? dots('M123,135 L79,135', 'var(--kb-teal)', bCh) : dots('M79,135 L123,135', 'var(--kb-teal)', bDis)) +
     (imp > 0 ? dots('M221,135 L177,135', 'var(--kb-blue)', imp) : dots('M177,135 L221,135', 'var(--kb-green)', exp)) +
+    (haveCar ? (cCh > 0 ? dots('M150,162 L150,201', 'var(--kb-teal)', cCh) : dots('M150,201 L150,162', 'var(--kb-teal)', cDis)) : '') +
     // nodes
-    node(150, 42, '☀️', havePv && pv > 0.04 ? fmt(pv, 1) : (havePv ? '0' : '–'), 'PV kW', !havePv || pv < 0.04, true) +
-    node(52, 135, '🔋', battVal, 'Batterie', battKwh <= 0) +
-    node(150, 135, '🏠', fmt(load, 1), 'Haus kW') +
-    node(248, 135, '⚡', gridVal, 'Netz', imp < 0.04 && exp < 0.04) +
+    node(150, 42, '☀️', havePv && pvActive ? fmt(pv, 1) : (havePv ? '0' : '–'), 'PV kW', !havePv || !pvActive, true) +
+    node(52, 135, '🔋', storeVal(battKwh, bCh, bDis), 'Batterie', !haveBatt) +
+    node(150, 135, '🏠', fmt(load, 1), haveCar ? '' : 'Haus kW') +
+    node(248, 135, '⚡', gridVal, 'Netz', !gridActive) +
+    (haveCar ? node(150, 228, '🚗', storeVal(inp.carKwh, cCh, cDis), 'E-Auto (V2H)', false) : '') +
     `</svg>` +
     `<div class="k-sub" style="text-align:center;font-size:11px;margin:2px 0 6px">` +
-    `Batterie +laden/−entladen · Netz ↓Bezug/↑Einspeisung · Momentan-Schätzung (${pvE ? pvE.src : 'ohne PV'})</div>`;
+    `Speicher +laden/−entladen · Netz ↓Bezug/↑Einspeisung · Momentan-Schätzung (${pvE ? pvE.src : 'ohne PV'})</div>`;
   el.innerHTML = svg;
+}
+// Top live consumers right now (incl. the air-source heat pump), from the latest
+// measured per-device power + the heat pump's live electrical draw.
+function renderKioskLoads() {
+  const el = $('kiosk-loads'); if (!el) return;
+  const list = [];
+  const hp = _kioskHp || (STATE.hpA && STATE.hpA.live);
+  if (hp && typeof hp.power_w === 'number' && hp.power_w > 1)
+    list.push({ name: 'Luft-Wärmepumpe', w: hp.power_w, icon: '♨️', hp: true });
+  const devs = (_kioskLive && _kioskLive.devices) || (STATE.data && STATE.data.live && STATE.data.live.devices) || [];
+  devs.forEach(d => { if (typeof d.power_w === 'number' && d.power_w > 1)
+    list.push({ name: d.custom_name || d.name, room: d.room, w: d.power_w, icon: '🔌' }); });
+  list.sort((a, b) => b.w - a.w);
+  const top = list.slice(0, 5);
+  if (!top.length) { el.innerHTML = ''; return; }
+  const max = top[0].w || 1;
+  const totalW = list.reduce((a, d) => a + d.w, 0);
+  const fmtW = w => w >= 1000 ? fmt(w / 1000, 2) + ' kW' : fmt(w, 0) + ' W';
+  el.innerHTML = `<div class="kl-title">⚡ Größte Verbraucher jetzt</div>` +
+    top.map(d => {
+      const col = d.hp ? 'var(--kb-amber)' : 'var(--kb-blue)';
+      return `<div class="kl-row"><div class="kl-ic">${d.icon}</div>` +
+        `<div class="kl-main"><div class="kl-nm">${esc(d.name)}${d.room ? ` <span class="kl-rm">· ${esc(d.room)}</span>` : ''}</div>` +
+        `<div class="kl-bar"><span style="width:${Math.max(4, d.w / max * 100)}%;background:${col}"></span></div></div>` +
+        `<div class="kl-w">${fmtW(d.w)}</div></div>`;
+    }).join('') +
+    `<div class="k-sub" style="font-size:11px;margin-top:8px">Summe gemessen jetzt: <b>${fmtW(totalW)}</b>` +
+    `${list.length > 5 ? ` · ${list.length} Verbraucher aktiv` : ''}</div>`;
 }
 function paintKiosk() {
   const rooms = _kioskRooms || [];
@@ -2715,6 +2766,7 @@ function paintKiosk() {
   if (ban) { ban.className = out.level;
     ban.innerHTML = `${out.line}<div class="b-sub">${out.sub}</div>`; }
   try { renderEnergyFlow(); } catch (e) {}
+  try { renderKioskLoads(); } catch (e) {}
   const og = $('kiosk-out');
   const hp = (_hdData && _hdData.kpis) || {};
   if (og) og.innerHTML = (_kioskAway ? '🚪 Abwesend · ' : '') + (hp.outdoor_c != null ? `🌡️ außen ${fmt(hp.outdoor_c, 0)}°${hp.heating_now ? ' · WP heizt' : ''}` : '');
@@ -2745,6 +2797,10 @@ async function kioskLoadData() {
     if (r && (r.rooms || r.ok !== false)) { _hdData = r; _kioskRooms = r.rooms || []; }
   } catch (e) { /* keep whatever we had */ }
   try { if (!STATE.spot) STATE.spot = await api('/api/spot'); } catch (e) {}
+  // light live-power refresh (small window = cheap; the live snapshot is the
+  // latest sample regardless) – kept separate so the other tabs' 90-day data stays.
+  try { const a = await api('/api/analytics?days=2'); if (a && a.live) _kioskLive = a.live; } catch (e) {}
+  try { const h = await api('/api/heatpump/analytics?days=2'); if (h && h.live) _kioskHp = h.live; } catch (e) {}
   paintKiosk();
 }
 function kioskTick() {
