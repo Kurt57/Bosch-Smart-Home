@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v150';   // short tag shown always-on in the header
-const APP_VERSION = 'v150 · 2026-10-15 · Durchfluss-Karte versöhnt mit dem Raum-Modell (Reserve → nicht hochdrehen, unterversorgt → aufdrehen) · Fenster-/Tür-Kontakte einem anderen Raum zuordnen (z. B. Haustür → Wohnzimmer) · neues Wohn-Dashboard (Vollbild fürs Wand-iPad, #dash): Räume, Lüften-Hinweise, „jetzt waschen?" aus Börse/PV'
+const APP_BUILD = 'v151';   // short tag shown always-on in the header
+const APP_VERSION = 'v151 · 2026-10-16 · Wohn-Dashboard: echte PV-Überschuss-Schätzung (Erzeugung aus Wetter/Sonnenverlauf minus Hauslast) statt Mittags-Heuristik + Abwesend/Zuhause-Modus (offene-Fenster-Warnung, „jetzt einschalten" vs. „per Zeitvorwahl")'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -2566,38 +2566,102 @@ async function renderContactsMap() {
 }
 /* ---- Wohn-Dashboard (Kiosk, Vollbild für ein Wand-iPad) ------------------- */
 let _kioskClockT = null, _kioskDataT = null, _kioskRooms = null;
+let _kioskAway = (() => { try { return localStorage.getItem('bhe_kiosk_away') === '1'; } catch (e) { return false; } })();
+// Average household+heat-pump load in the current hour (kW ≈ kWh/h), from the
+// measured hourly profile and the daily averages.
+function loadNowKw() {
+  const h = new Date().getHours();
+  const shShape = normFrac((STATE.data && STATE.data.hourly_profile || []).map(x => x.avg_w));
+  const hpProf = (STATE.hpA && STATE.hpA.hourly_profile) || [];
+  const hpShape = hpProf.length && hpProf.some(x => x.avg_w > 0) ? normFrac(hpProf.map(x => x.avg_w)) : null;
+  const shH = shAvgDaily() * (shShape[h] != null ? shShape[h] : 1 / 24);
+  const hpH = hpAvgDaily() * (hpShape ? hpShape[h] : 1 / 24);
+  return shH + hpH;
+}
+// Estimated PV surplus right NOW (kW): expected production (weather forecast if
+// available, else the clear-day shape) minus the typical house+WP load. Honest
+// estimate, clearly labelled – the app has no live PV meter.
+function pvNowEstimate() {
+  let kwp = 0; try { kwp = Math.max(0, parseFloat(($('pv-kwp') || {}).value) || 0); } catch (e) {}
+  if (kwp <= 0) return null;
+  const now = new Date(), m = now.getMonth(), h = now.getHours();
+  const pvKw = smartPvKw(Date.now() / 1000, m, h);
+  const loadKw = loadNowKw();
+  return { pvKw, loadKw, surplusKw: pvKw - loadKw,
+           src: (STATE.weather && Array.isArray(STATE.weather.hourly)) ? 'Wetter-Prognose' : 'typischer Sonnenverlauf' };
+}
 function kioskWashAdvice() {
   const sp = STATE.spot;
   const now = Date.now() / 1000;
-  let out = { line: '', sub: '', bg: '#3ba9ff22', fg: '#9ec7ff', bd: '#3ba9ff55' };
+  const pv = pvNowEstimate();
+  const GREEN = { bg: '#4be0b022', fg: '#4be0b0', bd: '#4be0b055' };
+  const AMBER = { bg: '#ffb64d22', fg: '#ffb64d', bd: '#ffb64d55' };
+  const RED = { bg: '#ff6b8a22', fg: '#ff6b8a', bd: '#ff6b8a55' };
+  const BLUE = { bg: '#3ba9ff22', fg: '#9ec7ff', bd: '#3ba9ff55' };
+  // Börse signal (if active)
+  let spot = null;
   if (sp && sp.enabled && sp.prices && sp.prices.length) {
     const cons = sp.prices.map(p => p.consumer_ct);
     const lo = Math.min(...cons), hi = Math.max(...cons), avg = mean(cons);
     const nowP = sp.prices.find(p => p.ts <= now && p.ts + 3600 > now) || sp.prices[0];
     const c = nowP.consumer_ct;
-    if (c <= avg * 0.9) { out = { bg: '#4be0b022', fg: '#4be0b0', bd: '#4be0b055' }; out.line = '🟢 Jetzt günstig – guter Moment für Waschmaschine, Trockner, Spüler & E-Auto.'; }
-    else if (c >= avg * 1.15) { out = { bg: '#ff6b8a22', fg: '#ff6b8a', bd: '#ff6b8a55' }; out.line = '🔴 Strom gerade teuer – große Verbraucher besser später laufen lassen.'; }
-    else { out = { bg: '#ffb64d22', fg: '#ffb64d', bd: '#ffb64d55' }; out.line = '🟡 Strompreis mittel – kein Schnäppchen, aber kein Grund zu warten.'; }
-    out.sub = `Börse jetzt <b>${fmt(c, 1)} ct</b> · heute ${fmt(lo, 1)}–${fmt(hi, 1)} ct (Ø ${fmt(avg, 1)})`;
-  } else {
-    out.line = 'ℹ️ Kein Börsentarif aktiv – ohne dynamische Preise keine „jetzt-waschen"-Empfehlung.';
-    out.sub = 'Im Setup „Dynamischer Börsentarif" aktivieren.';
+    spot = { c, lo, hi, avg, cheap: c <= avg * 0.9, dear: c >= avg * 1.15,
+             sub: `Börse jetzt <b>${fmt(c, 1)} ct</b> · heute ${fmt(lo, 1)}–${fmt(hi, 1)} ct (Ø ${fmt(avg, 1)})` };
   }
-  // PV midday hint (heuristic from the PV-tab sizing, not a live meter)
-  let kwp = 0; try { kwp = Math.max(0, parseFloat(($('pv-kwp') || {}).value) || 0); } catch (e) {}
-  const h = new Date().getHours();
-  if (kwp > 0 && h >= 10 && h <= 15) out.sub += ' · ☀️ Mittags läuft die PV – Eigenverbrauch lohnt jetzt besonders.';
+  const strongSurplus = pv && pv.surplusKw >= 0.4;
+  const act = _kioskAway ? 'per Zeitvorwahl programmieren' : 'jetzt einschalten';
+  let out;
+  // 1) Real PV surplus wins – free solar power beats any tariff signal
+  if (strongSurplus) {
+    out = Object.assign({}, GREEN);
+    out.line = `☀️ PV-Überschuss ~<b>${fmt(pv.surplusKw, 1)} kW</b> – Großverbraucher ${act} (Eigenverbrauch).`;
+    out.sub = `Erzeugung ~${fmt(pv.pvKw, 1)} kW − Last ~${fmt(pv.loadKw, 1)} kW · Quelle: ${pv.src}`
+      + (spot ? ` · ${spot.sub}` : '');
+    return out;
+  }
+  // 2) else the Börse signal
+  if (spot) {
+    out = Object.assign({}, spot.cheap ? GREEN : spot.dear ? RED : AMBER);
+    out.line = spot.cheap
+      ? `🟢 Börse günstig – guter Moment für Waschmaschine, Trockner, Spüler & E-Auto (${act}).`
+      : spot.dear
+        ? '🔴 Strom gerade teuer – große Verbraucher besser später laufen lassen.'
+        : '🟡 Strompreis mittel – kein Schnäppchen, aber kein Grund zu warten.';
+    out.sub = spot.sub + (pv && pv.surplusKw > 0 ? ` · ☀️ etwas PV (~${fmt(pv.surplusKw, 1)} kW)` : '');
+    return out;
+  }
+  // 3) no spot tariff
+  out = Object.assign({}, pv && pv.pvKw > 0.2 ? GREEN : BLUE);
+  out.line = pv && pv.surplusKw > 0
+    ? `☀️ PV deckt die Last gerade etwa – Eigenverbrauch lohnt (~${fmt(Math.max(0, pv.surplusKw), 1)} kW Überschuss).`
+    : 'ℹ️ Kein Börsentarif aktiv – ohne dynamische Preise keine „jetzt-waschen"-Empfehlung.';
+  out.sub = pv ? `Erzeugung ~${fmt(pv.pvKw, 1)} kW − Last ~${fmt(pv.loadKw, 1)} kW · Quelle: ${pv.src}`
+    : 'Im Setup „Dynamischer Börsentarif" aktivieren oder im PV-Tab die Anlage eintragen.';
   return out;
 }
 function paintKiosk() {
   const rooms = _kioskRooms || [];
+  // away toggle button state
+  const ab = $('kiosk-away');
+  if (ab) { ab.classList.toggle('away', _kioskAway); ab.textContent = _kioskAway ? '🚪 Abwesend' : '🏠 Zuhause'; }
+  // open-window warning (urgent when away, or when heating against an open window)
+  const openRooms = rooms.filter(rm => (rm.windows_open || 0) > 0);
+  const heatOpen = openRooms.filter(rm => rm.heating === true).map(rm => esc(rm.room));
+  const warn = $('kiosk-warn');
+  if (warn) {
+    if (_kioskAway && openRooms.length)
+      warn.textContent = `⚠️ Abwesend, aber Fenster/Tür offen: ${openRooms.map(rm => rm.room).join(', ')}`;
+    else if (heatOpen.length)
+      warn.innerHTML = `⚠️ Heizung läuft gegen offenes Fenster: <b>${heatOpen.join(', ')}</b> – schließen oder Thermostat runter.`;
+    else warn.textContent = '';
+  }
   const out = kioskWashAdvice();
   const ban = $('kiosk-banner');
   if (ban) { ban.style.background = out.bg; ban.style.border = '1px solid ' + out.bd; ban.style.color = out.fg;
     ban.innerHTML = `${out.line}<div class="b-sub" style="color:var(--ink)">${out.sub}</div>`; }
   const og = $('kiosk-out');
   const hp = (_hdData && _hdData.kpis) || {};
-  if (og) og.innerHTML = hp.outdoor_c != null ? `🌡️ außen ${fmt(hp.outdoor_c, 0)}°${hp.heating_now ? ' · WP heizt' : ''}` : '';
+  if (og) og.innerHTML = (_kioskAway ? '🚪 Abwesend · ' : '') + (hp.outdoor_c != null ? `🌡️ außen ${fmt(hp.outdoor_c, 0)}°${hp.heating_now ? ' · WP heizt' : ''}` : '');
   const grid = $('kiosk-rooms');
   if (grid) grid.innerHTML = rooms.map(rm => {
     const tags = [];
@@ -8118,6 +8182,11 @@ function init() {
   // Wohn-Dashboard (Kiosk)
   const ok = $('open-kiosk'); if (ok) ok.addEventListener('click', openKiosk);
   const kx = $('kiosk-exit'); if (kx) kx.addEventListener('click', closeKiosk);
+  const ka = $('kiosk-away'); if (ka) ka.addEventListener('click', () => {
+    _kioskAway = !_kioskAway;
+    try { localStorage.setItem('bhe_kiosk_away', _kioskAway ? '1' : '0'); } catch (e) {}
+    paintKiosk();
+  });
   window.addEventListener('hashchange', () => { if (location.hash === '#dash') openKiosk(); });
   if (location.hash === '#dash') setTimeout(openKiosk, 300);
   // device heating-curve points (read off the heat pump), stored locally
