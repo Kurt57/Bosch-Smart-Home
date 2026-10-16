@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v155';   // short tag shown always-on in the header
-const APP_VERSION = 'v155 · 2026-10-16 · Dashboard: Lüften-Hinweis zeigt jetzt den Grund (z. B. „lüften · 68% feucht" oder „· Luft schlecht") – auf der Kachel und in der Zusammenfassung'
+const APP_BUILD = 'v156';   // short tag shown always-on in the header
+const APP_VERSION = 'v156 · 2026-10-16 · Wärme/Heizung: neue Karte „Raumtemperaturen – Ziel-Erreichung" (alle Räume als Balken nebeneinander mit Ziel-Marker, grün/gelb/rot, X/Y am Ziel) + Ziel-Temperatur je Raum eintragen (gespeichert, mit Smart-Vorschlag) – für den hydraulischen Abgleich/Phase 2'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -245,6 +245,14 @@ function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<':
 const INFO = {
   wofuer: () => 'Aufteilung des heutigen Stroms nach Quelle. Die Wärmepumpe wird nach ' +
     '<b>Heizung</b> und <b>Warmwasser</b> getrennt (aus ihrem Betriebsmodus), dazu jedes Smart-Home-Gerät.',
+  roomtemp: () => 'Alle Räume als <b>Balken nebeneinander</b>: Höhe = aktuelle Temperatur, der gestrichelte ' +
+    'Strich ist dein <b>Ziel</b> (Wohlfühl-Temperatur). Grün = am Ziel, gelb/rot = noch zu kalt, blau = wärmer als nötig. ' +
+    '<b>Ziel des hydraulischen Abgleichs:</b> bei offenen Ventilen soll jeder Raum sein Ziel erreichen. Räume, die trotz ' +
+    'offenem Ventil <b>zu kalt</b> bleiben, brauchen mehr Durchfluss (am Verteiler aufdrehen); Räume, die ihr Ziel ' +
+    'locker übertreffen, kannst du <b>androsseln</b>, damit mehr für die kalten übrig bleibt. Weil in der Aufdreh-Phase ' +
+    'oft alle Sollwerte auf Anschlag (z. B. 30 °C) stehen, trägst du dein echtes Ziel je Raum unten einmal selbst ein – ' +
+    'wird lokal gespeichert. Eine feste Uhrzeit, wann es erreicht sein muss, gibt es nicht; der ehrliche Test ist ein ' +
+    '<b>kalter Tag</b> – dann zeigt sich, ob die Anlage ausgewogen ist.',
   'spot-worth': () => 'Lohnt sich ein <b>Börsenstrom-Tarif</b> (dynamisch) für <b>dich</b>? Die App nimmt dein ' +
     'gemessenes Verbrauchsprofil und – falls eingetragen – deine <b>PV & Speicher aus dem PV-Tab</b> und rechnet die ' +
     'Jahreskosten einmal mit deinem <b>Festtarif</b> und einmal mit der <b>saisonalen Börsen-Preisform</b> (Stunde × ' +
@@ -3340,6 +3348,90 @@ function roomChart(d, sel) {
   return svg(h, g + band + sep + strip + lines, null, { t0, t1, padL, padR, h, series: tsSeries });
 }
 let _rtsData = null, _rtsBusy = false, _rtsSel = '', _rtsDays = 2;
+/* ---- Raumtemperaturen: Balken je Raum + Ziel-Marker (Soll-Erreichung) ----- */
+function targetKey(room) { return 'bhe_target_' + room; }
+function targetGet(room) {
+  try { const v = parseFloat(localStorage.getItem(targetKey(room))); if (isFinite(v) && v > 0) return v; } catch (e) {}
+  return null;
+}
+function targetSet(room, v) {
+  try { (v == null || !isFinite(v)) ? localStorage.removeItem(targetKey(room)) : localStorage.setItem(targetKey(room), String(v)); } catch (e) {}
+}
+// sensible default target when the user hasn't set one and the current setpoint
+// is cranked up (phase-2 aufdrehen, e.g. 30 °C): guess from the room name.
+function targetGuess(rm) {
+  const sp = rm.setpoint;
+  if (sp != null && sp <= 24.5) return sp;             // looks like a real comfort value
+  const n = (rm.room || '').toLowerCase();
+  if (/bad|wc|dusch/.test(n)) return 23;
+  if (/schlaf/.test(n)) return 18;
+  if (/flur|diele|keller|g[äa]ste|abstell|hwr|technik|wasch/.test(n)) return 19;
+  if (/küche|kueche/.test(n)) return 20;
+  return 21;
+}
+function targetOf(rm) { const t = targetGet(rm.room); return t != null ? t : targetGuess(rm); }
+let _rtData = null, _rtBusy = false;
+async function renderRoomTemps(force) {
+  const card = $('roomtemp-card'); if (!card) return;
+  if (_rtData && !force) { paintRoomTemps(); return; }
+  if (_rtBusy) return;
+  _rtBusy = true;
+  try {
+    if (!_hdData || force) { const r = await api('/api/heating/diag'); if (r && r.rooms) _hdData = r; }
+    try { const t = await api('/api/thermal?days=14'); if (t && t.rooms) _tmData = t; } catch (e) {}
+    _rtData = true; paintRoomTemps();
+  } catch (e) {
+    const c = $('rt-chart'); if (c) c.innerHTML = '<div class="note">Nur mit laufender Bridge &amp; gekoppelten Thermostaten verfügbar.</div>';
+  } finally { _rtBusy = false; }
+}
+function paintRoomTemps() {
+  const chart = $('rt-chart'), ted = $('rt-targets'), head = $('rt-head'), note = $('rt-note');
+  const rooms = (_hdData && _hdData.rooms || []).filter(r => r.temp != null)
+    .filter(r => !(r.summerMode) && String(r.roomControlMode || 'HEATING').toUpperCase() !== 'OFF');
+  if (!rooms.length) { if (chart) chart.innerHTML = '<div class="note">Noch keine Raum-Temperaturen – läuft die Bridge?</div>'; if (ted) ted.innerHTML = ''; return; }
+  const heat = {}; ((_tmData && _tmData.rooms) || []).forEach(r => { heat[r.room] = r.heatup_kph; });
+  const MIN = 15, MAX = Math.max(26, Math.ceil(Math.max(...rooms.map(r => Math.max(r.temp, targetOf(r)))) + 0.5));
+  const h = (t) => Math.max(2, Math.min(100, (t - MIN) / (MAX - MIN) * 100));
+  const COL = { ok: '#4be0b0', warm: '#3ba9ff', near: '#ffb64d', cold: '#ff6b8a' };
+  let atGoal = 0;
+  const col = (gap) => gap <= 0.3 ? (gap < -0.7 ? 'warm' : 'ok') : gap <= 1.0 ? 'near' : 'cold';
+  chart.innerHTML = `<div class="rt-chart">` + rooms.map(r => {
+    const tgt = targetOf(r), gap = tgt - r.temp, c = col(gap);
+    if (c === 'ok' || c === 'warm') atGoal++;
+    const eta = (gap > 0.3 && heat[r.room] > 0.05) ? Math.round(gap / heat[r.room] * 10) / 10 : null;
+    const full = h(r.temp) >= 99;
+    const gapTxt = gap <= 0.3 ? (gap < -0.7 ? `+${fmt(-gap, 1)}° wärmer` : '✓ am Ziel')
+      : `−${fmt(gap, 1)}°${eta != null ? ` · ~${fmt(eta, 1)}h` : ''}`;
+    return `<div class="rt-col"><div class="rt-val" style="color:${COL[c]}">${fmt(r.temp, 1)}°</div>` +
+      `<div class="rt-barwrap"><div class="rt-bar${full ? ' full' : ''}" style="height:${h(r.temp)}%;background:${COL[c]}"></div>` +
+      `<div class="rt-target" style="bottom:${h(tgt)}%"></div></div>` +
+      `<div class="rt-name" title="${esc(r.room)}">${esc(r.room)}</div>` +
+      `<div class="rt-gap" style="color:${COL[c]}">${gapTxt}<br><span style="color:var(--muted)">Ziel ${fmt(tgt, 1)}°</span></div></div>`;
+  }).join('') + `</div>`;
+  if (head) head.innerHTML = `<span style="color:var(--muted)">${atGoal}/${rooms.length} am Ziel</span>`;
+  // target editor
+  ted.innerHTML = `<div style="font-weight:600;font-size:13px;margin-bottom:8px">🎯 Ziel-Temperatur je Raum ` +
+    `<span style="font-weight:400;color:var(--muted);font-size:12px">(wird gespeichert)</span></div>` +
+    `<div class="rt-ted">` + rooms.map(r =>
+      `<label>${esc(r.room)}<input class="rt-tin" data-room="${esc(r.room)}" type="number" step="0.5" min="10" max="28" ` +
+      `inputmode="decimal" value="${targetOf(r)}"></label>`).join('') + `</div>`;
+  ted.querySelectorAll('.rt-tin').forEach(inp => {
+    inp.addEventListener('change', () => {
+      const v = parseFloat((inp.value || '').replace(',', '.'));
+      targetSet(inp.dataset.room, isFinite(v) ? v : null);
+      paintRoomTemps();
+    });
+  });
+  const cold = rooms.filter(r => targetOf(r) - r.temp > 1.0).map(r => esc(r.room));
+  const warm = rooms.filter(r => targetOf(r) - r.temp < -0.7).map(r => esc(r.room));
+  if (note) note.innerHTML = (_hdData && _hdData.demo ? '<b>Demo-Daten.</b> ' : '') +
+    (atGoal === rooms.length
+      ? '✅ Alle Räume am oder über Ziel. Jetzt kannst du überversorgte Räume leicht androsseln und – wenn es stabil bleibt – die <b>Heizkurve absenken</b> (spart Strom).'
+      : (cold.length ? `❄️ Noch zu kalt: <b>${cold.join(', ')}</b> → beim Abgleich <b>mehr Durchfluss</b> geben (Verteiler aufdrehen) bzw. Vorlauf prüfen. ` : '') +
+        (warm.length ? `🔵 Über Ziel: <b>${warm.join(', ')}</b> → leicht <b>androsseln</b>, dann bleibt mehr für die kalten Räume. ` : '')) +
+    '<br><span style="color:var(--muted)">Die ~h-Angabe ist eine grobe Schätzung aus der gemessenen Aufheizrate. ' +
+    'Einen festen „bis wann" gibt es nicht – entscheidend ist, dass alle Räume ihr Ziel an einem <b>kalten Tag</b> halten.</span>';
+}
 async function renderRoomTs(force) {
   const card = $('rts-card'); if (!card) return;
   if (_rtsData && !force) { paintRoomTs(_rtsData); return; }
@@ -8081,7 +8173,7 @@ async function doPair() {
 const HEAT_SUBS = ['heizung', 'abgleich', 'effizienz', 'einstellung'];
 const HEAT_SUB_MAP = {
   'help-card': 'abgleich',
-  'hp-card': 'heizung', 'hd-card': 'heizung', 'hts-card': 'heizung', 'rts-card': 'heizung', 'win-card': 'heizung',
+  'hp-card': 'heizung', 'hd-card': 'heizung', 'roomtemp-card': 'heizung', 'hts-card': 'heizung', 'rts-card': 'heizung', 'win-card': 'heizung',
   'obs-card': 'abgleich', 'am-card': 'abgleich', 'tm-card': 'abgleich', 'hl-card': 'abgleich',
   'flow-card': 'abgleich', 'opt-card': 'abgleich', 'ha-card': 'abgleich', 'layout-card': 'abgleich',
   'hc-card': 'einstellung', 'hpctl-card': 'einstellung',
@@ -8109,6 +8201,7 @@ function switchView(v) {
   // lazily load the heating-check + heating-curve when the Wärme tab is opened
   if (v === 'heatpump') {
     if (typeof renderHeatingDiag === 'function') renderHeatingDiag(false);
+    if (typeof renderRoomTemps === 'function') renderRoomTemps(false);
     if (typeof renderHeatingCurve === 'function') renderHeatingCurve(false);
     if (typeof renderHeatTimeseries === 'function') renderHeatTimeseries(false);
     if (typeof renderRoomTs === 'function') renderRoomTs(false);
@@ -8291,7 +8384,7 @@ function init() {
     });
   }
   const hpr = $('hp-refresh'); if (hpr) hpr.addEventListener('click', doHpRefresh);
-  const hdr = $('hd-refresh'); if (hdr) hdr.addEventListener('click', () => { renderHeatingDiag(true); renderHeatingCurve(true); });
+  const hdr = $('hd-refresh'); if (hdr) hdr.addEventListener('click', () => { renderHeatingDiag(true); renderHeatingCurve(true); renderRoomTemps(true); });
   const hdRaw = $('hd-raw-btn');
   if (hdRaw) hdRaw.addEventListener('click', async () => {
     const pre = $('hd-raw'); if (!pre) return;
