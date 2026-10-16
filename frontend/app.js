@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v157';   // short tag shown always-on in the header
-const APP_VERSION = 'v157 · 2026-10-16 · Raumtemperatur-Karte erklärt jetzt die Saison-Frage: Abgleich bleibt ganzjährig gleich (Tacosetter einmal), Kälte gleicht die Heizkurve aus – plus Hinweis, wie aussagekräftig die heutige Außentemperatur für den Test ist'
+const APP_BUILD = 'v158';   // short tag shown always-on in the header
+const APP_VERSION = 'v158 · 2026-10-16 · „Räume & Heizbetrieb" bewertet in der Aufdreh-Phase gegen dein Ziel statt gegen den hochgedrehten Soll (30 °C) – kein falsches „nie Soll" mehr; Chart zoomt aufs Ziel statt bis 30 °C'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -3295,8 +3295,11 @@ function roomChart(d, sel) {
   const rooms = sel ? (d.rooms || []).filter(r => r.room === sel) : (d.rooms || []);
   if (!rooms.length) return '<div class="note">Keine Raumdaten.</div>';
   const temps = rooms.flatMap(r => r.points.map(p => p.temp)).filter(v => v != null);
-  const sps = rooms.map(r => r.setpoint).filter(v => v != null);
-  const all = temps.concat(sps);
+  // reference line = your comfort TARGET (targetOf), not the raw setpoint – so a
+  // cranked phase-2 setpoint (e.g. 30 °C) doesn't blow up the y-scale or read as
+  // "never reached". Falls back to the setpoint when no target is set.
+  const refs = rooms.map(r => targetOf(r)).filter(v => v != null);
+  const all = temps.concat(refs);
   let tmin = Math.floor(Math.min(...all) - 1), tmax = Math.ceil(Math.max(...all) + 1);
   if (tmax - tmin < 4) tmax = tmin + 4;
   const Y = v => top + (tmax - v) / (tmax - tmin) * (base - top);
@@ -3338,7 +3341,10 @@ function roomChart(d, sel) {
     pv.forEach(p => { const x = X(p.ts), y = Y(p.temp); dl += (pen ? 'L' : 'M') + x.toFixed(1) + ' ' + y.toFixed(1) + ' '; pen = true; });
     if (dl) lines += `<path d="${dl.trim()}" fill="none" stroke="${r.color}" stroke-width="${sel ? 2.4 : 1.8}"/>`;
     if (pv.length) { const last = pv[pv.length - 1]; lines += `<circle cx="${X(last.ts).toFixed(1)}" cy="${Y(last.temp).toFixed(1)}" r="${sel ? 3.2 : 2.6}" fill="${r.color}"/>`; }
-    if (r.setpoint != null) { const y = Y(r.setpoint); lines += `<line x1="${padL}" x2="${CW - padR}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="${r.color}" stroke-width="1" stroke-dasharray="4 3" opacity="${sel ? 0.85 : 0.3}"/>`; if (sel) lines += `<text class="axis" x="${CW - padR + 2}" y="${(y + 3).toFixed(1)}" fill="${r.color}" text-anchor="start">Soll ${r.setpoint}</text>`; }
+    const ref = targetOf(r);
+    if (ref != null) { const y = Y(ref); const cranked = r.setpoint != null && (r.setpoint - ref) > 2;
+      lines += `<line x1="${padL}" x2="${CW - padR}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="${r.color}" stroke-width="1" stroke-dasharray="4 3" opacity="${sel ? 0.85 : 0.3}"/>`;
+      if (sel) lines += `<text class="axis" x="${CW - padR + 2}" y="${(y + 3).toFixed(1)}" fill="${r.color}" text-anchor="start">${cranked ? 'Ziel' : 'Soll'} ${fmt(ref, 1)}</text>`; }
   });
   // per-room series for the tap/hover readout (temperature over time)
   const tsSeries = rooms.map(r => ({
@@ -3467,12 +3473,41 @@ function paintRoomTs(r) {
   if (chart) chart.innerHTML = list.length
     ? roomChart(r, _rtsSel || null)
     : '<div class="note" style="padding:14px 0;text-align:center">🌡️ Noch keine Raumdaten – die App loggt ab jetzt pro Raum (Temperatur, Soll, Ventil).</div>';
-  if (leg) leg.innerHTML = list.map(x => `<div class="it"><span class="sw" style="background:${x.color}"></span>${esc(x.room)}${x.below_always ? ' <span style="color:#ff6b8a">⚠︎ nie Soll</span>' : x.reached ? ' <span style="color:#4be0b0">✓</span>' : ''}</div>`).join('') +
-    '<div class="it"><span class="sw" style="background:#4be0b0"></span>WP heizt</div>';
-  if (logic) logic.innerHTML = `<div style="font-weight:700;margin-bottom:6px">🧠 Pro-Raum-Analyse</div>` +
-    (r.insights || []).map(l => `<div style="font-size:13px;line-height:1.5;margin-bottom:5px">• ${l}</div>`).join('');
+  // judge "reached" against the comfort TARGET (targetOf), not the raw setpoint –
+  // during phase-2 aufdrehen all setpoints are cranked (e.g. 30 °C), which would
+  // otherwise flag every room "nie Soll".
+  const tmaxOf = x => { const v = (x.points || []).map(p => p.temp).filter(n => n != null); return v.length ? Math.max(...v) : null; };
+  const assess = list.map(x => { const tmax = tmaxOf(x), tgt = targetOf(x); return { x, tmax, tgt, gap: tmax != null ? tgt - tmax : null }; });
+  const anyCranked = list.some(x => x.setpoint != null && (x.setpoint - targetOf(x)) > 2);
+  if (leg) leg.innerHTML = assess.map(a => {
+    const badge = a.gap == null ? '' : a.gap <= 0.3 ? ' <span style="color:#4be0b0">✓ am Ziel</span>'
+      : a.gap > 1.0 ? ` <span style="color:#ff6b8a">⚠︎ ${fmt(a.gap, 1)}° unter Ziel</span>`
+        : ` <span style="color:#ffb64d">${fmt(a.gap, 1)}° unter Ziel</span>`;
+    return `<div class="it"><span class="sw" style="background:${a.x.color}"></span>${esc(a.x.room)}${badge}</div>`;
+  }).join('') + '<div class="it"><span class="sw" style="background:#4be0b0"></span>WP heizt</div>';
+  if (logic) {
+    let insLines;
+    if (anyCranked) {
+      // phase-2: the server's setpoint-based "Erreicht Soll" lines are misleading →
+      // replace with a target-based assessment, keep the rest (cooldown, WP hours).
+      const serverIns = (r.insights || []).filter(l => !/Erreicht Soll/.test(l));
+      const cold = assess.filter(a => a.gap != null && a.gap > 1.0);
+      const okT = assess.filter(a => a.gap != null && a.gap <= 0.3);
+      const myIns = ['ℹ️ Deine Sollwerte stehen gerade <b>hoch</b> (Aufdreh-/Abgleich-Phase). Bewertet wird hier gegen dein ' +
+        '<b>Ziel</b> aus der Karte „Raumtemperaturen – Ziel-Erreichung" oben, <b>nicht</b> gegen die 30 °C.'];
+      if (cold.length) myIns.push(`❄️ <b>Noch unter Ziel:</b> ` + cold.map(a => `${esc(a.x.room)} (${fmt(a.tmax, 1)}° / Ziel ${fmt(a.tgt, 1)}°)`).join(', ') +
+        ` → beim Abgleich diese Kreise <b>mehr öffnen</b> bzw. Vorlauf/Heizkurve prüfen.`);
+      if (okT.length) myIns.push(`✅ <b>Am Ziel:</b> ` + okT.map(a => esc(a.x.room)).join(', ') + '.');
+      insLines = myIns.concat(serverIns);
+    } else {
+      insLines = (r.insights || []);
+    }
+    logic.innerHTML = `<div style="font-weight:700;margin-bottom:6px">🧠 Pro-Raum-Analyse</div>` +
+      insLines.map(l => `<div style="font-size:13px;line-height:1.5;margin-bottom:5px">• ${l}</div>`).join('');
+  }
   if (note) note.innerHTML = (r.demo ? '<b>Demo-Daten</b>. ' : '') +
-    'Einen Raum oben wählen zeigt zusätzlich den <b>Sollwert</b> (gestrichelt) und – als leichte Schattierung – wann sein <b>Ventil offen</b> ist (Raum verlangt Wärme). Wird pro Raum ab jetzt mitgeloggt.';
+    'Gestrichelt = dein <b>Ziel</b> (bei hochgedrehtem Soll dein Wohlfühl-Ziel aus der Karte oben, sonst der Sollwert). ' +
+    'Einen Raum oben wählen zeigt zusätzlich, wann sein <b>Ventil offen</b> ist (leichte Schattierung = Raum verlangt Wärme).';
 }
 /* ---- Auto-Messung: active night-setback on the thermostats ---------------- */
 let _amData = null, _amBusy = false;
