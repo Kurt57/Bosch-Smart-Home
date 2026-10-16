@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v156';   // short tag shown always-on in the header
-const APP_VERSION = 'v156 · 2026-10-16 · Wärme/Heizung: neue Karte „Raumtemperaturen – Ziel-Erreichung" (alle Räume als Balken nebeneinander mit Ziel-Marker, grün/gelb/rot, X/Y am Ziel) + Ziel-Temperatur je Raum eintragen (gespeichert, mit Smart-Vorschlag) – für den hydraulischen Abgleich/Phase 2'
+const APP_BUILD = 'v157';   // short tag shown always-on in the header
+const APP_VERSION = 'v157 · 2026-10-16 · Raumtemperatur-Karte erklärt jetzt die Saison-Frage: Abgleich bleibt ganzjährig gleich (Tacosetter einmal), Kälte gleicht die Heizkurve aus – plus Hinweis, wie aussagekräftig die heutige Außentemperatur für den Test ist'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -3424,13 +3424,27 @@ function paintRoomTemps() {
   });
   const cold = rooms.filter(r => targetOf(r) - r.temp > 1.0).map(r => esc(r.room));
   const warm = rooms.filter(r => targetOf(r) - r.temp < -0.7).map(r => esc(r.room));
+  // outdoor context: how representative is today for judging the balance?
+  const out = _hdData && _hdData.kpis ? _hdData.kpis.outdoor_c : null;
+  const design = parseFloat(($('hl-design') || {}).value || '-12');
+  let outLine = '';
+  if (out != null) {
+    const d = isFinite(design) ? design : -12;
+    outLine = out <= 2
+      ? `❄️ Heute <b>${fmt(out, 0)} °C</b> außen – <b>aussagekräftiger Testtag</b> für den Abgleich.`
+      : out >= 10
+        ? `☀️ Heute mild (<b>${fmt(out, 0)} °C</b>) – da erreichen fast alle Räume ihr Ziel locker. Der echte Test für den Abgleich ist ein <b>kalter Tag</b> (Auslegung ~${fmt(d, 0)} °C).`
+        : `Heute <b>${fmt(out, 0)} °C</b> außen – mittel. Je kälter, desto aussagekräftiger (Auslegung ~${fmt(d, 0)} °C).`;
+  }
   if (note) note.innerHTML = (_hdData && _hdData.demo ? '<b>Demo-Daten.</b> ' : '') +
     (atGoal === rooms.length
       ? '✅ Alle Räume am oder über Ziel. Jetzt kannst du überversorgte Räume leicht androsseln und – wenn es stabil bleibt – die <b>Heizkurve absenken</b> (spart Strom).'
       : (cold.length ? `❄️ Noch zu kalt: <b>${cold.join(', ')}</b> → beim Abgleich <b>mehr Durchfluss</b> geben (Verteiler aufdrehen) bzw. Vorlauf prüfen. ` : '') +
         (warm.length ? `🔵 Über Ziel: <b>${warm.join(', ')}</b> → leicht <b>androsseln</b>, dann bleibt mehr für die kalten Räume. ` : '')) +
-    '<br><span style="color:var(--muted)">Die ~h-Angabe ist eine grobe Schätzung aus der gemessenen Aufheizrate. ' +
-    'Einen festen „bis wann" gibt es nicht – entscheidend ist, dass alle Räume ihr Ziel an einem <b>kalten Tag</b> halten.</span>';
+    (outLine ? `<br>${outLine}` : '') +
+    '<br><span style="color:var(--muted)">Der <b>hydraulische Abgleich bleibt die ganze Saison gleich</b> – die Tacosetter-Werte stellst du einmal ein. ' +
+    'Wird es kälter, gleicht das die <b>Heizkurve (Vorlauftemperatur)</b> für alle Räume zugleich aus, nicht die Verteilung. ' +
+    'Die ~h-Angabe ist grob (gemessene Aufheizrate); einen festen „bis wann" gibt es nicht – entscheidend ist, dass alle Räume ihr Ziel an einem <b>kalten Tag</b> halten.</span>';
 }
 async function renderRoomTs(force) {
   const card = $('rts-card'); if (!card) return;
