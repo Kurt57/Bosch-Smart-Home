@@ -162,6 +162,7 @@
     --kb-amber:#ff9f0a; --kb-amber-bg:rgba(255,159,10,.16); --kb-amber-bd:rgba(255,159,10,.38);
     --kb-red:#ff453b;   --kb-red-bg:rgba(255,69,58,.16);    --kb-red-bd:rgba(255,69,58,.4);
     --kb-blue:#0a84ff;  --kb-blue-bg:rgba(10,132,255,.16);  --kb-blue-bd:rgba(10,132,255,.38);
+    --kb-teal:#64d2ff; --kb-sun:#ffd426; --kb-grid:#8e8e93;
   }
   #kiosk[data-ktheme="light"]{
     --k-bg:#f2f2f7; --k-card:rgba(255,255,255,.96); --k-card2:rgba(118,118,128,.12);
@@ -172,6 +173,7 @@
     --kb-amber:#c77700; --kb-amber-bg:rgba(255,149,0,.14); --kb-amber-bd:rgba(255,149,0,.32);
     --kb-red:#d70015;   --kb-red-bg:rgba(255,59,48,.11);   --kb-red-bd:rgba(255,59,48,.28);
     --kb-blue:#0071e3;  --kb-blue-bg:rgba(0,122,255,.11);  --kb-blue-bd:rgba(0,122,255,.28);
+    --kb-teal:#0a93c7; --kb-sun:#ff9500; --kb-grid:#8e8e93;
   }
   #kiosk{position:fixed; inset:0; z-index:200; background:var(--k-bg); color:var(--k-ink);
     overflow-y:auto; padding:0 20px calc(22px + var(--safe-b)); -webkit-overflow-scrolling:touch;
@@ -206,6 +208,18 @@
   .kroom .kr-tags{margin-top:9px; display:flex; flex-wrap:wrap; gap:6px; font-size:12px; letter-spacing:0}
   .kroom .kr-tags span{background:var(--k-card2); border-radius:999px; padding:3px 9px; white-space:nowrap; font-weight:500}
   #kiosk-vent{margin-top:16px}
+  /* Energiefluss-Animation */
+  #kiosk-flow:not(:empty){margin:16px 0; background:var(--k-card); border:.5px solid var(--k-sep);
+    border-radius:22px; padding:14px 10px 6px; box-shadow:var(--k-shadow);
+    -webkit-backdrop-filter:var(--k-blur); backdrop-filter:var(--k-blur)}
+  #kiosk-flow svg{width:100%; height:auto; display:block; max-width:520px; margin:0 auto}
+  .kf-node-bg{fill:var(--k-card2)}
+  .kf-line{stroke:var(--k-sep); stroke-width:2.5; fill:none; stroke-linecap:round}
+  .kf-icon{font-size:22px}
+  .kf-val{fill:var(--k-ink); font-weight:700; font-size:12px; letter-spacing:-.3px}
+  .kf-lbl{fill:var(--k-sub); font-weight:600; font-size:8.5px; letter-spacing:.3px; text-transform:uppercase}
+  .kf-sub{fill:var(--k-sub); font-size:8px}
+  @media (prefers-reduced-motion:reduce){#kiosk-flow .kf-dot{display:none}}
 </style>
 </head>
 <body>
@@ -1610,6 +1624,7 @@
   </div>
   <div id="kiosk-warn"></div>
   <div id="kiosk-banner"></div>
+  <div id="kiosk-flow"></div>
   <div id="kiosk-rooms"></div>
   <div id="kiosk-vent" class="k-sub"></div>
 </div>

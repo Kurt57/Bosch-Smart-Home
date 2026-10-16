@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v152';   // short tag shown always-on in the header
-const APP_VERSION = 'v152 · 2026-10-16 · Wohn-Dashboard im Apple-Look mit Hell/Dunkel-Umschalter (folgt per Default dem Gerät, ☀️/🌙-Button, gespeichert) – iOS-Farben, Vibrancy-Karten, große SF-Zahlen'
+const APP_BUILD = 'v153';   // short tag shown always-on in the header
+const APP_VERSION = 'v153 · 2026-10-16 · Wohn-Dashboard: animierte Energiefluss-Grafik (PV ☀️ → Haus 🏠 ↔ Batterie 🔋 ↔ Netz ⚡ mit fließenden Punkten, Richtung/Tempo ∝ Leistung) – Apple-Look, in Hell & Dunkel'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -2635,6 +2635,65 @@ function kcol(lvl) {
   return lvl === 'good' ? 'var(--kb-green)' : lvl === 'ok' ? 'var(--kb-amber)'
     : lvl === 'warn' ? 'var(--kb-red)' : 'var(--k-sub)';
 }
+// Animated live energy-flow diagram: PV ☀️ → Haus/Geräte 🏠 ↔ Batterie 🔋 ↔ Netz ⚡,
+// with dots streaming along the active lines (speed/number ∝ power). Instantaneous
+// estimate from the same PV/load model – clearly labelled, no live PV/battery meter.
+function renderEnergyFlow() {
+  const el = $('kiosk-flow'); if (!el) return;
+  const pvE = pvNowEstimate();
+  const load = loadNowKw();
+  let battKwh = 0; try { battKwh = Math.max(0, parseFloat(($('pv-batt') || {}).value) || 0); } catch (e) {}
+  const havePv = !!pvE, pv = pvE ? Math.max(0, pvE.pvKw) : 0;
+  const directPV = Math.min(pv, load);
+  let surplus = pv - directPV, deficit = load - directPV;
+  const cap = 3.0;                                  // assumed max (dis)charge kW
+  let charge = 0, discharge = 0, exp = 0, imp = 0;
+  if (surplus > 0.02) { charge = battKwh > 0 ? Math.min(surplus, cap) : 0; exp = surplus - charge; }
+  if (deficit > 0.02) { discharge = battKwh > 0 ? Math.min(deficit, cap) : 0; imp = deficit - discharge; }
+
+  // geometry (SVG units)
+  const HX = 150, HY = 135, R = 27;
+  const dots = (path, color, kw) => {
+    if (kw < 0.04) return '';
+    const n = Math.max(1, Math.min(4, Math.round(kw / 0.6)));
+    const dur = Math.max(0.9, Math.min(2.4, 2.6 - kw * 0.22));
+    let s = '';
+    // NEGATIVE begin offsets so every dot is already mid-path at t=0 – otherwise a
+    // delayed dot would sit at the SVG origin (0,0) until its turn (stray corner dot).
+    for (let i = 0; i < n; i++)
+      s += `<circle class="kf-dot" r="3.1" fill="${color}"><animateMotion dur="${dur}s" begin="-${(i * dur / n).toFixed(2)}s" repeatCount="indefinite" path="${path}" calcMode="linear"/></circle>`;
+    return s;
+  };
+  const node = (cx, cy, icon, val, label, dim, labelAbove) => {
+    const op = dim ? ' opacity="0.4"' : '';
+    const ly = labelAbove ? cy - R - 7 : cy + R + 13;
+    return `<g${op}><circle class="kf-node-bg" cx="${cx}" cy="${cy}" r="${R}"/>` +
+      `<text class="kf-icon" x="${cx}" y="${cy - 2}" text-anchor="middle">${icon}</text>` +
+      `<text class="kf-val" x="${cx}" y="${cy + 15}" text-anchor="middle">${val}</text>` +
+      `<text class="kf-lbl" x="${cx}" y="${ly}" text-anchor="middle">${label}</text></g>`;
+  };
+  const battVal = battKwh <= 0 ? '–' : charge > 0.04 ? `+${fmt(charge, 1)}` : discharge > 0.04 ? `−${fmt(discharge, 1)}` : '0';
+  const gridVal = imp > 0.04 ? `↓${fmt(imp, 1)}` : exp > 0.04 ? `↑${fmt(exp, 1)}` : '0';
+  const svg =
+    `<svg viewBox="0 -6 300 216" role="img" aria-label="Energiefluss">` +
+    // connector lines
+    `<line class="kf-line" x1="150" y1="69" x2="150" y2="108"/>` +
+    `<line class="kf-line" x1="79" y1="135" x2="123" y2="135"/>` +
+    `<line class="kf-line" x1="221" y1="135" x2="177" y2="135"/>` +
+    // animated dots
+    dots('M150,69 L150,108', 'var(--kb-sun)', directPV + charge + exp) +
+    (charge > 0 ? dots('M123,135 L79,135', 'var(--kb-teal)', charge) : dots('M79,135 L123,135', 'var(--kb-teal)', discharge)) +
+    (imp > 0 ? dots('M221,135 L177,135', 'var(--kb-blue)', imp) : dots('M177,135 L221,135', 'var(--kb-green)', exp)) +
+    // nodes
+    node(150, 42, '☀️', havePv && pv > 0.04 ? fmt(pv, 1) : (havePv ? '0' : '–'), 'PV kW', !havePv || pv < 0.04, true) +
+    node(52, 135, '🔋', battVal, 'Batterie', battKwh <= 0) +
+    node(150, 135, '🏠', fmt(load, 1), 'Haus kW') +
+    node(248, 135, '⚡', gridVal, 'Netz', imp < 0.04 && exp < 0.04) +
+    `</svg>` +
+    `<div class="k-sub" style="text-align:center;font-size:11px;margin:2px 0 6px">` +
+    `Batterie +laden/−entladen · Netz ↓Bezug/↑Einspeisung · Momentan-Schätzung (${pvE ? pvE.src : 'ohne PV'})</div>`;
+  el.innerHTML = svg;
+}
 function paintKiosk() {
   const rooms = _kioskRooms || [];
   // away toggle button state
@@ -2655,6 +2714,7 @@ function paintKiosk() {
   const ban = $('kiosk-banner');
   if (ban) { ban.className = out.level;
     ban.innerHTML = `${out.line}<div class="b-sub">${out.sub}</div>`; }
+  try { renderEnergyFlow(); } catch (e) {}
   const og = $('kiosk-out');
   const hp = (_hdData && _hdData.kpis) || {};
   if (og) og.innerHTML = (_kioskAway ? '🚪 Abwesend · ' : '') + (hp.outdoor_c != null ? `🌡️ außen ${fmt(hp.outdoor_c, 0)}°${hp.heating_now ? ' · WP heizt' : ''}` : '');
