@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v154';   // short tag shown always-on in the header
-const APP_VERSION = 'v154 · 2026-10-16 · Dashboard: Top-5 Live-Verbraucher (inkl. Luft-Wärmepumpe in W/kW) + Energiefluss mit glühenden/pulsierenden Linien und 🚗 E-Auto-Knoten (bei V2H)'
+const APP_BUILD = 'v155';   // short tag shown always-on in the header
+const APP_VERSION = 'v155 · 2026-10-16 · Dashboard: Lüften-Hinweis zeigt jetzt den Grund (z. B. „lüften · 68% feucht" oder „· Luft schlecht") – auf der Kachel und in der Zusammenfassung'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -673,15 +673,15 @@ function ventAdvice(rm) {
   const airMid = ar.lvl === 'ok';
   if (open) {
     if (heating)
-      return { lvl: 'warn', txt: '⚠️ Fenster offen & Heizung an – kurz stoßlüften, dann schließen' };
+      return { lvl: 'warn', short: 'Fenster offen & Heizung', txt: '⚠️ Fenster offen & Heizung an – kurz stoßlüften, dann schließen' };
     if (!humBad && !airBad && !humHigh && !airMid)
       return { lvl: 'good', txt: '✓ reicht – Fenster wieder schließen' };
     return { lvl: 'ok', txt: '🪟 offen – noch kurz weiter lüften' };
   }
   // window closed
-  if (humBad && airBad) return { lvl: 'warn', txt: '→ lüften: zu feucht & Luft schlecht' };
-  if (humBad) return { lvl: 'warn', txt: '→ lüften: Luftfeuchte hoch (Schimmelrisiko)' };
-  if (airBad) return { lvl: 'warn', txt: '→ lüften: Luftqualität schlecht' };
+  if (humBad && airBad) return { lvl: 'warn', short: `${fmt(hum, 0)}% feucht & Luft schlecht`, txt: '→ lüften: zu feucht & Luft schlecht' };
+  if (humBad) return { lvl: 'warn', short: `${fmt(hum, 0)}% feucht`, txt: '→ lüften: Luftfeuchte hoch (Schimmelrisiko)' };
+  if (airBad) return { lvl: 'warn', short: 'Luft schlecht', txt: '→ lüften: Luftqualität schlecht' };
   if (humHigh || airMid) return { lvl: 'ok', txt: '→ bald lüften' };
   if (hum == null && ar.lvl === 'na') return { lvl: 'na', txt: '' };
   return { lvl: 'good', txt: '✓ ok' };
@@ -2777,7 +2777,7 @@ function paintKiosk() {
     if (rm.air) { const ar = airRate(rm.air, rm.air_purity); tags.push(`<span style="color:${kcol(ar.lvl)}">● Luft ${ar.word}</span>`); }
     if (rm.humidity != null) { const hr = rateMetric('humidity', rm.humidity); tags.push(`<span style="color:${kcol(hr.lvl)}">${fmt(rm.humidity, 0)}%</span>`); }
     const va = ventAdvice(rm);
-    if (va.lvl === 'warn') tags.push(`<span style="color:var(--kb-red)">🌬️ lüften</span>`);
+    if (va.lvl === 'warn') tags.push(`<span style="color:var(--kb-red)">🌬️ lüften${va.short ? ` · ${va.short}` : ''}</span>`);
     const heat = rm.heating === true ? ' 🔥' : '';
     const cold = rm.setpoint != null && rm.temp != null && rm.temp <= rm.setpoint - 1.0;
     return `<div class="kroom"><div class="kr-name"><span>${esc(rm.room)}</span><span>${heat}</span></div>` +
@@ -2785,10 +2785,11 @@ function paintKiosk() {
       `<div class="kr-set">Soll ${rm.setpoint != null ? fmt(rm.setpoint, 0) + '°' : '–'}</div>` +
       (tags.length ? `<div class="kr-tags">${tags.join('')}</div>` : '') + `</div>`;
   }).join('') || '<div class="k-sub">Keine Raumdaten – läuft die Bridge?</div>';
-  // ventilation one-liner
-  const vent = rooms.filter(rm => ventAdvice(rm).lvl === 'warn').map(rm => esc(rm.room));
+  // ventilation one-liner (with the reason per room, so it's never a mystery)
+  const vent = rooms.map(rm => ({ rm, a: ventAdvice(rm) })).filter(x => x.a.lvl === 'warn')
+    .map(x => `${esc(x.rm.room)}${x.a.short ? ` (${x.a.short})` : ''}`);
   const ve = $('kiosk-vent');
-  if (ve) ve.innerHTML = vent.length ? `🌬️ <b>Lüften empfohlen:</b> ${vent.join(', ')} (kurz stoßlüften).` : '✓ Lüften: überall ok.';
+  if (ve) ve.innerHTML = vent.length ? `🌬️ <b>Lüften empfohlen:</b> ${vent.join(', ')} – kurz stoßlüften.` : '✓ Lüften: überall ok.';
   const up = $('kiosk-updated'); if (up) up.textContent = 'aktualisiert ' + new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
 }
 async function kioskLoadData() {
