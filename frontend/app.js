@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v151';   // short tag shown always-on in the header
-const APP_VERSION = 'v151 · 2026-10-16 · Wohn-Dashboard: echte PV-Überschuss-Schätzung (Erzeugung aus Wetter/Sonnenverlauf minus Hauslast) statt Mittags-Heuristik + Abwesend/Zuhause-Modus (offene-Fenster-Warnung, „jetzt einschalten" vs. „per Zeitvorwahl")'
+const APP_BUILD = 'v152';   // short tag shown always-on in the header
+const APP_VERSION = 'v152 · 2026-10-16 · Wohn-Dashboard im Apple-Look mit Hell/Dunkel-Umschalter (folgt per Default dem Gerät, ☀️/🌙-Button, gespeichert) – iOS-Farben, Vibrancy-Karten, große SF-Zahlen'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -2594,10 +2594,6 @@ function kioskWashAdvice() {
   const sp = STATE.spot;
   const now = Date.now() / 1000;
   const pv = pvNowEstimate();
-  const GREEN = { bg: '#4be0b022', fg: '#4be0b0', bd: '#4be0b055' };
-  const AMBER = { bg: '#ffb64d22', fg: '#ffb64d', bd: '#ffb64d55' };
-  const RED = { bg: '#ff6b8a22', fg: '#ff6b8a', bd: '#ff6b8a55' };
-  const BLUE = { bg: '#3ba9ff22', fg: '#9ec7ff', bd: '#3ba9ff55' };
   // Börse signal (if active)
   let spot = null;
   if (sp && sp.enabled && sp.prices && sp.prices.length) {
@@ -2610,34 +2606,34 @@ function kioskWashAdvice() {
   }
   const strongSurplus = pv && pv.surplusKw >= 0.4;
   const act = _kioskAway ? 'per Zeitvorwahl programmieren' : 'jetzt einschalten';
-  let out;
   // 1) Real PV surplus wins – free solar power beats any tariff signal
   if (strongSurplus) {
-    out = Object.assign({}, GREEN);
-    out.line = `☀️ PV-Überschuss ~<b>${fmt(pv.surplusKw, 1)} kW</b> – Großverbraucher ${act} (Eigenverbrauch).`;
-    out.sub = `Erzeugung ~${fmt(pv.pvKw, 1)} kW − Last ~${fmt(pv.loadKw, 1)} kW · Quelle: ${pv.src}`
-      + (spot ? ` · ${spot.sub}` : '');
-    return out;
+    return { level: 'green',
+      line: `☀️ PV-Überschuss ~<b>${fmt(pv.surplusKw, 1)} kW</b> – Großverbraucher ${act} (Eigenverbrauch).`,
+      sub: `Erzeugung ~${fmt(pv.pvKw, 1)} kW − Last ~${fmt(pv.loadKw, 1)} kW · Quelle: ${pv.src}` + (spot ? ` · ${spot.sub}` : '') };
   }
   // 2) else the Börse signal
   if (spot) {
-    out = Object.assign({}, spot.cheap ? GREEN : spot.dear ? RED : AMBER);
-    out.line = spot.cheap
-      ? `🟢 Börse günstig – guter Moment für Waschmaschine, Trockner, Spüler & E-Auto (${act}).`
-      : spot.dear
-        ? '🔴 Strom gerade teuer – große Verbraucher besser später laufen lassen.'
-        : '🟡 Strompreis mittel – kein Schnäppchen, aber kein Grund zu warten.';
-    out.sub = spot.sub + (pv && pv.surplusKw > 0 ? ` · ☀️ etwas PV (~${fmt(pv.surplusKw, 1)} kW)` : '');
-    return out;
+    return { level: spot.cheap ? 'green' : spot.dear ? 'red' : 'amber',
+      line: spot.cheap
+        ? `🟢 Börse günstig – guter Moment für Waschmaschine, Trockner, Spüler & E-Auto (${act}).`
+        : spot.dear
+          ? '🔴 Strom gerade teuer – große Verbraucher besser später laufen lassen.'
+          : '🟡 Strompreis mittel – kein Schnäppchen, aber kein Grund zu warten.',
+      sub: spot.sub + (pv && pv.surplusKw > 0 ? ` · ☀️ etwas PV (~${fmt(pv.surplusKw, 1)} kW)` : '') };
   }
   // 3) no spot tariff
-  out = Object.assign({}, pv && pv.pvKw > 0.2 ? GREEN : BLUE);
-  out.line = pv && pv.surplusKw > 0
-    ? `☀️ PV deckt die Last gerade etwa – Eigenverbrauch lohnt (~${fmt(Math.max(0, pv.surplusKw), 1)} kW Überschuss).`
-    : 'ℹ️ Kein Börsentarif aktiv – ohne dynamische Preise keine „jetzt-waschen"-Empfehlung.';
-  out.sub = pv ? `Erzeugung ~${fmt(pv.pvKw, 1)} kW − Last ~${fmt(pv.loadKw, 1)} kW · Quelle: ${pv.src}`
-    : 'Im Setup „Dynamischer Börsentarif" aktivieren oder im PV-Tab die Anlage eintragen.';
-  return out;
+  return { level: pv && pv.pvKw > 0.2 ? 'green' : 'blue',
+    line: pv && pv.surplusKw > 0
+      ? `☀️ PV deckt die Last gerade etwa – Eigenverbrauch lohnt (~${fmt(Math.max(0, pv.surplusKw), 1)} kW Überschuss).`
+      : 'ℹ️ Kein Börsentarif aktiv – ohne dynamische Preise keine „jetzt-waschen"-Empfehlung.',
+    sub: pv ? `Erzeugung ~${fmt(pv.pvKw, 1)} kW − Last ~${fmt(pv.loadKw, 1)} kW · Quelle: ${pv.src}`
+      : 'Im Setup „Dynamischer Börsentarif" aktivieren oder im PV-Tab die Anlage eintragen.' };
+}
+// map a rating level (good/ok/warn/na) to a theme-aware kiosk colour token
+function kcol(lvl) {
+  return lvl === 'good' ? 'var(--kb-green)' : lvl === 'ok' ? 'var(--kb-amber)'
+    : lvl === 'warn' ? 'var(--kb-red)' : 'var(--k-sub)';
 }
 function paintKiosk() {
   const rooms = _kioskRooms || [];
@@ -2657,23 +2653,23 @@ function paintKiosk() {
   }
   const out = kioskWashAdvice();
   const ban = $('kiosk-banner');
-  if (ban) { ban.style.background = out.bg; ban.style.border = '1px solid ' + out.bd; ban.style.color = out.fg;
-    ban.innerHTML = `${out.line}<div class="b-sub" style="color:var(--ink)">${out.sub}</div>`; }
+  if (ban) { ban.className = out.level;
+    ban.innerHTML = `${out.line}<div class="b-sub">${out.sub}</div>`; }
   const og = $('kiosk-out');
   const hp = (_hdData && _hdData.kpis) || {};
   if (og) og.innerHTML = (_kioskAway ? '🚪 Abwesend · ' : '') + (hp.outdoor_c != null ? `🌡️ außen ${fmt(hp.outdoor_c, 0)}°${hp.heating_now ? ' · WP heizt' : ''}` : '');
   const grid = $('kiosk-rooms');
   if (grid) grid.innerHTML = rooms.map(rm => {
     const tags = [];
-    if ((rm.windows_open || 0) > 0) tags.push(`<span style="color:#ffb64d">🪟 offen</span>`);
-    if (rm.air) { const ar = airRate(rm.air, rm.air_purity); tags.push(`<span style="color:${RATE_COL[ar.lvl]}">● Luft ${ar.word}</span>`); }
-    if (rm.humidity != null) { const hr = rateMetric('humidity', rm.humidity); tags.push(`<span style="color:${RATE_COL[hr.lvl]}">${fmt(rm.humidity, 0)}%</span>`); }
+    if ((rm.windows_open || 0) > 0) tags.push(`<span style="color:var(--kb-amber)">🪟 offen</span>`);
+    if (rm.air) { const ar = airRate(rm.air, rm.air_purity); tags.push(`<span style="color:${kcol(ar.lvl)}">● Luft ${ar.word}</span>`); }
+    if (rm.humidity != null) { const hr = rateMetric('humidity', rm.humidity); tags.push(`<span style="color:${kcol(hr.lvl)}">${fmt(rm.humidity, 0)}%</span>`); }
     const va = ventAdvice(rm);
-    if (va.lvl === 'warn') tags.push(`<span style="color:#ff6b8a">🌬️ lüften</span>`);
+    if (va.lvl === 'warn') tags.push(`<span style="color:var(--kb-red)">🌬️ lüften</span>`);
     const heat = rm.heating === true ? ' 🔥' : '';
     const cold = rm.setpoint != null && rm.temp != null && rm.temp <= rm.setpoint - 1.0;
     return `<div class="kroom"><div class="kr-name"><span>${esc(rm.room)}</span><span>${heat}</span></div>` +
-      `<div class="kr-temp" style="color:${cold ? '#ffb64d' : 'var(--ink)'}">${rm.temp != null ? fmt(rm.temp, 1) + '°' : '–'}</div>` +
+      `<div class="kr-temp"${cold ? ' style="color:var(--kb-amber)"' : ''}>${rm.temp != null ? fmt(rm.temp, 1) + '°' : '–'}</div>` +
       `<div class="kr-set">Soll ${rm.setpoint != null ? fmt(rm.setpoint, 0) + '°' : '–'}</div>` +
       (tags.length ? `<div class="kr-tags">${tags.join('')}</div>` : '') + `</div>`;
   }).join('') || '<div class="k-sub">Keine Raumdaten – läuft die Bridge?</div>';
@@ -2697,9 +2693,23 @@ function kioskTick() {
   if (c) c.textContent = now.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
   if (d) d.textContent = now.toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long' });
 }
+// Apple-like light/dark theme for the kiosk. Default: stored choice, else the
+// device's own appearance (prefers-color-scheme).
+function kioskTheme() {
+  try { const s = localStorage.getItem('bhe_kiosk_theme'); if (s === 'light' || s === 'dark') return s; } catch (e) {}
+  try { if (window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches) return 'light'; } catch (e) {}
+  return 'dark';
+}
+function applyKioskTheme(t) {
+  const k = $('kiosk'); if (!k) return;
+  k.setAttribute('data-ktheme', t);
+  const b = $('kiosk-theme'); if (b) b.textContent = t === 'light' ? '☀️' : '🌙';
+  try { const m = document.querySelector('meta[name="theme-color"]'); if (m) m.setAttribute('content', t === 'light' ? '#f2f2f7' : '#000000'); } catch (e) {}
+}
 function openKiosk() {
   const k = $('kiosk'); if (!k) return;
   k.hidden = false;
+  applyKioskTheme(kioskTheme());
   try { if (location.hash !== '#dash') history.replaceState(null, '', '#dash'); } catch (e) {}
   kioskTick(); paintKiosk(); kioskLoadData();
   clearInterval(_kioskClockT); _kioskClockT = setInterval(kioskTick, 1000);
@@ -2708,6 +2718,7 @@ function openKiosk() {
 function closeKiosk() {
   const k = $('kiosk'); if (k) k.hidden = true;
   clearInterval(_kioskClockT); clearInterval(_kioskDataT); _kioskClockT = _kioskDataT = null;
+  try { const m = document.querySelector('meta[name="theme-color"]'); if (m) m.setAttribute('content', '#0b1220'); } catch (e) {}
   try { if (location.hash === '#dash') history.replaceState(null, '', location.pathname + location.search); } catch (e) {}
 }
 async function renderHeatingDiag(force) {
@@ -8186,6 +8197,11 @@ function init() {
     _kioskAway = !_kioskAway;
     try { localStorage.setItem('bhe_kiosk_away', _kioskAway ? '1' : '0'); } catch (e) {}
     paintKiosk();
+  });
+  const kt = $('kiosk-theme'); if (kt) kt.addEventListener('click', () => {
+    const next = ($('kiosk') && $('kiosk').getAttribute('data-ktheme') === 'light') ? 'dark' : 'light';
+    try { localStorage.setItem('bhe_kiosk_theme', next); } catch (e) {}
+    applyKioskTheme(next);
   });
   window.addEventListener('hashchange', () => { if (location.hash === '#dash') openKiosk(); });
   if (location.hash === '#dash') setTimeout(openKiosk, 300);

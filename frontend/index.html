@@ -151,28 +151,61 @@
     border:1px solid var(--line); border-radius:14px; padding:13px 15px; font-size:13px; line-height:1.5;
     box-shadow:0 10px 40px rgba(0,0,0,.5)}
   #toast b{color:var(--ink)} #toast small{color:var(--muted)}
-  /* Kiosk / Wohn-Dashboard */
-  #kiosk{position:fixed; inset:0; z-index:200; background:var(--bg); color:var(--ink);
-    overflow-y:auto; padding:18px 18px calc(18px + var(--safe-b)); -webkit-overflow-scrolling:touch}
-  #kiosk-top{display:flex; align-items:flex-start; gap:12px; justify-content:space-between}
-  #kiosk-clock{font-size:46px; font-weight:800; line-height:1; letter-spacing:-1px}
-  #kiosk .k-sub{font-size:14px; color:var(--muted); margin-top:3px}
-  #kiosk-exit{background:var(--card2); border:1px solid var(--line); color:var(--muted);
-    width:40px; height:40px; border-radius:12px; font-size:18px; cursor:pointer; flex:0 0 auto}
-  #kiosk-away{background:var(--card2); border:1px solid var(--line); color:var(--ink);
-    height:40px; padding:0 14px; border-radius:12px; font-size:14px; font-weight:600; cursor:pointer; flex:0 0 auto; white-space:nowrap}
-  #kiosk-away.away{background:#ffb64d22; border-color:#ffb64d66; color:#ffb64d}
-  #kiosk-warn:not(:empty){margin:14px 0 0; border-radius:14px; padding:12px 16px; font-size:15px; font-weight:700;
-    background:#ff6b8a1f; border:1px solid #ff6b8a66; color:#ff6b8a}
-  #kiosk-banner{margin:16px 0; border-radius:18px; padding:18px 20px; font-size:20px; font-weight:700; line-height:1.35}
-  #kiosk-banner .b-sub{font-size:14px; font-weight:500; opacity:.85; margin-top:5px}
-  #kiosk-rooms{display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:12px}
-  .kroom{background:var(--card); border:1px solid var(--line); border-radius:16px; padding:13px 14px}
-  .kroom .kr-name{font-size:14px; font-weight:600; color:var(--muted); display:flex; justify-content:space-between; gap:6px}
-  .kroom .kr-temp{font-size:34px; font-weight:800; line-height:1.1; margin:2px 0}
-  .kroom .kr-set{font-size:12px; color:var(--muted)}
-  .kroom .kr-tags{margin-top:7px; display:flex; flex-wrap:wrap; gap:5px; font-size:12px}
-  .kroom .kr-tags span{background:var(--card2); border-radius:999px; padding:2px 8px; white-space:nowrap}
+  /* ===== Kiosk / Wohn-Dashboard — Apple-like, mit Hell/Dunkel ============== */
+  /* Dark tokens (default). Light tokens under [data-ktheme="light"]. */
+  #kiosk{
+    --k-bg:#000000; --k-card:rgba(28,28,30,.92); --k-card2:rgba(58,58,60,.55);
+    --k-ink:#ffffff; --k-sub:rgba(235,235,245,.6); --k-faint:rgba(235,235,245,.3);
+    --k-sep:rgba(84,84,88,.5); --k-blur:saturate(180%) blur(20px);
+    --k-shadow:none; --k-topbg:rgba(0,0,0,.55);
+    --kb-green:#30d158; --kb-green-bg:rgba(48,209,88,.16); --kb-green-bd:rgba(48,209,88,.38);
+    --kb-amber:#ff9f0a; --kb-amber-bg:rgba(255,159,10,.16); --kb-amber-bd:rgba(255,159,10,.38);
+    --kb-red:#ff453b;   --kb-red-bg:rgba(255,69,58,.16);    --kb-red-bd:rgba(255,69,58,.4);
+    --kb-blue:#0a84ff;  --kb-blue-bg:rgba(10,132,255,.16);  --kb-blue-bd:rgba(10,132,255,.38);
+  }
+  #kiosk[data-ktheme="light"]{
+    --k-bg:#f2f2f7; --k-card:rgba(255,255,255,.96); --k-card2:rgba(118,118,128,.12);
+    --k-ink:#1c1c1e; --k-sub:rgba(60,60,67,.6); --k-faint:rgba(60,60,67,.3);
+    --k-sep:rgba(60,60,67,.14); --k-blur:saturate(180%) blur(20px);
+    --k-shadow:0 1px 2px rgba(0,0,0,.06), 0 8px 24px rgba(0,0,0,.05); --k-topbg:rgba(242,242,247,.7);
+    --kb-green:#248a3d; --kb-green-bg:rgba(52,199,89,.14); --kb-green-bd:rgba(52,199,89,.32);
+    --kb-amber:#c77700; --kb-amber-bg:rgba(255,149,0,.14); --kb-amber-bd:rgba(255,149,0,.32);
+    --kb-red:#d70015;   --kb-red-bg:rgba(255,59,48,.11);   --kb-red-bd:rgba(255,59,48,.28);
+    --kb-blue:#0071e3;  --kb-blue-bg:rgba(0,122,255,.11);  --kb-blue-bd:rgba(0,122,255,.28);
+  }
+  #kiosk{position:fixed; inset:0; z-index:200; background:var(--k-bg); color:var(--k-ink);
+    overflow-y:auto; padding:0 20px calc(22px + var(--safe-b)); -webkit-overflow-scrolling:touch;
+    font-feature-settings:"tnum" 1; letter-spacing:-.01em}
+  #kiosk-top{display:flex; align-items:center; gap:10px; justify-content:space-between;
+    position:sticky; top:0; z-index:2; padding:calc(16px + var(--safe-t)) 0 12px;
+    background:var(--k-topbg); backdrop-filter:var(--k-blur); -webkit-backdrop-filter:var(--k-blur)}
+  #kiosk-top > div:first-child{margin-right:auto}
+  #kiosk-clock{font-size:52px; font-weight:800; line-height:1; letter-spacing:-2px}
+  #kiosk-date{font-size:15px; text-transform:capitalize}
+  #kiosk .k-sub{font-size:14px; color:var(--k-sub); margin-top:3px}
+  #kiosk-top button{flex:0 0 auto; border:none; cursor:pointer; background:var(--k-card2);
+    color:var(--k-ink); box-shadow:var(--k-shadow); -webkit-backdrop-filter:var(--k-blur); backdrop-filter:var(--k-blur)}
+  #kiosk-exit,#kiosk-theme{width:40px; height:40px; border-radius:50%; font-size:17px}
+  #kiosk-away{height:40px; padding:0 16px; border-radius:20px; font-size:14px; font-weight:600; white-space:nowrap}
+  #kiosk-away.away{background:var(--kb-amber-bg); color:var(--kb-amber); box-shadow:none}
+  #kiosk-warn:not(:empty){margin:14px 0 0; border-radius:16px; padding:14px 18px; font-size:15px; font-weight:600;
+    background:var(--kb-red-bg); border:1px solid var(--kb-red-bd); color:var(--kb-red)}
+  #kiosk-banner{margin:16px 0; border-radius:22px; padding:20px 22px; font-size:21px; font-weight:700;
+    line-height:1.3; box-shadow:var(--k-shadow)}
+  #kiosk-banner .b-sub{font-size:14px; font-weight:500; color:var(--k-ink); opacity:.78; margin-top:6px; letter-spacing:0}
+  #kiosk-banner.green{color:var(--kb-green); background:var(--kb-green-bg); border:1px solid var(--kb-green-bd)}
+  #kiosk-banner.amber{color:var(--kb-amber); background:var(--kb-amber-bg); border:1px solid var(--kb-amber-bd)}
+  #kiosk-banner.red{color:var(--kb-red); background:var(--kb-red-bg); border:1px solid var(--kb-red-bd)}
+  #kiosk-banner.blue{color:var(--kb-blue); background:var(--kb-blue-bg); border:1px solid var(--kb-blue-bd)}
+  #kiosk-rooms{display:grid; grid-template-columns:repeat(auto-fill,minmax(158px,1fr)); gap:14px}
+  .kroom{background:var(--k-card); border:.5px solid var(--k-sep); border-radius:22px; padding:16px 17px;
+    box-shadow:var(--k-shadow); -webkit-backdrop-filter:var(--k-blur); backdrop-filter:var(--k-blur)}
+  .kroom .kr-name{font-size:14px; font-weight:600; color:var(--k-sub); display:flex; justify-content:space-between; gap:6px}
+  .kroom .kr-temp{font-size:38px; font-weight:800; line-height:1.05; margin:3px 0; letter-spacing:-1.5px}
+  .kroom .kr-set{font-size:13px; color:var(--k-sub)}
+  .kroom .kr-tags{margin-top:9px; display:flex; flex-wrap:wrap; gap:6px; font-size:12px; letter-spacing:0}
+  .kroom .kr-tags span{background:var(--k-card2); border-radius:999px; padding:3px 9px; white-space:nowrap; font-weight:500}
+  #kiosk-vent{margin-top:16px}
 </style>
 </head>
 <body>
@@ -1572,6 +1605,7 @@
       <div id="kiosk-updated" class="k-sub" style="opacity:.6"></div>
     </div>
     <button id="kiosk-away" aria-label="Abwesend/Zuhause">🏠 Zuhause</button>
+    <button id="kiosk-theme" aria-label="Hell/Dunkel">🌙</button>
     <button id="kiosk-exit" aria-label="Schließen">✕</button>
   </div>
   <div id="kiosk-warn"></div>
