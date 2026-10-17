@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v159';   // short tag shown always-on in the header
-const APP_VERSION = 'v159 · 2026-10-17 · Standby je Gerät (nur Geräte mit echtem Dauer-Sockel, erkannt am 10%-Perzentil der eigenen Messwerte; €/Jahr + jetzt Standby/aktiv + Typ-Hinweis) · Fenster-offen-Marker in der Raum-Grafik (amber Band/🪟) für Zusammenhänge'
+const APP_BUILD = 'v160';   // short tag shown always-on in the header
+const APP_VERSION = 'v160 · 2026-10-17 · Gebäude-Einordnung zusätzlich mit GEMESSENEN Werten je m²: Heizwärme real (blauer Marker auf derselben Skala vs. Modell), Heizstrom, Haushaltsstrom gesamt und PV-Erzeugung je m² inkl. Deckungsgrad'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -5305,9 +5305,10 @@ const RENO = {
   win:    { u: 0.90, cost: 550, l: 'Fenster tauschen' },
   door:   { u: 1.10, cost: 0,   l: 'Haustür tauschen' },
 };
-// A horizontal energy-class scale (kWh/m²·a heating) with a marker.
-function classBar(spec) {
-  const h = 56, top = 8, barH = 16, y = top, max = 200;
+// A horizontal energy-class scale (kWh/m²·a heating) with a marker. An optional
+// second value (measured) is drawn as a blue marker below the bar.
+function classBar(spec, measured) {
+  const h = measured != null ? 66 : 56, top = 8, barH = 16, y = top, max = 200;
   const segs = [[15, '#2ecc71', 'Passiv'], [45, '#4be0b0', 'KfW'],
     [90, '#f6b93b', 'Neubau'], [140, '#f39c12', 'Bestand'], [max, '#ef6c4d', 'unsaniert']];
   const X = v => (Math.min(v, max) / max) * CW;
@@ -5318,8 +5319,15 @@ function classBar(spec) {
     lo = hi;
   });
   const mx = X(spec);
-  const marker = `<path d="M${mx.toFixed(1)} ${y - 1} l-5 -7 l10 0 z" fill="#fff"/>` +
-    `<line x1="${mx.toFixed(1)}" y1="${y}" x2="${mx.toFixed(1)}" y2="${y + barH}" stroke="#fff" stroke-width="2"/>`;
+  let marker = `<path d="M${mx.toFixed(1)} ${y - 1} l-5 -7 l10 0 z" fill="#fff"/>` +
+    `<line x1="${mx.toFixed(1)}" y1="${y}" x2="${mx.toFixed(1)}" y2="${y + barH}" stroke="#fff" stroke-width="2"/>` +
+    `<text class="axis" x="${Math.min(CW - 30, mx + 6).toFixed(1)}" y="${y - 2}" fill="#fff">Modell</text>`;
+  if (measured != null) {
+    const mm = X(measured);
+    marker += `<line x1="${mm.toFixed(1)}" y1="${y}" x2="${mm.toFixed(1)}" y2="${y + barH}" stroke="#3ba9ff" stroke-width="2"/>` +
+      `<path d="M${mm.toFixed(1)} ${y + barH + 1} l-5 7 l10 0 z" fill="#3ba9ff"/>` +
+      `<text class="axis" x="${Math.min(CW - 40, mm + 6).toFixed(1)}" y="${y + barH + 20}" fill="#3ba9ff">gemessen</text>`;
+  }
   return svg(h, rects + marker + ticks);
 }
 function buildClass(spec) {
@@ -5506,10 +5514,57 @@ function renderHeatDemand() {
   // ---- Gebäude-Einordnung (kWh/m²·a Heizwärmebedarf) -------------------
   const spec = b.area > 0 ? r.qHeat / b.area : 0;
   const [cls, col] = buildClass(spec);
-  $('hp-theory-class').innerHTML = classBar(spec);
-  $('hp-theory-class-note').innerHTML = `Dein <b>spezifischer Heizwärmebedarf</b> ist ~<b style="color:${col}">` +
+  // measured counterpart per m²: real heating thermal / electricity, total house
+  // electricity and PV generation – all per m² of heated area.
+  const area = b.area > 0 ? b.area : 0;
+  // measured annual WP electricity + thermal heat – from monthly/CSV if present,
+  // else the counter-based year estimate (works without a CSV import).
+  const measYearElec = measured || (A && A.stats && A.stats.year_estimate_kwh) ||
+    (A && A.counter && A.counter.avg_daily_elec_kwh ? A.counter.avg_daily_elec_kwh * 365 : null);
+  const measYearHeat = (A && A.counter && A.counter.avg_daily_heat_kwh ? A.counter.avg_daily_heat_kwh * 365 : null) ||
+    (measYearElec && copMeas ? measYearElec * copMeas : null);
+  let realSpec = null, heatElecM2 = null, elecM2 = null, pvM2 = null, pvCover = null, pvYield = null;
+  if (area > 0 && measYearElec) {
+    const heatFrac = r.eTotal > 0 ? r.eHeat / r.eTotal : 1;          // model heating share of WP elec
+    heatElecM2 = measYearElec * heatFrac / area;
+    if (measYearHeat) realSpec = Math.max(0, measYearHeat - b.dhw) / area;  // heating thermal /m²
+    const shYear = Math.max(0, shAvgDaily() * 365);
+    elecM2 = (shYear + measYearElec) / area;
+    try {
+      const pin = pvInputs();
+      if (pin.kwp > 0) { pvYield = simulatePv(pin).yield_kwh; pvM2 = pvYield / area; pvCover = (shYear + measYearElec) > 0 ? pvYield / (shYear + measYearElec) : null; }
+    } catch (e) {}
+  }
+  $('hp-theory-class').innerHTML = classBar(spec, realSpec);
+  $('hp-theory-class-note').innerHTML = `Dein <b>spezifischer Heizwärmebedarf</b> (Modell) ist ~<b style="color:${col}">` +
     `${fmt(spec, 0)} kWh/m²·a</b> → <b>${cls}</b>. Zum Einordnen: Passivhaus &lt;15, KfW ~30–45, Neubau ~55–70, ` +
-    `unsanierter Altbau ~150–250. (Nur Heizung, ohne Warmwasser; Marker oben.)`;
+    `unsanierter Altbau ~150–250. (Nur Heizung, ohne Warmwasser; <span style="color:#fff">weißer Marker</span>.)`;
+  // real / measured per m²
+  const realEl = $('hp-theory-real');
+  if (realEl) {
+    if (!area || !measYearElec) {
+      realEl.innerHTML = '<div class="note">Für die <b>gemessenen</b> Werte je m² fehlen noch Daten – trage die ' +
+        '<b>beheizte Fläche</b> ein (oben) und lass die Wärmepumpe mitlaufen (oder importiere eine HomeCom-CSV).</div>';
+    } else {
+      const rows = [];
+      if (realSpec != null) {
+        const [rcls, rcol] = buildClass(realSpec);
+        const d = spec > 0 ? (realSpec - spec) / spec : 0;
+        rows.push(devRow('Heizwärme gemessen', `thermisch · <b style="color:${rcol}">${rcls}</b>`,
+          `${fmt(realSpec, 0)} kWh/m²·a`, Math.abs(d) < 0.12 ? '≈ Modell' : (d < 0 ? `${fmt(-d * 100, 0)}% unter Modell` : `${fmt(d * 100, 0)}% über Modell`),
+          Math.min(100, realSpec / 200 * 100), '#3ba9ff'));
+      }
+      if (heatElecM2 != null) rows.push(devRow('Heizstrom gemessen', 'Strom nur fürs Heizen', `${fmt(heatElecM2, 0)} kWh/m²·a`, money(heatElecM2 * area * STATE.price) + '/Jahr', Math.min(100, heatElecM2 / 80 * 100), COL.hp));
+      if (elecM2 != null) rows.push(devRow('Haushaltsstrom gesamt', 'Smart Home + Wärmepumpe', `${fmt(elecM2, 0)} kWh/m²·a`, '', Math.min(100, elecM2 / 120 * 100), COL.sh));
+      if (pvM2 != null) rows.push(devRow('PV-Erzeugung', pvCover != null ? `deckt ~${fmt(pvCover * 100, 0)}% deines m²-Strombedarfs` : 'je m² Wohnfläche', `${fmt(pvM2, 0)} kWh/m²·a`, kwh(pvYield, 0) + '/Jahr', Math.min(100, pvM2 / 120 * 100), COL.pv));
+      realEl.innerHTML = `<div style="font-weight:700;font-size:13px;margin-bottom:6px">🔎 Real je m² (gemessen)` +
+        (realSpec != null ? ` <span style="font-weight:400;color:#3ba9ff;font-size:12px">· blauer Marker oben</span>` : '') + `</div>` +
+        rows.join('') +
+        `<div class="note" style="margin-top:8px">Gemessen aus deiner Wärmepumpe${pvM2 != null ? ' und der PV-Auslegung' : ''}, geteilt durch die beheizte Fläche (${fmt(area, 0)} m²). ` +
+        `Die <b>Heizwärme gemessen</b> hängt vom <b>Wetter</b> ab – ein milder Zeitraum liegt unter dem Modell-Bedarf (Auslegung), ein kalter darüber. ` +
+        `Teiljahre sind hochgerechnet.</div>`;
+    }
+  }
 
   // ---- Sanierung: Ersparnis-Ranking + Amortisation --------------------
   const measures = [];
