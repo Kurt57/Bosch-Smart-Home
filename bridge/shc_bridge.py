@@ -935,6 +935,11 @@ class Store:
                 "CREATE TABLE IF NOT EXISTS window_log("
                 " ts INTEGER PRIMARY KEY, open_count INTEGER, rooms TEXT)"
             )
+            # `doors` records which of the open contacts are DOORS (Haustür etc.),
+            # so the chart can mark a door opening differently from a window.
+            wlcols = [r[1] for r in self.conn.execute("PRAGMA table_info(window_log)")]
+            if "doors" not in wlcols:
+                self.conn.execute("ALTER TABLE window_log ADD COLUMN doors TEXT")
             # per-room temperature / setpoint / valve over time (thermostats)
             self.conn.execute(
                 "CREATE TABLE IF NOT EXISTS room_log("
@@ -1148,17 +1153,17 @@ class Store:
             return r["temp"] if r else None
 
     # -- window/door contacts -------------------------------------------- #
-    def window_log_add(self, ts: int, open_count: int, rooms: str):
+    def window_log_add(self, ts: int, open_count: int, rooms: str, doors: str = ""):
         with self.lock, self.conn:
             self.conn.execute(
-                "INSERT INTO window_log(ts,open_count,rooms) VALUES(?,?,?)"
+                "INSERT INTO window_log(ts,open_count,rooms,doors) VALUES(?,?,?,?)"
                 " ON CONFLICT(ts) DO UPDATE SET open_count=excluded.open_count,"
-                " rooms=excluded.rooms", (ts, open_count, rooms))
+                " rooms=excluded.rooms, doors=excluded.doors", (ts, open_count, rooms, doors))
 
     def window_log_since(self, since_ts: int) -> list[dict]:
         with self.lock:
             cur = self.conn.execute(
-                "SELECT ts,open_count,rooms FROM window_log WHERE ts>=? ORDER BY ts ASC",
+                "SELECT ts,open_count,rooms,doors FROM window_log WHERE ts>=? ORDER BY ts ASC",
                 (since_ts,))
             return [dict(r) for r in cur.fetchall()]
 
@@ -2503,8 +2508,10 @@ def compute_room_timeseries(store: "Store", days: int = 2) -> dict:
         insights.append(f"Wärmepumpe heizte im Zeitraum <b>{tot:.1f} h</b> in {len(heat_iv)} Phasen. "
                         f"Heizpausen = alle Räume haben ihr Soll erreicht (Ventile zu) oder Warmwasser-Vorrang.")
 
-    # window-open events for the chart markers (which room, when open→close)
-    window_events = [{"rooms": sorted(e.get("rooms") or []), "start": e["start"],
+    # window-open events for the chart markers (which room, when open→close).
+    # `doors` flags openings that are a door (Haustür etc.) – shown separately.
+    window_events = [{"rooms": sorted(e.get("rooms") or []),
+                      "doors": sorted(e.get("doors") or []), "start": e["start"],
                       "end": e["end"], "ongoing": bool(e.get("ongoing"))}
                      for e in win_events if e.get("end", 0) >= since]
     return {"ok": True, "days_window": days, "rooms": out_rooms,
@@ -2547,9 +2554,11 @@ def _demo_room_timeseries(days: int = 2) -> dict:
         "<b>Auskühlen:</b> am schnellsten Bad (~1.5 K/h), am trägsten Wohnzimmer (~0.6 K/h).",
         "Wärmepumpe heizte im Zeitraum mehrere Phasen; Pausen = alle Räume am Soll (Ventile zu).",
     ]
-    # a couple of demo window-open events so the chart markers are visible
-    win = [{"rooms": ["Bad"], "start": int(now - 5 * 3600), "end": int(now - 4.4 * 3600), "ongoing": False},
-           {"rooms": ["Wohnzimmer"], "start": int(now - 2 * 3600), "end": int(now - 1.6 * 3600), "ongoing": False}]
+    # a couple of demo window-open events so the chart markers are visible,
+    # plus a short Haustür (door) opening so the door marker shows too
+    win = [{"rooms": ["Bad"], "doors": [], "start": int(now - 5 * 3600), "end": int(now - 4.4 * 3600), "ongoing": False},
+           {"rooms": ["Flur"], "doors": ["Haustür"], "start": int(now - 3.2 * 3600), "end": int(now - 3.17 * 3600), "ongoing": False},
+           {"rooms": ["Wohnzimmer"], "doors": [], "start": int(now - 2 * 3600), "end": int(now - 1.6 * 3600), "ongoing": False}]
     return {"ok": True, "demo": True, "days_window": days, "rooms": out,
             "heating": heat, "window_events": win, "insights": insights}
 
@@ -4003,10 +4012,13 @@ def _window_events(log_rows: list[dict], now: int) -> list[dict]:
         oc = r.get("open_count") or 0
         if oc > 0:
             if cur is None:
-                cur = {"start": r["ts"], "rooms": set(), "end": None}
+                cur = {"start": r["ts"], "rooms": set(), "doors": set(), "end": None}
             for x in (r.get("rooms") or "").split(","):
                 if x.strip():
                     cur["rooms"].add(x.strip())
+            for x in (r.get("doors") or "").split(","):
+                if x.strip():
+                    cur["doors"].add(x.strip())
         elif cur is not None:
             cur["end"] = r["ts"]
             events.append(cur)
@@ -4551,11 +4563,14 @@ class Poller(threading.Thread):
         """Record a row whenever the set of open windows changes."""
         contacts = self.client.list_window_contacts(self.cfg.get("contact_room_map"))
         open_rooms = sorted({(c.get("room") or c.get("name") or "?") for c in contacts if c.get("open")})
+        open_doors = sorted({(c.get("room") or c.get("name") or "?")
+                             for c in contacts if c.get("open") and c.get("door")})
         sig = tuple(open_rooms)
         if sig == self._win_sig:
             return                        # no change → nothing to log
         self._win_sig = sig
-        self.store.window_log_add(ts, len(open_rooms), ", ".join(open_rooms))
+        self.store.window_log_add(ts, len(open_rooms), ", ".join(open_rooms),
+                                  ", ".join(open_doors))
 
     def _log_room_temp(self, ts: int):
         """Measured temperature per room (+ setpoint, valve) → store. Also keeps

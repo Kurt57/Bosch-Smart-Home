@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v161';   // short tag shown always-on in the header
-const APP_VERSION = 'v161 · 2026-10-17 · Gebäude-Einordnung: Fußnote nennt jetzt die Daten-BASIS der gemessenen kWh/m² – gemessener Zeitraum (Monate/Tage vom WP-Zähler bzw. HomeCom-CSV), Herkunft der Heizwärme (Wärmezähler vs. Strom×JAZ) und die Wetter-/Teiljahr-Unschärfe'
+const APP_BUILD = 'v162';   // short tag shown always-on in the header
+const APP_VERSION = 'v162 · 2026-10-17 · Raum-Grafik: zusätzliche Ereignis-Marker für 🚪 Tür-/Haustür-Öffnen (violette Linie) und ▲ WP-Heizstart (Takt am Bandanfang); Sparpotenzial-Karte: Standby jetzt als eigener Posten aus der je-Gerät gemessenen Dauerlast'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -3321,10 +3321,19 @@ function roomChart(d, sel) {
   // valve-open shading when a single room is selected (room calling for heat)
   let band = '';
   if (sel && rooms[0]) { const p = rooms[0].points; for (let i = 0; i < p.length - 1; i++) { if ((p[i].valve || 0) > 50) { const x1 = X(p[i].ts), x2 = X(p[i + 1].ts); band += `<rect x="${x1.toFixed(1)}" y="${top}" width="${Math.max(0.6, x2 - x1).toFixed(1)}" height="${(base - top).toFixed(1)}" fill="${rooms[0].color}" fill-opacity="0.09"/>`; } } }
-  // WP heating strip below the plot
+  // WP heating strip below the plot + a start-tick (▲) at each cycle start, so
+  // the TAKTung (on/off cycling) is visible – many short starts = Takten.
   const stripY = base + 10;
   let strip = `<text class="axis" x="0" y="${stripY + 6}">WP</text>`;
-  (d.heating || []).forEach(iv => { const x1 = X(iv[0]), x2 = X(iv[1]); strip += `<rect x="${x1.toFixed(1)}" y="${stripY}" width="${Math.max(1, x2 - x1).toFixed(1)}" height="6" fill="#4be0b0" fill-opacity="0.85"/>`; });
+  (d.heating || []).forEach(iv => {
+    const x1 = X(iv[0]), x2 = X(iv[1]);
+    strip += `<rect x="${x1.toFixed(1)}" y="${stripY}" width="${Math.max(1, x2 - x1).toFixed(1)}" height="6" fill="#4be0b0" fill-opacity="0.85"/>`;
+    if (iv[0] >= t0 && iv[0] <= t1) {
+      const xs = X(iv[0]);
+      strip += `<path d="M${xs.toFixed(1)} ${(stripY - 1).toFixed(1)} l-3 -5 l6 0 z" fill="#4be0b0"/>`;
+      strip += `<line x1="${xs.toFixed(1)}" x2="${xs.toFixed(1)}" y1="${top}" y2="${stripY}" stroke="#4be0b0" stroke-width="1" stroke-dasharray="2 3" opacity="${sel ? 0.5 : 0.26}"/>`;
+    }
+  });
   // time grid with adaptive, denser labels: weekday at midnight, otherwise the
   // hour (or HH:MM for very short ranges). More ticks than before so the x-axis
   // actually tells you when, not just "Mo / Di".
@@ -3357,7 +3366,11 @@ function roomChart(d, sel) {
   // correlate a temperature dip with airing. Selected room → only its events.
   let wins = '';
   (d.window_events || []).forEach(ev => {
-    const evRooms = ev.rooms || [];
+    const evDoors = ev.doors || [];
+    // a room that is only a door opening is drawn by the door marker below,
+    // not as a window band (a door is a brief draught, not airing a room).
+    const evRooms = (ev.rooms || []).filter(r => !evDoors.includes(r));
+    if (!evRooms.length) return;
     if (sel && !evRooms.includes(sel)) return;
     const xs = X(Math.max(ev.start, t0)), xe = X(Math.min(ev.end, t1));
     if (xe < padL || xs > CW - padR) return;
@@ -3367,12 +3380,26 @@ function roomChart(d, sel) {
     const lbl = sel ? '🪟 offen' : ('🪟 ' + (evRooms[0] || ''));
     wins += `<text x="${(xs + 2).toFixed(1)}" y="${(top + 9).toFixed(1)}" style="font-size:9px" fill="${amber}">${esc(lbl)}</text>`;
   });
+  // door-open markers (Haustür etc.): a thin violet line + 🚪, so a door opening
+  // (brief cold draught) is distinguishable from airing a room via a window.
+  let doors = '';
+  (d.window_events || []).forEach(ev => {
+    const evDoors = ev.doors || [];
+    if (!evDoors.length) return;
+    if (sel && !(ev.rooms || []).includes(sel)) return;
+    const xs = X(Math.max(ev.start, t0));
+    if (xs < padL || xs > CW - padR) return;
+    const violet = '#c084fc';
+    doors += `<line x1="${xs.toFixed(1)}" x2="${xs.toFixed(1)}" y1="${top}" y2="${base}" stroke="${violet}" stroke-width="1.4" stroke-dasharray="1 2" opacity="0.9"/>`;
+    const lbl = sel ? '🚪 offen' : ('🚪 ' + (evDoors[0] || 'Tür'));
+    doors += `<text x="${(xs + 2).toFixed(1)}" y="${(top + 20).toFixed(1)}" style="font-size:9px" fill="${violet}">${esc(lbl)}</text>`;
+  });
   // per-room series for the tap/hover readout (temperature over time)
   const tsSeries = rooms.map(r => ({
     name: r.room, color: r.color, unit: '°',
     pts: r.points.filter(p => p.temp != null && p.ts >= t0).map(p => [p.ts, Math.round(p.temp * 10) / 10]),
   })).filter(s => s.pts.length);
-  return svg(h, g + band + wins + sep + strip + lines, null, { t0, t1, padL, padR, h, series: tsSeries });
+  return svg(h, g + band + wins + doors + sep + strip + lines, null, { t0, t1, padL, padR, h, series: tsSeries });
 }
 let _rtsData = null, _rtsBusy = false, _rtsSel = '', _rtsDays = 2;
 /* ---- Raumtemperaturen: Balken je Raum + Ziel-Marker (Soll-Erreichung) ----- */
@@ -3506,7 +3533,9 @@ function paintRoomTs(r) {
         : ` <span style="color:#ffb64d">${fmt(a.gap, 1)}° unter Ziel</span>`;
     return `<div class="it"><span class="sw" style="background:${a.x.color}"></span>${esc(a.x.room)}${badge}</div>`;
   }).join('') + '<div class="it"><span class="sw" style="background:#4be0b0"></span>WP heizt</div>' +
-    ((r.window_events || []).length ? '<div class="it"><span class="sw" style="background:#ffb64d"></span>🪟 Fenster offen</div>' : '');
+    '<div class="it"><span style="color:#4be0b0;font-weight:700">▲</span>&nbsp;WP-Start (Takt)</div>' +
+    ((r.window_events || []).some(e => (e.rooms || []).some(x => !((e.doors || []).includes(x)))) ? '<div class="it"><span class="sw" style="background:#ffb64d"></span>🪟 Fenster offen</div>' : '') +
+    ((r.window_events || []).some(e => (e.doors || []).length) ? '<div class="it"><span class="sw" style="background:#c084fc"></span>🚪 Tür offen</div>' : '');
   if (logic) {
     let insLines;
     if (anyCranked) {
@@ -3529,7 +3558,9 @@ function paintRoomTs(r) {
   }
   if (note) note.innerHTML = (r.demo ? '<b>Demo-Daten</b>. ' : '') +
     'Gestrichelt = dein <b>Ziel</b> (bei hochgedrehtem Soll dein Wohlfühl-Ziel aus der Karte oben, sonst der Sollwert). ' +
-    'Die <b style="color:#ffb64d">amberfarbenen Bänder/Marker 🪟</b> zeigen, wann ein <b>Fenster offen</b> war – so siehst du Zusammenhänge (z. B. Temperatur fällt beim Lüften). ' +
+    'Die <b style="color:#ffb64d">amberfarbenen Bänder/Marker 🪟</b> zeigen, wann ein <b>Fenster offen</b> war, ' +
+    'die <b style="color:#c084fc">violetten Linien 🚪</b> ein <b>Tür-/Haustür-Öffnen</b> (kurzer Kältezug) – so siehst du Zusammenhänge (z. B. Temperatur fällt beim Lüften oder Türöffnen). ' +
+    'Das <b style="color:#4be0b0">grüne WP-Band</b> zeigt, wann die Wärmepumpe heizte; das <b style="color:#4be0b0">▲ am Bandanfang</b> markiert jeden <b>Heizstart (Takt)</b> – viele kurze Starts = Takten. ' +
     'Einen Raum oben wählen zeigt zusätzlich, wann sein <b>Ventil offen</b> ist (leichte Schattierung = Raum verlangt Wärme).';
 }
 /* ---- Auto-Messung: active night-setback on the thermostats ---------------- */
@@ -4827,16 +4858,44 @@ function renoBest(b, r) {
 
 // A ranked, actionable list of the biggest saving levers (€/year), synthesised
 // from what the app already computes. Rough estimates – labelled as such.
+// Measured standby total from the per-device floor (same basis as the Standby
+// card): what every device draws even at rest, projected to a year. The
+// "achievable" saving credits clearly switch-off-able devices fully and the
+// rest only partially – an always-on router can't be switched to zero.
+function standbySavings() {
+  const devs = (STATE.data && STATE.data.live && STATE.data.live.devices) || [];
+  const price = STATE.price;
+  let totW = 0, killW = 0;
+  devs.forEach(d => {
+    const sb = d.standby_w || 0;
+    if (sb < 0.8) return;
+    totW += sb;
+    const lab = (typeof devLabel === 'function') ? devLabel(d) : { title: d.name || '' };
+    if (/abschaltbar/.test(guessDeviceType((lab.title || '') + ' ' + (d.name || '') + ' ' + (d.room || '')))) killW += sb;
+  });
+  if (totW < 0.5) return null;
+  const totCost = totW / 1000 * 8760 * price;
+  const killCost = killW / 1000 * 8760 * price;
+  return { totW, killW, totCost, killCost, saveCost: killCost + 0.4 * (totCost - killCost) };
+}
+
 function renderSavings() {
   const card = $('ov-savings-card'); if (!card) return;
   const price = STATE.price, L = [];
-  // 1) always-on base load (measured Smart-Home devices)
-  const prof = (STATE.data && STATE.data.hourly_profile) || [];
-  const vals = prof.map(h => h.avg_w).filter(v => v != null);
-  if (vals.length >= 24) {
-    const baseW = mean(vals.slice().sort((a, b) => a - b).slice(0, 3));
-    const eur = baseW * 0.3 / 1000 * 8760 * price;      // trimming ~30 % of the base load
-    if (eur > 8) L.push({ label: 'Dauerverbraucher/Standby senken', hint: 'Profil → Grundlast', eur, color: COL.sh });
+  // 1) standby / always-on base load. Prefer the MEASURED per-device standby
+  // (precise, same basis as the Standby card); fall back to the base-load
+  // heuristic from the hourly profile when no device-level standby is known.
+  const sb = standbySavings();
+  if (sb && sb.saveCost > 5) {
+    L.push({ label: 'Standby abschalten (je Gerät gemessen)', hint: `Profil → Standby · ${fmt(sb.totW, 0)} W Dauer`, eur: sb.saveCost, color: COL.sh });
+  } else {
+    const prof = (STATE.data && STATE.data.hourly_profile) || [];
+    const vals = prof.map(h => h.avg_w).filter(v => v != null);
+    if (vals.length >= 24) {
+      const baseW = mean(vals.slice().sort((a, b) => a - b).slice(0, 3));
+      const eur = baseW * 0.3 / 1000 * 8760 * price;      // trimming ~30 % of the base load
+      if (eur > 8) L.push({ label: 'Dauerverbraucher/Standby senken', hint: 'Profil → Grundlast', eur, color: COL.sh });
+    }
   }
   // 2) electric booster heater (Heizstab) on the heat pump
   const hl = (STATE.hpA && STATE.hpA.live) || {};
