@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v160';   // short tag shown always-on in the header
-const APP_VERSION = 'v160 · 2026-10-17 · Gebäude-Einordnung zusätzlich mit GEMESSENEN Werten je m²: Heizwärme real (blauer Marker auf derselben Skala vs. Modell), Heizstrom, Haushaltsstrom gesamt und PV-Erzeugung je m² inkl. Deckungsgrad'
+const APP_BUILD = 'v161';   // short tag shown always-on in the header
+const APP_VERSION = 'v161 · 2026-10-17 · Gebäude-Einordnung: Fußnote nennt jetzt die Daten-BASIS der gemessenen kWh/m² – gemessener Zeitraum (Monate/Tage vom WP-Zähler bzw. HomeCom-CSV), Herkunft der Heizwärme (Wärmezähler vs. Strom×JAZ) und die Wetter-/Teiljahr-Unschärfe'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -5557,12 +5557,35 @@ function renderHeatDemand() {
       if (heatElecM2 != null) rows.push(devRow('Heizstrom gemessen', 'Strom nur fürs Heizen', `${fmt(heatElecM2, 0)} kWh/m²·a`, money(heatElecM2 * area * STATE.price) + '/Jahr', Math.min(100, heatElecM2 / 80 * 100), COL.hp));
       if (elecM2 != null) rows.push(devRow('Haushaltsstrom gesamt', 'Smart Home + Wärmepumpe', `${fmt(elecM2, 0)} kWh/m²·a`, '', Math.min(100, elecM2 / 120 * 100), COL.sh));
       if (pvM2 != null) rows.push(devRow('PV-Erzeugung', pvCover != null ? `deckt ~${fmt(pvCover * 100, 0)}% deines m²-Strombedarfs` : 'je m² Wohnfläche', `${fmt(pvM2, 0)} kWh/m²·a`, kwh(pvYield, 0) + '/Jahr', Math.min(100, pvM2 / 120 * 100), COL.pv));
+      // data basis: which months are actually measured + from CSV or the counter
+      const MABB = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'];
+      const fmtYM = ym => { const p = String(ym).split('-'); const mi = parseInt(p[1], 10) - 1; return (MABB[mi] || p[1]) + ' ' + p[0]; };
+      const im = A && A.imported, cnt = A && A.counter;
+      let basis;
+      if (measured && im && im.months) {
+        basis = `importierte <b>HomeCom-CSV</b> (${im.months} Monate, ${im.days} Tage` +
+          (im.seasonal_cop ? `, JAZ ${fmt(im.seasonal_cop, 2)}` : '') + ')';
+      } else if (cnt && (cnt.observed_months || cnt.span_days)) {
+        const oms = (cnt.observed_months || []).map(fmtYM);
+        const span = oms.length >= 2 ? `${oms[0]} – ${oms[oms.length - 1]}` : (oms[0] || '');
+        basis = `dem laufenden <b>WP-Zähler</b> über <b>${fmt(cnt.span_days || 0, 0)} gemessene Tage</b>` +
+          (span ? ` (${oms.length >= 2 ? '' : 'Monat '}<b>${span}</b>)` : '');
+      } else if (A && A.stats) {
+        basis = `der <b>Zähler-Jahresschätzung</b> der Wärmepumpe`;
+      } else {
+        basis = `den gemessenen WP-Daten`;
+      }
+      const heatBasis = (cnt && cnt.avg_daily_heat_kwh)
+        ? 'der <b>gemessenen Wärmemenge</b> (WP-Wärmezähler)'
+        : 'dem <b>gemessenen Strom × Jahresarbeitszahl</b>';
       realEl.innerHTML = `<div style="font-weight:700;font-size:13px;margin-bottom:6px">🔎 Real je m² (gemessen)` +
         (realSpec != null ? ` <span style="font-weight:400;color:#3ba9ff;font-size:12px">· blauer Marker oben</span>` : '') + `</div>` +
         rows.join('') +
-        `<div class="note" style="margin-top:8px">Gemessen aus deiner Wärmepumpe${pvM2 != null ? ' und der PV-Auslegung' : ''}, geteilt durch die beheizte Fläche (${fmt(area, 0)} m²). ` +
-        `Die <b>Heizwärme gemessen</b> hängt vom <b>Wetter</b> ab – ein milder Zeitraum liegt unter dem Modell-Bedarf (Auslegung), ein kalter darüber. ` +
-        `Teiljahre sind hochgerechnet.</div>`;
+        `<div class="note" style="margin-top:8px"><b>Basis:</b> ${basis}, aufs Jahr hochgerechnet und durch die ` +
+        `beheizte Fläche (${fmt(area, 0)} m²) geteilt. Die <b>Heizwärme je m²</b> stammt aus ${heatBasis} (Warmwasser herausgerechnet)` +
+        (pvM2 != null ? ', die <b>PV-Erzeugung</b> aus deiner PV-Auslegung (PV-Tab)' : '') + '. ' +
+        `Je <b>weniger Monate</b> bisher gemessen wurden, desto gröber die Hochrechnung. Die Heizwärme hängt zudem vom <b>Wetter</b> ab: ` +
+        `ein milder Zeitraum liegt <b>unter</b> dem Modell-Bedarf (Auslegung), ein kalter <b>darüber</b> – erst über eine volle Heizsaison nähern sich beide Marker an.</div>`;
     }
   }
 
