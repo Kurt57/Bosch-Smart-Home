@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v158';   // short tag shown always-on in the header
-const APP_VERSION = 'v158 · 2026-10-16 · „Räume & Heizbetrieb" bewertet in der Aufdreh-Phase gegen dein Ziel statt gegen den hochgedrehten Soll (30 °C) – kein falsches „nie Soll" mehr; Chart zoomt aufs Ziel statt bis 30 °C'
+const APP_BUILD = 'v159';   // short tag shown always-on in the header
+const APP_VERSION = 'v159 · 2026-10-17 · Standby je Gerät (nur Geräte mit echtem Dauer-Sockel, erkannt am 10%-Perzentil der eigenen Messwerte; €/Jahr + jetzt Standby/aktiv + Typ-Hinweis) · Fenster-offen-Marker in der Raum-Grafik (amber Band/🪟) für Zusammenhänge'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -263,6 +263,13 @@ const INFO = {
   'ov-month': () => 'Hochrechnung für den laufenden Monat: dein durchschnittlicher Tagesverbrauch ' +
     '(Smart Home aus dem Zählerstand, Wärmepumpe aus dem Zählerwachstum) – <b>saisonal</b> für diesen ' +
     'Monat gewichtet und mit deinem kWh-Preis multipliziert.',
+  standby: () => 'Zeigt je <b>gemessenem Gerät</b>, wie viel es im <b>Ruhezustand dauerhaft</b> zieht (Standby/Phantomlast) – ' +
+    'nur Geräte, die überhaupt einen Standby haben. <b>Woher ich das weiß:</b> Ich nehme das <b>Dauer-Minimum</b> jedes ' +
+    'Geräts (das 10-%-Perzentil seiner <b>eigenen</b> Messwerte) – was es fast immer zieht, ist Standby; alles darüber ist ' +
+    'echte Nutzung. Ein Licht, das meist aus ist, kommt auf ~0 W (kein Standby); ein Router/TV, der immer ein paar Watt ' +
+    'sipt, zeigt genau diesen Sockel. „jetzt Standby/aktiv" vergleicht die aktuelle Leistung mit diesem Sockel. Der ' +
+    'Typ-Hinweis (Netzwerk, Unterhaltung …) ist aus dem Namen geraten – hilft beim Einschätzen, ob der Standby ' +
+    '<b>abschaltbar</b> ist (TV/Konsole/Ladegerät per Zeitschaltung aus) oder <b>nötig</b> (Kühlung).',
   baseload: () => 'Deine <b>Grundlast</b> ist der Strom, der <b>rund um die Uhr</b> fließt, auch wenn niemand etwas ' +
     'benutzt. Geschätzt aus dem Mittel der <b>drei ruhigsten Stunden</b> deines Tagesprofils, hochgerechnet aufs Jahr. ' +
     'Hohe Grundlast heißt: viele <b>Dauerverbraucher/Standby</b> (Router, Netzteile, alte Kühlgeräte, Pumpen). Schon ' +
@@ -3346,12 +3353,26 @@ function roomChart(d, sel) {
       lines += `<line x1="${padL}" x2="${CW - padR}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="${r.color}" stroke-width="1" stroke-dasharray="4 3" opacity="${sel ? 0.85 : 0.3}"/>`;
       if (sel) lines += `<text class="axis" x="${CW - padR + 2}" y="${(y + 3).toFixed(1)}" fill="${r.color}" text-anchor="start">${cranked ? 'Ziel' : 'Soll'} ${fmt(ref, 1)}</text>`; }
   });
+  // window-open markers: WHEN was a window open (and which room) – so you can
+  // correlate a temperature dip with airing. Selected room → only its events.
+  let wins = '';
+  (d.window_events || []).forEach(ev => {
+    const evRooms = ev.rooms || [];
+    if (sel && !evRooms.includes(sel)) return;
+    const xs = X(Math.max(ev.start, t0)), xe = X(Math.min(ev.end, t1));
+    if (xe < padL || xs > CW - padR) return;
+    const amber = '#ffb64d';
+    wins += `<rect x="${xs.toFixed(1)}" y="${top}" width="${Math.max(1.5, xe - xs).toFixed(1)}" height="${(base - top).toFixed(1)}" fill="${amber}" fill-opacity="${sel ? 0.13 : 0.08}"/>`;
+    wins += `<line x1="${xs.toFixed(1)}" x2="${xs.toFixed(1)}" y1="${top}" y2="${base}" stroke="${amber}" stroke-width="1" stroke-dasharray="3 2" opacity="0.85"/>`;
+    const lbl = sel ? '🪟 offen' : ('🪟 ' + (evRooms[0] || ''));
+    wins += `<text x="${(xs + 2).toFixed(1)}" y="${(top + 9).toFixed(1)}" style="font-size:9px" fill="${amber}">${esc(lbl)}</text>`;
+  });
   // per-room series for the tap/hover readout (temperature over time)
   const tsSeries = rooms.map(r => ({
     name: r.room, color: r.color, unit: '°',
     pts: r.points.filter(p => p.temp != null && p.ts >= t0).map(p => [p.ts, Math.round(p.temp * 10) / 10]),
   })).filter(s => s.pts.length);
-  return svg(h, g + band + sep + strip + lines, null, { t0, t1, padL, padR, h, series: tsSeries });
+  return svg(h, g + band + wins + sep + strip + lines, null, { t0, t1, padL, padR, h, series: tsSeries });
 }
 let _rtsData = null, _rtsBusy = false, _rtsSel = '', _rtsDays = 2;
 /* ---- Raumtemperaturen: Balken je Raum + Ziel-Marker (Soll-Erreichung) ----- */
@@ -3484,7 +3505,8 @@ function paintRoomTs(r) {
       : a.gap > 1.0 ? ` <span style="color:#ff6b8a">⚠︎ ${fmt(a.gap, 1)}° unter Ziel</span>`
         : ` <span style="color:#ffb64d">${fmt(a.gap, 1)}° unter Ziel</span>`;
     return `<div class="it"><span class="sw" style="background:${a.x.color}"></span>${esc(a.x.room)}${badge}</div>`;
-  }).join('') + '<div class="it"><span class="sw" style="background:#4be0b0"></span>WP heizt</div>';
+  }).join('') + '<div class="it"><span class="sw" style="background:#4be0b0"></span>WP heizt</div>' +
+    ((r.window_events || []).length ? '<div class="it"><span class="sw" style="background:#ffb64d"></span>🪟 Fenster offen</div>' : '');
   if (logic) {
     let insLines;
     if (anyCranked) {
@@ -3507,6 +3529,7 @@ function paintRoomTs(r) {
   }
   if (note) note.innerHTML = (r.demo ? '<b>Demo-Daten</b>. ' : '') +
     'Gestrichelt = dein <b>Ziel</b> (bei hochgedrehtem Soll dein Wohlfühl-Ziel aus der Karte oben, sonst der Sollwert). ' +
+    'Die <b style="color:#ffb64d">amberfarbenen Bänder/Marker 🪟</b> zeigen, wann ein <b>Fenster offen</b> war – so siehst du Zusammenhänge (z. B. Temperatur fällt beim Lüften). ' +
     'Einen Raum oben wählen zeigt zusätzlich, wann sein <b>Ventil offen</b> ist (leichte Schattierung = Raum verlangt Wärme).';
 }
 /* ---- Auto-Messung: active night-setback on the thermostats ---------------- */
@@ -5804,7 +5827,68 @@ function renderProfile() {
     : m >= 5 && m <= 7 ? 'wenig Licht, wenig Heizung – meist unter dem Jahresmittel' : 'Übergangszeit, nahe am Mittel')]);
   $('profile-insights').innerHTML = rows.map(([k, v]) => statusRow(k, v)).join('');
   renderBaseload();
+  renderStandby();
   renderBehavior();
+}
+
+// Rough device-type hint from the name – tells whether a standby is likely
+// killable (entertainment, chargers) or necessary (fridge/pump).
+function guessDeviceType(name) {
+  const n = (name || '').toLowerCase();
+  if (/router|fritz|repeater|modem|switch\b|\bnas\b|server|access.?point|wlan/.test(n)) return 'Netzwerk · läuft meist bewusst durch';
+  if (/\btv\b|fernseh|beamer|sound|hifi|stereo|konsole|playstation|\bps[45]\b|xbox|receiver|soundbar|media/.test(n)) return 'Unterhaltung · Standby abschaltbar';
+  if (/kühl|kuehl|gefrier|fridge|freezer/.test(n)) return 'Kühlung · Dauerlast nötig';
+  if (/lad|charger|netzteil|\busb\b|adapter/.test(n)) return 'Ladegerät/Netzteil · oft abschaltbar';
+  if (/pumpe|\bpump\b|zirkul/.test(n)) return 'Pumpe';
+  if (/kaffee|coffee|siebträger|vollautomat/.test(n)) return 'Kaffeemaschine · Standby abschaltbar';
+  if (/drucker|printer/.test(n)) return 'Drucker · Standby abschaltbar';
+  if (/\bpc\b|rechner|computer|monitor|laptop|notebook|dock/.test(n)) return 'PC/Monitor · Standby abschaltbar';
+  if (/boiler|durchlauf|therme|warmwasser/.test(n)) return 'Warmwasser';
+  return '';
+}
+
+// Per-device standby / phantom load: the device's own always-on floor
+// (standby_w from the bridge = low percentile of its readings). Only lists
+// devices that actually have a standby, with annual cost and live state.
+function renderStandby() {
+  const card = $('pf-standby-card'); if (!card) return;
+  const devs = (STATE.data && STATE.data.live && STATE.data.live.devices) || [];
+  const price = STATE.price;
+  const list = devs.map(d => {
+    const sb = d.standby_w || 0, label = devLabel(d);
+    return { d, sb, label, now: d.power_w || 0, peak: d.peak_w || 0, yearCost: sb / 1000 * 8760 * price };
+  }).filter(x => x.sb >= 0.8).sort((a, b) => b.sb - a.sb);
+  const head = $('pf-sb-head'), body = $('pf-sb-body'), note = $('pf-sb-note');
+  if (!list.length) {
+    if (head) head.textContent = '';
+    if (body) body.innerHTML = '';
+    if (note) note.innerHTML = devs.length
+      ? '✓ <b>Keine nennenswerten Standby-Verbraucher</b> erkannt – deine gemessenen Geräte gehen im Ruhezustand auf ~0 W. ' +
+        '<span style="color:var(--muted)">(Erkannt am Dauer-Minimum jedes Geräts; bezieht sich auf die von den Modulen gemessenen Steckdosen/Geräte.)</span>'
+      : 'Noch keine gemessenen Steckdosen/Geräte vorhanden – sobald Module Leistung melden, erkenne ich Standby automatisch.';
+    return;
+  }
+  const totW = list.reduce((a, x) => a + x.sb, 0), totCost = list.reduce((a, x) => a + x.yearCost, 0);
+  const maxCost = list[0].yearCost || 1;
+  if (head) head.innerHTML = `<span style="color:var(--muted)">${fmt(totW, 0)} W · ${money(totCost)}/Jahr</span>`;
+  if (body) body.innerHTML = list.map(x => {
+    const active = x.now > x.sb * 1.3 + 0.8;
+    const hint = guessDeviceType((x.label.title || '') + ' ' + (x.d.name || '') + ' ' + (x.d.room || ''));
+    const state = active ? `<span style="color:#ffb64d">● jetzt aktiv (${fmt(x.now, 0)} W)</span>` : `<span style="color:var(--muted)">● jetzt Standby</span>`;
+    const w = Math.max(5, x.yearCost / maxCost * 100);
+    return `<div style="padding:8px 0;border-bottom:1px solid var(--line)">` +
+      `<div style="display:flex;justify-content:space-between;gap:8px;font-size:13px">` +
+      `<b>${esc(x.label.title)}${hint ? ` <span style="color:var(--muted);font-weight:400;font-size:11px">· ${hint}</span>` : ''}</b>` +
+      `<span style="white-space:nowrap"><b>${fmt(x.sb, 1)} W</b> <span style="color:var(--muted)">· ${money(x.yearCost)}/J</span></span></div>` +
+      `<div class="bar" style="height:6px;margin:5px 0 3px"><i style="width:${w}%;background:${COL.sh}"></i></div>` +
+      `<div style="font-size:11px;color:var(--muted)">${state} · Spitze ~${fmt(x.peak, 0)} W${x.label.sub ? ' · ' + esc(x.label.sub) : ''}</div>` +
+      `</div>`;
+  }).join('');
+  const killable = list.filter(x => /abschaltbar/.test(guessDeviceType((x.label.title || '') + ' ' + (x.d.name || ''))));
+  if (note) note.innerHTML = `Zusammen rund <b>${fmt(totW, 0)} W</b> Dauer-Standby ≈ <b>${kwh(totW / 1000 * 8760, 0)}/Jahr</b> (${money(totCost)}). ` +
+    `<b>Erkennung:</b> der Sockel ist das Dauer-Minimum jedes Geräts (10-%-Perzentil seiner eigenen Messwerte); was ein Gerät <b>fast immer</b> zieht = Standby, Spitzen darüber = Nutzung. ` +
+    (killable.length ? `<br>💡 <b>Abschaltbar</b> (per Zeitschaltuhr/Smart-Plug nachts aus): ${killable.map(x => esc(x.label.title)).join(', ')}. ` : '') +
+    `<span style="color:var(--muted)">Der Typ-Hinweis ist aus dem Namen geraten – über „Gerät umbenennen" im Setup kannst du Namen (und damit die Einordnung) korrigieren.</span>`;
 }
 
 // Always-on base load of the MEASURED smart-home devices: the robust minimum of
@@ -9149,6 +9233,9 @@ function demoAnalytics(days) {
   const perDevice = DEMO_DEVICES.map(d => ({
     id: d.id, name: d.name, room: d.room, model: d.model, custom_name: '',
     power_w: round(liveNow[d.id] || 0, 2), energy_kwh_total: round(devEnergy[d.id] / 1000, 3),
+    // no-bridge demo: synthetic standby floor (module/always-on sips a bit, pure lights ~0)
+    standby_w: /rollladen|router|\btv\b|modul|micromodule|steck/i.test(d.name + ' ' + (d.model || '')) ? 1.3 : 0.3,
+    peak_w: round(Math.max(liveNow[d.id] || 0, 9), 0),
   })).sort((a, b) => b.power_w - a.power_w);
   return {
     currency: '€', price_per_kwh: STATE.price, baseline_w: round(baseline, 2), window_days: days,

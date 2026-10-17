@@ -1495,6 +1495,20 @@ def compute_analytics(store: Store, days: int, price: float) -> dict:
     all_powers = sorted(s["power_w"] for s in all_samples) or [0.0]
     baseline_w = all_powers[max(0, int(len(all_powers) * 0.10) - 1)]
 
+    # per-device standby floor: the power a device draws nearly all the time
+    # (low percentile of ITS OWN readings). A light that is often off → ~0 (no
+    # standby); a router/TV that always sips a few W → that floor = its standby.
+    dev_standby: dict[str, float] = {}
+    dev_peak: dict[str, float] = {}
+    for dev_id, samples in by_dev.items():
+        ps = sorted(s["power_w"] for s in samples if s.get("power_w") is not None)
+        if ps:
+            dev_standby[dev_id] = round(ps[max(0, int(len(ps) * 0.10) - 1)], 2)
+            dev_peak[dev_id] = round(ps[min(len(ps) - 1, int(len(ps) * 0.97))], 2)
+    for d in per_device:
+        d["standby_w"] = dev_standby.get(d["id"], 0.0)
+        d["peak_w"] = dev_peak.get(d["id"], 0.0)
+
     for dev_id, samples in by_dev.items():
         # split per local day, compute energy per day for this device
         day_groups: dict[str, list[dict]] = {}
@@ -2397,8 +2411,9 @@ def compute_room_timeseries(store: "Store", days: int = 2) -> dict:
     heat_iv = _heat_intervals(store.hp_samples_since(since), now)
     # per-room window-open intervals – an open window is ventilation, not the
     # room's natural heat loss, so it must not count as "fast cool-down".
+    win_events = _window_events(store.window_log_since(since), now)
     win_by_room: dict[str, list] = {}
-    for e in _window_events(store.window_log_since(since), now):
+    for e in win_events:
         for rm in e.get("rooms") or []:
             win_by_room.setdefault(rm, []).append((e["start"], e["end"]))
 
@@ -2488,8 +2503,13 @@ def compute_room_timeseries(store: "Store", days: int = 2) -> dict:
         insights.append(f"Wärmepumpe heizte im Zeitraum <b>{tot:.1f} h</b> in {len(heat_iv)} Phasen. "
                         f"Heizpausen = alle Räume haben ihr Soll erreicht (Ventile zu) oder Warmwasser-Vorrang.")
 
+    # window-open events for the chart markers (which room, when open→close)
+    window_events = [{"rooms": sorted(e.get("rooms") or []), "start": e["start"],
+                      "end": e["end"], "ongoing": bool(e.get("ongoing"))}
+                     for e in win_events if e.get("end", 0) >= since]
     return {"ok": True, "days_window": days, "rooms": out_rooms,
-            "heating": [[a, b] for a, b in heat_iv], "insights": insights}
+            "heating": [[a, b] for a, b in heat_iv], "window_events": window_events,
+            "insights": insights}
 
 
 def _demo_room_timeseries(days: int = 2) -> dict:
@@ -2527,8 +2547,11 @@ def _demo_room_timeseries(days: int = 2) -> dict:
         "<b>Auskühlen:</b> am schnellsten Bad (~1.5 K/h), am trägsten Wohnzimmer (~0.6 K/h).",
         "Wärmepumpe heizte im Zeitraum mehrere Phasen; Pausen = alle Räume am Soll (Ventile zu).",
     ]
+    # a couple of demo window-open events so the chart markers are visible
+    win = [{"rooms": ["Bad"], "start": int(now - 5 * 3600), "end": int(now - 4.4 * 3600), "ongoing": False},
+           {"rooms": ["Wohnzimmer"], "start": int(now - 2 * 3600), "end": int(now - 1.6 * 3600), "ongoing": False}]
     return {"ok": True, "demo": True, "days_window": days, "rooms": out,
-            "heating": heat, "insights": insights}
+            "heating": heat, "window_events": win, "insights": insights}
 
 
 # ===================================================================== #
@@ -4572,6 +4595,8 @@ DEMO_DEVICES = [
     {"id": "demo-schlafzimmer", "name": "Schlafzimmer Rollladen", "room": "Schlafzimmer",
      "model": "BSM"},
     {"id": "demo-flur", "name": "Flur Licht", "room": "Flur", "model": "BSM"},
+    {"id": "demo-router", "name": "WLAN-Router", "room": "Arbeitszimmer", "model": "PSM"},
+    {"id": "demo-tv", "name": "TV Wohnzimmer", "room": "Wohnzimmer", "model": "PSM"},
 ]
 
 
@@ -4579,6 +4604,13 @@ def _demo_power(dev_id: str, dt: datetime, away: bool) -> float:
     """Plausible instantaneous power (W) for a light/shutter micromodule."""
     h = dt.hour + dt.minute / 60.0
     weekend = dt.weekday() >= 5
+    # always-on devices: a router sips a near-constant few watts (pure standby);
+    # a TV sits at ~1 W standby and jumps to ~90 W while watched in the evening.
+    if "router" in dev_id:
+        return round(6.8 + 0.6 * math.sin(dt.timestamp() / 211.0), 2)
+    if "-tv" in dev_id:
+        watching = (not away) and (18 <= h <= 23 or (weekend and 13 <= h <= 16))
+        return round((95.0 if watching else 1.2) + 0.3 * math.sin(dt.timestamp() / 97.0), 2)
     base = 0.4  # standby of the module itself
     if away:
         # only the standby draw and the occasional timer-driven shutter move
