@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v165';   // short tag shown always-on in the header
-const APP_VERSION = 'v165 · 2026-10-18 · Heizkurve: „jetzt"-Punkt pulsiert sanft; Referenz-Tabelle bekommt eine gelb hervorgehobene „jetzt"-Zeile bei der aktuellen Außentemperatur (passend zum Chart-Punkt). Nebenbei: Empfehlungs-Howto rendert wieder fett statt mit sichtbaren <b>-Tags'
+const APP_BUILD = 'v166';   // short tag shown always-on in the header
+const APP_VERSION = 'v166 · 2026-10-18 · Heizkurve: Zeitraum-Umschalter für die Messpunkte – Heute · Gestern · 7 · 14 · 30 Tage · Gesamt. Der „jetzt"-Betriebspunkt bleibt immer der echte Live-Zustand, auch auf historischen Zeiträumen'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -4544,13 +4544,24 @@ async function readDeviceCurve() {
     if (el) el.innerHTML = 'Nur möglich, wenn die Seite von der Bridge geöffnet ist. Trag die Werte oben von Hand ein.';
   } finally { if (btn) btn.disabled = false; }
 }
-let _hcData = null, _hcBusy = false;
+let _hcData = null, _hcBusy = false, _hcRange = null;
+// the measurement window for the heating curve. 'today'/'yesterday'/'all' map to
+// a ?range= query, a plain number to ?days=N. Remembered per browser.
+function hcRange() {
+  if (_hcRange == null) { try { _hcRange = localStorage.getItem('bhe_hc_range') || '30'; } catch (e) { _hcRange = '30'; } }
+  return _hcRange;
+}
+const HC_RANGE_LBL = { today: 'heute', yesterday: 'gestern', all: 'gesamter Zeitraum', '7': '7 Tage', '14': '14 Tage', '30': '30 Tage' };
+function hcQuery() {
+  const r = hcRange();
+  return /^\d+$/.test(r) ? `days=${r}` : `range=${encodeURIComponent(r)}`;
+}
 async function renderHeatingCurve(force) {
   const card = $('hc-card'); if (!card) return;
   if (_hcData && !force) { paintHeatingCurve(_hcData); return; }
   if (_hcBusy) return;
   _hcBusy = true;
-  try { const r = await api('/api/heating/curve?days=30'); _hcData = r; paintHeatingCurve(r); }
+  try { const r = await api('/api/heating/curve?' + hcQuery()); _hcData = r; paintHeatingCurve(r); }
   catch (e) { const c = $('hc-chart'); if (c) c.innerHTML = '<div class="note">Nur mit laufender Bridge verfügbar.</div>'; }
   finally { _hcBusy = false; }
 }
@@ -4560,11 +4571,15 @@ function paintHeatingCurve(r) {
   const device = hcDevice();
   r.device = device;
   renderHcDeviceNote(device);
-  // current operating point: current outdoor + Vorlauf (live_point only exists
-  // while the WP is actually heating; otherwise fall back to the live outdoor).
+  // current operating point: the TRUE live state (from the heat-pump analytics),
+  // independent of the selected measurement window – so the "jetzt" readout stays
+  // correct even on a historical range (gestern / gesamt), where r.live_point is
+  // deliberately absent. Vorlauf only when the WP is actually heating right now.
   const live = (STATE.hpA && STATE.hpA.live) || {};
-  const nowOut = r.live_point ? r.live_point[0] : (live.outdoor_c != null ? live.outdoor_c : null);
-  const nowSup = r.live_point ? r.live_point[1] : null;
+  const liveHeating = ['ch', 'heating', 'heat'].includes(String(live.mode || '').toLowerCase())
+    && (live.modulation || 0) > 0 && live.supply_c != null && live.supply_c >= 20;
+  const nowOut = live.outdoor_c != null ? live.outdoor_c : (r.live_point ? r.live_point[0] : null);
+  const nowSup = liveHeating ? live.supply_c : (r.live_point ? r.live_point[1] : null);
   r._now = { outdoor: nowOut, supply: nowSup };
   let nowTxt = '';
   if (nowOut != null) {
@@ -4584,7 +4599,8 @@ function paintHeatingCurve(r) {
         ? curveChart({ points: p, device, _now: r._now })
         : '<div class="note" style="padding:20px 0;text-align:center">📈 Noch keine Heizkurve – trage oben deine Geräte-Kurve ein oder lass die Wärmepumpe heizen.</div>';
     }
-    if (note) note.innerHTML = nowTxt + '⏳ ' + esc(r.note || 'Sammelt noch Daten.') + ` <span style="color:var(--muted)">(${r.n || 0} Messpunkte)</span>`;
+    if (note) note.innerHTML = nowTxt + '⏳ ' + esc(r.note || 'Sammelt noch Daten.') +
+      ` <span style="color:var(--muted)">(Zeitraum: ${HC_RANGE_LBL[hcRange()] || hcRange()} · ${r.n || 0} Messpunkte)</span>`;
     return;
   }
   const col = r.over_k >= 6 ? '#ff6b8a' : r.over_k >= 3 ? '#ffb64d' : '#4be0b0';
@@ -4627,7 +4643,7 @@ function paintHeatingCurve(r) {
       nowRow + (r.ref || []).map(x => row(x.outdoor, x.actual, x.ideal)).join('') + `</table>`;
   }
   if (note) note.innerHTML = (nowTxt ? nowTxt + '<br>' : '') +
-    `<b style="color:${col}">${esc(r.verdict)}</b> · ${r.n} Messpunkt${r.n === 1 ? '' : 'e'}` +
+    `<b style="color:${col}">${esc(r.verdict)}</b> · <b>Zeitraum: ${HC_RANGE_LBL[hcRange()] || hcRange()}</b> · ${r.n} Messpunkt${r.n === 1 ? '' : 'e'}` +
     (r.csv_points ? ` (davon ${r.csv_points} aus CSV-Import)` : '') +
     (r.cycles && r.cycles.per_day != null ? ` · ~${fmt(r.cycles.per_day, 1)} Takte/Tag` : '') +
     (r.demo ? ' · <b>Demo-Daten</b>' : '') +
@@ -8640,6 +8656,20 @@ function init() {
     renderHistory();
   });
   ['hist-from', 'hist-to'].forEach(id => { const el = $(id); if (el) el.addEventListener('change', renderHistory); });
+  // heating-curve measurement window: Heute / Gestern / 7·14·30 T / Gesamt
+  const hcr = $('hc-range');
+  if (hcr) {
+    hcr.addEventListener('click', e => {
+      const b = e.target.closest('button'); if (!b) return;
+      _hcRange = b.dataset.hcr;
+      try { localStorage.setItem('bhe_hc_range', _hcRange); } catch (err) {}
+      hcr.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+      renderHeatingCurve(true);
+    });
+    // reflect the stored range on the buttons
+    const cur = hcRange();
+    hcr.querySelectorAll('button').forEach(x => x.classList.toggle('on', x.dataset.hcr === cur));
+  }
   // tap/hover a day (or month) bar to read its exact values
   const hd = $('h-daily');
   if (hd) {

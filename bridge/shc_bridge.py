@@ -1434,6 +1434,12 @@ def _local_day(ts: int) -> str:
     return datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
 
 
+def _local_midnight(ts: int) -> int:
+    """Epoch of local midnight (00:00) of the day containing ts."""
+    d = datetime.fromtimestamp(ts).replace(hour=0, minute=0, second=0, microsecond=0)
+    return int(d.timestamp())
+
+
 def _energy_for_bucket(samples: list[dict]) -> float:
     """Energy (Wh) for a list of samples of ONE device, time-ordered.
 
@@ -2029,16 +2035,27 @@ def hp_cycle_stats(samples: list[dict]) -> dict | None:
 IDEAL_SLOPE = -0.45   # °C flow per °C outdoor (= 4,5 K Vorlauf je 10 K kälter)
 
 
-def compute_heating_curve(store: "Store", days: int = 30, hp_live: dict | None = None) -> dict:
+def compute_heating_curve(store: "Store", days: int = 30, hp_live: dict | None = None,
+                          since: int | None = None, until: int | None = None,
+                          range_label: str | None = None) -> dict:
     """The REAL heating curve: flow temperature vs. outdoor temperature from the
     stored samples + the current operating point, a fitted (or provisional) line,
     the WP-friendly target band, and a CONCRETE recommendation (Niveau/Steilheit).
 
+    The time window is either the last ``days`` days (default) or an explicit
+    [``since``, ``until``) range (for "heute"/"gestern"/"gesamt"). The live
+    operating point is only folded in when the window reaches up to now.
+
     Historic CSV/energy data has no flow temperature, so the curve builds from the
     flow/return we log from now on – plus the live snapshot, so a first
     recommendation is possible immediately instead of waiting days."""
-    since = int(time.time()) - days * 86400
-    rows = store.hp_samples_since(since)
+    now = int(time.time())
+    if until is None:
+        until = now
+    if since is None:
+        since = now - days * 86400
+    includes_now = until >= now - 300          # window reaches "now"? → live point valid
+    rows = [s for s in store.hp_samples_since(since) if s.get("ts", 0) < until]
     pts = []
     for s in rows:
         o, sup = s.get("outdoor_c"), s.get("supply_c")
@@ -2051,15 +2068,16 @@ def compute_heating_curve(store: "Store", days: int = 30, hp_live: dict | None =
         pts.append((round(float(o), 1), round(float(sup), 1)))
     # historical heating-curve points imported from a HomeCom CSV (flow temp vs.
     # outdoor during space-heating hours) – make the curve usable immediately.
-    csv_rows = store.hp_curve_since(since)
+    csv_rows = [s for s in store.hp_curve_since(since) if s.get("ts", 0) < until]
     for s in csv_rows:
         o, sup = s.get("outdoor_c"), s.get("supply_c")
         if o is not None and sup is not None and sup >= 20:
             pts.append((round(float(o), 1), round(float(sup), 1)))
     n_csv = len(csv_rows)
-    # add the live operating point (counts immediately, before history fills up)
+    # add the live operating point (counts immediately, before history fills up) –
+    # only when the window actually includes the present moment.
     live_pt = None
-    if hp_live:
+    if hp_live and includes_now:
         lo, ls = hp_live.get("outdoor_c"), hp_live.get("supply_c")
         lm = (hp_live.get("mode") or "").lower()
         if lo is not None and ls is not None and ls >= 20 and lm in ("ch", "heating", "heat") \
@@ -2068,12 +2086,17 @@ def compute_heating_curve(store: "Store", days: int = 30, hp_live: dict | None =
             pts.append(live_pt)
     n = len(pts)
     cyc = hp_cycle_stats(rows)
+    win = {"range": range_label, "since": since, "until": until, "days_window": days}
     if n == 0:
+        ranged = range_label in ("today", "yesterday") or (range_label or "").endswith("d")
+        note = ("In diesem Zeitraum hat die Wärmepumpe keine Heizpunkte aufgezeichnet "
+                "(z. B. zu mild, oder sie lief nicht). Wähle einen längeren Zeitraum "
+                "oder „Gesamt“.") if ranged else \
+               ("Noch keine Heizpunkte. Entweder heizt die Wärmepumpe gerade nicht, oder "
+                "importiere im Setup deinen HomeCom-CSV-Export – er enthält stündlich "
+                "Vorlauf- und Außentemperatur, daraus baue ich die Kurve sofort.")
         return {"ok": True, "enough": False, "n": 0, "points": [], "cycles": cyc,
-                "csv_points": 0,
-                "note": "Noch keine Heizpunkte. Entweder heizt die Wärmepumpe gerade nicht, oder "
-                        "importiere im Setup deinen HomeCom-CSV-Export – er enthält stündlich "
-                        "Vorlauf- und Außentemperatur, daraus baue ich die Kurve sofort."}
+                "csv_points": 0, "note": note, **win}
 
     xs = [p[0] for p in pts]; ys = [p[1] for p in pts]
     span = max(xs) - min(xs)
@@ -2159,14 +2182,14 @@ def compute_heating_curve(store: "Store", days: int = 30, hp_live: dict | None =
            for rx in (20, 0, -10)]
     step = max(1, n // 300)
     return {"ok": True, "enough": True, "provisional": not full_fit, "basis": basis,
-            "n": n, "csv_points": n_csv, "days_window": days,
+            "n": n, "csv_points": n_csv,
             "points": pts[::step], "live_point": live_pt,
             "fit": {"a": round(a, 3), "b": round(b, 2)},
             "ideal": [{"x": round(x, 1), "y": round(_ideal_flow(x), 1)} for x in
                       [xmin + (xmax - xmin) * k / 20 for k in range(21)]],
             "xmin": round(xmin, 1), "xmax": round(xmax, 1),
             "over_k": over_k, "verdict": verdict, "saving_pct": saving_pct,
-            "recommendation": rec, "ref": ref, "cycles": cyc}
+            "recommendation": rec, "ref": ref, "cycles": cyc, **win}
 
 
 def _linfit(xy):
@@ -6429,10 +6452,26 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send_json({"ok": False, "error": str(exc)}, 200)
             if path == "/api/heating/curve":
                 # the real heating curve (flow vs. outdoor) from logged samples
-                # plus the live operating point, with a concrete recommendation
-                cd = int(qs.get("days", ["30"])[0])
+                # plus the live operating point, with a concrete recommendation.
+                # `range` picks the window: today / yesterday / all, else `days`=N.
+                rng = (qs.get("range", [""])[0] or "").lower()
+                now = int(time.time())
+                cd, since, until, label = 30, None, None, rng
+                if rng == "today":
+                    since, until, cd = _local_midnight(now), now, 1
+                elif rng == "yesterday":
+                    t0 = _local_midnight(now); since, until, cd = t0 - 86400, t0, 1
+                elif rng in ("all", "gesamt", "total"):
+                    since, until, label = 0, now, "all"
+                else:
+                    try:
+                        cd = max(1, min(3650, int(qs.get("days", ["30"])[0])))
+                    except ValueError:
+                        cd = 30
+                    since, until, label = now - cd * 86400, now, f"{cd}d"
                 return self._send_json({"demo": self.ctx.mode == "demo",
-                    **compute_heating_curve(self.store, cd, self._hp_live())})
+                    **compute_heating_curve(self.store, cd, self._hp_live(),
+                                            since=since, until=until, range_label=label)})
             if path == "/api/heating/timeseries":
                 td = int(qs.get("days", ["4"])[0])
                 if self.ctx.mode == "demo":

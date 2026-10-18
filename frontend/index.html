@@ -517,6 +517,14 @@
     </div>
     <div class="card" id="hc-card">
       <h2><span class="info" data-info="heating-curve" role="button" aria-label="Info">i</span>📈 Heizkurve <span class="r" id="hc-head"></span></h2>
+      <div class="seg" id="hc-range" style="margin-bottom:10px">
+        <button data-hcr="today">Heute</button>
+        <button data-hcr="yesterday">Gestern</button>
+        <button data-hcr="7">7 T</button>
+        <button data-hcr="14">14 T</button>
+        <button data-hcr="30" class="on">30 T</button>
+        <button data-hcr="all">Gesamt</button>
+      </div>
       <div class="note" style="margin-bottom:10px">Deine <b>echte Heizkurve</b>: gemessener <b>Vorlauf</b> über der <b>Außentemperatur</b>
         (jeder Punkt ein Messwert beim Heizen). Die <b>grüne Linie</b> ist das WP-freundliche Zielband, die
         <b>rote</b> deine gemessene Kurve. Liegt Rot über Grün, ist die Kurve zu hoch eingestellt.</div>
