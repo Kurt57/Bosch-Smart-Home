@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v163';   // short tag shown always-on in the header
-const APP_VERSION = 'v163 · 2026-10-18 · Heizkurve: Touch-/Hover-Readout wie in den anderen Diagrammen – Tippen auf die Kurve zeigt die Vorlauftemperatur von Zielband, gemessener und Geräte-Kurve bei der jeweiligen Außentemperatur plus den nächsten Messpunkt, mit Cursor-Linie'
+const APP_BUILD = 'v164';   // short tag shown always-on in the header
+const APP_VERSION = 'v164 · 2026-10-18 · Heizkurve: aktueller Betriebspunkt direkt hervorgehoben – gelber „jetzt"-Punkt (aktueller Vorlauf), grüner Ziel-Ring bei der momentanen Außentemperatur, senkrechte Jetzt-Linie und eine immer sichtbare „Jetzt: bei X° außen → Vorlauf Y°, Ziel Z°"-Zeile'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -3112,6 +3112,27 @@ function curveChart(d) {
       `<text class="axis" x="${(x20 + 7).toFixed(1)}" y="${(y20 - 5).toFixed(1)}" fill="#3ba9ff">${dv.p20}</text>` +
       `<text class="axis" x="${(xm10 - 7).toFixed(1)}" y="${(ym10 - 5).toFixed(1)}" text-anchor="end" fill="#3ba9ff">${dv.pm10}</text>`;
   }
+  // current operating point: highlight where the WP sits RIGHT NOW, so you can
+  // read the current Vorlauf and the target at the current outdoor temp without
+  // tapping. A hollow green ring marks the Zielband-Soll at the current outdoor.
+  let nowMark = '';
+  const nw = d._now;
+  if (nw && nw.outdoor != null && nw.outdoor <= XL + 0.01 && nw.outdoor >= XR - 0.01) {
+    const nx = X(nw.outdoor);
+    nowMark += `<line x1="${nx.toFixed(1)}" x2="${nx.toFixed(1)}" y1="${top}" y2="${base}" stroke="#ffffff" stroke-width="1" stroke-dasharray="3 3" opacity="0.45"/>`;
+    const ty = Y(clampY(HC_IDEAL(nw.outdoor)));
+    nowMark += `<circle cx="${nx.toFixed(1)}" cy="${ty.toFixed(1)}" r="3.6" fill="none" stroke="#4be0b0" stroke-width="2"/>`;
+    if (nw.supply != null) {
+      const sy = Y(clampY(nw.supply));
+      nowMark += `<circle cx="${nx.toFixed(1)}" cy="${sy.toFixed(1)}" r="7" fill="none" stroke="#ffd166" stroke-width="1" opacity="0.55"/>`;
+      nowMark += `<circle cx="${nx.toFixed(1)}" cy="${sy.toFixed(1)}" r="4.5" fill="#ffd166" stroke="var(--bg)" stroke-width="1.3"/>`;
+      const lblY = sy < top + 18 ? sy + 16 : sy - 9;
+      const lblX = nw.outdoor < 2 ? nx - 6 : nx + 7, anc = nw.outdoor < 2 ? 'end' : 'start';
+      nowMark += `<text class="axis" x="${lblX.toFixed(1)}" y="${lblY.toFixed(1)}" text-anchor="${anc}" fill="#ffd166" style="font-weight:700">jetzt ${fmt(nw.supply, 0)}°</text>`;
+    } else {
+      nowMark += `<text class="axis" x="${(nx + 4).toFixed(1)}" y="${(top + 10).toFixed(1)}" fill="#ffffff" opacity="0.7">jetzt ${fmt(nw.outdoor, 0)}° außen</text>`;
+    }
+  }
   // touch/hover readout: show each curve's Vorlauf at the outdoor temp under the
   // finger (Zielband, gemessen, Geräte-Kurve) + the nearest measured point.
   const lines = [{ name: 'Zielband', color: '#4be0b0', kind: 'ideal' }];
@@ -3124,7 +3145,7 @@ function curveChart(d) {
     padL, padR, h, XL, XR, YB, YT, lines,
     dots: pts.filter(p => p[0] <= XL + 0.01 && p[0] >= XR - 0.01).map(p => [p[0], p[1]]),
   };
-  return svg(h, g + xt + dots + idealPath + fitPath + devPath, null, null, hcMeta);
+  return svg(h, g + xt + dots + idealPath + fitPath + devPath + nowMark, null, null, hcMeta);
 }
 
 /* ---- Combined hourly time-series: temps (top) + consumption & COP (bottom) -- */
@@ -4536,16 +4557,31 @@ function paintHeatingCurve(r) {
   const device = hcDevice();
   r.device = device;
   renderHcDeviceNote(device);
+  // current operating point: current outdoor + Vorlauf (live_point only exists
+  // while the WP is actually heating; otherwise fall back to the live outdoor).
+  const live = (STATE.hpA && STATE.hpA.live) || {};
+  const nowOut = r.live_point ? r.live_point[0] : (live.outdoor_c != null ? live.outdoor_c : null);
+  const nowSup = r.live_point ? r.live_point[1] : null;
+  r._now = { outdoor: nowOut, supply: nowSup };
+  let nowTxt = '';
+  if (nowOut != null) {
+    const tgt = HC_IDEAL(nowOut), dk = nowSup != null ? nowSup - tgt : null;
+    const dkCol = dk == null ? 'var(--muted)' : dk >= 6 ? '#ff6b8a' : dk >= 3 ? '#ffb64d' : '#4be0b0';
+    nowTxt = `<b style="color:#ffd166">● Jetzt:</b> bei <b>${fmt(nowOut, 0)}°</b> außen ` +
+      (nowSup != null
+        ? `fährt die WP <b>${fmt(nowSup, 0)}° Vorlauf</b> · Ziel ~<b>${fmt(tgt, 0)}°</b> <span style="color:${dkCol}">(${dk >= 0 ? '+' : ''}${fmt(dk, 0)} K)</span>`
+        : `– die WP <b>heizt gerade nicht</b> · nötig wären ~<b>${fmt(tgt, 0)}°</b> Vorlauf`) + '. ';
+  }
   if (!r.enough) {
     if (head) head.textContent = '';
     if (ref) ref.innerHTML = '';
     if (chart) {
       const p = r.points || [];
-      chart.innerHTML = (p.length >= 2 || device)
-        ? curveChart({ points: p, device })
+      chart.innerHTML = (p.length >= 2 || device || nowOut != null)
+        ? curveChart({ points: p, device, _now: r._now })
         : '<div class="note" style="padding:20px 0;text-align:center">📈 Noch keine Heizkurve – trage oben deine Geräte-Kurve ein oder lass die Wärmepumpe heizen.</div>';
     }
-    if (note) note.innerHTML = '⏳ ' + esc(r.note || 'Sammelt noch Daten.') + ` <span style="color:var(--muted)">(${r.n || 0} Messpunkte)</span>`;
+    if (note) note.innerHTML = nowTxt + '⏳ ' + esc(r.note || 'Sammelt noch Daten.') + ` <span style="color:var(--muted)">(${r.n || 0} Messpunkte)</span>`;
     return;
   }
   const col = r.over_k >= 6 ? '#ff6b8a' : r.over_k >= 3 ? '#ffb64d' : '#4be0b0';
@@ -4572,7 +4608,8 @@ function paintHeatingCurve(r) {
     ref.innerHTML = recBox + `<table style="width:100%;border-collapse:collapse;font-size:13px">` +
       (r.ref || []).map(x => row(x.outdoor, x.actual, x.ideal)).join('') + `</table>`;
   }
-  if (note) note.innerHTML = `<b style="color:${col}">${esc(r.verdict)}</b> · ${r.n} Messpunkt${r.n === 1 ? '' : 'e'}` +
+  if (note) note.innerHTML = (nowTxt ? nowTxt + '<br>' : '') +
+    `<b style="color:${col}">${esc(r.verdict)}</b> · ${r.n} Messpunkt${r.n === 1 ? '' : 'e'}` +
     (r.csv_points ? ` (davon ${r.csv_points} aus CSV-Import)` : '') +
     (r.cycles && r.cycles.per_day != null ? ` · ~${fmt(r.cycles.per_day, 1)} Takte/Tag` : '') +
     (r.demo ? ' · <b>Demo-Daten</b>' : '') +
