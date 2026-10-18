@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v162';   // short tag shown always-on in the header
-const APP_VERSION = 'v162 · 2026-10-17 · Raum-Grafik: zusätzliche Ereignis-Marker für 🚪 Tür-/Haustür-Öffnen (violette Linie) und ▲ WP-Heizstart (Takt am Bandanfang); Sparpotenzial-Karte: Standby jetzt als eigener Posten aus der je-Gerät gemessenen Dauerlast'
+const APP_BUILD = 'v163';   // short tag shown always-on in the header
+const APP_VERSION = 'v163 · 2026-10-18 · Heizkurve: Touch-/Hover-Readout wie in den anderen Diagrammen – Tippen auf die Kurve zeigt die Vorlauftemperatur von Zielband, gemessener und Geräte-Kurve bei der jeweiligen Außentemperatur plus den nächsten Messpunkt, mit Cursor-Linie'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -1290,12 +1290,13 @@ const CW = 520;
 function _cdAttr(meta) {
   return JSON.stringify(meta).replace(/&/g, '&amp;').replace(/'/g, '&#39;').replace(/</g, '&lt;');
 }
-function svg(h, inner, meta, tsMeta) {
+function svg(h, inner, meta, tsMeta, hcMeta) {
   let attr = meta ? ` data-cd='${_cdAttr(meta)}'` : '';
   if (tsMeta) attr += ` data-ts='${_cdAttr(tsMeta)}'`;
+  if (hcMeta) attr += ` data-hc='${_cdAttr(hcMeta)}'`;
   // transparent hit layer so a tap/hover anywhere on the plot (not only on a bar
   // or line) triggers the value readout; harmless when no readout is attached
-  const hit = (meta || tsMeta) ? `<rect x="0" y="0" width="${CW}" height="${h}" fill="transparent" pointer-events="all"/>` : '';
+  const hit = (meta || tsMeta || hcMeta) ? `<rect x="0" y="0" width="${CW}" height="${h}" fill="transparent" pointer-events="all"/>` : '';
   return `<svg viewBox="0 0 ${CW} ${h}" preserveAspectRatio="none" role="img"${attr}>${hit}${inner}</svg>`;
 }
 // Tap/hover anywhere on a chart → read the exact value at that x-position in the
@@ -1379,9 +1380,54 @@ function _tsReadout(e) {
   } catch (err) {}
   e.stopPropagation();
 }
+// Heating-curve readout: the x-axis is OUTDOOR temperature (reversed, warm +20
+// left → cold −10 right), y is the Vorlauf. Tap/hover → the flow temp each curve
+// predicts at that outdoor temp (Zielband, gemessen, Geräte-Kurve) plus the
+// nearest measured point. Carries data-hc = {padL,padR,h,XL,XR,YB,YT,
+// lines:[{name,color,kind?,a?,b?}], dots:[[outdoor,vorlauf],…]}.
+function _hcReadout(e) {
+  const el = e.target && e.target.closest && e.target.closest('svg[data-hc]');
+  if (!el) return;
+  let m; try { m = JSON.parse(el.dataset.hc); } catch (err) { return; }
+  if (!m) return;
+  const rect = el.getBoundingClientRect(); if (!rect.width) return;
+  const cx = (e.touches && e.touches[0] ? e.touches[0].clientX : e.clientX);
+  const px = Math.min(1, Math.max(0, (cx - rect.left) / rect.width)) * CW;
+  const padL = m.padL != null ? m.padL : 30, padR = m.padR != null ? m.padR : 10;
+  const plotW = Math.max(1, CW - padL - padR);
+  const frac = Math.min(1, Math.max(0, (px - padL) / plotW));
+  const o = m.XL - frac * (m.XL - m.XR);              // outdoor temp under the cursor
+  const parts = [];
+  (m.lines || []).forEach(L => {
+    let v;
+    if (L.kind === 'ideal') v = Math.max(28, Math.min(45, 30 + (18 - o) * 0.45));
+    else if (L.a != null) v = L.a * o + L.b;
+    else return;
+    parts.push(`<span style="color:${L.color}">●</span> ${esc(L.name)} <b>${fmt(v, 1)}°</b>`);
+  });
+  if (m.dots && m.dots.length) {                       // nearest measured point (~1.5 °C outdoor)
+    let best = null, bd = Infinity;
+    for (const p of m.dots) { const d = Math.abs(p[0] - o); if (d < bd) { bd = d; best = p; } }
+    if (best && bd <= 1.5) parts.push(`<span style="color:var(--muted)">○</span> Messpunkt <b>${fmt(best[1], 1)}°</b> <span style="color:var(--muted)">(bei ${fmt(best[0], 1)}°)</span>`);
+  }
+  if (!parts.length) return;
+  const t = $('toast');
+  if (t) { t.innerHTML = `<b>Außen ${fmt(o, 1)}°</b><div class="note" style="margin-top:2px">${parts.join(' · ')}</div>`; t.hidden = false; clearTimeout(_toastT); _toastT = setTimeout(() => { t.hidden = true; _cdClear(); }, 6000); }
+  _cdClear();
+  try {
+    const vbH = (el.viewBox && el.viewBox.baseVal && el.viewBox.baseVal.height) || m.h || 200;
+    const markX = padL + frac * plotW;
+    const ln = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    ln.setAttribute('class', 'cd-cursor');
+    ln.setAttribute('x1', markX.toFixed(1)); ln.setAttribute('x2', markX.toFixed(1));
+    ln.setAttribute('y1', '0'); ln.setAttribute('y2', String(vbH));
+    el.appendChild(ln);
+  } catch (err) {}
+  e.stopPropagation();
+}
 try {
-  const onDown = e => { _chartReadout(e); _tsReadout(e); };
-  const onMove = e => { if (e.pointerType !== 'mouse' && !(e.buttons & 1)) return; _chartReadout(e); _tsReadout(e); };
+  const onDown = e => { _chartReadout(e); _tsReadout(e); _hcReadout(e); };
+  const onMove = e => { if (e.pointerType !== 'mouse' && !(e.buttons & 1)) return; _chartReadout(e); _tsReadout(e); _hcReadout(e); };
   document.addEventListener('pointerdown', onDown);
   document.addEventListener('pointermove', onMove);
 } catch (e) {}
@@ -3066,7 +3112,19 @@ function curveChart(d) {
       `<text class="axis" x="${(x20 + 7).toFixed(1)}" y="${(y20 - 5).toFixed(1)}" fill="#3ba9ff">${dv.p20}</text>` +
       `<text class="axis" x="${(xm10 - 7).toFixed(1)}" y="${(ym10 - 5).toFixed(1)}" text-anchor="end" fill="#3ba9ff">${dv.pm10}</text>`;
   }
-  return svg(h, g + xt + dots + idealPath + fitPath + devPath);
+  // touch/hover readout: show each curve's Vorlauf at the outdoor temp under the
+  // finger (Zielband, gemessen, Geräte-Kurve) + the nearest measured point.
+  const lines = [{ name: 'Zielband', color: '#4be0b0', kind: 'ideal' }];
+  if (d.fit) lines.push({ name: 'gemessen', color: '#ff6b8a', a: d.fit.a, b: d.fit.b });
+  if (dv && dv.p20 != null && dv.pm10 != null) {
+    const a = (dv.pm10 - dv.p20) / (XR - XL), b = dv.p20 - a * XL;   // 2-point → linear
+    lines.push({ name: 'Geräte-Kurve', color: '#3ba9ff', a, b });
+  }
+  const hcMeta = {
+    padL, padR, h, XL, XR, YB, YT, lines,
+    dots: pts.filter(p => p[0] <= XL + 0.01 && p[0] >= XR - 0.01).map(p => [p[0], p[1]]),
+  };
+  return svg(h, g + xt + dots + idealPath + fitPath + devPath, null, null, hcMeta);
 }
 
 /* ---- Combined hourly time-series: temps (top) + consumption & COP (bottom) -- */
