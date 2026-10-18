@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v166';   // short tag shown always-on in the header
-const APP_VERSION = 'v166 · 2026-10-18 · Heizkurve: Zeitraum-Umschalter für die Messpunkte – Heute · Gestern · 7 · 14 · 30 Tage · Gesamt. Der „jetzt"-Betriebspunkt bleibt immer der echte Live-Zustand, auch auf historischen Zeiträumen'
+const APP_BUILD = 'v167';   // short tag shown always-on in the header
+const APP_VERSION = 'v167 · 2026-10-18 · Heizkurve: Messpunkte nach Alter eingefärbt (ältere slate → neuere golden), damit man sieht, ob die Kurve zuletzt gewandert ist. Gradient spannt immer den gezeigten Zeitraum auf'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -3067,6 +3067,12 @@ function paintHeatingDiag(r) {
 /* ---- Heizkurve: flow temp vs. outdoor temp, drawn as a classic Heizkennlinie:
  * x reversed (warm +20 °C left → cold −10 °C right), y Vorlauf fixed 20–50 °C. */
 const HC_IDEAL = o => Math.max(28, Math.min(45, 30 + (18 - o) * 0.45));
+// linear blend between two [r,g,b] colours → "#rrggbb" (t in 0..1)
+function lerpHex(a, b, t) {
+  t = Math.min(1, Math.max(0, t));
+  const c = k => Math.round(a[k] + (b[k] - a[k]) * t).toString(16).padStart(2, '0');
+  return '#' + c(0) + c(1) + c(2);
+}
 function curveChart(d) {
   const h = 230, padL = 30, padR = 10, top = 12, base = h - 26;
   const pts = d.points || [];
@@ -3098,9 +3104,24 @@ function curveChart(d) {
     const y1 = clampY(d.fit.a * XL + d.fit.b), y2 = clampY(d.fit.a * XR + d.fit.b);
     fitPath = `<line x1="${X(XL).toFixed(1)}" y1="${Y(y1).toFixed(1)}" x2="${X(XR).toFixed(1)}" y2="${Y(y2).toFixed(1)}" stroke="#ff6b8a" stroke-width="2.5"/>`;
   }
-  // measured points within the visible domain
-  const dots = pts.filter(p => p[0] <= XL + 0.01 && p[0] >= XR - 0.01 && p[1] >= YB && p[1] <= YT)
-    .map(p => `<circle cx="${X(p[0]).toFixed(1)}" cy="${Y(p[1]).toFixed(1)}" r="2.3" fill="var(--muted)" fill-opacity="0.55"/>`).join('');
+  // measured points within the visible domain, shaded by RECENCY so a drifting
+  // curve is visible: old points fade to slate, recent ones warm toward the
+  // "jetzt" gold. Age is measured against the selected window (since…until);
+  // without a window, against the points' own min/max timestamp.
+  // anchor the gradient to the shown points' own oldest…newest timestamp, so the
+  // full colour range is used for every window (a "since=0" for „Gesamt" or a
+  // 30-day window whose data starts later would otherwise collapse the gradient).
+  const COLD = [0x53, 0x62, 0x7a], HOT = [0xff, 0xd1, 0x66];
+  const vis = pts.filter(p => p[0] <= XL + 0.01 && p[0] >= XR - 0.01 && p[1] >= YB && p[1] <= YT);
+  const tsv = vis.map(p => p[2]).filter(v => v != null);
+  const ptA = tsv.length ? Math.min(...tsv) : 0;
+  const ptB = tsv.length ? Math.max(...tsv) : 1;
+  const ptSpan = Math.max(1, ptB - ptA);
+  const dots = vis.map(p => {
+    const f = p[2] != null ? Math.min(1, Math.max(0, (p[2] - ptA) / ptSpan)) : 0.5;
+    const col = lerpHex(COLD, HOT, f), op = (0.32 + 0.5 * f).toFixed(2), r = (2.0 + 1.1 * f).toFixed(1);
+    return `<circle cx="${X(p[0]).toFixed(1)}" cy="${Y(p[1]).toFixed(1)}" r="${r}" fill="${col}" fill-opacity="${op}"/>`;
+  }).join('');
   // the device's configured 2-point curve (blue), as read off the heat pump
   let devPath = '';
   const dv = d.device;
@@ -4596,7 +4617,7 @@ function paintHeatingCurve(r) {
     if (chart) {
       const p = r.points || [];
       chart.innerHTML = (p.length >= 2 || device || nowOut != null)
-        ? curveChart({ points: p, device, _now: r._now })
+        ? curveChart({ points: p, device, _now: r._now, since: r.since, until: r.until })
         : '<div class="note" style="padding:20px 0;text-align:center">📈 Noch keine Heizkurve – trage oben deine Geräte-Kurve ein oder lass die Wärmepumpe heizen.</div>';
     }
     if (note) note.innerHTML = nowTxt + '⏳ ' + esc(r.note || 'Sammelt noch Daten.') +

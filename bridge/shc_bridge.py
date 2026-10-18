@@ -2065,14 +2065,15 @@ def compute_heating_curve(store: "Store", days: int = 30, hp_live: dict | None =
             continue
         if (s.get("modulation") or 0) <= 0:
             continue
-        pts.append((round(float(o), 1), round(float(sup), 1)))
+        # [outdoor, supply, ts] – the ts lets the UI shade points by recency.
+        pts.append((round(float(o), 1), round(float(sup), 1), s.get("ts")))
     # historical heating-curve points imported from a HomeCom CSV (flow temp vs.
     # outdoor during space-heating hours) – make the curve usable immediately.
     csv_rows = [s for s in store.hp_curve_since(since) if s.get("ts", 0) < until]
     for s in csv_rows:
         o, sup = s.get("outdoor_c"), s.get("supply_c")
         if o is not None and sup is not None and sup >= 20:
-            pts.append((round(float(o), 1), round(float(sup), 1)))
+            pts.append((round(float(o), 1), round(float(sup), 1), s.get("ts")))
     n_csv = len(csv_rows)
     # add the live operating point (counts immediately, before history fills up) –
     # only when the window actually includes the present moment.
@@ -2083,7 +2084,7 @@ def compute_heating_curve(store: "Store", days: int = 30, hp_live: dict | None =
         if lo is not None and ls is not None and ls >= 20 and lm in ("ch", "heating", "heat") \
                 and (hp_live.get("modulation") or 0) > 0:
             live_pt = (round(float(lo), 1), round(float(ls), 1))
-            pts.append(live_pt)
+            pts.append((live_pt[0], live_pt[1], now))     # newest point
     n = len(pts)
     cyc = hp_cycle_stats(rows)
     win = {"range": range_label, "since": since, "until": until, "days_window": days}
