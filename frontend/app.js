@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v164';   // short tag shown always-on in the header
-const APP_VERSION = 'v164 · 2026-10-18 · Heizkurve: aktueller Betriebspunkt direkt hervorgehoben – gelber „jetzt"-Punkt (aktueller Vorlauf), grüner Ziel-Ring bei der momentanen Außentemperatur, senkrechte Jetzt-Linie und eine immer sichtbare „Jetzt: bei X° außen → Vorlauf Y°, Ziel Z°"-Zeile'
+const APP_BUILD = 'v165';   // short tag shown always-on in the header
+const APP_VERSION = 'v165 · 2026-10-18 · Heizkurve: „jetzt"-Punkt pulsiert sanft; Referenz-Tabelle bekommt eine gelb hervorgehobene „jetzt"-Zeile bei der aktuellen Außentemperatur (passend zum Chart-Punkt). Nebenbei: Empfehlungs-Howto rendert wieder fett statt mit sichtbaren <b>-Tags'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -3124,7 +3124,10 @@ function curveChart(d) {
     nowMark += `<circle cx="${nx.toFixed(1)}" cy="${ty.toFixed(1)}" r="3.6" fill="none" stroke="#4be0b0" stroke-width="2"/>`;
     if (nw.supply != null) {
       const sy = Y(clampY(nw.supply));
-      nowMark += `<circle cx="${nx.toFixed(1)}" cy="${sy.toFixed(1)}" r="7" fill="none" stroke="#ffd166" stroke-width="1" opacity="0.55"/>`;
+      // gently pulsing halo so the current point draws the eye
+      nowMark += `<circle cx="${nx.toFixed(1)}" cy="${sy.toFixed(1)}" r="5" fill="none" stroke="#ffd166" stroke-width="1.5" opacity="0.7">` +
+        `<animate attributeName="r" values="5;11;5" dur="1.9s" repeatCount="indefinite"/>` +
+        `<animate attributeName="opacity" values="0.65;0;0.65" dur="1.9s" repeatCount="indefinite"/></circle>`;
       nowMark += `<circle cx="${nx.toFixed(1)}" cy="${sy.toFixed(1)}" r="4.5" fill="#ffd166" stroke="var(--bg)" stroke-width="1.3"/>`;
       const lblY = sy < top + 18 ? sy + 16 : sy - 9;
       const lblX = nw.outdoor < 2 ? nx - 6 : nx + 7, anc = nw.outdoor < 2 ? 'end' : 'start';
@@ -4596,7 +4599,7 @@ function paintHeatingCurve(r) {
       recBox = `<div style="background:var(--card2);border:1px solid var(--line);border-left:3px solid ${col};border-radius:8px;padding:10px 12px;margin-bottom:10px">` +
         `<div style="font-weight:700;color:${col}">💡 Empfehlung${prov}</div>` +
         `<div style="font-size:13px;margin-top:4px;line-height:1.5">${rec.text}</div>` +
-        `<div style="font-size:12px;color:var(--muted);margin-top:6px">${esc(rec.howto || '')}</div></div>`;
+        `<div style="font-size:12px;color:var(--muted);margin-top:6px">${rec.howto || ''}</div></div>`;
     }
     const row = (o, a, id) => {
       const diff = a - id, dc = diff >= 2 ? '#ff6b8a' : diff >= 1 ? '#ffb64d' : '#4be0b0';
@@ -4605,8 +4608,23 @@ function paintHeatingCurve(r) {
         `<td style="padding:5px 8px;text-align:right;color:var(--muted)">Ziel ${fmt(id, 0)} °C</td>` +
         `<td style="padding:5px 8px;text-align:right;color:${dc}">${diff >= 0 ? '+' : ''}${fmt(diff, 0)} K</td></tr>`;
     };
+    // a highlighted "jetzt"-row at the current outdoor temp (matches the gold
+    // point on the chart), so the most relevant line is called out directly.
+    let nowRow = '';
+    if (nowOut != null) {
+      const na = nowSup != null ? nowSup : (r.fit ? r.fit.a * nowOut + r.fit.b : null);
+      const nid = HC_IDEAL(nowOut);
+      if (na != null) {
+        const diff = na - nid, dc = diff >= 2 ? '#ff6b8a' : diff >= 1 ? '#ffb64d' : '#4be0b0';
+        nowRow = `<tr style="background:rgba(255,209,102,0.13)">` +
+          `<td style="padding:5px 8px;border-left:3px solid #ffd166"><span style="color:#ffd166">●</span> <b>jetzt</b> · ${fmt(nowOut, 0)} °C außen</td>` +
+          `<td style="padding:5px 8px;text-align:right">Vorlauf <b>${fmt(na, 0)} °C</b>${nowSup == null ? '<span style="color:var(--muted);font-weight:400"> (Modell)</span>' : ''}</td>` +
+          `<td style="padding:5px 8px;text-align:right;color:var(--muted)">Ziel ${fmt(nid, 0)} °C</td>` +
+          `<td style="padding:5px 8px;text-align:right;color:${dc}">${diff >= 0 ? '+' : ''}${fmt(diff, 0)} K</td></tr>`;
+      }
+    }
     ref.innerHTML = recBox + `<table style="width:100%;border-collapse:collapse;font-size:13px">` +
-      (r.ref || []).map(x => row(x.outdoor, x.actual, x.ideal)).join('') + `</table>`;
+      nowRow + (r.ref || []).map(x => row(x.outdoor, x.actual, x.ideal)).join('') + `</table>`;
   }
   if (note) note.innerHTML = (nowTxt ? nowTxt + '<br>' : '') +
     `<b style="color:${col}">${esc(r.verdict)}</b> · ${r.n} Messpunkt${r.n === 1 ? '' : 'e'}` +
