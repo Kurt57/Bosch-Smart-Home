@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v167';   // short tag shown always-on in the header
-const APP_VERSION = 'v167 · 2026-10-18 · Heizkurve: Messpunkte nach Alter eingefärbt (ältere slate → neuere golden), damit man sieht, ob die Kurve zuletzt gewandert ist. Gradient spannt immer den gezeigten Zeitraum auf'
+const APP_BUILD = 'v168';   // short tag shown always-on in the header
+const APP_VERSION = 'v168 · 2026-10-19 · Fix: Die Sub-Tabs im Wärme-Tab (Heizung/Abgleich/Effizienz/Einstellung) waren am Desktop nach dem Scrollen nicht mehr klickbar – der klebende Header lag darüber. Sub-Tabs kleben jetzt sichtbar unter dem Header'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.

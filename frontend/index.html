@@ -137,6 +137,10 @@
   .subnav::-webkit-scrollbar{display:none}
   .subnav button{flex:0 0 auto; padding:7px 13px; border-radius:999px; border:1px solid var(--line); background:var(--card2); color:var(--muted); font-size:13px; font-weight:600; white-space:nowrap; cursor:pointer}
   .subnav button.on{background:var(--accent); border-color:var(--accent); color:#06142e}
+  /* keep the Wärme sub-tabs visible & clickable below the sticky header –
+     otherwise scrolling slides them under the header, which swallows the clicks */
+  #heat-subnav{position:sticky; top:var(--hdr-h,64px); z-index:21; background:var(--bg);
+    padding-top:8px; box-shadow:0 8px 14px -6px rgba(11,18,32,.55)}
   #v-heatpump.hsa-heizung > .card:not([data-hs="heizung"]),
   #v-heatpump.hsa-abgleich > .card:not([data-hs="abgleich"]),
   #v-heatpump.hsa-effizienz > .card:not([data-hs="effizienz"]),
