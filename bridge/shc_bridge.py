@@ -1519,6 +1519,10 @@ def compute_analytics(store: Store, days: int, price: float) -> dict:
     for d in per_device:
         d["standby_w"] = dev_standby.get(d["id"], 0.0)
         d["peak_w"] = dev_peak.get(d["id"], 0.0)
+        # does this device report power at all in the window? (vs. a pure
+        # switch/contact/thermostat that never contributes a standby reading)
+        d["measures_power"] = d["id"] in dev_standby
+        d["win_samples"] = len(by_dev.get(d["id"], []))
 
     for dev_id, samples in by_dev.items():
         # split per local day, compute energy per day for this device

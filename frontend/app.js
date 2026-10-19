@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v168';   // short tag shown always-on in the header
-const APP_VERSION = 'v168 · 2026-10-19 · Fix: Die Sub-Tabs im Wärme-Tab (Heizung/Abgleich/Effizienz/Einstellung) waren am Desktop nach dem Scrollen nicht mehr klickbar – der klebende Header lag darüber. Sub-Tabs kleben jetzt sichtbar unter dem Header'
+const APP_BUILD = 'v169';   // short tag shown always-on in the header
+const APP_VERSION = 'v169 · 2026-10-19 · Standby-Karte: Basis-Zeile (X von Y Geräten messen Leistung · Fenster · Schwelle), Zeitraum-Umschalter (24 h · 7 · 30 · 90 · Gesamt), einstellbare Schwelle (0,3–5 W) und eine ausklappbare Liste der Kleinst-Verbraucher unter der Schwelle'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -6135,30 +6135,50 @@ function guessDeviceType(name) {
 }
 
 // Per-device standby / phantom load: the device's own always-on floor
-// (standby_w from the bridge = low percentile of its readings). Only lists
-// devices that actually have a standby, with annual cost and live state.
-function renderStandby() {
+// (standby_w from the bridge = low percentile of its readings over the chosen
+// window). Window + threshold are adjustable; devices below the threshold are
+// still shown (muted), and a basis line explains what the detection is based on.
+let _sbDays = null, _sbThresh = null, _sbCache = {}, _sbBusy = false;
+const SB_DAYS_LBL = { 1: 'letzte 24 h', 7: '7 Tage', 30: '30 Tage', 90: '90 Tage', 3650: 'gesamter Zeitraum' };
+function sbDays() { if (_sbDays == null) { try { _sbDays = parseInt(localStorage.getItem('bhe_sb_days'), 10) || 90; } catch (e) { _sbDays = 90; } } return _sbDays; }
+function sbThresh() { if (_sbThresh == null) { try { const v = parseFloat(localStorage.getItem('bhe_sb_thresh')); _sbThresh = isFinite(v) ? v : 0.8; } catch (e) { _sbThresh = 0.8; } } return _sbThresh; }
+async function renderStandby(force) {
   const card = $('pf-standby-card'); if (!card) return;
-  const devs = (STATE.data && STATE.data.live && STATE.data.live.devices) || [];
-  const price = STATE.price;
-  const list = devs.map(d => {
-    const sb = d.standby_w || 0, label = devLabel(d);
-    return { d, sb, label, now: d.power_w || 0, peak: d.peak_w || 0, yearCost: sb / 1000 * 8760 * price };
-  }).filter(x => x.sb >= 0.8).sort((a, b) => b.sb - a.sb);
-  const head = $('pf-sb-head'), body = $('pf-sb-body'), note = $('pf-sb-note');
-  if (!list.length) {
-    if (head) head.textContent = '';
-    if (body) body.innerHTML = '';
-    if (note) note.innerHTML = devs.length
-      ? '✓ <b>Keine nennenswerten Standby-Verbraucher</b> erkannt – deine gemessenen Geräte gehen im Ruhezustand auf ~0 W. ' +
-        '<span style="color:var(--muted)">(Erkannt am Dauer-Minimum jedes Geräts; bezieht sich auf die von den Modulen gemessenen Steckdosen/Geräte.)</span>'
-      : 'Noch keine gemessenen Steckdosen/Geräte vorhanden – sobald Module Leistung melden, erkenne ich Standby automatisch.';
-    return;
+  const days = sbDays();
+  let devs = null;
+  if (days === 90 && STATE.data && STATE.data.live && STATE.data.live.devices) {
+    devs = STATE.data.live.devices;                 // default window = already loaded
+  } else if (_sbCache[days] && !force) {
+    devs = _sbCache[days];
+  } else {
+    const body = $('pf-sb-body'); if (body && !_sbCache[days]) body.innerHTML = '<div class="note">Lade Zeitraum …</div>';
+    if (_sbBusy) return; _sbBusy = true;
+    try { const a = await api('/api/analytics?days=' + days + '&price=' + STATE.price); devs = (a && a.live && a.live.devices) || []; _sbCache[days] = devs; }
+    catch (e) { devs = (STATE.data && STATE.data.live && STATE.data.live.devices) || []; }
+    finally { _sbBusy = false; }
   }
+  paintStandby(devs || [], days);
+}
+function paintStandby(devs, days) {
+  const price = STATE.price, thr = sbThresh();
+  const head = $('pf-sb-head'), body = $('pf-sb-body'), minorEl = $('pf-sb-minor'), note = $('pf-sb-note'), basis = $('pf-sb-basis');
+  const rows = devs.map(d => {
+    const sb = d.standby_w || 0;
+    return { d, sb, label: devLabel(d), now: d.power_w || 0, peak: d.peak_w || 0,
+      measures: d.measures_power !== false && (d.measures_power || sb > 0 || (d.win_samples || 0) > 0),
+      yearCost: sb / 1000 * 8760 * price };
+  });
+  const metered = rows.filter(x => x.measures);
+  const list = metered.filter(x => x.sb >= thr).sort((a, b) => b.sb - a.sb);
+  const minor = metered.filter(x => x.sb > 0 && x.sb < thr).sort((a, b) => b.sb - a.sb);
+  // basis line: always shown, so "nothing detected" is explainable
+  if (basis) basis.innerHTML = `<b>${metered.length}</b> von <b>${devs.length}</b> Geräten messen Leistung · ` +
+    `Fenster <b>${SB_DAYS_LBL[days] || days + ' Tage'}</b> · Schwelle <b>${fmt(thr, thr < 1 ? 1 : 0)} W</b> Dauerlast`;
+
   const totW = list.reduce((a, x) => a + x.sb, 0), totCost = list.reduce((a, x) => a + x.yearCost, 0);
-  const maxCost = list[0].yearCost || 1;
-  if (head) head.innerHTML = `<span style="color:var(--muted)">${fmt(totW, 0)} W · ${money(totCost)}/Jahr</span>`;
-  if (body) body.innerHTML = list.map(x => {
+  const maxCost = list[0] ? (list[0].yearCost || 1) : 1;
+  if (head) head.innerHTML = list.length ? `<span style="color:var(--muted)">${fmt(totW, 0)} W · ${money(totCost)}/Jahr</span>` : '';
+  const rowHtml = x => {
     const active = x.now > x.sb * 1.3 + 0.8;
     const hint = guessDeviceType((x.label.title || '') + ' ' + (x.d.name || '') + ' ' + (x.d.room || ''));
     const state = active ? `<span style="color:#ffb64d">● jetzt aktiv (${fmt(x.now, 0)} W)</span>` : `<span style="color:var(--muted)">● jetzt Standby</span>`;
@@ -6170,10 +6190,23 @@ function renderStandby() {
       `<div class="bar" style="height:6px;margin:5px 0 3px"><i style="width:${w}%;background:${COL.sh}"></i></div>` +
       `<div style="font-size:11px;color:var(--muted)">${state} · Spitze ~${fmt(x.peak, 0)} W${x.label.sub ? ' · ' + esc(x.label.sub) : ''}</div>` +
       `</div>`;
-  }).join('');
+  };
+  if (body) body.innerHTML = list.length ? list.map(rowHtml).join('')
+    : `<div class="note" style="padding:4px 0">${metered.length
+      ? `✓ Kein Gerät zieht dauerhaft <b>≥ ${fmt(thr, thr < 1 ? 1 : 0)} W</b> – deine gemessenen Geräte gehen im Ruhezustand ~auf 0 W${minor.length ? ' (ein paar Kleinst-Sockel unten)' : ''}. Senke die Schwelle, um kleinere Dauerlasten zu sehen.`
+      : 'Noch keine <b>Leistungs-messenden</b> Geräte im Zeitraum – reine Schalter/Kontakte/Thermostate melden keinen Verbrauch. Sobald ein Zwischenstecker mit Messung Daten liefert, erkenne ich Standby automatisch.'}</div>`;
+  // muted "below threshold" list, so small always-on draws aren't hidden entirely
+  if (minorEl) minorEl.innerHTML = minor.length
+    ? `<details style="margin-top:8px"><summary style="cursor:pointer;color:var(--muted);font-size:12px">… ${minor.length} weitere unter der Schwelle (${fmt(thr, thr < 1 ? 1 : 0)} W)</summary>` +
+      `<div style="margin-top:6px;opacity:.72">` + minor.map(x =>
+        `<div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;padding:3px 0;border-bottom:1px solid var(--line)">` +
+        `<span>${esc(x.label.title)}</span><span style="white-space:nowrap;color:var(--muted)">${fmt(x.sb, 1)} W · ${money(x.yearCost)}/J</span></div>`).join('') +
+      `</div></details>`
+    : '';
   const killable = list.filter(x => /abschaltbar/.test(guessDeviceType((x.label.title || '') + ' ' + (x.d.name || ''))));
-  if (note) note.innerHTML = `Zusammen rund <b>${fmt(totW, 0)} W</b> Dauer-Standby ≈ <b>${kwh(totW / 1000 * 8760, 0)}/Jahr</b> (${money(totCost)}). ` +
-    `<b>Erkennung:</b> der Sockel ist das Dauer-Minimum jedes Geräts (10-%-Perzentil seiner eigenen Messwerte); was ein Gerät <b>fast immer</b> zieht = Standby, Spitzen darüber = Nutzung. ` +
+  if (note) note.innerHTML = (list.length
+    ? `Zusammen rund <b>${fmt(totW, 0)} W</b> Dauer-Standby ≈ <b>${kwh(totW / 1000 * 8760, 0)}/Jahr</b> (${money(totCost)}). ` : '') +
+    `<b>Erkennung:</b> der Sockel ist das Dauer-Minimum jedes Geräts (10-%-Perzentil seiner eigenen Messwerte im gewählten Zeitraum); was ein Gerät <b>fast immer</b> zieht = Standby, Spitzen darüber = Nutzung. ` +
     (killable.length ? `<br>💡 <b>Abschaltbar</b> (per Zeitschaltuhr/Smart-Plug nachts aus): ${killable.map(x => esc(x.label.title)).join(', ')}. ` : '') +
     `<span style="color:var(--muted)">Der Typ-Hinweis ist aus dem Namen geraten – über „Gerät umbenennen" im Setup kannst du Namen (und damit die Einordnung) korrigieren.</span>`;
 }
@@ -8690,6 +8723,29 @@ function init() {
     // reflect the stored range on the buttons
     const cur = hcRange();
     hcr.querySelectorAll('button').forEach(x => x.classList.toggle('on', x.dataset.hcr === cur));
+  }
+  // standby card: measurement window + detection threshold
+  const sbd = $('pf-sb-days');
+  if (sbd) {
+    sbd.addEventListener('click', e => {
+      const b = e.target.closest('button'); if (!b) return;
+      _sbDays = parseInt(b.dataset.sbd, 10);
+      try { localStorage.setItem('bhe_sb_days', String(_sbDays)); } catch (err) {}
+      sbd.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+      renderStandby(true);
+    });
+    sbd.querySelectorAll('button').forEach(x => x.classList.toggle('on', parseInt(x.dataset.sbd, 10) === sbDays()));
+  }
+  const sbt = $('pf-sb-thr');
+  if (sbt) {
+    sbt.addEventListener('click', e => {
+      const b = e.target.closest('button'); if (!b) return;
+      _sbThresh = parseFloat(b.dataset.sbt);
+      try { localStorage.setItem('bhe_sb_thresh', String(_sbThresh)); } catch (err) {}
+      sbt.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+      renderStandby(false);     // threshold is a client-side filter; no refetch needed
+    });
+    sbt.querySelectorAll('button').forEach(x => x.classList.toggle('on', parseFloat(x.dataset.sbt) === sbThresh()));
   }
   // tap/hover a day (or month) bar to read its exact values
   const hd = $('h-daily');
