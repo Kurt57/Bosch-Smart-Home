@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v169';   // short tag shown always-on in the header
-const APP_VERSION = 'v169 · 2026-10-19 · Standby-Karte: Basis-Zeile (X von Y Geräten messen Leistung · Fenster · Schwelle), Zeitraum-Umschalter (24 h · 7 · 30 · 90 · Gesamt), einstellbare Schwelle (0,3–5 W) und eine ausklappbare Liste der Kleinst-Verbraucher unter der Schwelle'
+const APP_BUILD = 'v170';   // short tag shown always-on in the header
+const APP_VERSION = 'v170 · 2026-10-20 · FIX: App-Absturz beim Start behoben (PV-Wirtschaftlichkeit stürzte ab, wenn keine Smart-Home-Leistungsdaten vorliegen – häufig bei Haushalten ohne messende Steckdosen). Neu: „Verbrauch je Gerät · Zeitstrahl" (Tages-kWh je Gerät, gestapelt oder einzeln, mit Tages-Aufschlüsselung beim Tippen)'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -270,6 +270,10 @@ const INFO = {
     'sipt, zeigt genau diesen Sockel. „jetzt Standby/aktiv" vergleicht die aktuelle Leistung mit diesem Sockel. Der ' +
     'Typ-Hinweis (Netzwerk, Unterhaltung …) ist aus dem Namen geraten – hilft beim Einschätzen, ob der Standby ' +
     '<b>abschaltbar</b> ist (TV/Konsole/Ladegerät per Zeitschaltung aus) oder <b>nötig</b> (Kühlung).',
+  devtl: () => '<b>Zeitstrahl</b> des Stromverbrauchs je <b>gemessenem Gerät</b>: jeder Balken ein Tag, die <b>Höhe</b> die ' +
+    'verbrauchten <b>kWh</b>. „Alle Geräte" stapelt die Geräte farbig übereinander (Top 8 + „übrige"), oder wähle ein ' +
+    'einzelnes Gerät. Ein Tippen/Überfahren zeigt die <b>Aufschlüsselung je Tag</b>. Datenquelle sind die von den Modulen ' +
+    'gemessenen Steckdosen aus der 90-Tage-Analyse – reine Schalter/Kontakte/Thermostate tauchen nicht auf.',
   baseload: () => 'Deine <b>Grundlast</b> ist der Strom, der <b>rund um die Uhr</b> fließt, auch wenn niemand etwas ' +
     'benutzt. Geschätzt aus dem Mittel der <b>drei ruhigsten Stunden</b> deines Tagesprofils, hochgerechnet aufs Jahr. ' +
     'Hohe Grundlast heißt: viele <b>Dauerverbraucher/Standby</b> (Router, Netzteile, alte Kühlgeräte, Pumpen). Schon ' +
@@ -6115,7 +6119,88 @@ function renderProfile() {
   $('profile-insights').innerHTML = rows.map(([k, v]) => statusRow(k, v)).join('');
   renderBaseload();
   renderStandby();
+  renderDeviceTimeline();
   renderBehavior();
+}
+
+// ---- Verbrauch je Gerät · Zeitstrahl (daily kWh per device over time) ------
+let _devtlSel = null, _devtlDays = null;
+const DEVTL_PAL = ['#3ba9ff', '#ff6b8a', '#4be0b0', '#ffb64d', '#b794f6', '#f78fb3', '#7ed6df', '#e77f67', '#9b8cff', '#ffd166'];
+function devtlSel() { if (_devtlSel == null) { try { _devtlSel = localStorage.getItem('bhe_devtl_sel') || 'all'; } catch (e) { _devtlSel = 'all'; } } return _devtlSel; }
+function devtlDays() { if (_devtlDays == null) { try { _devtlDays = parseInt(localStorage.getItem('bhe_devtl_days'), 10) || 30; } catch (e) { _devtlDays = 30; } } return _devtlDays; }
+function devtlName(id) {
+  const devs = (STATE.data && STATE.data.live && STATE.data.live.devices) || [];
+  const d = devs.find(x => x.id === id); return d ? (d.custom_name || d.name) : id;
+}
+// build {rows, series, totalKwh} from per_device_day for the window + selection
+function deviceTimelineData(days, selId) {
+  const pdd = (STATE.data && STATE.data.per_device_day) || {};
+  const ids = Object.keys(pdd);
+  const allDays = [...new Set(ids.flatMap(id => Object.keys(pdd[id] || {})))].sort();
+  const dayKeys = allDays.slice(-days);
+  if (!dayKeys.length) return null;
+  const totals = ids.map(id => ({ id, tot: dayKeys.reduce((a, k) => a + ((pdd[id] || {})[k] || 0), 0) }))
+    .filter(x => x.tot > 0.0001).sort((a, b) => b.tot - a.tot);
+  if (!totals.length) return null;
+  if (selId && selId !== 'all' && !pdd[selId]) selId = 'all';
+  let series, restIds = [];
+  if (selId && selId !== 'all') {
+    series = [{ key: selId, color: DEVTL_PAL[0], label: devtlName(selId) }];
+  } else {
+    const TOPN = 8, top = totals.slice(0, TOPN);
+    series = top.map((t, i) => ({ key: t.id, color: DEVTL_PAL[i % DEVTL_PAL.length], label: devtlName(t.id) }));
+    restIds = totals.slice(TOPN).map(t => t.id);
+    if (restIds.length) series.push({ key: '__rest', color: '#6b7280', label: `übrige (${restIds.length})` });
+  }
+  const WD = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
+  let totalKwh = 0;
+  const rows = dayKeys.map(k => {
+    const values = {};
+    series.forEach(s => {
+      const v = s.key === '__rest' ? restIds.reduce((a, id) => a + ((pdd[id] || {})[k] || 0), 0) : ((pdd[s.key] || {})[k] || 0);
+      values[s.key] = v; totalKwh += v;
+    });
+    const p = k.split('-'); const dt = new Date(+p[0], +p[1] - 1, +p[2]);
+    return { label: `${p[2]}.${p[1]}.`, full: `${WD[dt.getDay()]} ${p[2]}.${p[1]}.${p[0]}`, values };
+  });
+  return { rows, series, totalKwh };
+}
+function renderDeviceTimeline() {
+  const card = $('pf-devtl-card'); if (!card) return;
+  const pdd = (STATE.data && STATE.data.per_device_day) || {};
+  const sel = $('pf-devtl-dev');
+  if (sel) {
+    const totals = Object.keys(pdd).map(id => ({ id, tot: Object.values(pdd[id] || {}).reduce((a, b) => a + b, 0) }))
+      .sort((a, b) => b.tot - a.tot);
+    const sig = totals.map(t => t.id).join(',');
+    if (sel.dataset.sig !== sig) {
+      sel.innerHTML = '<option value="all">Alle Geräte (gestapelt)</option>' +
+        totals.map(t => `<option value="${esc(t.id)}">${esc(devtlName(t.id))}</option>`).join('');
+      sel.dataset.sig = sig;
+    }
+    sel.value = devtlSel();
+    if (sel.value !== devtlSel()) { _devtlSel = 'all'; sel.value = 'all'; }   // selected device vanished
+  }
+  const dtd = $('pf-devtl-days');
+  if (dtd) dtd.querySelectorAll('button').forEach(x => x.classList.toggle('on', parseInt(x.dataset.dtd, 10) === devtlDays()));
+  paintDeviceTimeline();
+}
+function paintDeviceTimeline() {
+  const chart = $('pf-devtl-chart'), leg = $('pf-devtl-legend'), note = $('pf-devtl-note'), head = $('pf-devtl-head');
+  if (!chart) return;
+  const built = deviceTimelineData(devtlDays(), devtlSel());
+  if (!built) {
+    chart.innerHTML = '<div class="note" style="padding:14px 0;text-align:center">Noch keine gemessenen Tagesverbräuche – sobald Steckdosen mit Messung Daten liefern, erscheint hier der Zeitstrahl.</div>';
+    if (leg) leg.innerHTML = ''; if (note) note.innerHTML = ''; if (head) head.innerHTML = '';
+    return;
+  }
+  const { rows, series, totalKwh } = built;
+  chart.innerHTML = stackedBar(rows, series, { h: 230, unit: 'kWh' });
+  if (leg) leg.innerHTML = series.map(s => `<div class="it"><span class="sw" style="background:${s.color}"></span>${esc(s.label)}</div>`).join('');
+  if (head) head.innerHTML = `<span style="color:var(--muted)">${kwh(totalKwh, 0)} · ${rows.length} Tage</span>`;
+  if (note) note.innerHTML = `Tages-<b>kWh je Gerät</b> über die letzten <b>${rows.length} Tage</b> ` +
+    `(${devtlSel() === 'all' ? 'gestapelt – Top 8 + „übrige"' : 'ein Gerät'}). Tippen/überfahren zeigt die <b>Aufschlüsselung je Tag</b>. ` +
+    `<span style="color:var(--muted)">Quelle: gemessene Steckdosen (Smart Home) aus der 90-Tage-Analyse.</span>`;
 }
 
 // Rough device-type hint from the name – tells whether a standby is likely
@@ -6378,7 +6463,11 @@ const EV_SHAPE = (() => {
 })();
 
 function simulatePv(p) {
-  const shShape = normFrac((STATE.data && STATE.data.hourly_profile || []).map(h => h.avg_w));
+  // household hourly shape – fall back to a flat 24 h profile when there is no
+  // (or only zero) smart-home power data, so shShape[h] is never undefined
+  // (an empty normFrac() would yield NaN loads and break the whole PV model).
+  const shRaw = (STATE.data && STATE.data.hourly_profile || []).map(h => h.avg_w);
+  const shShape = shRaw.length === 24 && shRaw.some(v => v > 0) ? normFrac(shRaw) : new Array(24).fill(1 / 24);
   const hpProf = (STATE.hpA && STATE.hpA.hourly_profile) || [];
   const hpShape = hpProf.length && hpProf.some(h => h.avg_w > 0)
     ? normFrac(hpProf.map(h => h.avg_w)) : new Array(24).fill(1 / 24);
@@ -6967,9 +7056,11 @@ function pvEconChart(pts, marks) {
 }
 function renderPvEcon(p) {
   const cur = p.kwp || 5, price = STATE.price;
-  const load = simulatePv({ ...p, kwp: 0.0001 }).load_kwh;
+  const loadRaw = simulatePv({ ...p, kwp: 0.0001 }).load_kwh;
+  const load = isFinite(loadRaw) ? loadRaw : 0;
   const coverK = load / (p.spec || 1000);
-  const maxK = Math.min(60, Math.max(24, Math.ceil(coverK * 3.5), Math.ceil(cur * 1.5)));
+  let maxK = Math.min(60, Math.max(24, Math.ceil(coverK * 3.5), Math.ceil(cur * 1.5)));
+  if (!isFinite(maxK) || maxK <= 0) maxK = 24;     // never let a bad input empty the curve
   const step = maxK / 22;
   const pts = [];
   for (let k = step; k <= maxK + 0.001; k += step) {
@@ -6990,7 +7081,7 @@ function renderPvEcon(p) {
   ];
   if (nullK) marks.push({ kwp: nullK, label: '0 €', color: PVC.direct, row: 2 });
   $('pv-econchart').innerHTML = pvEconChart(pts, marks);
-  const knee = pts.find(x => x.self < 0.32) || pts[pts.length - 1];
+  const knee = pts.find(x => x.self < 0.32) || pts[pts.length - 1] || { kwp: maxK };
   const curR = simulatePv(p);
   const curNet = curR.grid_kwh * price - curR.feed_kwh * p.feedin;
   $('pv-econchart-note').innerHTML =
@@ -8746,6 +8837,22 @@ function init() {
       renderStandby(false);     // threshold is a client-side filter; no refetch needed
     });
     sbt.querySelectorAll('button').forEach(x => x.classList.toggle('on', parseFloat(x.dataset.sbt) === sbThresh()));
+  }
+  // device-consumption timeline: device picker + window
+  const dtDev = $('pf-devtl-dev');
+  if (dtDev) dtDev.addEventListener('change', () => {
+    _devtlSel = dtDev.value; try { localStorage.setItem('bhe_devtl_sel', _devtlSel); } catch (e) {}
+    paintDeviceTimeline();
+  });
+  const dtDays = $('pf-devtl-days');
+  if (dtDays) {
+    dtDays.addEventListener('click', e => {
+      const b = e.target.closest('button'); if (!b) return;
+      _devtlDays = parseInt(b.dataset.dtd, 10); try { localStorage.setItem('bhe_devtl_days', String(_devtlDays)); } catch (err) {}
+      dtDays.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+      paintDeviceTimeline();
+    });
+    dtDays.querySelectorAll('button').forEach(x => x.classList.toggle('on', parseInt(x.dataset.dtd, 10) === devtlDays()));
   }
   // tap/hover a day (or month) bar to read its exact values
   const hd = $('h-daily');
