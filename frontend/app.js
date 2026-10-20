@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v170';   // short tag shown always-on in the header
-const APP_VERSION = 'v170 · 2026-10-20 · FIX: App-Absturz beim Start behoben (PV-Wirtschaftlichkeit stürzte ab, wenn keine Smart-Home-Leistungsdaten vorliegen – häufig bei Haushalten ohne messende Steckdosen). Neu: „Verbrauch je Gerät · Zeitstrahl" (Tages-kWh je Gerät, gestapelt oder einzeln, mit Tages-Aufschlüsselung beim Tippen)'
+const APP_BUILD = 'v171';   // short tag shown always-on in the header
+const APP_VERSION = 'v171 · 2026-10-20 · Zeitstrahl je Gerät: zusätzliche Auflösungen Stunde (kWh/h) und Roh (Leistung W, bis aufs Poll-Intervall). Geräte-Dropdown jetzt nach Verbrauch sortiert und mit kWh je Gerät – so findest du die großen Verbraucher sofort'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -6123,84 +6123,229 @@ function renderProfile() {
   renderBehavior();
 }
 
-// ---- Verbrauch je Gerät · Zeitstrahl (daily kWh per device over time) ------
-let _devtlSel = null, _devtlDays = null;
+// ---- Verbrauch je Gerät · Zeitstrahl ---------------------------------------
+// Three resolutions: Tag (kWh/day from per_device_day), Stunde (kWh/hour) and
+// Roh (power W over time) – the two fine ones from /api/series. Device picker is
+// sorted by consumption (biggest first) and shows each device's kWh, so big
+// consumers are easy to find; "Alle" stacks the top consumers.
+let _devtlRes = null, _devtlSel = null, _devtlWinMap = null, _devtlSeries = {}, _devtlBusy = false;
 const DEVTL_PAL = ['#3ba9ff', '#ff6b8a', '#4be0b0', '#ffb64d', '#b794f6', '#f78fb3', '#7ed6df', '#e77f67', '#9b8cff', '#ffd166'];
+const DEVTL_WIN = {
+  day: [{ v: 7, l: '7 T' }, { v: 14, l: '14 T' }, { v: 30, l: '30 T' }, { v: 90, l: '90 T' }],
+  hour: [{ v: 1, l: '1 T' }, { v: 2, l: '2 T' }, { v: 3, l: '3 T' }, { v: 7, l: '7 T' }],
+  raw: [{ v: 0.25, l: '6 h' }, { v: 0.5, l: '12 h' }, { v: 1, l: '24 h' }, { v: 2, l: '2 T' }],
+};
+const DEVTL_WIN_DEF = { day: 30, hour: 2, raw: 1 };
+function devtlRes() { if (_devtlRes == null) { try { _devtlRes = localStorage.getItem('bhe_devtl_res') || 'day'; } catch (e) { _devtlRes = 'day'; } if (!DEVTL_WIN[_devtlRes]) _devtlRes = 'day'; } return _devtlRes; }
+function devtlWinMap() { if (_devtlWinMap == null) { let m = {}; try { m = JSON.parse(localStorage.getItem('bhe_devtl_win') || '{}') || {}; } catch (e) {} _devtlWinMap = { ...DEVTL_WIN_DEF, ...m }; } return _devtlWinMap; }
+function devtlWin() { const m = devtlWinMap(), r = devtlRes(); return m[r] != null ? m[r] : DEVTL_WIN_DEF[r]; }
+function setDevtlWin(v) { devtlWinMap()[devtlRes()] = v; try { localStorage.setItem('bhe_devtl_win', JSON.stringify(_devtlWinMap)); } catch (e) {} }
 function devtlSel() { if (_devtlSel == null) { try { _devtlSel = localStorage.getItem('bhe_devtl_sel') || 'all'; } catch (e) { _devtlSel = 'all'; } } return _devtlSel; }
-function devtlDays() { if (_devtlDays == null) { try { _devtlDays = parseInt(localStorage.getItem('bhe_devtl_days'), 10) || 30; } catch (e) { _devtlDays = 30; } } return _devtlDays; }
 function devtlName(id) {
   const devs = (STATE.data && STATE.data.live && STATE.data.live.devices) || [];
   const d = devs.find(x => x.id === id); return d ? (d.custom_name || d.name) : id;
 }
-// build {rows, series, totalKwh} from per_device_day for the window + selection
-function deviceTimelineData(days, selId) {
+// devices ranked by their total over the 90-day analysis (stable order + kWh for
+// the dropdown), biggest consumer first.
+function devtlRanking() {
+  const pdd = (STATE.data && STATE.data.per_device_day) || {};
+  return Object.keys(pdd).map(id => ({ id, kwh: Object.values(pdd[id] || {}).reduce((a, b) => a + b, 0) }))
+    .sort((a, b) => b.kwh - a.kwh);
+}
+// energy per interval via power integration (robust against counter resets);
+// gaps capped so an offline stretch doesn't inflate a bucket.
+function _devtlBucket(arr, bucketOf) {
+  const out = {};
+  for (let i = 0; i < arr.length; i++) {
+    const dt = Math.min(1800, i < arr.length - 1 ? arr[i + 1].ts - arr[i].ts : 900);
+    if (dt <= 0) continue;
+    const wh = (arr[i].power_w || 0) * dt / 3600;
+    const b = bucketOf(arr[i].ts);
+    out[b] = (out[b] || 0) + wh;
+  }
+  return out;
+}
+// shape the top-N (+ "übrige") series list from a ranked [{id,val}] list
+function _devtlSeries3(ranked, selId) {
+  if (selId && selId !== 'all' && ranked.some(r => r.id === selId)) {
+    return { series: [{ key: selId, color: DEVTL_PAL[0], label: devtlName(selId) }], restIds: [] };
+  }
+  const TOPN = 8, top = ranked.slice(0, TOPN);
+  const series = top.map((t, i) => ({ key: t.id, color: DEVTL_PAL[i % DEVTL_PAL.length], label: devtlName(t.id) }));
+  const restIds = ranked.slice(TOPN).map(t => t.id);
+  if (restIds.length) series.push({ key: '__rest', color: '#6b7280', label: `übrige (${restIds.length})` });
+  return { series, restIds };
+}
+
+// --- Tag: daily kWh from per_device_day → stacked bars ---------------------- #
+function devtlDailyData(days, selId) {
   const pdd = (STATE.data && STATE.data.per_device_day) || {};
   const ids = Object.keys(pdd);
   const allDays = [...new Set(ids.flatMap(id => Object.keys(pdd[id] || {})))].sort();
   const dayKeys = allDays.slice(-days);
   if (!dayKeys.length) return null;
-  const totals = ids.map(id => ({ id, tot: dayKeys.reduce((a, k) => a + ((pdd[id] || {})[k] || 0), 0) }))
-    .filter(x => x.tot > 0.0001).sort((a, b) => b.tot - a.tot);
-  if (!totals.length) return null;
-  if (selId && selId !== 'all' && !pdd[selId]) selId = 'all';
-  let series, restIds = [];
-  if (selId && selId !== 'all') {
-    series = [{ key: selId, color: DEVTL_PAL[0], label: devtlName(selId) }];
-  } else {
-    const TOPN = 8, top = totals.slice(0, TOPN);
-    series = top.map((t, i) => ({ key: t.id, color: DEVTL_PAL[i % DEVTL_PAL.length], label: devtlName(t.id) }));
-    restIds = totals.slice(TOPN).map(t => t.id);
-    if (restIds.length) series.push({ key: '__rest', color: '#6b7280', label: `übrige (${restIds.length})` });
-  }
+  const ranked = ids.map(id => ({ id, val: dayKeys.reduce((a, k) => a + ((pdd[id] || {})[k] || 0), 0) }))
+    .filter(x => x.val > 0.0001).sort((a, b) => b.val - a.val);
+  if (!ranked.length) return null;
+  const { series, restIds } = _devtlSeries3(ranked, selId);
   const WD = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
-  let totalKwh = 0;
+  let total = 0;
   const rows = dayKeys.map(k => {
     const values = {};
     series.forEach(s => {
       const v = s.key === '__rest' ? restIds.reduce((a, id) => a + ((pdd[id] || {})[k] || 0), 0) : ((pdd[s.key] || {})[k] || 0);
-      values[s.key] = v; totalKwh += v;
+      values[s.key] = v; total += v;
     });
     const p = k.split('-'); const dt = new Date(+p[0], +p[1] - 1, +p[2]);
     return { label: `${p[2]}.${p[1]}.`, full: `${WD[dt.getDay()]} ${p[2]}.${p[1]}.${p[0]}`, values };
   });
-  return { rows, series, totalKwh };
+  return { rows, series, total, unitLabel: 'Tage' };
 }
+
+// --- Stunde: hourly kWh from raw samples → stacked bars --------------------- #
+function devtlHourlyData(days, selId, samples) {
+  const now = Date.now() / 1000, t0 = now - days * 86400;
+  const by = {};
+  for (const s of samples) { if (s.ts >= t0) (by[s.device_id] = by[s.device_id] || []).push(s); }
+  const hourOf = ts => Math.floor(ts / 3600) * 3600;
+  const perDev = {};                      // id -> {hourTs: wh}
+  for (const id in by) { by[id].sort((a, b) => a.ts - b.ts); perDev[id] = _devtlBucket(by[id], hourOf); }
+  const ranked = Object.keys(perDev).map(id => ({ id, val: Object.values(perDev[id]).reduce((a, b) => a + b, 0) }))
+    .filter(x => x.val > 0.01).sort((a, b) => b.val - a.val);
+  if (!ranked.length) return null;
+  const allHb = [...new Set(Object.values(perDev).flatMap(b => Object.keys(b).map(Number)))].filter(h => h >= t0).sort((a, b) => a - b);
+  if (!allHb.length) return null;
+  const { series, restIds } = _devtlSeries3(ranked, selId);
+  const WD = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'], p2 = n => String(n).padStart(2, '0');
+  let total = 0;
+  const rows = allHb.map(hb => {
+    const values = {};
+    series.forEach(s => {
+      const wh = s.key === '__rest' ? restIds.reduce((a, id) => a + ((perDev[id] || {})[hb] || 0), 0) : ((perDev[s.key] || {})[hb] || 0);
+      values[s.key] = wh / 1000; total += wh / 1000;
+    });
+    const dt = new Date(hb * 1000);
+    const label = dt.getHours() === 0 ? WD[dt.getDay()] : `${p2(dt.getHours())}h`;
+    return { label, full: `${WD[dt.getDay()]} ${p2(dt.getDate())}.${p2(dt.getMonth() + 1)}. ${p2(dt.getHours())}:00`, values };
+  });
+  return { rows, series, total, unitLabel: 'Stunden' };
+}
+
+// --- Roh: power (W) over time as lines (with the time-series readout) ------- #
+function devtlRawChart(days, selId, samples) {
+  const now = Date.now() / 1000, t0 = now - days * 86400, t1 = now;
+  const by = {};
+  for (const s of samples) { if (s.ts >= t0) (by[s.device_id] = by[s.device_id] || []).push(s); }
+  for (const id in by) by[id].sort((a, b) => a.ts - b.ts);
+  const ranked = Object.keys(by).map(id => ({ id, val: by[id].reduce((a, s) => a + (s.power_w || 0), 0) }))
+    .filter(x => x.val > 0).sort((a, b) => b.val - a.val);
+  if (!ranked.length) return null;
+  let ids = (selId && selId !== 'all' && by[selId]) ? [selId] : ranked.slice(0, 8).map(r => r.id);
+  ids = ids.filter(id => (by[id] || []).length);
+  if (!ids.length) return null;
+  const h = 230, padL = 32, padR = 10, top = 12, base = h - 26;
+  const X = ts => padL + Math.max(0, Math.min(1, (ts - t0) / (t1 - t0))) * (CW - padL - padR);
+  const maxW = Math.max(1, ...ids.flatMap(id => by[id].map(s => s.power_w || 0)));
+  const sc = niceScale(maxW), ymax = sc.max;
+  const Y = w => top + (1 - Math.max(0, Math.min(ymax, w)) / ymax) * (base - top);
+  let g = gridLines(h, top, base, padL, ymax, { step: sc.step, unit: 'W' });
+  // time grid: adaptive hour/day ticks
+  const spanH = (t1 - t0) / 3600, p2 = n => String(n).padStart(2, '0');
+  const stepH = spanH <= 8 ? 1 : spanH <= 14 ? 2 : spanH <= 26 ? 4 : spanH <= 50 ? 6 : 12, stepS = stepH * 3600;
+  let sep = '';
+  for (let t = Math.ceil(t0 / stepS) * stepS; t <= t1; t += stepS) {
+    const x = X(t), dd = new Date(t * 1000), mid = dd.getHours() === 0;
+    sep += `<line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${top}" y2="${base}" stroke="var(--line)" stroke-dasharray="2 3" opacity="${mid ? 0.9 : 0.5}"/>` +
+      `<text class="axis" x="${(x + 2).toFixed(1)}" y="${h - 6}"${mid ? ' style="font-weight:700"' : ''}>${mid ? p2(dd.getDate()) + '.' : p2(dd.getHours()) + 'h'}</text>`;
+  }
+  let lines = ''; const series = [];
+  ids.forEach((id, i) => {
+    const col = DEVTL_PAL[i % DEVTL_PAL.length], pv = by[id];
+    let dl = '', pen = false;
+    pv.forEach(s => { const x = X(s.ts), y = Y(s.power_w || 0); dl += (pen ? 'L' : 'M') + x.toFixed(1) + ' ' + y.toFixed(1) + ' '; pen = true; });
+    if (dl) lines += `<path d="${dl.trim()}" fill="none" stroke="${col}" stroke-width="${ids.length === 1 ? 2 : 1.5}"/>`;
+    const last = pv[pv.length - 1];
+    if (last) lines += `<circle cx="${X(last.ts).toFixed(1)}" cy="${Y(last.power_w || 0).toFixed(1)}" r="2.6" fill="${col}"/>`;
+    series.push({ name: devtlName(id), color: col, unit: ' W', pts: pv.map(s => [s.ts, Math.round(s.power_w || 0)]) });
+  });
+  const legend = ids.map((id, i) => ({ label: devtlName(id), color: DEVTL_PAL[i % DEVTL_PAL.length] }));
+  return { svg: svg(h, g + sep + lines, null, { t0, t1, padL, padR, h, series }), legend };
+}
+
 function renderDeviceTimeline() {
   const card = $('pf-devtl-card'); if (!card) return;
-  const pdd = (STATE.data && STATE.data.per_device_day) || {};
+  // device dropdown: sorted by consumption, with each device's 90-day kWh
   const sel = $('pf-devtl-dev');
   if (sel) {
-    const totals = Object.keys(pdd).map(id => ({ id, tot: Object.values(pdd[id] || {}).reduce((a, b) => a + b, 0) }))
-      .sort((a, b) => b.tot - a.tot);
-    const sig = totals.map(t => t.id).join(',');
+    const ranked = devtlRanking();
+    const sig = ranked.map(t => t.id + ':' + Math.round(t.kwh)).join(',');
     if (sel.dataset.sig !== sig) {
-      sel.innerHTML = '<option value="all">Alle Geräte (gestapelt)</option>' +
-        totals.map(t => `<option value="${esc(t.id)}">${esc(devtlName(t.id))}</option>`).join('');
+      sel.innerHTML = '<option value="all">Alle Geräte (Top 8 gestapelt)</option>' +
+        ranked.map(t => `<option value="${esc(t.id)}">${esc(devtlName(t.id))} · ${kwh(t.kwh, t.kwh >= 10 ? 0 : 1)}</option>`).join('');
       sel.dataset.sig = sig;
     }
     sel.value = devtlSel();
     if (sel.value !== devtlSel()) { _devtlSel = 'all'; sel.value = 'all'; }   // selected device vanished
   }
-  const dtd = $('pf-devtl-days');
-  if (dtd) dtd.querySelectorAll('button').forEach(x => x.classList.toggle('on', parseInt(x.dataset.dtd, 10) === devtlDays()));
+  const res = $('pf-devtl-res');
+  if (res) res.querySelectorAll('button').forEach(x => x.classList.toggle('on', x.dataset.dtr === devtlRes()));
+  // window seg: options depend on the resolution
+  const winEl = $('pf-devtl-win');
+  if (winEl) {
+    const opts = DEVTL_WIN[devtlRes()], cur = devtlWin();
+    winEl.innerHTML = opts.map(o => `<button data-dtw="${o.v}"${o.v === cur ? ' class="on"' : ''}>${o.l}</button>`).join('');
+  }
   paintDeviceTimeline();
 }
-function paintDeviceTimeline() {
+async function paintDeviceTimeline() {
   const chart = $('pf-devtl-chart'), leg = $('pf-devtl-legend'), note = $('pf-devtl-note'), head = $('pf-devtl-head');
   if (!chart) return;
-  const built = deviceTimelineData(devtlDays(), devtlSel());
-  if (!built) {
-    chart.innerHTML = '<div class="note" style="padding:14px 0;text-align:center">Noch keine gemessenen Tagesverbräuche – sobald Steckdosen mit Messung Daten liefern, erscheint hier der Zeitstrahl.</div>';
-    if (leg) leg.innerHTML = ''; if (note) note.innerHTML = ''; if (head) head.innerHTML = '';
+  const res = devtlRes(), win = devtlWin(), sel = devtlSel();
+  const empty = msg => { chart.innerHTML = `<div class="note" style="padding:14px 0;text-align:center">${msg}</div>`; if (leg) leg.innerHTML = ''; if (note) note.innerHTML = ''; if (head) head.innerHTML = ''; };
+
+  if (res === 'day') {
+    const built = devtlDailyData(win, sel);
+    if (!built) return empty('Noch keine gemessenen Tagesverbräuche – sobald Steckdosen mit Messung Daten liefern, erscheint hier der Zeitstrahl.');
+    chart.innerHTML = stackedBar(built.rows, built.series, { h: 230, unit: 'kWh' });
+    if (leg) leg.innerHTML = built.series.map(s => `<div class="it"><span class="sw" style="background:${s.color}"></span>${esc(s.label)}</div>`).join('');
+    if (head) head.innerHTML = `<span style="color:var(--muted)">${kwh(built.total, 0)} · ${built.rows.length} Tage</span>`;
+    if (note) note.innerHTML = `Tages-<b>kWh je Gerät</b> (${sel === 'all' ? 'Top 8 gestapelt + „übrige"' : 'ein Gerät'}). Tippen/überfahren zeigt die Aufschlüsselung je Tag. ` +
+      `<span style="color:var(--muted)">Quelle: gemessene Steckdosen aus der 90-Tage-Analyse.</span>`;
     return;
   }
-  const { rows, series, totalKwh } = built;
-  chart.innerHTML = stackedBar(rows, series, { h: 230, unit: 'kWh' });
-  if (leg) leg.innerHTML = series.map(s => `<div class="it"><span class="sw" style="background:${s.color}"></span>${esc(s.label)}</div>`).join('');
-  if (head) head.innerHTML = `<span style="color:var(--muted)">${kwh(totalKwh, 0)} · ${rows.length} Tage</span>`;
-  if (note) note.innerHTML = `Tages-<b>kWh je Gerät</b> über die letzten <b>${rows.length} Tage</b> ` +
-    `(${devtlSel() === 'all' ? 'gestapelt – Top 8 + „übrige"' : 'ein Gerät'}). Tippen/überfahren zeigt die <b>Aufschlüsselung je Tag</b>. ` +
-    `<span style="color:var(--muted)">Quelle: gemessene Steckdosen (Smart Home) aus der 90-Tage-Analyse.</span>`;
+  // fine resolutions (Stunde / Roh) fetch raw samples for the window
+  chart.innerHTML = '<div class="note" style="padding:14px 0;text-align:center">Lade Messwerte …</div>';
+  let samples;
+  try { samples = await devtlFetchSeries(win); }
+  catch (e) { return empty('Feinauflösung nur mit laufender Bridge verfügbar.'); }
+  if (!samples.length) return empty('Keine Messpunkte im Zeitraum.');
+
+  if (res === 'hour') {
+    const built = devtlHourlyData(win, sel, samples);
+    if (!built) return empty('Keine gemessenen Verbräuche im Zeitraum.');
+    chart.innerHTML = stackedBar(built.rows, built.series, { h: 230, unit: 'kWh' });
+    if (leg) leg.innerHTML = built.series.map(s => `<div class="it"><span class="sw" style="background:${s.color}"></span>${esc(s.label)}</div>`).join('');
+    if (head) head.innerHTML = `<span style="color:var(--muted)">${kwh(built.total, 1)} · ${built.rows.length} Std.</span>`;
+    if (note) note.innerHTML = `Stunden-<b>kWh je Gerät</b> (${sel === 'all' ? 'Top 8 gestapelt' : 'ein Gerät'}). Tippen zeigt die Aufschlüsselung je Stunde. ` +
+      `<span style="color:var(--muted)">Energie aus den gemessenen Leistungswerten integriert.</span>`;
+    return;
+  }
+  // raw power
+  const built = devtlRawChart(win, sel, samples);
+  if (!built) return empty('Keine Messpunkte im Zeitraum.');
+  chart.innerHTML = built.svg;
+  if (leg) leg.innerHTML = built.legend.map(s => `<div class="it"><span class="sw" style="background:${s.color}"></span>${esc(s.label)}</div>`).join('');
+  if (head) head.innerHTML = `<span style="color:var(--muted)">Leistung · ${DEVTL_WIN[res].find(o => o.v === win).l}</span>`;
+  if (note) note.innerHTML = `<b>Leistung (W) über die Zeit</b> je Gerät (${sel === 'all' ? 'die 8 größten Verbraucher' : 'ein Gerät'}). Tippen/überfahren zeigt die Watt je Gerät zum Zeitpunkt. ` +
+    `<span style="color:var(--muted)">Feinste Auflösung = dein Poll-Intervall (hier Demo ~30 s).</span>`;
+}
+// raw samples for N days (cached by whole-day bucket)
+async function devtlFetchSeries(days) {
+  const key = Math.max(1, Math.ceil(days));
+  if (_devtlSeries[key]) return _devtlSeries[key];
+  const r = await api('/api/series?device=all&days=' + key);
+  const s = (r && r.samples) || [];
+  _devtlSeries[key] = s; return s;
 }
 
 // Rough device-type hint from the name – tells whether a standby is likely
@@ -8838,22 +8983,26 @@ function init() {
     });
     sbt.querySelectorAll('button').forEach(x => x.classList.toggle('on', parseFloat(x.dataset.sbt) === sbThresh()));
   }
-  // device-consumption timeline: device picker + window
+  // device-consumption timeline: resolution + device picker + window
   const dtDev = $('pf-devtl-dev');
   if (dtDev) dtDev.addEventListener('change', () => {
     _devtlSel = dtDev.value; try { localStorage.setItem('bhe_devtl_sel', _devtlSel); } catch (e) {}
     paintDeviceTimeline();
   });
-  const dtDays = $('pf-devtl-days');
-  if (dtDays) {
-    dtDays.addEventListener('click', e => {
-      const b = e.target.closest('button'); if (!b) return;
-      _devtlDays = parseInt(b.dataset.dtd, 10); try { localStorage.setItem('bhe_devtl_days', String(_devtlDays)); } catch (err) {}
-      dtDays.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
-      paintDeviceTimeline();
-    });
-    dtDays.querySelectorAll('button').forEach(x => x.classList.toggle('on', parseInt(x.dataset.dtd, 10) === devtlDays()));
-  }
+  const dtRes = $('pf-devtl-res');
+  if (dtRes) dtRes.addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    _devtlRes = b.dataset.dtr; try { localStorage.setItem('bhe_devtl_res', _devtlRes); } catch (err) {}
+    dtRes.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+    renderDeviceTimeline();     // rebuild the window seg for this resolution, then paint
+  });
+  const dtWin = $('pf-devtl-win');
+  if (dtWin) dtWin.addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    setDevtlWin(parseFloat(b.dataset.dtw));
+    dtWin.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+    paintDeviceTimeline();
+  });
   // tap/hover a day (or month) bar to read its exact values
   const hd = $('h-daily');
   if (hd) {

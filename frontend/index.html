@@ -923,15 +923,15 @@
     </div>
     <div class="card" id="pf-devtl-card">
       <h2><span class="info" data-info="devtl" role="button" aria-label="Info">i</span>📊 Verbrauch je Gerät · Zeitstrahl <span class="r" id="pf-devtl-head"></span></h2>
-      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px">
-        <select id="pf-devtl-dev" style="width:auto;flex:1;min-width:170px"></select>
-        <div class="seg" id="pf-devtl-days" style="flex:1;min-width:190px;margin:0">
-          <button data-dtd="7">7 T</button>
-          <button data-dtd="14">14 T</button>
-          <button data-dtd="30" class="on">30 T</button>
-          <button data-dtd="90">90 T</button>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px">
+        <div class="seg" id="pf-devtl-res" style="flex:1;min-width:200px;margin:0">
+          <button data-dtr="day" class="on">Tag</button>
+          <button data-dtr="hour">Stunde</button>
+          <button data-dtr="raw">Roh (W)</button>
         </div>
+        <select id="pf-devtl-dev" style="width:auto;flex:1;min-width:190px"></select>
       </div>
+      <div class="seg" id="pf-devtl-win" style="margin:0 0 12px"></div>
       <div id="pf-devtl-chart"></div>
       <div class="legend" id="pf-devtl-legend" style="margin-top:8px"></div>
       <div class="note" id="pf-devtl-note" style="margin-top:8px"></div>
