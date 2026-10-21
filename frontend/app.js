@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v171';   // short tag shown always-on in the header
-const APP_VERSION = 'v171 · 2026-10-20 · Zeitstrahl je Gerät: zusätzliche Auflösungen Stunde (kWh/h) und Roh (Leistung W, bis aufs Poll-Intervall). Geräte-Dropdown jetzt nach Verbrauch sortiert und mit kWh je Gerät – so findest du die großen Verbraucher sofort'
+const APP_BUILD = 'v172';   // short tag shown always-on in the header
+const APP_VERSION = 'v172 · 2026-10-21 · Neue Karte „Raumtemperatur ↔ Wärmepumpe": Ist/Soll/Feuchte je Raum aus den Bosch-Thermostaten + ehrliche Geräte-Prüfung, ob die HomeCom-API eine gemessene Raumtemperatur annimmt (CS6800i: nein – misst über eigene Raumstation; schreibbar ist nur der Raum-Soll)'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -270,6 +270,9 @@ const INFO = {
     'sipt, zeigt genau diesen Sockel. „jetzt Standby/aktiv" vergleicht die aktuelle Leistung mit diesem Sockel. Der ' +
     'Typ-Hinweis (Netzwerk, Unterhaltung …) ist aus dem Namen geraten – hilft beim Einschätzen, ob der Standby ' +
     '<b>abschaltbar</b> ist (TV/Konsole/Ladegerät per Zeitschaltung aus) oder <b>nötig</b> (Kühlung).',
+  roomsync: () => 'Zeigt je Raum <b>Ist</b>-Temperatur, <b>Soll</b> und <b>Feuchte</b> aus deinen Bosch-Raumthermostaten – und prüft, ob die <b>Wärmepumpe über die HomeCom-API eine gemessene Raumtemperatur entgegennimmt</b>. ' +
+    'Bei der Compress 6800i ist das normalerweise <b>nicht</b> vorgesehen: Die WP ist witterungsgeführt und misst die Raumtemperatur über ihre <b>eigene Raumstation</b>, nicht über einen API-Eingang. Schreibbar ist nur der <b>Raum-Soll</b>. ' +
+    'Der Energiemanager kann genau diesen Soll als Hebel nutzen (anheben/absenken je nach gemessener Ist-Temperatur). Ob dein konkretes Gerät doch einen Ist-Eingang hat, sagt dir die Prüfung oben.',
   devtl: () => '<b>Zeitstrahl</b> des Stromverbrauchs je <b>gemessenem Gerät</b>: jeder Balken ein Tag, die <b>Höhe</b> die ' +
     'verbrauchten <b>kWh</b>. „Alle Geräte" stapelt die Geräte farbig übereinander (Top 8 + „übrige"), oder wähle ein ' +
     'einzelnes Gerät. Ein Tippen/Überfahren zeigt die <b>Aufschlüsselung je Tag</b>. Datenquelle sind die von den Modulen ' +
@@ -4675,6 +4678,60 @@ function paintHeatingCurve(r) {
     (r.provisional ? '<br><span style="color:var(--muted)">Noch vorläufig – mit mehr Punkten (weiter heizen oder einen HomeCom-CSV-Export mit stündlicher Vorlauftemperatur importieren) wird die Steilheit belastbar.</span>' : '');
 }
 
+/* ---- Raumtemperatur ↔ Wärmepumpe: Soll/Ist/Feuchte + API-Prüfung ---------- */
+let _rsBusy = false;
+async function renderRoomSync() {
+  const card = $('roomsync-card'); if (!card) return;
+  if (_rsBusy) return; _rsBusy = true;
+  try { const r = await api('/api/heatpump/roomsync'); paintRoomSync(r); }
+  catch (e) { const t = $('roomsync-table'); if (t) t.innerHTML = '<div class="note">Nur mit laufender Bridge verfügbar.</div>'; }
+  finally { _rsBusy = false; }
+}
+function paintRoomSync(r) {
+  const head = $('roomsync-head'), verdict = $('roomsync-verdict'), table = $('roomsync-table'), note = $('roomsync-note');
+  if (!r || !r.ok) { if (table) table.innerHTML = '<div class="note">Keine Daten.</div>'; return; }
+  const rooms = r.rooms || [];
+  if (head) head.innerHTML = `<span style="color:var(--muted)">${rooms.length} Räume</span>`;
+  // verdict: does the WP accept a MEASURED room temperature?
+  if (verdict) {
+    if (!r.connected_wp) {
+      verdict.innerHTML = '<span style="color:var(--muted)">⚙︎ Wärmepumpe (HomeCom) nicht verbunden – die Soll/Ist/Feuchte-Übersicht steht trotzdem; die API-Prüfung läuft, sobald die WP verbunden ist.</span>';
+    } else if (r.supports_actual) {
+      verdict.innerHTML = '<span style="color:var(--accent2)">✅ Deine Anlage meldet einen <b>schreibbaren Raumtemperatur-Eingang</b> – die gemessene Ist-Temperatur lässt sich an die WP übermitteln.</span>';
+    } else {
+      verdict.innerHTML = '<span style="color:var(--warn)">ℹ️ Deine Anlage bietet <b>keinen API-Eingang für die gemessene Raumtemperatur</b>.</span> ' +
+        'Das ist bei der <b>Compress 6800i normal</b>: Sie ist witterungsgeführt und misst die Raumtemperatur über ihre <b>eigene Raumstation</b>, nicht über die API. ' +
+        'Schreibbar ist der <b>Raum-Soll</b>' + (r.writeable_setpoints && r.writeable_setpoints.length
+          ? ` (z. B. „${esc(r.writeable_setpoints[0].label)}", aktuell ${fmt(r.writeable_setpoints[0].value, 1)} °C)` : '') + '.';
+    }
+  }
+  // per-room Ist / Soll / Feuchte table
+  if (table) {
+    if (!rooms.length) { table.innerHTML = '<div class="note">Keine aktiven Heizräume.</div>'; }
+    else {
+      const cell = (v, u) => v == null ? '<span style="color:var(--muted)">–</span>' : `<b>${fmt(v, 1)}</b>${u}`;
+      table.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px">` +
+        `<tr style="color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em">` +
+        `<td style="padding:4px 8px">Raum</td><td style="padding:4px 8px;text-align:right">Ist</td>` +
+        `<td style="padding:4px 8px;text-align:right">Soll</td><td style="padding:4px 8px;text-align:right">Feuchte</td></tr>` +
+        rooms.map(x => {
+          const gap = (x.ist != null && x.soll != null) ? x.ist - x.soll : null;
+          const gc = gap == null ? 'var(--ink)' : gap >= -0.2 ? '#4be0b0' : gap >= -1 ? '#ffb64d' : '#ff6b8a';
+          return `<tr style="border-top:1px solid var(--line)">` +
+            `<td style="padding:6px 8px">${esc(x.room)}${x.heating ? ' <span style="color:#4be0b0" title="heizt">●</span>' : ''}</td>` +
+            `<td style="padding:6px 8px;text-align:right;color:${gc}">${cell(x.ist, '°')}</td>` +
+            `<td style="padding:6px 8px;text-align:right">${cell(x.soll, '°')}</td>` +
+            `<td style="padding:6px 8px;text-align:right;color:${x.feuchte > 65 ? '#ffb64d' : 'var(--ink)'}">${cell(x.feuchte, '%')}</td></tr>`;
+        }).join('') + `</table>`;
+    }
+  }
+  if (note) note.innerHTML = (r.demo ? '<b>Demo-Daten.</b> ' : '') +
+    'Quelle: deine Bosch-Raumthermostate (Ist/Soll) und Feuchte-Sensoren. ' +
+    (r.supports_actual
+      ? 'Die Übermittlung der Ist-Temperatur an die WP kann der Energiemanager übernehmen.'
+      : 'Da die WP keine gemessene Raumtemperatur annimmt, nutzt der Energiemanager später den <b>Raum-Soll</b> als Stellhebel – z. B. Soll leicht anheben, wenn ein Raum zu kühl ist, oder absenken, wenn es passt. So „weiß" die WP indirekt über die Raumlage Bescheid.');
+}
+
 /* ---- Hydraulischer Abgleich: step guide + data-driven room worklist ------- */
 function renderHydronic() {
   const card = $('ha-card'); if (!card) return;
@@ -8865,7 +8922,7 @@ const HEAT_SUB_MAP = {
   'hp-card': 'heizung', 'hd-card': 'heizung', 'roomtemp-card': 'heizung', 'hts-card': 'heizung', 'rts-card': 'heizung', 'win-card': 'heizung',
   'obs-card': 'abgleich', 'am-card': 'abgleich', 'tm-card': 'abgleich', 'hl-card': 'abgleich',
   'flow-card': 'abgleich', 'opt-card': 'abgleich', 'ha-card': 'abgleich', 'layout-card': 'abgleich',
-  'hc-card': 'einstellung', 'hpctl-card': 'einstellung',
+  'hc-card': 'einstellung', 'hpctl-card': 'einstellung', 'roomsync-card': 'einstellung',
   // everything else in the Wärme view (COP/stats/theory charts) → Effizienz
 };
 function assignHeatSubs() {
@@ -8904,6 +8961,7 @@ function switchView(v) {
     if (typeof renderHydronic === 'function') renderHydronic();
     if (typeof renderLayout === 'function') renderLayout();
     if (typeof initHpControls === 'function') initHpControls();
+    if (typeof renderRoomSync === 'function') renderRoomSync();
   }
 }
 

@@ -4780,6 +4780,41 @@ def _control_label(path: str) -> str:
     return f"{area}: {seg}" if area else seg
 
 
+def _classify_room_inputs(controls: list[dict]) -> dict:
+    """From the heat-pump control tree, pick the room-related resources and say
+    whether the device exposes a WRITEABLE *measured* room-temperature input (the
+    thing you'd push the thermostat reading into). On a Bosch/Buderus CS6800i this
+    is normally absent – only the room SETPOINT is writeable; the actual room
+    temperature comes from the heat pump's own room station, not an API write."""
+    room, actual, setpoints = [], [], []
+    for c in controls or []:
+        p = (c.get("path") or "").lower()
+        if "heatingcircuits" not in p:
+            continue
+        seg = p.rstrip("/").rsplit("/", 1)[-1]
+        is_setpoint = any(k in p for k in ("manual", "setpoint", "comfort", "eco", "levels"))
+        if "roomtemperature" in seg and not is_setpoint:
+            kind = "actual_room_temp"          # the measured value (push target)
+        elif any(k in p for k in ("roommanual", "temperatureroommanual", "manualroomsetpoint",
+                                   "roomsetpoint", "currentroomsetpoint")):
+            kind = "room_setpoint"
+        elif "humidity" in p:
+            kind = "humidity"
+        else:
+            continue
+        entry = {"path": c.get("path"), "label": _control_label(c.get("path") or ""),
+                 "value": c.get("value"), "writeable": bool(c.get("writeable")),
+                 "unit": c.get("unit"), "kind": kind}
+        room.append(entry)
+        if kind == "actual_room_temp":
+            actual.append(entry)
+        elif kind == "room_setpoint":
+            setpoints.append(entry)
+    supports_actual = any(e["writeable"] for e in actual)
+    return {"room_inputs": room, "supports_actual": supports_actual,
+            "writeable_setpoints": [e for e in setpoints if e["writeable"]]}
+
+
 def _demo_climate() -> list[dict]:
     """Synthetic per-room thermostat snapshot for the heating diagnostics demo –
     deliberately seeded with a few typical misconfigurations so the check has
@@ -6668,6 +6703,28 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send_json({"error": "nicht mit HomeCom verbunden"}, 400)
                 gid = qs.get("gateway", [self.cfg.get("homecom_gateway", "")])[0]
                 return self._send_json({"gateway": gid, "results": client.probe(gid)})
+            if path == "/api/heatpump/roomsync":
+                # Per-room Soll/Ist/Feuchte (SHC thermostats) + a probe of the heat
+                # pump's API: does it accept a MEASURED room temperature, or only a
+                # room setpoint? Honest, device-specific answer.
+                try:
+                    if self.ctx.mode == "demo":
+                        climate, controls = _demo_climate(), _demo_controls()
+                    else:
+                        cl = SHCClient(self.cfg.get("shc_ip", ""), self.cfg["cert"], self.cfg["key"])
+                        climate = cl.list_climate(self.cfg.get("contact_room_map"))
+                        hc = self.ctx.homecom_client()
+                        controls = hc.read_controls(self.cfg.get("homecom_gateway", "")) if hc else []
+                except Exception as exc:
+                    return self._send_json({"ok": False, "error": str(exc)}, 200)
+                rooms = [{"room": r.get("room"), "ist": r.get("temp"), "soll": r.get("setpoint"),
+                          "feuchte": r.get("humidity"), "valve": r.get("valve"),
+                          "heating": r.get("heating")}
+                         for r in climate
+                         if str(r.get("roomControlMode") or "HEATING").upper() != "OFF"]
+                cls = _classify_room_inputs(controls)
+                return self._send_json({"ok": True, "demo": self.ctx.mode == "demo",
+                                        "rooms": rooms, "connected_wp": bool(controls), **cls})
             if path == "/api/homecom/controls":
                 # discover settable heat-pump resources (heating curve, modes,
                 # setpoints) with their current value + writeable/range
