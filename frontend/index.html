@@ -1232,6 +1232,51 @@
       <div id="pv-product-body" style="margin-top:10px"></div>
       <div class="note" id="pv-product-note" style="margin-top:10px"></div>
     </div>
+
+    <div class="card" id="bk-card">
+      <h2><span class="info" data-info="balkon" role="button" aria-label="Info">i</span>🌇 Balkonkraftwerk (800 W) <span class="r" id="bk-head"></span></h2>
+      <div class="note" style="margin-bottom:12px">
+        Steckersolar darfst du bis <b>800 W Einspeiseleistung</b> selbst installieren. Module dürfen <b>mehr</b> –
+        der Wechselrichter speist aber nur 800 W. Ein <b>Speicher</b> (z. B. Anker Solarbank) puffert den Mittags-Überschuss
+        und schiebt ihn als ≤800 W in den Abend, um deine <b>Grundlast</b> zu decken. Trag ein, was du planst:
+      </div>
+      <div class="grid2">
+        <div><label>Module (kWp)</label>
+          <input id="bk-kwp" type="number" step="0.1" min="0" inputmode="decimal" value="0.8"></div>
+        <div><label>Speicher (kWh)</label>
+          <input id="bk-batt" type="number" step="0.1" min="0" inputmode="decimal" value="1.6"></div>
+      </div>
+      <div class="grid2" style="margin-top:8px">
+        <div><label>Einspeise-Grenze</label>
+          <select id="bk-cap">
+            <option value="800" selected>800 W (Selbstbau)</option>
+            <option value="600">600 W</option>
+            <option value="2000">2000 W (mit Elektriker)</option>
+          </select></div>
+        <div><label>Verbrauch</label>
+          <select id="bk-load">
+            <option value="base" selected>Hausstrom (gemessen)</option>
+            <option value="all">Hausstrom + Wärmepumpe</option>
+          </select></div>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
+        <button class="btn sec bk-preset" data-kwp="0.8" data-batt="0">Nur Module 0,8 kWp</button>
+        <button class="btn sec bk-preset" data-kwp="2.0" data-batt="1.6">Solarbank 2 Pro (1,6 kWh)</button>
+        <button class="btn sec bk-preset" data-kwp="2.0" data-batt="3.2">+ Erweiterung (3,2 kWh)</button>
+        <button class="btn sec bk-preset" data-kwp="2.0" data-batt="5">Solarbank Max (5 kWh)</button>
+      </div>
+      <div class="grid2" id="bk-kpis" style="margin-top:14px"></div>
+      <div class="seg" id="bk-day" style="margin:14px 0 10px">
+        <button data-bd="summer" class="on">Sommertag</button>
+        <button data-bd="winter">Wintertag</button>
+      </div>
+      <div id="bk-daychart"></div>
+      <div class="legend" id="bk-day-legend" style="margin-top:8px"></div>
+      <h2 style="margin-top:18px">Übers Jahr</h2>
+      <div id="bk-yearchart"></div>
+      <div class="legend" id="bk-year-legend" style="margin-top:8px"></div>
+      <div class="note" id="bk-note" style="margin-top:10px"></div>
+    </div>
   </section>
 
   <!-- BÖRSE (dynamischer Tarif) ------------------------------------------->

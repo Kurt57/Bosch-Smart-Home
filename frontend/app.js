@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v173';   // short tag shown always-on in the header
-const APP_VERSION = 'v173 · 2026-10-22 · Verlauf: neuer „Tag"-Eintrag (links vor 7 T) für einen einzelnen Tag mit ◀ ▶-Navigation (voriger/nächster Tag). Zeigt den Tag stundenweise je Gerät; Tippen gibt die Aufschlüsselung je Stunde'
+const APP_BUILD = 'v174';   // short tag shown always-on in the header
+const APP_VERSION = 'v174 · 2026-10-22 · PV-Tab: Balkonkraftwerk-Simulator (800-W-Grenze). Module (kWp) + Speicher (kWh, z. B. Anker Solarbank) eingeben und gegen das gemessene Verbrauchsprofil rechnen – Autarkie/Netz-Gap/Ersparnis, Sommer-/Wintertag (PV, Batterie-SOC, Netzbezug) und Jahresverlauf'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -271,6 +271,11 @@ const INFO = {
     'sipt, zeigt genau diesen Sockel. „jetzt Standby/aktiv" vergleicht die aktuelle Leistung mit diesem Sockel. Der ' +
     'Typ-Hinweis (Netzwerk, Unterhaltung …) ist aus dem Namen geraten – hilft beim Einschätzen, ob der Standby ' +
     '<b>abschaltbar</b> ist (TV/Konsole/Ladegerät per Zeitschaltung aus) oder <b>nötig</b> (Kühlung).',
+  balkon: () => 'Simuliert ein <b>Balkonkraftwerk/Steckersolar</b> mit <b>800 W</b> Einspeisegrenze (bis dahin darfst du selbst installieren). ' +
+    'Du gibst <b>Module (kWp)</b> und <b>Speicher (kWh)</b> ein (z. B. Anker Solarbank). Die Simulation rechnet gegen dein <b>gemessenes Verbrauchsprofil</b>: ' +
+    'Tagsüber deckt die PV direkt die Last, der Überschuss <b>über 800 W</b> lädt den Speicher, der ihn abends wieder als ≤800 W abgibt – so werden die ' +
+    '<b>Grundlast-Lücken</b> geschlossen. Oben die Kennzahlen (Autarkie, Netz-Gap, Ersparnis), darunter ein <b>Sommer-/Wintertag</b> (PV, Last, Batterie-SOC, Netzbezug) ' +
+    'und der <b>Jahresverlauf</b> (selbst gedeckt vs. Netzbezug). So siehst du, ob sich mehr Speicher/Module lohnen, bevor du kaufst.',
   roomsync: () => 'Zeigt je Raum <b>Ist</b>-Temperatur, <b>Soll</b> und <b>Feuchte</b> aus deinen Bosch-Raumthermostaten – und prüft, ob die <b>Wärmepumpe über die HomeCom-API eine gemessene Raumtemperatur entgegennimmt</b>. ' +
     'Bei der Compress 6800i ist das normalerweise <b>nicht</b> vorgesehen: Die WP ist witterungsgeführt und misst die Raumtemperatur über ihre <b>eigene Raumstation</b>, nicht über einen API-Eingang. Schreibbar ist nur der <b>Raum-Soll</b>. ' +
     'Der Energiemanager kann genau diesen Soll als Hebel nutzen (anheben/absenken je nach gemessener Ist-Temperatur). Ob dein konkretes Gerät doch einen Ist-Eingang hat, sagt dir die Prüfung oben.',
@@ -7892,6 +7897,115 @@ function renderPvSoon() {
   if (_renderPvTimer) clearTimeout(_renderPvTimer);
   _renderPvTimer = setTimeout(() => { _renderPvTimer = null; renderPv(); }, 200);
 }
+// ---- Balkonkraftwerk (800 W) simulation ------------------------------------
+// DC-coupled, AC-capped battery (Solarbank-style): PV covers the load first,
+// then charges the battery, then feeds the grid – all AC output limited to the
+// 800 W (or chosen) cap. Shows how a battery shifts midday surplus into the
+// evening to close the base-load gap, over a day and over the year.
+function simulateBalcony(p) {
+  const spec = p.spec || 1000, pm = pvMonth();
+  const shRaw = (STATE.data && STATE.data.hourly_profile || []).map(h => h.avg_w);
+  const shShape = shRaw.length === 24 && shRaw.some(v => v > 0) ? normFrac(shRaw) : new Array(24).fill(1 / 24);
+  const shDaily = householdBaseDaily();
+  const hpArr = (STATE.hpA && STATE.hpA.hourly_profile) || [];
+  const hpShape = hpArr.length && hpArr.some(h => h.avg_w > 0) ? normFrac(hpArr.map(h => h.avg_w)) : new Array(24).fill(1 / 24);
+  const cap = p.capW / 1000, chP = (p.battChW || 1200) / 1000, disP = (p.battDisW || p.capW) / 1000;
+  let soc = 0, Ypv = 0, Yself = 0, Yfeed = 0, Ygrid = 0, Yclip = 0, Yload = 0;
+  const months = [], repDay = {};
+  for (let m = 0; m < 12; m++) {
+    const dim = DIM[m], dayPv = (p.kwp * spec * pm[m]) / dim;
+    const dayHp = p.inclHp ? hpMonthEst(m) / dim : 0;
+    const pvH = pvHourFractions(m);
+    let mPv = 0, mSelf = 0, mFeed = 0, mGrid = 0, mClip = 0, mLoad = 0, lastDay = null;
+    for (let d = 0; d < dim; d++) {
+      const prof = [];
+      for (let h = 0; h < 24; h++) {
+        const pvDC = dayPv * pvH[h], load = shDaily * shShape[h] + dayHp * hpShape[h];
+        const direct = Math.min(pvDC, cap, load);            // PV → load first (within AC cap)
+        let remDC = pvDC - direct, acHead = cap - direct;
+        const charge = Math.min(remDC, chP, p.battKwh - soc); soc += charge; remDC -= charge;  // then battery
+        const feed = Math.min(remDC, acHead); acHead -= feed;                                   // then feed (capped)
+        const clip = remDC - feed;                            // DC lost to the AC cap (battery full)
+        const deficit = load - direct;
+        const dis = Math.min(deficit, soc, disP, acHead); soc -= dis;                            // discharge for the rest
+        const grid = deficit - dis, self = direct + dis;
+        mPv += pvDC; mSelf += self; mFeed += feed; mGrid += grid; mClip += clip; mLoad += load;
+        prof.push({ h, pv: pvDC, load, soc, direct, dis, grid, feed });
+      }
+      lastDay = prof;
+    }
+    months.push({ m, pv: mPv, self: mSelf, grid: mGrid, feed: mFeed, clip: mClip, load: mLoad });
+    Ypv += mPv; Yself += mSelf; Yfeed += mFeed; Ygrid += mGrid; Yclip += mClip; Yload += mLoad;
+    if (m === 6) repDay.summer = lastDay;
+    if (m === 0) repDay.winter = lastDay;
+  }
+  return { yearPv: Ypv, yearSelf: Yself, yearFeed: Yfeed, yearGrid: Ygrid, yearClip: Yclip, yearLoad: Yload,
+    autarky: Yload > 0 ? Yself / Yload : 0, selfRate: Ypv > 0 ? Yself / Ypv : 0, months, repDay };
+}
+function bkDayChart(day, capW, battKwh) {
+  const h = 230, padL = 36, padR = 34, top = 14, base = h - 26, n = 24;
+  const X = i => padL + (CW - padL - padR) * (i / (n - 1)), W = x => x * 1000;
+  const sc = niceScale(Math.max(200, ...day.flatMap(d => [W(d.load), W(d.pv)]), capW)), yMax = sc.max;
+  const Y = w => top + (1 - Math.max(0, Math.min(yMax, w)) / yMax) * (base - top);
+  const socMax = Math.max(0.1, battKwh), Ysoc = s => top + (1 - Math.max(0, Math.min(socMax, s)) / socMax) * (base - top);
+  let g = gridLines(h, top, base, padL, yMax, { step: sc.step, unit: 'W' });
+  const cum = day.map(() => 0); let areas = '';
+  [{ k: 'direct', c: '#4be0b0' }, { k: 'dis', c: '#3ba9ff' }, { k: 'grid', c: '#6b7280' }].forEach(L => {
+    let up = '', dn = '';
+    day.forEach((d, i) => { up += `${i ? 'L' : 'M'}${X(i).toFixed(1)} ${Y(W(cum[i] + d[L.k])).toFixed(1)} `; });
+    for (let i = n - 1; i >= 0; i--) dn += `L${X(i).toFixed(1)} ${Y(W(cum[i])).toFixed(1)} `;
+    areas += `<path d="${up}${dn}Z" fill="${L.c}" fill-opacity="0.5"/>`;
+    day.forEach((d, i) => cum[i] += d[L.k]);
+  });
+  let pvL = '', socL = ''; day.forEach((d, i) => { pvL += `${i ? 'L' : 'M'}${X(i).toFixed(1)} ${Y(W(d.pv)).toFixed(1)} `; socL += `${i ? 'L' : 'M'}${X(i).toFixed(1)} ${Ysoc(d.soc).toFixed(1)} `; });
+  let xt = ''; for (let i = 0; i < 24; i += 3) xt += `<text class="axis" x="${X(i).toFixed(1)}" y="${h - 6}" text-anchor="middle">${String(i).padStart(2, '0')}</text>`;
+  const capY = Y(capW);
+  const inner = g + areas +
+    `<path d="${pvL.trim()}" fill="none" stroke="#ffd166" stroke-width="2"/>` +
+    `<line x1="${padL}" x2="${CW - padR}" y1="${capY.toFixed(1)}" y2="${capY.toFixed(1)}" stroke="#ff6b8a" stroke-width="1" stroke-dasharray="4 3"/>` +
+    `<text class="axis" x="${CW - padR}" y="${(capY - 3).toFixed(1)}" text-anchor="end" fill="#ff6b8a">${capW} W</text>` +
+    (battKwh > 0 ? `<path d="${socL.trim()}" fill="none" stroke="#b794f6" stroke-width="1.6"/><text class="axis" x="${CW - padR + 3}" y="${top + 8}" fill="#b794f6">SOC</text>` : '') + xt;
+  const tips = day.map(d => `<b>${String(d.h).padStart(2, '0')}:00</b><div class="note" style="margin-top:2px">` +
+    `<span style="color:#ffd166">●</span> PV ${fmt(W(d.pv), 0)} W · <span style="color:#4be0b0">●</span> direkt ${fmt(W(d.direct), 0)} · ` +
+    `<span style="color:#3ba9ff">●</span> Batterie ${fmt(W(d.dis), 0)} · <span style="color:#6b7280">●</span> Netz ${fmt(W(d.grid), 0)}` +
+    (battKwh > 0 ? ` · <span style="color:#b794f6">●</span> SOC ${fmt(d.soc / socMax * 100, 0)}%` : '') + `</div>`);
+  return svg(h, inner, { kind: 'area', pad: padL, padR, n, h, tips });
+}
+let _bkDay = 'summer';
+function bkInputs() {
+  const cap = parseFloat(($('bk-cap') || {}).value) || 800;
+  return { kwp: Math.max(0, parseFloat(($('bk-kwp') || {}).value) || 0),
+    battKwh: Math.max(0, parseFloat(($('bk-batt') || {}).value) || 0), capW: cap,
+    spec: parseFloat(($('pv-orient') || {}).value) || 1000,
+    inclHp: (($('bk-load') || {}).value) === 'all', battChW: 1200, battDisW: cap };
+}
+function renderBalcony() {
+  const card = $('bk-card'); if (!card) return;
+  const p = bkInputs(), r = simulateBalcony(p), r0 = p.battKwh > 0 ? simulateBalcony({ ...p, battKwh: 0 }) : null;
+  const price = STATE.price, feedin = (pvInputs().feedin || 0), save = r.yearSelf * price + r.yearFeed * feedin;
+  const kpi = (v, l) => `<div class="kpi sm"><div class="v">${v}</div><div class="l">${l}</div></div>`;
+  if ($('bk-head')) $('bk-head').innerHTML = `<span style="color:var(--muted)">${fmt(p.kwp, 1)} kWp · ${fmt(p.battKwh, 1)} kWh</span>`;
+  if ($('bk-kpis')) $('bk-kpis').innerHTML = kpi(fmt(r.autarky * 100, 0) + ' %', 'Grundlast gedeckt') +
+    kpi(kwh(r.yearGrid, 0), 'Netz-Gap / Jahr') + kpi(money(save), 'Ersparnis / Jahr') + kpi(kwh(r.yearSelf, 0), 'selbst genutzt / Jahr');
+  const day = r.repDay[_bkDay] || r.repDay.summer;
+  if ($('bk-daychart')) $('bk-daychart').innerHTML = day ? `<div style="touch-action:none">${bkDayChart(day, p.capW, p.battKwh)}</div>` : '<div class="note">—</div>';
+  if ($('bk-day-legend')) $('bk-day-legend').innerHTML = legendHtml([{ label: '☀️ PV-Erzeugung', color: '#ffd166' },
+    { label: 'direkt genutzt', color: '#4be0b0' }, { label: 'aus Batterie', color: '#3ba9ff' }, { label: 'Netzbezug', color: '#6b7280' }]
+    .concat(p.battKwh > 0 ? [{ label: 'SOC', color: '#b794f6' }] : [])) + `<span style="color:var(--muted);font-size:11px;margin-left:6px">tippen für Stundenwerte</span>`;
+  if ($('bk-yearchart')) $('bk-yearchart').innerHTML = stackedBar(
+    r.months.map(m => ({ label: MON[m.m][0], full: MON[m.m], values: { self: m.self, grid: m.grid } })),
+    [{ key: 'self', color: '#4be0b0', label: 'selbst gedeckt' }, { key: 'grid', color: '#6b7280', label: 'Netzbezug' }], { h: 190, unit: 'kWh' });
+  if ($('bk-year-legend')) $('bk-year-legend').innerHTML = legendHtml([{ label: 'selbst gedeckt', color: '#4be0b0' }, { label: 'Netzbezug (Gap)', color: '#6b7280' }]);
+  if ($('bk-note')) $('bk-note').innerHTML =
+    `Mit <b>${fmt(p.battKwh, 1)} kWh</b> Speicher deckst du <b>${fmt(r.autarky * 100, 0) + ' %'}</b> deiner Last; es bleiben <b>${kwh(r.yearGrid, 0)}/Jahr</b> Netzbezug (Gap). ` +
+    (r0 ? `<b>Ohne</b> Speicher wären es nur <b>${fmt(r0.autarky * 100, 0)} %</b> (Gap ${kwh(r0.yearGrid, 0)}) – der Speicher schließt also <b>${kwh(r0.yearGrid - r.yearGrid, 0)}/Jahr</b>. ` : '') +
+    `Durch die <b>${p.capW} W</b>-Grenze gehen <b>${kwh(r.yearClip, 0)}/Jahr</b> verloren (Mittags-Überschuss, den der Speicher nicht mehr fasst) – ${r.yearClip > 60 ? 'ein größerer Speicher würde hier noch etwas holen.' : 'die Grenze kostet dich kaum etwas.'} ` +
+    `Einspeisung: ${kwh(r.yearFeed, 0)}/Jahr. ` +
+    (((typeof houseManual === 'function' ? houseManual() : 0) <= 0 && (typeof meterHouseholdDaily === 'function' ? (meterHouseholdDaily() || 0) : 0) <= 0)
+      ? `<br>⚠︎ <b>Für realistische Zahlen</b> trag deinen <b>Haushaltsstrom (kWh/Jahr)</b> ein (Feld „Haushaltsstrom" oben im PV-Tab bzw. im Konzept) – sonst zählt nur der kleine <b>gemessene</b> Anteil deiner Steckdosen, und die Autarkie wirkt zu hoch. ` : '') +
+    `<span style="color:var(--muted)">Last = ${p.inclHp ? 'Hausstrom + Wärmepumpe' : 'Hausstrom'} (${kwh(r.yearLoad, 0)}/Jahr); Erzeugung aus ${fmt(p.kwp, 1)} kWp × ${fmt(p.spec, 0)} kWh/kWp.</span>`;
+}
+
 function renderPv() {
   if (!$('pv-yield')) return;
   const haveData = shAvgDaily() > 0 || hpAvgDaily() > 0;
@@ -8002,6 +8116,7 @@ function renderPv() {
   renderBuildCompare(p);
   renderPvOrient();
   renderSurfaces();
+  try { renderBalcony(); } catch (e) {}
   // the Börse "lohnt sich?" card depends on the PV/battery dimensions here –
   // keep it in sync when they change (it reads pvInputs() live).
   try { if (typeof renderBorseWorth === 'function') renderBorseWorth(); } catch (e) {}
@@ -9547,6 +9662,28 @@ function init() {
     };
     hk.addEventListener('input', upd); upd();
   }
+
+  // Balkonkraftwerk (800 W) simulation: inputs, presets, day toggle (localStorage)
+  const bkFields = [['bk-kwp', 'bhe_bk_kwp'], ['bk-batt', 'bhe_bk_batt'], ['bk-cap', 'bhe_bk_cap'], ['bk-load', 'bhe_bk_load']];
+  bkFields.forEach(([id, key]) => {
+    const el = $(id); if (!el) return;
+    try { const v = localStorage.getItem(key); if (v != null && v !== '') el.value = v; } catch (e) {}
+    const ev = el.tagName === 'SELECT' ? 'change' : 'input';
+    el.addEventListener(ev, () => { try { localStorage.setItem(key, el.value); } catch (e) {} renderBalcony(); });
+  });
+  document.querySelectorAll('.bk-preset').forEach(b => b.addEventListener('click', () => {
+    if ($('bk-kwp')) $('bk-kwp').value = b.dataset.kwp;
+    if ($('bk-batt')) $('bk-batt').value = b.dataset.batt;
+    try { localStorage.setItem('bhe_bk_kwp', b.dataset.kwp); localStorage.setItem('bhe_bk_batt', b.dataset.batt); } catch (e) {}
+    renderBalcony();
+  }));
+  const bkDay = $('bk-day');
+  if (bkDay) bkDay.addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    _bkDay = b.dataset.bd;
+    bkDay.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+    renderBalcony();
+  });
 
   // whole-house meter readings: add + delete (stored on the bridge)
   const mAdd = $('meter-add');
