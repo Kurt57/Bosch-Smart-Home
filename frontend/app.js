@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v175';   // short tag shown always-on in the header
-const APP_VERSION = 'v175 · 2026-10-22 · Profil: „Lastspitzen & Dimensionierung" – Top-10-Leistungsspitzen (W) mit Dauer/Zeitpunkt, eine Lastdauerlinie (für wie viel % der Zeit die Leistung über X W lag) mit 600/800/1200-W-Markern, und je Ausgangsleistung die Zeit-Abdeckung. Zeigt, welche Watt-Leistung eine Anlage wirklich braucht'
+const APP_BUILD = 'v176';   // short tag shown always-on in the header
+const APP_VERSION = 'v176 · 2026-10-22 · Lastspitzen jetzt zählerbasiert: liegen Zählerstände vor, wird auf den ganzen Haushalt hochgerechnet – der ungemessene Rest wird nach dem Rhythmus der gemessenen Geräte über die Stunden verteilt. Neu: Aufschlüsselung je Gerät (gemessen real + Rest) und Verbrauch je Stunde (gemessen vs. verteilter Rest). Ohne Zähler bleibt es wie bisher messungsbasiert'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -274,7 +274,8 @@ const INFO = {
   loadpeaks: () => 'Zeigt deine <b>Leistungsspitzen</b> und wie lange sie dauern – für die <b>Dimensionierung</b> (welche Ausgangsleistung eine Anlage/Batterie/ein Wechselrichter braucht). ' +
     'Die <b>Lastdauerlinie</b> sagt, für wie viel <b>% der Zeit</b> die Leistung über einem Wert lag – die roten Linien markieren gängige Größen (800/1200/2000 W). Darunter die <b>Top-10-Spitzen</b> mit Höhe (W), Dauer und Zeitpunkt. ' +
     'So siehst du: die <b>Dauerlast</b> ist meist niedrig, nur kurze Spitzen (Wärmepumpen-Start, Küche) treiben die nötige Leistung hoch – und wie oft/lange die überhaupt vorkommen. ' +
-    '<b>Ehrlich:</b> gerechnet wird die Summe der <b>gemessenen</b> Steckdosen + Wärmepumpe; ohne Ganzhaus-Zähler fehlen ungemessene Großverbraucher (Herd, Wasserkocher).',
+    'Sobald du <b>Zählerstände</b> (Setup) hinterlegst, wird auf den <b>ganzen Haushalt</b> hochgerechnet: der ungemessene Rest wird nach dem Rhythmus deiner Messungen über die Stunden verteilt, dazu gibt es eine <b>Aufschlüsselung je Gerät</b> und den <b>Verbrauch je Stunde</b>. ' +
+    '<b>Ehrlich:</b> ohne Zähler zählt nur die Summe der <b>gemessenen</b> Steckdosen + Wärmepumpe (ungemessene Großverbraucher wie Herd/Wasserkocher fehlen dann).',
   balkon: () => 'Simuliert ein <b>Balkonkraftwerk/Steckersolar</b> mit <b>800 W</b> Einspeisegrenze (bis dahin darfst du selbst installieren). ' +
     'Du gibst <b>Module (kWp)</b> und <b>Speicher (kWh)</b> ein (z. B. Anker Solarbank). Die Simulation rechnet gegen dein <b>gemessenes Verbrauchsprofil</b>: ' +
     'Tagsüber deckt die PV direkt die Last, der Überschuss <b>über 800 W</b> lädt den Speicher, der ihn abends wieder als ≤800 W abgibt – so werden die ' +
@@ -6537,16 +6538,60 @@ function ldcChart(ldc, levels) {
   const tips = ldc.map((p, i) => `<b>${i}% der Zeit</b> lag die Last über <b>${fmt(p.w, 0)} W</b>`);
   return svg(h, g + area + lv + xt, { kind: 'area', pad: padL, padR, n, h, tips });
 }
+// one row of the per-device breakdown: name · kWh · share% + a proportional bar
+function lpBreakRow(x, maxShare) {
+  const isRest = x.measured === false, isHp = x.name === 'Wärmepumpe';
+  const c = isRest ? '#9aa4b2' : (isHp ? COL.hp : COL.sh);
+  const w = Math.max(3, (x.share || 0) / Math.max(1, maxShare) * 100);
+  return `<div style="padding:7px 0;border-bottom:1px solid var(--line)">` +
+    `<div style="display:flex;justify-content:space-between;gap:8px;font-size:13px">` +
+    `<b${isRest ? ' style="color:var(--muted)"' : ''}>${esc(x.name)}</b>` +
+    `<span style="white-space:nowrap"><b>${kwh(x.kwh, x.kwh >= 10 ? 0 : 1)}</b> <span style="color:var(--muted)">· ${fmt(x.share, 0)} %</span></span></div>` +
+    `<div class="bar" style="height:7px;margin-top:5px"><i style="width:${w.toFixed(0)}%;background:${c}"></i></div></div>`;
+}
+// meter-anchored hourly distribution: measured (hell) + verteilter Rest (dunkel)
+function lpHourChart(hd) {
+  const rows = hd.map(p => ({
+    label: (p.hour % 3 === 0) ? String(p.hour) : '',
+    full: String(p.hour).padStart(2, '0') + ':00 Uhr',
+    values: { meas: p.measured_w, rest: Math.max(0, p.w - p.measured_w) },
+  }));
+  return stackedBar(rows, [
+    { key: 'meas', color: COL.sh, label: 'gemessen' },
+    { key: 'rest', color: '#9aa4b2', label: 'ungemessener Rest' },
+  ], { unit: 'W', h: 200 });
+}
 function paintLoadPeaks(r) {
-  const head = $('pf-lp-head'), kpis = $('pf-lp-kpis'), ldcEl = $('pf-lp-ldc'), lvlEl = $('pf-lp-levels'), evEl = $('pf-lp-events'), note = $('pf-lp-note');
+  const head = $('pf-lp-head'), kpis = $('pf-lp-kpis'), ldcEl = $('pf-lp-ldc'), lvlEl = $('pf-lp-levels'), evEl = $('pf-lp-events'), note = $('pf-lp-note'), basis = $('pf-lp-basis');
+  const brkWrap = $('pf-lp-break-wrap'), brk = $('pf-lp-break'), hrsWrap = $('pf-lp-hours-wrap'), hrs = $('pf-lp-hours');
   if (!r || !r.ok || !r.n) {
     if (ldcEl) ldcEl.innerHTML = '<div class="note" style="padding:14px 0;text-align:center">Noch keine gemessenen Leistungsdaten im Zeitraum – sobald Steckdosen/Wärmepumpe Leistung melden, erscheint hier die Lastanalyse.</div>';
-    [kpis, lvlEl, evEl, note].forEach(e => { if (e) e.innerHTML = ''; }); if (head) head.innerHTML = ''; return;
+    [kpis, lvlEl, evEl, note, basis].forEach(e => { if (e) e.innerHTML = ''; });
+    [brkWrap, hrsWrap].forEach(e => { if (e) e.hidden = true; }); if (head) head.innerHTML = ''; return;
   }
-  if (head) head.innerHTML = `<span style="color:var(--muted)">${r.hours} h · ${r.sources} Quellen</span>`;
+  const whole = r.basis === 'meter' && r.meter;
+  if (head) head.innerHTML = `<span style="color:var(--muted)">${r.hours} h · ${whole ? '🏠 Ganzhaus' : r.sources + ' Quellen'}</span>`;
   const kpi = (v, l) => `<div class="kpi sm"><div class="v">${v}</div><div class="l">${l}</div></div>`;
   if (kpis) kpis.innerHTML = kpi(fmt(r.peak_w, 0) + ' W', 'Spitze') + kpi(fmt(r.p99_w, 0) + ' W', '99-%-Spitze') +
     kpi(fmt(r.p95_w, 0) + ' W', '95-%-Dauerlast') + kpi(fmt(r.p50_w, 0) + ' W', 'Median');
+  if (basis) basis.innerHTML = whole
+    ? `🏠 <b>Ganzhaus</b> aus deinem Zähler: Ø <b>${kwh(r.meter.daily_kwh, 1)}/Tag</b> · davon direkt gemessen <b>${fmt(r.meter.coverage, 0)} %</b> (Steckdosen + WP), der Rest wird hochgerechnet.`
+    : `<span style="color:var(--muted)">Nur <b>gemessene</b> Steckdosen + Wärmepumpe – ohne Zählerstand ist das nicht die echte Hausspitze. Trag im Setup ein paar <b>Zählerstände</b> ein, dann rechne ich auf den ganzen Haushalt hoch.</span>`;
+  // per-device breakdown (whole-house only)
+  if (brkWrap && brk) {
+    if (whole && r.breakdown && r.breakdown.length) {
+      const maxShare = Math.max(...r.breakdown.map(x => x.share || 0), 1);
+      brk.innerHTML = r.breakdown.map(x => lpBreakRow(x, maxShare)).join('');
+      brkWrap.hidden = false;
+    } else brkWrap.hidden = true;
+  }
+  // meter-anchored hourly distribution (whole-house only)
+  if (hrsWrap && hrs) {
+    if (whole && r.hour_dist && r.hour_dist.length === 24) {
+      hrs.innerHTML = `<div style="touch-action:none">${lpHourChart(r.hour_dist)}</div>`;
+      hrsWrap.hidden = false;
+    } else hrsWrap.hidden = true;
+  }
   if (ldcEl) ldcEl.innerHTML = `<div style="touch-action:none">${ldcChart(r.ldc, r.levels)}</div>`;
   if (lvlEl) lvlEl.innerHTML = (r.levels || []).map(L =>
     `<div style="display:flex;justify-content:space-between;gap:8px;font-size:13px;padding:5px 0;border-bottom:1px solid var(--line)">` +
@@ -6563,11 +6608,14 @@ function paintLoadPeaks(r) {
       `<div class="bar" style="height:6px;margin-top:5px"><i style="width:${Math.max(5, e.peak_w / maxP * 100)}%;background:${COL.hp}"></i></div></div>`).join('')
       : '<div class="note">Keine ausgeprägten Spitzen im Zeitraum.</div>';
   }
+  const whole2 = r.basis === 'meter' && r.meter;
   const l800 = (r.levels || []).find(L => L.w === 800);
   if (note) note.innerHTML = (l800
     ? `Eine Anlage mit <b>800 W</b> Ausgangsleistung deckt <b>${fmt(100 - l800.pct_above, 0)}%</b> deiner Zeit; die Spitzen darüber dauern zusammen nur <b>${fmt(l800.hours_above, 1)} h</b> im Zeitraum. ` : '') +
     `Für die <b>Dauerlast</b> reichen ~<b>${fmt(r.p95_w, 0)} W</b> (95 % der Zeit darunter), die kurzen Lastspitzen bestimmen die Größe. ` +
-    `<span style="color:var(--muted)">Summe aller <b>gemessenen</b> Steckdosen + Wärmepumpe auf ein ${r.bin_s}-s-Raster. Ohne Ganzhaus-Zähler ist das <b>nicht</b> die echte Hausspitze – ungemessene Großverbraucher (Herd, Wasserkocher, Backofen) fehlen.</span>`;
+    (whole2
+      ? `<span style="color:var(--muted)">Basis: dein <b>Ganzhaus-Zähler</b> (Ø ${kwh(r.meter.daily_kwh, 1)}/Tag). Die gemessenen Geräte + WP decken davon <b>${fmt(r.meter.coverage, 0)} %</b> (${kwh(r.meter.measured_kwh, 0)}), der ungemessene Rest (<b>${kwh(r.meter.rest_kwh, 0)}</b>) wird <b>nach dem Tagesrhythmus</b> deiner Messungen über die Stunden verteilt. Die <b>Höhe</b> der Spitzen ist damit echt (Zählerenergie), ihr <b>genaues Timing</b> beim ungemessenen Rest ist eine Schätzung.</span>`
+      : `<span style="color:var(--muted)">Summe aller <b>gemessenen</b> Steckdosen + Wärmepumpe auf ein ${r.bin_s}-s-Raster. Ohne Ganzhaus-Zähler ist das <b>nicht</b> die echte Hausspitze – ungemessene Großverbraucher (Herd, Wasserkocher, Backofen) fehlen.</span>`);
 }
 
 // Rough device-type hint from the name – tells whether a standby is likely

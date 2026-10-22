@@ -1460,12 +1460,37 @@ def _energy_for_bucket(samples: list[dict]) -> float:
     return wh
 
 
+def _meter_daily_kwh(store: "Store") -> dict | None:
+    """Whole-house TOTAL daily kWh (incl. heat pump) from the manual meter
+    readings – cumulative counter values in kWh at timestamps. Uses the growth
+    from the first to the last reading / the span, matching the frontend's
+    meterStats(). Returns {daily_kwh, span_days, first_ts, last_ts} or None."""
+    rows = [r for r in store.meter_list()
+            if r.get("kwh") is not None and r.get("ts")]
+    if len(rows) < 2:
+        return None
+    rows.sort(key=lambda r: r["ts"])
+    first, last = rows[0], rows[-1]
+    span = (last["ts"] - first["ts"]) / 86400.0
+    if span <= 0 or last["kwh"] < first["kwh"]:
+        return None
+    return {"daily_kwh": (last["kwh"] - first["kwh"]) / span, "span_days": span,
+            "first_ts": first["ts"], "last_ts": last["ts"]}
+
+
 def compute_load_peaks(store: "Store", days: float = 7, hp_live: dict | None = None) -> dict:
-    """Total MEASURED power over time (all metered devices + heat pump) on a common
-    time grid, for load-management awareness: the biggest power peaks with their
-    duration, a load-duration curve, and how much of the time a given output rating
-    (e.g. 800 W) would cover. Honest scope: only measured plugs + the heat pump –
-    without a whole-house meter this is not the true house peak."""
+    """Load over time on a common grid, for load-management awareness: the
+    biggest power peaks with their duration, a load-duration curve, and how much
+    of the time a given output rating (e.g. 800 W) would cover.
+
+    Base signal = sum of all MEASURED plugs + the heat pump. When manual
+    whole-house meter readings exist we ANCHOR on them: the gap between the
+    meter total and the measured sum ("ungemessener Rest") is distributed over
+    the day following the rhythm of the measured devices, so the curve, peaks
+    and levels reflect the real whole house. We also return a per-device
+    breakdown (measured devices real + the unmeasured rest as one bucket) and a
+    meter-anchored hourly distribution. Without a meter it stays measured-only
+    and the note says so."""
     now = int(time.time())
     days = max(0.5, min(31.0, float(days)))
     since = int(now - days * 86400)
@@ -1491,9 +1516,12 @@ def compute_load_peaks(store: "Store", days: float = 7, hp_live: dict | None = N
     if ngrid <= 2:
         return {"ok": True, "n": 0, "sources": len(sources)}
     ptrs = {k: 0 for k in sources}
+    src_e = {k: 0.0 for k in sources}         # Wh integrated per source on the grid
     total = [0.0] * ngrid
+    hour_of = [0] * ngrid
     for gi in range(ngrid):
         t = start + gi * bin_s
+        hour_of[gi] = datetime.fromtimestamp(t).hour
         s = 0.0
         for k, arr in sources.items():
             p = ptrs[k]
@@ -1503,8 +1531,66 @@ def compute_load_peaks(store: "Store", days: float = 7, hp_live: dict | None = N
             ts_k, pw_k = arr[p]
             if ts_k <= t and (t - ts_k) <= maxstale:
                 s += pw_k
+                src_e[k] += pw_k * bin_s / 3600.0      # Wh
         total[gi] = s
     n = ngrid
+    win_hours = n * bin_s / 3600.0
+    win_days = max(1e-6, win_hours / 24.0)
+    measured_kwh = sum(src_e.values()) / 1000.0
+
+    # ---- meter anchoring: augment the measured load up to the real whole-house
+    # total from the manual meter readings, distributing the "unmeasured rest"
+    # over the day by the rhythm of the measured devices --------------------- #
+    meter = _meter_daily_kwh(store)
+    basis = "measured"
+    meter_block = breakdown = hour_dist = None
+    if meter and meter["daily_kwh"] > 0 and measured_kwh > 0:
+        meter_win_kwh = meter["daily_kwh"] * win_days
+        rest_kwh = max(0.0, meter_win_kwh - measured_kwh)
+        # measured avg-W-per-hour-of-day shape → spreads the rest over the day
+        # (NOT onto instantaneous measured spikes, which would overstate peaks)
+        hsum = [0.0] * 24
+        hcnt = [0] * 24
+        for gi in range(n):
+            hsum[hour_of[gi]] += total[gi]
+            hcnt[hour_of[gi]] += 1
+        havg = [hsum[h] / hcnt[h] if hcnt[h] else 0.0 for h in range(24)]
+        shape = sum(havg)
+        rest_daily_kwh = rest_kwh / win_days
+        if shape > 0:
+            rest_w_hour = [rest_daily_kwh * 1000.0 * (havg[h] / shape) for h in range(24)]
+        else:                                    # no shape → flat base
+            rest_w_hour = [rest_daily_kwh * 1000.0 / 24.0] * 24
+        for gi in range(n):                      # augment every bin → whole house
+            total[gi] += rest_w_hour[hour_of[gi]]
+        basis = "meter"
+        hour_dist = [{"hour": h, "w": round(havg[h] + rest_w_hour[h], 0),
+                      "measured_w": round(havg[h], 0)} for h in range(24)]
+        names = {}
+        for dev in store.devices():
+            names[dev["id"]] = dev.get("custom_name") or dev.get("name") or dev["id"]
+        bd = []
+        for k, e in src_e.items():
+            nm = "Wärmepumpe" if k == "__hp" else names.get(k, k)
+            bd.append({"name": nm, "kwh": round(e / 1000.0, 3), "measured": True})
+        bd.sort(key=lambda x: -x["kwh"])
+        if rest_kwh > 0.01:
+            bd.append({"name": "Nicht gemessen (Rest)",
+                       "kwh": round(rest_kwh, 3), "measured": False})
+        tot_kwh = sum(x["kwh"] for x in bd) or 1.0
+        for x in bd:
+            x["share"] = round(x["kwh"] / tot_kwh * 100.0, 1)
+        breakdown = bd
+        meter_block = {
+            "daily_kwh": round(meter["daily_kwh"], 3),
+            "win_kwh": round(meter_win_kwh, 3),
+            "measured_kwh": round(measured_kwh, 3),
+            "rest_kwh": round(rest_kwh, 3),
+            "coverage": (round(measured_kwh / meter_win_kwh * 100.0, 1)
+                         if meter_win_kwh > 0 else None),
+            "span_days": round(meter["span_days"], 1),
+        }
+
     srt = sorted(total, reverse=True)
 
     def pct(fr):                             # power exceeded fr of the time
@@ -1538,7 +1624,9 @@ def compute_load_peaks(store: "Store", days: float = 7, hp_live: dict | None = N
     return {"ok": True, "days": days, "bin_s": bin_s, "n": n,
             "hours": round(n * bin_s / 3600.0, 1), "sources": len(sources),
             "peak_w": peak_w, "p99_w": pct(0.01), "p95_w": pct(0.05),
-            "p50_w": pct(0.5), "ldc": ldc, "levels": levels, "events": events[:10]}
+            "p50_w": pct(0.5), "ldc": ldc, "levels": levels, "events": events[:10],
+            "basis": basis, "meter": meter_block, "breakdown": breakdown,
+            "hour_dist": hour_dist, "measured_kwh": round(measured_kwh, 3)}
 
 
 def compute_analytics(store: Store, days: int, price: float) -> dict:
@@ -4998,9 +5086,11 @@ def seed_demo(store: Store, days: int = 90):
         t += timedelta(hours=1)
     print("[demo] inserted demo AEG appliance history.")
 
-    # two demo whole-house meter readings (~17 kWh/day total)
+    # two demo whole-house meter readings (~34 kWh/day total incl. heat pump) –
+    # chosen above the measured plugs+WP sum so the "ungemessener Rest" bucket and
+    # the meter-anchored load analysis have something to show in demo mode.
     store.meter_upsert(int((now - timedelta(days=8)).timestamp()), 2202.0, "")
-    store.meter_upsert(int(now.timestamp()), 2202.0 + 8 * 17.0, "")
+    store.meter_upsert(int(now.timestamp()), 2202.0 + 8 * 34.0, "")
 
 
 class DemoPoller(threading.Thread):
