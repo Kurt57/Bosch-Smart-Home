@@ -983,6 +983,14 @@ class Store:
             self.conn.execute(
                 "CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY, value TEXT)"
             )
+            # hardware product catalog (PV inverters / batteries / all-in-one),
+            # seeded from curated datasheets, extensible by the user. `data` holds
+            # the full spec document as JSON so the schema stays flexible.
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS products("
+                " id TEXT PRIMARY KEY, brand TEXT, category TEXT, name TEXT,"
+                " data TEXT, updated INTEGER)"
+            )
 
     # -- heat pump ------------------------------------------------------- #
     def add_hp_sample(self, row: dict):
@@ -1251,6 +1259,33 @@ class Store:
         with self.lock, self.conn:
             self.conn.execute("DELETE FROM meter_readings WHERE ts=?", (int(ts),))
 
+    # -- hardware product catalog ---------------------------------------- #
+    def product_upsert(self, p: dict):
+        with self.lock, self.conn:
+            self.conn.execute(
+                "INSERT INTO products(id,brand,category,name,data,updated)"
+                " VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET"
+                " brand=excluded.brand, category=excluded.category,"
+                " name=excluded.name, data=excluded.data, updated=excluded.updated",
+                (p["id"], p.get("brand", ""), p.get("category", ""), p.get("name", ""),
+                 json.dumps(p, ensure_ascii=False), int(time.time())))
+
+    def products_list(self) -> list[dict]:
+        with self.lock:
+            rows = self.conn.execute(
+                "SELECT data FROM products ORDER BY category, brand, name").fetchall()
+        out = []
+        for r in rows:
+            try:
+                out.append(json.loads(r["data"]))
+            except Exception:
+                pass
+        return out
+
+    def product_delete(self, pid: str):
+        with self.lock, self.conn:
+            self.conn.execute("DELETE FROM products WHERE id=?", (str(pid),))
+
     # -- generic key/value app state ------------------------------------- #
     def kv_get(self, key: str):
         with self.lock:
@@ -1458,6 +1493,118 @@ def _energy_for_bucket(samples: list[dict]) -> float:
         if 0 < dt_h < 6:  # ignore huge gaps (bridge was offline)
             wh += (a["power_w"] + b["power_w"]) / 2.0 * dt_h
     return wh
+
+
+# --------------------------------------------------------------------------- #
+# Hardware product catalog – curated from the manufacturer datasheets the user
+# supplied (Fronius Symo GEN24 Plus, Fronius Reserva, GoodWe ESA). Seeded into
+# the `products` table so the app "has it in the database" and can be extended.
+# All figures are from the datasheets; prices are left out (not on the sheets).
+# --------------------------------------------------------------------------- #
+PRODUCT_CATALOG = [
+    {
+        "id": "fronius_gen24_plus",
+        "brand": "Fronius",
+        "category": "hybrid_inverter",       # Wechselrichter mit Batterie-Anschluss
+        "name": "Fronius Symo GEN24 Plus",
+        "origin": "Österreich (Europa)",
+        "phases": 3,
+        "coupling": "DC",
+        "needs_separate_battery": True,
+        "controllable": 5,                   # 1..5 – how well THIS app can read/steer it
+        "local_api": ["Fronius Solar API (JSON, lokal)", "Modbus TCP SunSpec", "Modbus RTU SunSpec"],
+        "ohmpilot": True,                     # steuert Heizstab/Warmwasser mit Überschuss
+        "smart_meter": "Fronius Smart Meter (separat)",
+        "built_in_ems": False,
+        "backup": "full_optional",            # Full Backup (ganzes Haus) ab 6 kW + Zusatzkomponenten
+        "backup_switch_s": 10.0,
+        "efficiency_max_pct": 98.3,
+        "warranty_years": 10,                 # nach Produktregistrierung
+        "night_w": 10,
+        "compatible_batteries": ["Fronius Reserva", "BYD Battery-Box HVS/HVM", "LG FLEX"],
+        "variants": [
+            {"model": "GEN24 6.0 Plus", "ac_kw": 6.0, "pv_max_wp": 9000, "batt_kw": 6.0, "mppt": 2, "full_backup": True, "weight_kg": 22.8},
+            {"model": "GEN24 8.0 Plus", "ac_kw": 8.0, "pv_max_wp": 12000, "batt_kw": 8.0, "mppt": 2, "full_backup": True, "weight_kg": 22.8},
+            {"model": "GEN24 10.0 Plus", "ac_kw": 10.0, "pv_max_wp": 15000, "batt_kw": 10.0, "mppt": 2, "full_backup": True, "weight_kg": 22.8},
+            {"model": "GEN24 12.0 Plus", "ac_kw": 12.0, "pv_max_wp": 18000, "batt_kw": 11.7, "mppt": 2, "full_backup": True, "weight_kg": 22.8},
+        ],
+        "summary": "Hybrid-Wechselrichter: das „Herz\" der Anlage, das zusätzlich eine Batterie laden/entladen kann. Offene lokale Schnittstellen (Solar-API + Modbus) – ideal, wenn diese App der Energiemanager sein soll. Braucht eine separate Batterie.",
+    },
+    {
+        "id": "fronius_reserva",
+        "brand": "Fronius",
+        "category": "battery",
+        "name": "Fronius Reserva",
+        "origin": "Europa (Fronius)",
+        "chemistry": "LFP (Lithium-Eisenphosphat)",
+        "coupling": "DC (Hochvolt)",
+        "controllable": 5,                    # über den GEN24-Wechselrichter
+        "max_current_a": 32,
+        "warranty_years": 10,
+        "parallel_max": 4,
+        "compatible_inverters": ["Fronius Symo GEN24 Plus"],
+        "variants": [
+            {"model": "Reserva 6.3", "usable_kwh": 6.31, "modules": 2, "weight_kg": 86.5, "height_mm": 860},
+            {"model": "Reserva 9.5", "usable_kwh": 9.47, "modules": 3, "weight_kg": 120.0, "height_mm": 1100},
+            {"model": "Reserva 12.6", "usable_kwh": 12.63, "modules": 4, "weight_kg": 153.5, "height_mm": 1360},
+            {"model": "Reserva 15.8", "usable_kwh": 15.79, "modules": 5, "weight_kg": 187.0, "height_mm": 1610},
+        ],
+        "summary": "DC-gekoppelter Hochvolt-Speicher, der nur an den Fronius GEN24 Plus passt. 2–5 Module (≈3,15 kWh je Modul), 10 Jahre Garantie, europäischer Service.",
+    },
+    {
+        "id": "goodwe_esa",
+        "brand": "GoodWe",
+        "category": "all_in_one",             # Wechselrichter + Batterie + Energiemanager in einem
+        "name": "GoodWe ESA-Serie (All-in-One)",
+        "origin": "China (GoodWe)",
+        "chemistry": "LFP (Lithium-Eisenphosphat)",
+        "coupling": "DC + AC (Hybrid)",
+        "phases": 3,
+        "needs_separate_battery": False,
+        "controllable": 3,                    # Modbus-TCP lokal, aber eigener EMS dazwischen
+        "local_api": ["Modbus-TCP", "Modbus-RTU"],
+        "built_in_ems": True,                 # KI-Energiemanagement
+        "dynamic_tariff_builtin": True,       # dynamische Tarifoptimierung ab Werk
+        "backup": "whole_home",               # Whole-Home Backup (Dual-Port)
+        "backup_switch_s": 0.004,             # <4 ms
+        "efficiency_max_pct": 98.2,
+        "heating_to_c": -20,
+        "battery_module_kwh": [5.0, 8.0],     # nutzbar je Modul (GW5.1 / GW8.3)
+        "battery_modules_max": 12,
+        "battery_max_kwh": 108,
+        "inverter_kw_range": [5, 30],
+        "warranty_years": 10,
+        "variants": [
+            {"model": "ESA GW6K + 10 kWh", "ac_kw": 6.0, "batt_kwh": 10.0, "modules": "2× 5 kWh"},
+            {"model": "ESA GW8K + 16 kWh", "ac_kw": 8.0, "batt_kwh": 16.0, "modules": "2× 8 kWh"},
+            {"model": "ESA GW10K + 20 kWh", "ac_kw": 10.0, "batt_kwh": 20.0, "modules": "4× 5 kWh"},
+            {"model": "ESA GW15K + 24 kWh", "ac_kw": 15.0, "batt_kwh": 24.0, "modules": "3× 8 kWh"},
+        ],
+        "summary": "Alles in einem Gerät (Wechselrichter + Batterie + Energiemanager), sehr groß ausbaubar (bis 108 kWh / 30 kW), eingebaute KI-Optimierung für dynamische Tarife und blitzschnelles Notstrom-Umschalten (<4 ms). Weniger offen für eine eigene App-Steuerung als Fronius.",
+    },
+]
+
+PRODUCT_GLOSSARY = [
+    ("Wechselrichter", "Wandelt den Gleichstrom (DC) der Solarmodule in normalen Haushaltsstrom (AC, 230 V) um – das Herzstück jeder PV-Anlage."),
+    ("Hybrid-Wechselrichter", "Ein Wechselrichter, der zusätzlich eine Batterie laden und entladen kann. Ohne „Hybrid\" bräuchtest du später ein zweites Gerät für den Speicher."),
+    ("All-in-One", "Wechselrichter + Batterie + Energiemanager stecken in einem Gerät. Vorteil: weniger Einzelteile, schneller installiert, oft günstiger."),
+    ("kWp (Kilowatt-Peak)", "Die Spitzenleistung der Solarmodule bei vollem Sonnenschein. Faustregel Deutschland: 1 kWp bringt ~900–1000 kWh Strom pro Jahr."),
+    ("kWh Speicher", "Wie viel Strom die Batterie speichert. Grob: 1 kWh ≈ eine Waschmaschinen-Ladung oder ein halber Tag Kühlschrank + Router + Licht."),
+    ("DC-/AC-gekoppelt", "DC-gekoppelt = Batterie hängt direkt am Solarstrom, minimal effizienter. AC-gekoppelt = Batterie hängt am Hausnetz, dafür flexibler nachrüstbar."),
+    ("LFP", "Lithium-Eisenphosphat – die sicherste und langlebigste Akku-Art fürs Haus (kein Kobalt, sehr schwer entflammbar)."),
+    ("MPP-Tracker", "Ein Eingang für eine Modulgruppe. Mehr Tracker = du kannst Dachflächen mit unterschiedlicher Ausrichtung (z. B. Ost + West) getrennt optimal nutzen."),
+    ("Notstrom / Backup", "Versorgt dich bei Stromausfall weiter. „Whole-Home / Full Backup\" = ganzes Haus, „PV Point\" = nur eine Notsteckdose bei Sonne."),
+    ("Umschaltzeit", "Wie schnell bei Stromausfall auf Batterie umgeschaltet wird. Unter 10 ms merkst du gar nichts; Sekunden = kurzes Flackern/PC aus."),
+    ("Smart Meter", "Misst den Strom am Hausanschluss. Nötig, damit die Anlage genau weiß, wie viel Überschuss da ist – sonst verschenkt sie Strom oder zieht unnötig aus dem Netz."),
+    ("Dynamischer Tarif", "Strompreis ändert sich stündlich mit der Börse. Ein guter Energiemanager lädt/entlädt die Batterie so, dass du günstig kaufst und teuer vermeidest (oder verkaufst)."),
+    ("Modbus / Solar-API", "Offene „Sprachen\", über die ein Gerät lokal Messwerte herausgibt und Befehle annimmt. Je offener, desto besser kann DIESE App der Energiemanager sein."),
+]
+
+
+def seed_products(store: "Store"):
+    """Upsert the curated hardware catalog into the DB (idempotent)."""
+    for p in PRODUCT_CATALOG:
+        store.product_upsert(p)
 
 
 def _meter_daily_kwh(store: "Store") -> dict | None:
@@ -6822,6 +6969,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json(self._appliances_payload())
             if path == "/api/meter":
                 return self._send_json({"readings": self.store.meter_list()})
+            if path == "/api/products":
+                prods = self.store.products_list() or PRODUCT_CATALOG
+                return self._send_json({"products": prods,
+                                        "glossary": [{"term": t, "text": x} for t, x in PRODUCT_GLOSSARY]})
             if path == "/api/spot":
                 return self._send_json(self._spot_payload())
             if path == "/api/pvgis":
@@ -7132,6 +7283,7 @@ def cmd_pair(args, cfg):
 
 def cmd_serve(args, cfg):
     store = Store(cfg["db"])
+    seed_products(store)                      # keep the hardware catalog in the DB
     cfg["_config_path"] = args.config
     if args.ip:
         cfg["shc_ip"] = args.ip

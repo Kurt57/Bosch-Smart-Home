@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v176';   // short tag shown always-on in the header
-const APP_VERSION = 'v176 · 2026-10-22 · Lastspitzen jetzt zählerbasiert: liegen Zählerstände vor, wird auf den ganzen Haushalt hochgerechnet – der ungemessene Rest wird nach dem Rhythmus der gemessenen Geräte über die Stunden verteilt. Neu: Aufschlüsselung je Gerät (gemessen real + Rest) und Verbrauch je Stunde (gemessen vs. verteilter Rest). Ohne Zähler bleibt es wie bisher messungsbasiert'
+const APP_BUILD = 'v177';   // short tag shown always-on in the header
+const APP_VERSION = 'v177 · 2026-10-22 · Produktauswahl (PV-Tab): die Datenblätter von Fronius GEN24 Plus, Fronius Reserva und GoodWe ESA liegen jetzt in der Datenbank. Aus deinem Verbrauch wird die passende Größe (kWp/Speicher/Wechselrichter) empfohlen; nach deinen Prioritäten (App-steuerbar, dynamischer Tarif, Notstrom, Speichergröße, Preis, EU-Marke) werden die Systeme mit „Passung %" und Für-/Gegen-Punkten sortiert – plus Glossar für Nicht-Elektriker'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -271,6 +271,10 @@ const INFO = {
     'sipt, zeigt genau diesen Sockel. „jetzt Standby/aktiv" vergleicht die aktuelle Leistung mit diesem Sockel. Der ' +
     'Typ-Hinweis (Netzwerk, Unterhaltung …) ist aus dem Namen geraten – hilft beim Einschätzen, ob der Standby ' +
     '<b>abschaltbar</b> ist (TV/Konsole/Ladegerät per Zeitschaltung aus) oder <b>nötig</b> (Kühlung).',
+  pvpick: () => 'Vergleicht die von dir hinterlegten <b>Geräte</b> (Wechselrichter, Speicher, All-in-One) und schlägt vor, was zu <b>deinem Haushalt</b> passt. ' +
+    'Oben die aus deinem Verbrauch <b>empfohlene Größe</b> (PV-kWp, Speicher-kWh, Wechselrichter-kW). Darunter wählst du deine <b>Prioritäten</b> – jede Priorität gewichtet die Systeme neu. ' +
+    'Die <b>Passung in %</b> sagt, wie gut ein System deine aktiven Prioritäten erfüllt; grüne Haken = Stärken, orange ⚠ = Kompromisse. ' +
+    'Das <b>Glossar</b> erklärt jeden Fachbegriff für Nicht-Elektriker. <b>Ohne Preise</b> (stehen nicht auf den Datenblättern) und ersetzt keine Elektro-Planung – hol dir für die konkrete Installation 2–3 Angebote.',
   loadpeaks: () => 'Zeigt deine <b>Leistungsspitzen</b> und wie lange sie dauern – für die <b>Dimensionierung</b> (welche Ausgangsleistung eine Anlage/Batterie/ein Wechselrichter braucht). ' +
     'Die <b>Lastdauerlinie</b> sagt, für wie viel <b>% der Zeit</b> die Leistung über einem Wert lag – die roten Linien markieren gängige Größen (800/1200/2000 W). Darunter die <b>Top-10-Spitzen</b> mit Höhe (W), Dauer und Zeitpunkt. ' +
     'So siehst du: die <b>Dauerlast</b> ist meist niedrig, nur kurze Spitzen (Wärmepumpen-Start, Küche) treiben die nötige Leistung hoch – und wie oft/lange die überhaupt vorkommen. ' +
@@ -8233,9 +8237,228 @@ function renderPv() {
   renderPvOrient();
   renderSurfaces();
   try { renderBalcony(); } catch (e) {}
+  try { renderProductPick(); } catch (e) {}
   // the Börse "lohnt sich?" card depends on the PV/battery dimensions here –
   // keep it in sync when they change (it reads pvInputs() live).
   try { if (typeof renderBorseWorth === 'function') renderBorseWorth(); } catch (e) {}
+}
+
+// ===== Produktauswahl: welches PV/Speicher-System passt? ==================== #
+// Fetches the hardware catalog from the bridge, derives a recommended sizing
+// from the household's own consumption, and ranks the systems against the
+// user's chosen priorities – in plain language for non-electricians.
+let _ppCatalog = null, _ppBusy = false;
+const PP_PRIOS = [
+  { key: 'control', emoji: '🧠', label: 'Von dieser App steuerbar', hint: 'eigener Energiemanager / Direktvermarktung' },
+  { key: 'tariff', emoji: '📈', label: 'Dynamischen Tarif nutzen', hint: 'günstig laden, teuer vermeiden/verkaufen' },
+  { key: 'backup', emoji: '🏠', label: 'Notstrom fürs ganze Haus', hint: 'läuft bei Stromausfall weiter' },
+  { key: 'expand', emoji: '🔋', label: 'Großer/erweiterbarer Speicher', hint: 'später E-Auto, mehr Module' },
+  { key: 'price', emoji: '💶', label: 'Günstiger Preis', hint: 'möglichst wenig Investition' },
+  { key: 'europe', emoji: '🇪🇺', label: 'EU-Marke & Service', hint: '10 J. Garantie, Support in DE' },
+];
+// per-system weight (0..10) for each priority, plus a neutral base
+// "control" (this app as the energy manager) is the user's architectural choice,
+// so it weighs heaviest for the open Fronius; GoodWe leads on size/price/backup.
+const PP_W = {
+  fronius: { control: 10, tariff: 8, backup: 6, expand: 6, price: 4, europe: 10, base: 6.5 },
+  goodwe: { control: 4, tariff: 9, backup: 10, expand: 10, price: 9, europe: 3, base: 6.5 },
+};
+function ppPrios() {
+  try { const v = JSON.parse(localStorage.getItem('bhe_pp_prios') || 'null'); if (v && typeof v === 'object') return v; } catch (e) {}
+  return { control: true, tariff: true, backup: true, expand: false, price: false, europe: false };
+}
+function ppSetPrio(key, on) {
+  const p = ppPrios(); p[key] = !!on;
+  try { localStorage.setItem('bhe_pp_prios', JSON.stringify(p)); } catch (e) {}
+  renderProductPick();
+}
+async function renderProductPick() {
+  const card = $('pp-card'); if (!card) return;
+  if (!_ppCatalog) {
+    if (_ppBusy) return; _ppBusy = true;
+    try { _ppCatalog = await api('/api/products'); }
+    catch (e) { _ppCatalog = null; }
+    finally { _ppBusy = false; }
+  }
+  paintProductPick();
+}
+// household/day, heat-pump/day → recommended battery, PV kWp, inverter kW
+function ppContext() {
+  const hh = (typeof shAvgDaily === 'function' ? shAvgDaily() : 0) || 0;
+  const hp = (typeof hpAvgDaily === 'function' ? hpAvgDaily() : 0) || 0;
+  const dayTotal = hh + hp, annual = dayTotal * 365;
+  const kwpPlan = parseFloat(($('pv-kwp') || {}).value) || 0;
+  const battPlan = parseFloat(($('pv-batt') || {}).value) || 0;
+  const recBatt = Math.max(5, Math.min(20, Math.round(hh * 1.2 + hp * 0.2)));
+  const recKwp = kwpPlan > 0 ? kwpPlan : Math.max(5, Math.min(14, Math.round(annual / 950)));
+  const recInv = Math.max(5, Math.min(12, Math.round(recKwp * 0.9)));
+  return { hh, hp, dayTotal, annual, kwpPlan, battPlan, recBatt, recKwp, recInv };
+}
+function ppNearest(variants, keyFn, target) {
+  let best = null, bd = Infinity;
+  (variants || []).forEach(v => { const d = Math.abs(keyFn(v) - target); if (d < bd) { bd = d; best = v; } });
+  return best;
+}
+// build the two comparable systems from the flat catalog
+function ppSystems(ctx) {
+  const prods = (_ppCatalog && _ppCatalog.products) || [];
+  const byId = {}; prods.forEach(p => { byId[p.id] = p; });
+  const gen24 = byId['fronius_gen24_plus'], reserva = byId['fronius_reserva'], esa = byId['goodwe_esa'];
+  const out = [];
+  if (gen24 && reserva) {
+    const inv = ppNearest(gen24.variants, v => v.ac_kw, ctx.recInv) || {};
+    const bat = ppNearest(reserva.variants, v => v.usable_kwh, ctx.recBatt) || {};
+    out.push({
+      sysKey: 'fronius', brand: 'Fronius', kind: 'Wechselrichter + Speicher (getrennt)',
+      title: 'Fronius GEN24 Plus + Reserva',
+      pick: `${inv.model || 'GEN24'} + ${bat.model || 'Reserva'} (${fmt(bat.usable_kwh || 0, 1)} kWh nutzbar)`,
+      invKw: inv.ac_kw, battKwh: bat.usable_kwh,
+      summary: gen24.summary, catalog: [gen24, reserva],
+    });
+  }
+  if (esa) {
+    const v = ppNearest(esa.variants, x => x.ac_kw, ctx.recInv) || {};
+    out.push({
+      sysKey: 'goodwe', brand: 'GoodWe', kind: 'All-in-One (alles in einem Gerät)',
+      title: 'GoodWe ESA-Serie',
+      pick: `${v.model || 'ESA'} – Speicher frei in 5/8-kWh-Modulen bis 108 kWh`,
+      invKw: v.ac_kw, battKwh: ctx.recBatt,
+      summary: esa.summary, catalog: [esa],
+    });
+  }
+  return out;
+}
+// tailored pro/con bullets per active priority
+function ppReasons(sysKey, prios, ctx) {
+  const pro = [], con = [];
+  const F = sysKey === 'fronius';
+  if (prios.control) (F ? pro : con).push(F
+    ? 'Offene lokale Schnittstellen (Solar-API + Modbus) – <b>diese App</b> kann direkt messen & steuern (dein eigener Energiemanager, später Direktvermarktung).'
+    : 'Hat einen eigenen Energiemanager – per Modbus steuerbar, aber weniger offen für eine komplett eigene App-Logik.');
+  if (prios.tariff) (F ? pro : pro).push(F
+    ? 'Dynamischer Tarif läuft über diese App / den eigenen Energiemanager – volle Kontrolle, aber nicht „ab Werk".'
+    : 'KI-Tarifoptimierung <b>ab Werk</b> – lädt/entlädt automatisch nach dem Börsenpreis.');
+  if (prios.backup) (F ? con : pro).push(F
+    ? 'Notstrom fürs ganze Haus erst ab 6 kW und mit Zusatz-Umschaltbox, ~10 s Umschaltzeit.'
+    : 'Whole-Home-Notstrom mit Umschaltung <b>&lt;4 ms</b> – den Ausfall merkst du gar nicht.');
+  if (prios.expand) (F ? con : pro).push(F
+    ? 'Speicher bis ~15,8 kWh (oder mehrere Batterien parallel) – für normale Häuser genug, aber nicht riesig.'
+    : 'Bis <b>108 kWh / 30 kW</b> ausbaubar – reicht locker für E-Auto + Wärmepumpe + mehr.');
+  if (prios.price) (F ? con : pro).push(F
+    ? 'Premium-Preis (zwei Geräte) – dafür Top-Service und Langlebigkeit.'
+    : 'Als All-in-One meist <b>günstiger</b> und schneller installiert (ein Gerät).');
+  if (prios.europe) (F ? pro : con).push(F
+    ? 'Österreichische Marke, <b>10 Jahre</b> Garantie, Service & Datenstandort in der EU.'
+    : 'Chinesischer Hersteller – gute Technik, aber Service/Datenstandort außerhalb der EU.');
+  return { pro, con };
+}
+function ppScore(sysKey, prios) {
+  const w = PP_W[sysKey]; let raw = 0, n = 0;
+  PP_PRIOS.forEach(p => { if (prios[p.key]) { raw += w[p.key]; n++; } });
+  const pct = n ? Math.round(raw / (10 * n) * 100) : null;
+  return { pct, tie: w.base + raw };
+}
+function paintProductPick() {
+  const sizing = $('pp-sizing'), sizeNote = $('pp-sizing-note'), priosEl = $('pp-prios'),
+    rank = $('pp-ranking'), gloss = $('pp-glossary'), note = $('pp-note');
+  if (!_ppCatalog || !(_ppCatalog.products || []).length) {
+    if (rank) rank.innerHTML = '<div class="note">Produktkatalog nur mit laufender Bridge verfügbar.</div>';
+    [sizing, sizeNote, priosEl, gloss, note].forEach(e => { if (e) e.innerHTML = ''; });
+    return;
+  }
+  const ctx = ppContext(), prios = ppPrios();
+  // recommended sizing KPIs
+  if (sizing) sizing.innerHTML =
+    `<div class="kpi sm"><div class="v">${fmt(ctx.recKwp, 0)} kWp</div><div class="l">PV empfohlen</div></div>` +
+    `<div class="kpi sm"><div class="v">${fmt(ctx.recBatt, 0)} kWh</div><div class="l">Speicher empfohlen</div></div>` +
+    `<div class="kpi sm"><div class="v">${fmt(ctx.recInv, 0)} kW</div><div class="l">Wechselrichter</div></div>`;
+  if (sizeNote) sizeNote.innerHTML = ctx.dayTotal > 0
+    ? `Basis: dein Verbrauch ~<b>${kwh(ctx.annual, 0)}/Jahr</b> (${fmt(ctx.dayTotal, 1)} kWh/Tag inkl. Wärmepumpe)${ctx.kwpPlan > 0 ? ` · PV-kWp aus deiner Planung übernommen` : ''}. Speicher ≈ ein Nacht-/Grundlast-Tag, Wechselrichter ≈ 0,9 × kWp.`
+    : `Sobald ein paar Verbrauchstage/Zählerstände vorliegen, rechne ich die empfohlene Größe aus deinen echten Werten.`;
+  // priority chips
+  if (priosEl) priosEl.innerHTML = PP_PRIOS.map(p => {
+    const on = !!prios[p.key];
+    return `<button class="pp-prio" data-pp="${p.key}" aria-pressed="${on}" title="${esc(p.hint)}" ` +
+      `style="flex:1 1 160px;min-width:150px;text-align:left;padding:9px 11px;border-radius:12px;cursor:pointer;` +
+      `border:1px solid ${on ? 'var(--accent)' : 'var(--line)'};background:${on ? 'color-mix(in srgb,var(--accent) 16%,transparent)' : 'transparent'};color:var(--fg)">` +
+      `<div style="font-size:13px;font-weight:600">${p.emoji} ${esc(p.label)} ${on ? '✓' : ''}</div>` +
+      `<div style="font-size:11px;color:var(--muted)">${esc(p.hint)}</div></button>`;
+  }).join('');
+  // rank the systems
+  const sys = ppSystems(ctx).map(s => ({ ...s, ...ppScore(s.sysKey, prios) }));
+  sys.sort((a, b) => (b.pct || 0) - (a.pct || 0) || b.tie - a.tie);
+  const anyPrio = PP_PRIOS.some(p => prios[p.key]);
+  if (rank) rank.innerHTML = sys.map((s, i) => {
+    const top = i === 0 && anyPrio;
+    const r = ppReasons(s.sysKey, prios, ctx);
+    const bar = s.pct == null ? '' :
+      `<div class="bar" style="height:8px;margin:8px 0 2px"><i style="width:${s.pct}%;background:${top ? COL.pv : COL.sh}"></i></div>`;
+    const pros = r.pro.map(t => `<div style="font-size:12.5px;margin:3px 0"><span style="color:${COL.pv}">✓</span> ${t}</div>`).join('');
+    const cons = r.con.map(t => `<div style="font-size:12.5px;margin:3px 0"><span style="color:#ffb64d">⚠</span> ${t}</div>`).join('');
+    const specs = ppSpecTable(s.catalog);
+    return `<div style="border:1px solid ${top ? 'var(--accent)' : 'var(--line)'};border-radius:14px;padding:13px 14px;margin-bottom:12px;` +
+      `background:${top ? 'color-mix(in srgb,var(--accent) 7%,transparent)' : 'transparent'}">` +
+      `<div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">` +
+      `<div><b style="font-size:15px">${esc(s.title)}</b> ${top ? '<span style="font-size:11px;background:' + COL.pv + ';color:#04110c;padding:2px 7px;border-radius:999px;font-weight:700">EMPFEHLUNG</span>' : ''}` +
+      `<div style="font-size:11.5px;color:var(--muted);margin-top:1px">${esc(s.kind)}</div></div>` +
+      `<div style="text-align:right;white-space:nowrap">${s.pct == null ? '' : `<b style="font-size:18px">${s.pct}%</b><div style="font-size:10px;color:var(--muted)">Passung</div>`}</div></div>` +
+      bar +
+      `<div class="note" style="margin:8px 0 6px">${esc(s.summary)}</div>` +
+      `<div style="font-size:12.5px;margin:6px 0 8px">👉 <b>Für dich:</b> ${esc(s.pick)}</div>` +
+      pros + cons +
+      specs +
+      `</div>`;
+  }).join('');
+  // glossary (non-electrician)
+  const gl = (_ppCatalog.glossary || []);
+  if (gloss) gloss.innerHTML = gl.length
+    ? `<details><summary style="cursor:pointer;font-weight:600;font-size:13.5px">📖 Fachbegriffe einfach erklärt (${gl.length})</summary>` +
+    `<div style="margin-top:8px">` + gl.map(g =>
+      `<div style="padding:7px 0;border-bottom:1px solid var(--line)"><b style="font-size:13px">${esc(g.term)}</b>` +
+      `<div style="font-size:12.5px;color:var(--muted);margin-top:2px">${esc(g.text)}</div></div>`).join('') + `</div></details>`
+    : '';
+  if (note) {
+    const top = sys[0], sec = sys[1];
+    let msg = `<b>Ehrlich:</b> die Datenblätter nennen <b>keine Preise</b> – hol dir für dein Dach 2–3 Angebote. Diese Auswahl ist eine <b>Orientierung</b>, keine Elektro-Planung. `;
+    if (top && sec && top.pct != null && sec.pct != null && anyPrio) {
+      const close = (top.pct - sec.pct) <= 8;
+      msg += `Bei <b>deinen</b> Prioritäten liegt <b>${esc(top.brand)}</b> vorn (${top.pct} % vs. ${sec.pct} %)` + (close ? ' – aber knapp, hier entscheidet dein Geschmack. ' : '. ');
+      msg += top.sysKey === 'fronius'
+        ? `Soll <b>diese App</b> der Energiemanager sein (dynamischer Tarif, später Direktvermarktung), ist die <b>offene Steuerbarkeit</b> von Fronius der Trumpf. Willst du maximale Speichergröße, bestes Preis-Leistung und Notstrom „out of the box", schalte die passenden Prioritäten – dann zieht GoodWe vorbei.`
+        : `GoodWe punktet mit <b>Speichergröße, Preis und sofortigem Notstrom</b> (&lt;4 ms). Soll diese App selbst steuern/direktvermarkten, schalte „<b>Von dieser App steuerbar</b>" scharf – dann zieht Fronius vorbei.`;
+    } else {
+      msg += `Tippe oben deine Prioritäten an, dann sortiere ich die Systeme für <b>dich</b>.`;
+    }
+    note.innerHTML = msg;
+  }
+}
+// compact collapsible spec table for a system's catalog entries
+function ppSpecTable(entries) {
+  const rows = [];
+  (entries || []).forEach(p => {
+    (p.variants || []).forEach(v => {
+      const cells = [];
+      if (v.ac_kw != null) cells.push(`${fmt(v.ac_kw, 1)} kW`);
+      if (v.usable_kwh != null) cells.push(`${fmt(v.usable_kwh, 1)} kWh`);
+      if (v.batt_kwh != null) cells.push(`${fmt(v.batt_kwh, 0)} kWh Speicher`);
+      if (v.pv_max_wp != null) cells.push(`bis ${fmt(v.pv_max_wp / 1000, 1)} kWp PV`);
+      if (v.modules) cells.push(esc(v.modules));
+      rows.push(`<div style="display:flex;justify-content:space-between;gap:8px;font-size:11.5px;padding:3px 0;border-bottom:1px solid var(--line)">` +
+        `<span>${esc(v.model)}</span><span style="color:var(--muted);text-align:right">${cells.join(' · ')}</span></div>`);
+    });
+  });
+  const meta = (entries || []).map(p => {
+    const bits = [];
+    if (p.origin) bits.push(p.origin);
+    if (p.chemistry) bits.push(p.chemistry);
+    if (p.coupling) bits.push(p.coupling + '-gekoppelt');
+    if (p.warranty_years) bits.push(p.warranty_years + ' J. Garantie');
+    if (p.efficiency_max_pct) bits.push('η ' + fmt(p.efficiency_max_pct, 1) + ' %');
+    if (p.local_api && p.local_api.length) bits.push('API: ' + p.local_api.join(', '));
+    return `<div style="font-size:11px;color:var(--muted);margin-top:4px"><b>${esc(p.name)}</b> · ${esc(bits.join(' · '))}</div>`;
+  }).join('');
+  return `<details style="margin-top:8px"><summary style="cursor:pointer;color:var(--muted);font-size:12px">Technische Daten & alle Modelle</summary>` +
+    `<div style="margin-top:6px">${rows.join('')}${meta}</div></details>`;
 }
 // Render the orientation/sizing recommendation.
 function renderPvOrient() {
@@ -9312,6 +9535,8 @@ function init() {
     if (rb) { e.stopPropagation(); showRate(rb.dataset.rk, rb.dataset.rv === '' ? null : rb.dataset.rv, rb.dataset.rl); return; }
     const gl = e.target.closest('.gloss');
     if (gl) { e.stopPropagation(); showGloss(gl.dataset.g); return; }
+    const pp = e.target.closest('.pp-prio');
+    if (pp) { e.stopPropagation(); ppSetPrio(pp.dataset.pp, pp.getAttribute('aria-pressed') !== 'true'); return; }
     const t = $('toast'); if (t && !t.hidden) t.hidden = true;
   });
   $('hist-range').addEventListener('click', e => {
