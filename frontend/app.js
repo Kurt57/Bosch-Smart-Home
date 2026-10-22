@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v174';   // short tag shown always-on in the header
-const APP_VERSION = 'v174 · 2026-10-22 · PV-Tab: Balkonkraftwerk-Simulator (800-W-Grenze). Module (kWp) + Speicher (kWh, z. B. Anker Solarbank) eingeben und gegen das gemessene Verbrauchsprofil rechnen – Autarkie/Netz-Gap/Ersparnis, Sommer-/Wintertag (PV, Batterie-SOC, Netzbezug) und Jahresverlauf'
+const APP_BUILD = 'v175';   // short tag shown always-on in the header
+const APP_VERSION = 'v175 · 2026-10-22 · Profil: „Lastspitzen & Dimensionierung" – Top-10-Leistungsspitzen (W) mit Dauer/Zeitpunkt, eine Lastdauerlinie (für wie viel % der Zeit die Leistung über X W lag) mit 600/800/1200-W-Markern, und je Ausgangsleistung die Zeit-Abdeckung. Zeigt, welche Watt-Leistung eine Anlage wirklich braucht'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -271,6 +271,10 @@ const INFO = {
     'sipt, zeigt genau diesen Sockel. „jetzt Standby/aktiv" vergleicht die aktuelle Leistung mit diesem Sockel. Der ' +
     'Typ-Hinweis (Netzwerk, Unterhaltung …) ist aus dem Namen geraten – hilft beim Einschätzen, ob der Standby ' +
     '<b>abschaltbar</b> ist (TV/Konsole/Ladegerät per Zeitschaltung aus) oder <b>nötig</b> (Kühlung).',
+  loadpeaks: () => 'Zeigt deine <b>Leistungsspitzen</b> und wie lange sie dauern – für die <b>Dimensionierung</b> (welche Ausgangsleistung eine Anlage/Batterie/ein Wechselrichter braucht). ' +
+    'Die <b>Lastdauerlinie</b> sagt, für wie viel <b>% der Zeit</b> die Leistung über einem Wert lag – die roten Linien markieren gängige Größen (800/1200/2000 W). Darunter die <b>Top-10-Spitzen</b> mit Höhe (W), Dauer und Zeitpunkt. ' +
+    'So siehst du: die <b>Dauerlast</b> ist meist niedrig, nur kurze Spitzen (Wärmepumpen-Start, Küche) treiben die nötige Leistung hoch – und wie oft/lange die überhaupt vorkommen. ' +
+    '<b>Ehrlich:</b> gerechnet wird die Summe der <b>gemessenen</b> Steckdosen + Wärmepumpe; ohne Ganzhaus-Zähler fehlen ungemessene Großverbraucher (Herd, Wasserkocher).',
   balkon: () => 'Simuliert ein <b>Balkonkraftwerk/Steckersolar</b> mit <b>800 W</b> Einspeisegrenze (bis dahin darfst du selbst installieren). ' +
     'Du gibst <b>Module (kWp)</b> und <b>Speicher (kWh)</b> ein (z. B. Anker Solarbank). Die Simulation rechnet gegen dein <b>gemessenes Verbrauchsprofil</b>: ' +
     'Tagsüber deckt die PV direkt die Last, der Überschuss <b>über 800 W</b> lädt den Speicher, der ihn abends wieder als ≤800 W abgibt – so werden die ' +
@@ -6274,6 +6278,7 @@ function renderProfile() {
   renderBaseload();
   renderStandby();
   renderDeviceTimeline();
+  renderLoadPeaks();
   renderBehavior();
 }
 
@@ -6500,6 +6505,69 @@ async function devtlFetchSeries(days) {
   const r = await api('/api/series?device=all&days=' + key);
   const s = (r && r.samples) || [];
   _devtlSeries[key] = s; return s;
+}
+
+// ---- Lastspitzen & Dimensionierung (load-duration + peak events) ----------
+let _lpDays = null, _lpData = {}, _lpBusy = false;
+function lpDays() { if (_lpDays == null) { try { _lpDays = parseInt(localStorage.getItem('bhe_lp_days'), 10) || 7; } catch (e) { _lpDays = 7; } } return _lpDays; }
+async function renderLoadPeaks() {
+  const card = $('pf-lp-card'); if (!card) return;
+  const d = lpDays();
+  if (_lpData[d]) { paintLoadPeaks(_lpData[d]); return; }
+  if (_lpBusy) return; _lpBusy = true;
+  const el = $('pf-lp-ldc'); if (el) el.innerHTML = '<div class="note" style="padding:14px 0;text-align:center">Lade Lastanalyse …</div>';
+  try { const r = await api('/api/loadpeaks?days=' + d); _lpData[d] = r; paintLoadPeaks(r); }
+  catch (e) { if (el) el.innerHTML = '<div class="note">Nur mit laufender Bridge verfügbar.</div>'; }
+  finally { _lpBusy = false; }
+}
+// load-duration curve: for each % of time, the power that was exceeded
+function ldcChart(ldc, levels) {
+  const h = 220, padL = 42, padR = 12, top = 12, base = h - 26, n = ldc.length;
+  const X = i => padL + (CW - padL - padR) * (i / (n - 1));
+  const sc = niceScale(Math.max(200, ...ldc.map(p => p.w))), yMax = sc.max;
+  const Y = w => top + (1 - Math.max(0, Math.min(yMax, w)) / yMax) * (base - top);
+  const g = gridLines(h, top, base, padL, yMax, { step: sc.step, unit: 'W' });
+  let up = ''; ldc.forEach((p, i) => { up += `${i ? 'L' : 'M'}${X(i).toFixed(1)} ${Y(p.w).toFixed(1)} `; });
+  const area = `<path d="${up}L${X(n - 1).toFixed(1)} ${base} L${X(0).toFixed(1)} ${base} Z" fill="#ffd166" fill-opacity="0.15"/>` +
+    `<path d="${up.trim()}" fill="none" stroke="#ffd166" stroke-width="2"/>`;
+  let lv = '';
+  (levels || []).forEach(L => { const y = Y(L.w); lv += `<line x1="${padL}" x2="${CW - padR}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="#ff6b8a" stroke-width="1" stroke-dasharray="3 3" opacity="0.8"/>` +
+    `<text class="axis" x="${CW - padR}" y="${(y - 3).toFixed(1)}" text-anchor="end" fill="#ff6b8a">${L.w} W · ${fmt(L.pct_above, 0)}%</text>`; });
+  let xt = ''; [0, 25, 50, 75, 100].forEach(pc => { xt += `<text class="axis" x="${X(pc).toFixed(1)}" y="${h - 6}" text-anchor="middle">${pc}%</text>`; });
+  const tips = ldc.map((p, i) => `<b>${i}% der Zeit</b> lag die Last über <b>${fmt(p.w, 0)} W</b>`);
+  return svg(h, g + area + lv + xt, { kind: 'area', pad: padL, padR, n, h, tips });
+}
+function paintLoadPeaks(r) {
+  const head = $('pf-lp-head'), kpis = $('pf-lp-kpis'), ldcEl = $('pf-lp-ldc'), lvlEl = $('pf-lp-levels'), evEl = $('pf-lp-events'), note = $('pf-lp-note');
+  if (!r || !r.ok || !r.n) {
+    if (ldcEl) ldcEl.innerHTML = '<div class="note" style="padding:14px 0;text-align:center">Noch keine gemessenen Leistungsdaten im Zeitraum – sobald Steckdosen/Wärmepumpe Leistung melden, erscheint hier die Lastanalyse.</div>';
+    [kpis, lvlEl, evEl, note].forEach(e => { if (e) e.innerHTML = ''; }); if (head) head.innerHTML = ''; return;
+  }
+  if (head) head.innerHTML = `<span style="color:var(--muted)">${r.hours} h · ${r.sources} Quellen</span>`;
+  const kpi = (v, l) => `<div class="kpi sm"><div class="v">${v}</div><div class="l">${l}</div></div>`;
+  if (kpis) kpis.innerHTML = kpi(fmt(r.peak_w, 0) + ' W', 'Spitze') + kpi(fmt(r.p99_w, 0) + ' W', '99-%-Spitze') +
+    kpi(fmt(r.p95_w, 0) + ' W', '95-%-Dauerlast') + kpi(fmt(r.p50_w, 0) + ' W', 'Median');
+  if (ldcEl) ldcEl.innerHTML = `<div style="touch-action:none">${ldcChart(r.ldc, r.levels)}</div>`;
+  if (lvlEl) lvlEl.innerHTML = (r.levels || []).map(L =>
+    `<div style="display:flex;justify-content:space-between;gap:8px;font-size:13px;padding:5px 0;border-bottom:1px solid var(--line)">` +
+    `<span>Anlage mit <b>${L.w} W</b> Ausgang</span>` +
+    `<span style="white-space:nowrap"><b>${fmt(100 - L.pct_above, 0)}%</b> der Zeit gedeckt <span style="color:var(--muted)">· darüber ${fmt(L.hours_above, 1)} h</span></span></div>`).join('');
+  if (evEl) {
+    const dur = s => { s = Math.round(s); return s < 90 ? s + ' s' : s < 5400 ? Math.round(s / 60) + ' min' : (s / 3600).toFixed(1) + ' h'; };
+    const when = ts => new Date(ts * 1000).toLocaleString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    const maxP = (r.events[0] && r.events[0].peak_w) || 1;
+    evEl.innerHTML = r.events.length ? r.events.map((e, i) =>
+      `<div style="padding:7px 0;border-bottom:1px solid var(--line)">` +
+      `<div style="display:flex;justify-content:space-between;gap:8px;font-size:13px"><b>${i + 1}. ${fmt(e.peak_w, 0)} W</b>` +
+      `<span style="color:var(--muted)">${dur(e.dur_s)} · ${esc(when(e.start))}</span></div>` +
+      `<div class="bar" style="height:6px;margin-top:5px"><i style="width:${Math.max(5, e.peak_w / maxP * 100)}%;background:${COL.hp}"></i></div></div>`).join('')
+      : '<div class="note">Keine ausgeprägten Spitzen im Zeitraum.</div>';
+  }
+  const l800 = (r.levels || []).find(L => L.w === 800);
+  if (note) note.innerHTML = (l800
+    ? `Eine Anlage mit <b>800 W</b> Ausgangsleistung deckt <b>${fmt(100 - l800.pct_above, 0)}%</b> deiner Zeit; die Spitzen darüber dauern zusammen nur <b>${fmt(l800.hours_above, 1)} h</b> im Zeitraum. ` : '') +
+    `Für die <b>Dauerlast</b> reichen ~<b>${fmt(r.p95_w, 0)} W</b> (95 % der Zeit darunter), die kurzen Lastspitzen bestimmen die Größe. ` +
+    `<span style="color:var(--muted)">Summe aller <b>gemessenen</b> Steckdosen + Wärmepumpe auf ein ${r.bin_s}-s-Raster. Ohne Ganzhaus-Zähler ist das <b>nicht</b> die echte Hausspitze – ungemessene Großverbraucher (Herd, Wasserkocher, Backofen) fehlen.</span>`;
 }
 
 // Rough device-type hint from the name – tells whether a standby is likely
@@ -9276,6 +9344,17 @@ function init() {
     dtWin.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
     paintDeviceTimeline();
   });
+  // load-peaks window
+  const lpd = $('pf-lp-days');
+  if (lpd) {
+    lpd.addEventListener('click', e => {
+      const b = e.target.closest('button'); if (!b) return;
+      _lpDays = parseInt(b.dataset.lpd, 10); try { localStorage.setItem('bhe_lp_days', String(_lpDays)); } catch (err) {}
+      lpd.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+      renderLoadPeaks();
+    });
+    lpd.querySelectorAll('button').forEach(x => x.classList.toggle('on', parseInt(x.dataset.lpd, 10) === lpDays()));
+  }
   // tap/hover a day (or month) bar to read its exact values
   const hd = $('h-daily');
   if (hd) {

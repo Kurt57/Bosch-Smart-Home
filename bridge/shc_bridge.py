@@ -1460,6 +1460,87 @@ def _energy_for_bucket(samples: list[dict]) -> float:
     return wh
 
 
+def compute_load_peaks(store: "Store", days: float = 7, hp_live: dict | None = None) -> dict:
+    """Total MEASURED power over time (all metered devices + heat pump) on a common
+    time grid, for load-management awareness: the biggest power peaks with their
+    duration, a load-duration curve, and how much of the time a given output rating
+    (e.g. 800 W) would cover. Honest scope: only measured plugs + the heat pump –
+    without a whole-house meter this is not the true house peak."""
+    now = int(time.time())
+    days = max(0.5, min(31.0, float(days)))
+    since = int(now - days * 86400)
+    bin_s = 60 if days <= 10 else 120
+    maxstale = 15 * 60                       # forward-fill a reading up to 15 min
+
+    sources: dict[str, list] = {}
+    for r in store.samples_since(since):
+        p = r.get("power_w")
+        if p is not None:
+            sources.setdefault(r["device_id"], []).append((int(r["ts"]), float(p)))
+    hp = [(int(r["ts"]), float(r.get("power_w") or 0.0))
+          for r in store.hp_samples_since(since) if r.get("power_w") is not None]
+    if hp:
+        sources["__hp"] = hp
+    for k in sources:
+        sources[k].sort()
+    if not sources:
+        return {"ok": True, "n": 0, "sources": 0}
+
+    start = (since // bin_s) * bin_s
+    ngrid = int((now - start) // bin_s) + 1
+    if ngrid <= 2:
+        return {"ok": True, "n": 0, "sources": len(sources)}
+    ptrs = {k: 0 for k in sources}
+    total = [0.0] * ngrid
+    for gi in range(ngrid):
+        t = start + gi * bin_s
+        s = 0.0
+        for k, arr in sources.items():
+            p = ptrs[k]
+            while p + 1 < len(arr) and arr[p + 1][0] <= t:
+                p += 1
+            ptrs[k] = p
+            ts_k, pw_k = arr[p]
+            if ts_k <= t and (t - ts_k) <= maxstale:
+                s += pw_k
+        total[gi] = s
+    n = ngrid
+    srt = sorted(total, reverse=True)
+
+    def pct(fr):                             # power exceeded fr of the time
+        return round(srt[min(n - 1, int(fr * (n - 1)))], 0)
+    peak_w = round(max(total), 0)
+    ldc = [{"frac": round(i / 100.0, 2), "w": round(srt[min(n - 1, int(i / 100.0 * (n - 1)))], 0)}
+           for i in range(101)]
+    levels = []
+    for lv in (600, 800, 1200, 2000, 3600, 5000):
+        if lv > peak_w + 1:
+            continue
+        cnt = sum(1 for v in total if v > lv)
+        levels.append({"w": lv, "pct_above": round(cnt / n * 100.0, 1),
+                       "hours_above": round(cnt * bin_s / 3600.0, 2)})
+    # top excursion events: contiguous runs above a threshold, ranked by peak
+    thr = max(pct(0.08), 300.0)
+    events, i = [], 0
+    while i < n:
+        if total[i] > thr:
+            j, pk = i, total[i]
+            while j + 1 < n and total[j + 1] > thr:
+                j += 1
+                if total[j] > pk:
+                    pk = total[j]
+            events.append({"peak_w": round(pk, 0), "start": start + i * bin_s,
+                           "dur_s": (j - i + 1) * bin_s})
+            i = j + 1
+        else:
+            i += 1
+    events.sort(key=lambda e: -e["peak_w"])
+    return {"ok": True, "days": days, "bin_s": bin_s, "n": n,
+            "hours": round(n * bin_s / 3600.0, 1), "sources": len(sources),
+            "peak_w": peak_w, "p99_w": pct(0.01), "p95_w": pct(0.05),
+            "p50_w": pct(0.5), "ldc": ldc, "levels": levels, "events": events[:10]}
+
+
 def compute_analytics(store: Store, days: int, price: float) -> dict:
     now = int(time.time())
     since = now - days * 86400
@@ -6763,6 +6844,14 @@ class Handler(BaseHTTPRequestHandler):
                 since = int(time.time()) - days * 86400
                 rows = self.store.samples_since(since, device)
                 return self._send_json({"device": device, "samples": rows})
+            if path == "/api/loadpeaks":
+                try:
+                    lpd = max(0.5, min(31.0, float(qs.get("days", ["7"])[0])))
+                except ValueError:
+                    lpd = 7.0
+                return self._send_json(self.ctx.calc_get(
+                    ("loadpeaks", round(lpd, 2)), 60,
+                    lambda: compute_load_peaks(self.store, lpd, self._hp_live())))
             if path == "/api/discover":
                 found = discover_shc()
                 return self._send_json({
