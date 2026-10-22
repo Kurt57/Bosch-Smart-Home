@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v172';   // short tag shown always-on in the header
-const APP_VERSION = 'v172 · 2026-10-21 · Neue Karte „Raumtemperatur ↔ Wärmepumpe": Ist/Soll/Feuchte je Raum aus den Bosch-Thermostaten + ehrliche Geräte-Prüfung, ob die HomeCom-API eine gemessene Raumtemperatur annimmt (CS6800i: nein – misst über eigene Raumstation; schreibbar ist nur der Raum-Soll)'
+const APP_BUILD = 'v173';   // short tag shown always-on in the header
+const APP_VERSION = 'v173 · 2026-10-22 · Verlauf: neuer „Tag"-Eintrag (links vor 7 T) für einen einzelnen Tag mit ◀ ▶-Navigation (voriger/nächster Tag). Zeigt den Tag stundenweise je Gerät; Tippen gibt die Aufschlüsselung je Stunde'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -226,6 +226,7 @@ let STATE = {
   price: parseFloat(localStorage.getItem(LS.price) || '0.35'),
   demo: localStorage.getItem(LS.demo) === '1',
   histSel: '14',
+  histDay: null,  // single-day Verlauf: selected day (Date at local midnight)
   ov: null,       // /api/overview (combined)
   hpA: null,      // /api/heatpump/analytics
   data: null,     // /api/analytics (Smart Home, for profile + shares)
@@ -5294,8 +5295,24 @@ function renderToday() {
 }
 
 // Resolve the current Verlauf window [from,to] and the display mode.
+// label a day as heute / gestern / "Mi, 15.10.2026"
+function dayLabel(d) {
+  const t = new Date(); t.setHours(0, 0, 0, 0);
+  const diff = Math.round((t - d) / 86400000);
+  if (diff === 0) return 'heute';
+  if (diff === 1) return 'gestern';
+  if (diff === 2) return 'vorgestern';
+  return d.toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' });
+}
 function historyWindow() {
   const sel = STATE.histSel, now = new Date();
+  if (sel === 'day') {
+    const base = STATE.histDay ? new Date(STATE.histDay) : new Date();
+    const from = new Date(base.getFullYear(), base.getMonth(), base.getDate());
+    const name = dayLabel(from), rel = !/\d{4}/.test(name);   // heute/gestern/… vs. a date
+    return { from, to: new Date(from), mode: 'day', single: true, day: from,
+      title: 'Strom ' + (rel ? name : 'am ' + name) + ' · pro Stunde' };
+  }
   if (sel === 'year') {
     return { from: new Date(now.getFullYear(), 0, 1), to: now, mode: 'month', title: 'Strom dieses Jahr pro Monat' };
   }
@@ -5323,7 +5340,9 @@ function renderHistory() {
     .concat(anyEst ? [{ label: 'geschätzt (Ø, saisonal)', color: 'rgba(147,162,196,.5)' }] : [])) +
     `<span style="color:var(--muted);font-size:11px;margin-left:6px">tippen/fahren für Tageswerte</span>`;
 
-  if (win.mode === 'month') {
+  if (win.single) {
+    paintHistoryDayHourly(win.day);   // single day → hourly bars (own async path)
+  } else if (win.mode === 'month') {
     const months = aggregateMonths(filled);
     $('h-daily').innerHTML = `<div class="dhit" style="touch-action:none">` + stackedBar(
       months.map(m => ({ label: m.label, estimated: m.estimated, values: { sh: m.sh, hp: m.hp } })),
@@ -5438,6 +5457,79 @@ function renderHistory() {
   renderForecastBasis(fc);
   renderConsumYear();
   renderTibberCons();
+}
+
+// Single-day Verlauf: hourly Smart-Home consumption (per device, stacked) for
+// the selected day, from /api/series. Reuses the device-timeline machinery.
+let _histDayTok = 0;
+async function paintHistoryDayHourly(day) {
+  const el = $('h-daily'), leg = $('h-daily-legend'); if (!el) return;
+  const dayStart = new Date(day.getFullYear(), day.getMonth(), day.getDate());
+  const t0 = Math.floor(dayStart.getTime() / 1000), t1 = t0 + 86400;
+  const daysBack = Math.max(1, Math.ceil(Date.now() / 1000 / 86400 - t0 / 86400) + 1);
+  el.innerHTML = '<div class="note" style="padding:16px 0;text-align:center">Lade Stundenwerte …</div>';
+  const token = (_histDayTok = _histDayTok + 1);
+  let samples;
+  try { samples = await devtlFetchSeries(daysBack); }
+  catch (e) { if (token === _histDayTok) el.innerHTML = '<div class="note">Stundenwerte nur mit laufender Bridge verfügbar.</div>'; return; }
+  if (token !== _histDayTok) return;                // a newer day was picked meanwhile
+  const by = {};
+  for (const s of samples) if (s.ts >= t0 && s.ts < t1) (by[s.device_id] = by[s.device_id] || []).push(s);
+  const perDev = {}; let any = false;
+  for (const id in by) {
+    const arr = by[id]; arr.sort((a, b) => a.ts - b.ts); perDev[id] = {};
+    for (let i = 0; i < arr.length; i++) {
+      const dt = Math.min(1800, i < arr.length - 1 ? arr[i + 1].ts - arr[i].ts : 900);
+      const wh = (arr[i].power_w || 0) * dt / 3600, h = Math.floor((arr[i].ts - t0) / 3600);
+      if (h >= 0 && h < 24 && wh > 0) { perDev[id][h] = (perDev[id][h] || 0) + wh; any = true; }
+    }
+  }
+  if (!any) {
+    el.innerHTML = '<div class="note" style="padding:16px 0;text-align:center">Für diesen Tag liegen keine gemessenen Stundenwerte vor (gemessene Steckdosen). Mit einem der Mehrtage-Zeiträume siehst du geschätzte Tageswerte.</div>';
+    if (leg) leg.innerHTML = '';
+    $('h-avg').innerHTML = '–'; $('h-max').innerHTML = '–'; $('h-max-l').textContent = 'Stärkste Stunde';
+    return;
+  }
+  const ranked = Object.keys(perDev).map(id => ({ id, val: Object.values(perDev[id]).reduce((a, b) => a + b, 0) }))
+    .filter(x => x.val > 0.001).sort((a, b) => b.val - a.val);
+  const { series, restIds } = _devtlSeries3(ranked, 'all');
+  const rows = []; let dayTot = 0; const hourTot = new Array(24).fill(0);
+  for (let h = 0; h < 24; h++) {
+    const values = {};
+    series.forEach(s => {
+      const wh = s.key === '__rest' ? restIds.reduce((a, id) => a + ((perDev[id] || {})[h] || 0), 0) : ((perDev[s.key] || {})[h] || 0);
+      values[s.key] = wh / 1000; dayTot += wh / 1000; hourTot[h] += wh / 1000;
+    });
+    rows.push({ label: h % 3 === 0 ? (String(h).padStart(2, '0') + 'h') : '',
+      full: String(h).padStart(2, '0') + ':00–' + String((h + 1) % 24).padStart(2, '0') + ':00', values });
+  }
+  // plain wrapper (NOT .dhit): the day chart uses stackedBar's own per-hour
+  // readout, so it must not trigger the multi-day _histHit hover handler.
+  el.innerHTML = `<div style="touch-action:none">` + stackedBar(rows, series, { h: 210, unit: 'kWh' }) + `</div>`;
+  if (leg) leg.innerHTML = legendHtml(series.map(s => ({ label: s.label, color: s.color }))) +
+    `<span style="color:var(--muted);font-size:11px;margin-left:6px">tippen/fahren für Stundenwerte</span>`;
+  const peakH = hourTot.indexOf(Math.max(...hourTot));
+  $('h-avg').innerHTML = kwh(dayTot, 2);
+  $('h-max').innerHTML = `${String(peakH).padStart(2, '0')}–${String((peakH + 1) % 24).padStart(2, '0')} h`;
+  $('h-max-l').textContent = 'Stärkste Stunde';
+}
+// day navigator (◀ ▶) for the single-day Verlauf
+function updateHistDayNav() {
+  const lbl = $('hist-day-label'); if (!lbl) return;
+  const base = STATE.histDay ? new Date(STATE.histDay) : new Date();
+  const d = new Date(base.getFullYear(), base.getMonth(), base.getDate());
+  const name = dayLabel(d), full = d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  lbl.textContent = /\d{4}/.test(name) ? name : `${name} · ${full}`;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const next = $('hist-day-next'); if (next) next.disabled = d >= today;
+}
+function histDayShift(delta) {
+  const base = STATE.histDay ? new Date(STATE.histDay) : new Date();
+  const d = new Date(base.getFullYear(), base.getMonth(), base.getDate());
+  d.setDate(d.getDate() + delta);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  if (d > today) return;
+  STATE.histDay = d; updateHistDayNav(); renderHistory();
 }
 
 // Explains WHERE the yearly number comes from and how sure it is – so a
@@ -8996,6 +9088,11 @@ function init() {
     STATE.histSel = b.dataset.d;
     document.querySelectorAll('#hist-range button').forEach(x => x.classList.toggle('on', x === b));
     const cust = $('hist-custom'); if (cust) cust.hidden = (STATE.histSel !== 'custom');
+    const dayNav = $('hist-day'); if (dayNav) dayNav.hidden = (STATE.histSel !== 'day');
+    if (STATE.histSel === 'day') {
+      if (!STATE.histDay) { const n = new Date(); STATE.histDay = new Date(n.getFullYear(), n.getMonth(), n.getDate()); }
+      updateHistDayNav();
+    }
     if (STATE.histSel === 'custom') {
       const now = new Date();
       if (!$('hist-to').value) $('hist-to').value = localKey(now);
@@ -9003,6 +9100,9 @@ function init() {
     }
     renderHistory();
   });
+  { const pv = $('hist-day-prev'), nx = $('hist-day-next');
+    if (pv) pv.addEventListener('click', () => histDayShift(-1));
+    if (nx) nx.addEventListener('click', () => histDayShift(1)); }
   ['hist-from', 'hist-to'].forEach(id => { const el = $(id); if (el) el.addEventListener('change', renderHistory); });
   // heating-curve measurement window: Heute / Gestern / 7·14·30 T / Gesamt
   const hcr = $('hc-range');

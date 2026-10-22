@@ -97,7 +97,14 @@
     margin:0 0 12px}
   /* keep the time-range control visible & clickable below the sticky header */
   #hist-range{position:sticky; top:var(--hdr-h,64px); z-index:21;
-    box-shadow:0 6px 16px rgba(11,18,32,.6)}
+    box-shadow:0 6px 16px rgba(11,18,32,.6); overflow-x:auto; scrollbar-width:none}
+  #hist-range::-webkit-scrollbar{display:none}
+  #hist-range button{flex:1 0 auto; white-space:nowrap}
+  #hist-day{display:flex; gap:8px; align-items:center; margin:-4px 0 12px}
+  #hist-day[hidden]{display:none}
+  #hist-day #hist-day-label{flex:1; text-align:center; font-weight:700; font-size:14px}
+  #hist-day button{flex:0 0 auto; width:auto; padding:8px 16px; margin:0; font-size:15px}
+  #hist-day button:disabled{opacity:.35}
   #hist-custom{display:flex; gap:8px; margin:-4px 0 12px}
   #hist-custom[hidden]{display:none}
   .seg button{flex:1; border:none; background:transparent; color:var(--muted);
@@ -398,12 +405,18 @@
   <!-- VERLAUF ------------------------------------------------------------->
   <section class="view" id="v-history">
     <div class="seg" id="hist-range">
+      <button data-d="day">Tag</button>
       <button data-d="7">7 T</button>
       <button data-d="14" class="on">14 T</button>
       <button data-d="30">30 T</button>
       <button data-d="90">90 T</button>
       <button data-d="year">Jahr</button>
       <button data-d="custom">Zeitraum</button>
+    </div>
+    <div id="hist-day" hidden>
+      <button class="btn sec" id="hist-day-prev" aria-label="voriger Tag">◀</button>
+      <div id="hist-day-label">heute</div>
+      <button class="btn sec" id="hist-day-next" aria-label="nächster Tag">▶</button>
     </div>
     <div id="hist-custom" hidden>
       <div style="flex:1"><label>Von</label><input id="hist-from" type="date"></div>
