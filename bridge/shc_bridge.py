@@ -1757,6 +1757,71 @@ def compute_dhw_impact(store: "Store", days: float = 14, hp_live: dict | None = 
                            "avg_drop": round(sum(d["drop"] for d in es) / len(es), 2),
                            "avg_recov_min": (round(sum(rs) / len(rs)) if rs else None)})
 
+    # --- day-part breakdown + concrete "Hebel" (levers) --------------------- #
+    def hod(ts):
+        return datetime.fromtimestamp(ts).hour
+
+    dayparts = []
+    for lbl, lo, hi in [("früh/Nacht (0–8 Uhr)", 0, 9), ("Mittag (9–16 Uhr)", 9, 17),
+                        ("Abend (17–23 Uhr)", 17, 24)]:
+        es = [e for e in events if lo <= hod(e["start"]) < hi]
+        if es:
+            rs = [e["recov_min"] for e in es if e["recov_min"] is not None]
+            dayparts.append({"label": lbl, "n": len(es),
+                             "avg_drop": round(sum(e["drop"] for e in es) / len(es), 2),
+                             "avg_recov_min": (round(sum(rs) / len(rs)) if rs else None)})
+
+    levers = []
+    overall_drop = sum(drops) / len(drops)
+    timing_added = False
+    # Lever 1 — timing: colder outside = bigger dip; move DHW to the warm midday
+    if len(by_out) >= 2:
+        warm = min(by_out, key=lambda b: b["avg_drop"])
+        cold = max(by_out, key=lambda b: b["avg_drop"])
+        gain = round(cold["avg_drop"] - warm["avg_drop"], 1)
+        if gain >= 0.2:
+            timing_added = True
+            levers.append({
+                "icon": "🕑", "title": "Warmwasser in die Mittagszeit legen", "benefit_c": gain,
+                "detail": f"Wenn es draußen wärmer ist ({warm['label']}), kühlt dein Haus beim WW nur um "
+                          f"−{warm['avg_drop']:.1f} °C aus – bei {cold['label']} dagegen um −{cold['avg_drop']:.1f} °C. "
+                          f"Lege die WW-Bereitung in die wärmsten Stunden (Mittag, oft mit PV-Überschuss): "
+                          f"die Heizung pausiert dann bei kleinerem Komfortverlust."})
+    # Lever 2 — duration: longer charges cool the house more → cap the charge time
+    durs = sorted(e["dur_min"] for e in events)
+    med_dur = durs[len(durs) // 2]
+    longs = [e for e in events if e["dur_min"] > med_dur]
+    shorts = [e for e in events if e["dur_min"] <= med_dur]
+    if longs and shorts:
+        dl = sum(e["drop"] for e in longs) / len(longs)
+        ds = sum(e["drop"] for e in shorts) / len(shorts)
+        if dl - ds >= 0.15:
+            levers.append({
+                "icon": "⏱️", "title": f"WW-Ladedauer begrenzen (~{med_dur:.0f} min)",
+                "benefit_c": round(dl - ds, 1),
+                "detail": f"Lange WW-Ladungen (> {med_dur:.0f} min) kühlen dein Haus um −{dl:.1f} °C aus, kurze nur "
+                          f"um −{ds:.1f} °C. Über WW-Soll/Hysterese oder eine Zeitbegrenzung die Ladung kürzer halten – "
+                          f"so pausiert die Heizung weniger lang."})
+    # Lever 3 — early-morning cluster: the setback hours are the worst to pause
+    # in (only when the timing lever didn't already say "move DHW to midday")
+    morn = [e for e in events if 4 <= hod(e["start"]) < 9]
+    if not timing_added and len(morn) >= 3:
+        dm = sum(e["drop"] for e in morn) / len(morn)
+        if dm >= overall_drop + 0.12:
+            levers.append({
+                "icon": "🌅", "title": "Früh-WW (4–9 Uhr) entzerren", "benefit_c": round(dm - overall_drop, 1),
+                "detail": f"Morgens (4–9 Uhr) ist der Dip mit −{dm:.1f} °C überdurchschnittlich – da ist das Haus "
+                          f"nach der Nachtabsenkung ohnehin am kühlsten. Die WW-Ladung ein bis zwei Stunden später "
+                          f"(wenn es draußen wärmer wird) legen glättet den Tiefpunkt."})
+    # Lever 4 — lower the hot-water target (directional, always sensible)
+    levers.append({
+        "icon": "🌡️", "title": "WW-Soll etwas senken (z. B. 55 → 50 °C)", "benefit_c": None,
+        "detail": "Jedes Grad weniger Warmwasser-Soll verkürzt die Ladezeit und damit die Heizpause. 50 °C genügen "
+                  "meist für Komfort; für den Legionellenschutz reicht 1×/Woche eine Aufheizung auf 60 °C. Die "
+                  "Heizung ist danach schneller wieder dran."})
+    # quantified levers first (by benefit), directional ones last
+    levers.sort(key=lambda l: (l["benefit_c"] is None, -(l["benefit_c"] or 0)))
+
     # representative phase for the chart: most recent clear dip that recovered
     cand = [e for e in events if e["drop"] >= 0.2 and e["recovered"]] or events
     rep_e = max(cand, key=lambda x: x["start"])
@@ -1775,6 +1840,8 @@ def compute_dhw_impact(store: "Store", days: float = 14, hp_live: dict | None = 
         "share_recovered": round(sum(1 for e in events if e["recovered"]) / len(events) * 100),
         "avg_dur_min": round(sum(e["dur_min"] for e in events) / len(events)),
         "by_outdoor": by_out,
+        "dayparts": dayparts,
+        "levers": levers,
         "events": events[-24:],
         "representative": rep,
         "n_dhw_total": len(merged),
@@ -5170,7 +5237,10 @@ def _demo_hp(dt: datetime) -> dict:
     daily = 4.0 * math.sin((h - 14) / 24.0 * 2 * math.pi)
     outdoor = round(seasonal + daily, 1)
 
-    dhw = (6.0 <= h <= 7.0) or (18.5 <= h <= 19.5)     # hot-water charge windows
+    # hot-water charge windows; the morning charge runs longer on some days
+    # (higher demand / weekly legionella run) so charge durations vary
+    morn_end = 7.75 if (doy % 3 == 0) else 7.0
+    dhw = (6.0 <= h <= morn_end) or (18.5 <= h <= 19.5)
     if dhw:
         elec, mode = 1500.0, "dhw"
         cop = max(1.8, min(3.6, 2.0 + 0.07 * outdoor))  # warmer air = better COP

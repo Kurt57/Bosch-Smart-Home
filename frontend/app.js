@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v178';   // short tag shown always-on in the header
-const APP_VERSION = 'v178 · 2026-10-26 · Wärmepumpe → Abgleich: „Warmwasser kostet Komfort". Überlagert die Warmwasser-Phasen der WP (HomeCom) mit der gemessenen Innentemperatur (Bosch-Thermostate) und misst je Phase, um wie viel das Haus abkühlt, während die Heizung pausiert – und wie lange es nach dem Neustart dauert, bis der Startwert wieder erreicht ist. Mit Beispielkurve, Außentemperatur-Abhängigkeit und Liste der letzten Phasen'
+const APP_BUILD = 'v179';   // short tag shown always-on in the header
+const APP_VERSION = 'v179 · 2026-10-26 · „Warmwasser kostet Komfort" bekommt Hebel-Vorschläge: aus deinen eigenen Daten berechnete, konkrete Maßnahmen, den Innentemperatur-Dip zu verkleinern (WW in die Mittagszeit legen, Ladedauer begrenzen, Früh-WW entzerren, WW-Soll senken) – je mit geschätzter Ersparnis in °C, sortiert nach Wirkung'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -4808,8 +4808,8 @@ function dhwEventChart(rep) {
 }
 function paintDhwImpact(r) {
   const head = $('dhw-head'), kpis = $('dhw-kpis'), ch = $('dhw-chart'), repNote = $('dhw-rep-note'),
-    legend = $('dhw-legend'), byout = $('dhw-byout'), evs = $('dhw-events'), note = $('dhw-note');
-  const clear = () => [kpis, legend, byout, evs].forEach(e => { if (e) e.innerHTML = ''; });
+    legend = $('dhw-legend'), byout = $('dhw-byout'), evs = $('dhw-events'), note = $('dhw-note'), levEl = $('dhw-levers');
+  const clear = () => [kpis, legend, byout, evs, levEl].forEach(e => { if (e) e.innerHTML = ''; });
   if (!r || !r.ok || !r.n) {
     const why = r && r.reason === 'no_temp'
       ? 'Dafür brauche ich <b>Innentemperatur über die Zeit</b> aus deinen Bosch-Raumthermostaten – die sammelt die App im Betrieb. Nach ein paar Tagen erscheint hier die Auswertung.'
@@ -4825,6 +4825,21 @@ function paintDhwImpact(r) {
     kpi('−' + fmt(r.avg_drop, 1).replace('-', '') + ' °C', 'Ø Abkühlung') +
     kpi(r.avg_recov_min != null ? '~' + fmt(r.avg_recov_min, 0) + ' min' : '–', 'Ø wieder warm') +
     kpi(fmt(r.share_recovered, 0) + ' %', 'erreichen Startwert');
+  // concrete levers to shrink the dip (quantified from the user's own data)
+  if (levEl) {
+    const lv = r.levers || [];
+    levEl.innerHTML = lv.length
+      ? `<div style="font-weight:600;font-size:13.5px;margin-bottom:8px">💡 Hebel: so verkleinerst du den Dip</div>` + lv.map(l => {
+        const chip = l.benefit_c != null
+          ? `<span style="white-space:nowrap;font-size:11px;background:color-mix(in srgb,${COL.pv} 22%,transparent);color:var(--fg);border:1px solid ${COL.pv};padding:2px 8px;border-radius:999px;font-weight:700">~${fmt(l.benefit_c, 1)} °C weniger</span>`
+          : `<span style="white-space:nowrap;font-size:11px;color:var(--muted);border:1px solid var(--line);padding:2px 8px;border-radius:999px">allgemein</span>`;
+        return `<div style="padding:9px 0;border-bottom:1px solid var(--line)">` +
+          `<div style="display:flex;justify-content:space-between;gap:10px;align-items:baseline">` +
+          `<b style="font-size:13px">${esc(l.icon || '•')} ${esc(l.title)}</b>${chip}</div>` +
+          `<div class="note" style="margin-top:3px">${esc(l.detail)}</div></div>`;
+      }).join('')
+      : '';
+  }
   // representative phase
   const rep = r.representative;
   if (rep && ch) {
