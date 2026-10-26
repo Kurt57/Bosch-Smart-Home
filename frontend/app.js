@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v177';   // short tag shown always-on in the header
-const APP_VERSION = 'v177 · 2026-10-22 · Produktauswahl (PV-Tab): die Datenblätter von Fronius GEN24 Plus, Fronius Reserva und GoodWe ESA liegen jetzt in der Datenbank. Aus deinem Verbrauch wird die passende Größe (kWp/Speicher/Wechselrichter) empfohlen; nach deinen Prioritäten (App-steuerbar, dynamischer Tarif, Notstrom, Speichergröße, Preis, EU-Marke) werden die Systeme mit „Passung %" und Für-/Gegen-Punkten sortiert – plus Glossar für Nicht-Elektriker'
+const APP_BUILD = 'v178';   // short tag shown always-on in the header
+const APP_VERSION = 'v178 · 2026-10-26 · Wärmepumpe → Abgleich: „Warmwasser kostet Komfort". Überlagert die Warmwasser-Phasen der WP (HomeCom) mit der gemessenen Innentemperatur (Bosch-Thermostate) und misst je Phase, um wie viel das Haus abkühlt, während die Heizung pausiert – und wie lange es nach dem Neustart dauert, bis der Startwert wieder erreicht ist. Mit Beispielkurve, Außentemperatur-Abhängigkeit und Liste der letzten Phasen'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -288,6 +288,11 @@ const INFO = {
   roomsync: () => 'Zeigt je Raum <b>Ist</b>-Temperatur, <b>Soll</b> und <b>Feuchte</b> aus deinen Bosch-Raumthermostaten – und prüft, ob die <b>Wärmepumpe über die HomeCom-API eine gemessene Raumtemperatur entgegennimmt</b>. ' +
     'Bei der Compress 6800i ist das normalerweise <b>nicht</b> vorgesehen: Die WP ist witterungsgeführt und misst die Raumtemperatur über ihre <b>eigene Raumstation</b>, nicht über einen API-Eingang. Schreibbar ist nur der <b>Raum-Soll</b>. ' +
     'Der Energiemanager kann genau diesen Soll als Hebel nutzen (anheben/absenken je nach gemessener Ist-Temperatur). Ob dein konkretes Gerät doch einen Ist-Eingang hat, sagt dir die Prüfung oben.',
+  'dhw-impact': () => 'Die Compress 6800i hat <b>Warmwasser-Vorrang</b>: macht sie Warmwasser, <b>pausiert die Heizung</b> solange. Diese Karte misst, was das für deinen <b>Komfort</b> bedeutet. ' +
+    'Dazu wird die <b>Warmwasser-Phase</b> der Wärmepumpe (aus HomeCom) mit der gemessenen <b>Innentemperatur</b> (aus deinen Bosch-Thermostaten) überlagert. Je Phase: ' +
+    'wie viel die Innentemperatur vom Wert <b>bei WW-Start</b> bis zum Tiefpunkt <b>fällt</b> – und wie lange es nach dem Heizungs-Neustart dauert, bis dieser <b>Startwert wieder erreicht</b> ist. ' +
+    'Die Beispiel-Kurve zeigt eine typische Phase (schattiert = WW-Pause, gestrichelt = Startwert, grün = wieder warm). Darunter die Abhängigkeit von der <b>Außentemperatur</b> und die letzten Phasen. ' +
+    '<b>Je kälter draußen, desto größer der Dip.</b> Gegenmittel: WW in Schwachlastzeiten legen, WW-Soll/Hysterese senken oder die Ladedauer begrenzen – dann pausiert die Heizung kürzer.',
   devtl: () => '<b>Zeitstrahl</b> des Stromverbrauchs je <b>gemessenem Gerät</b>: jeder Balken ein Tag, die <b>Höhe</b> die ' +
     'verbrauchten <b>kWh</b>. „Alle Geräte" stapelt die Geräte farbig übereinander (Top 8 + „übrige"), oder wähle ein ' +
     'einzelnes Gerät. Ein Tippen/Überfahren zeigt die <b>Aufschlüsselung je Tag</b>. Datenquelle sind die von den Modulen ' +
@@ -4745,6 +4750,114 @@ function paintRoomSync(r) {
     (r.supports_actual
       ? 'Die Übermittlung der Ist-Temperatur an die WP kann der Energiemanager übernehmen.'
       : 'Da die WP keine gemessene Raumtemperatur annimmt, nutzt der Energiemanager später den <b>Raum-Soll</b> als Stellhebel – z. B. Soll leicht anheben, wenn ein Raum zu kühl ist, oder absenken, wenn es passt. So „weiß" die WP indirekt über die Raumlage Bescheid.');
+}
+
+// ===== Warmwasser kostet Komfort: Innentemperatur-Dip durch WW-Vorrang ===== #
+let _dwDays = null, _dwData = {}, _dwBusy = false;
+function dwDays() { if (_dwDays == null) { try { _dwDays = parseInt(localStorage.getItem('bhe_dw_days'), 10) || 14; } catch (e) { _dwDays = 14; } } return _dwDays; }
+async function renderDhwImpact() {
+  const card = $('dhw-card'); if (!card) return;
+  const d = dwDays();
+  if (_dwData[d]) { paintDhwImpact(_dwData[d]); return; }
+  if (_dwBusy) return; _dwBusy = true;
+  const ch = $('dhw-chart'); if (ch) ch.innerHTML = '<div class="note" style="padding:14px 0;text-align:center">Lade Warmwasser-Analyse …</div>';
+  try { const r = await api('/api/heatpump/dhwimpact?days=' + d); _dwData[d] = r; paintDhwImpact(r); }
+  catch (e) { if (ch) ch.innerHTML = '<div class="note">Nur mit laufender Bridge verfügbar.</div>'; }
+  finally { _dwBusy = false; }
+}
+// one representative DHW phase: indoor temp line, shaded WW-pause, start-temp
+// reference line, lowest-point and "wieder warm" markers
+function dhwEventChart(rep) {
+  const s = rep.series || []; if (s.length < 3) return '<div class="note">Zu wenig Messpunkte für die Kurve.</div>';
+  const h = 215, padL = 42, padR = 14, top = 16, base = h - 26, n = s.length;
+  const temps = s.map(p => p.temp);
+  const lo = Math.min(rep.t_start, ...temps) - 0.3, hi = Math.max(rep.t_start, ...temps) + 0.3;
+  const span = Math.max(0.6, hi - lo);
+  const X = i => padL + (CW - padL - padR) * (n <= 1 ? 0 : i / (n - 1));
+  const Y = v => top + (1 - (v - lo) / span) * (base - top);
+  const t0 = s[0].ts, t1 = s[n - 1].ts;
+  const xForTs = ts => { const fr = (ts - t0) / Math.max(1, t1 - t0); return padL + (CW - padL - padR) * Math.max(0, Math.min(1, fr)); };
+  // shaded WW-pause band
+  const xa = xForTs(rep.start), xb = xForTs(rep.end);
+  let g = `<rect x="${xa.toFixed(1)}" y="${top}" width="${Math.max(2, xb - xa).toFixed(1)}" height="${(base - top).toFixed(1)}" fill="${COL.hp}" fill-opacity="0.12"/>`;
+  g += `<text class="axis" x="${((xa + xb) / 2).toFixed(1)}" y="${top + 10}" text-anchor="middle" fill="${COL.hp}" style="font-size:9px">Warmwasser</text>`;
+  // y gridlines (2 levels) + start-temp reference line
+  const yS = Y(rep.t_start);
+  g += `<line x1="${padL}" x2="${CW - padR}" y1="${yS.toFixed(1)}" y2="${yS.toFixed(1)}" stroke="var(--accent2)" stroke-width="1" stroke-dasharray="4 3" opacity="0.85"/>`;
+  g += `<text class="axis" x="${padL + 2}" y="${(yS - 4).toFixed(1)}" fill="var(--accent2)" style="font-size:9px">Start ${fmt(rep.t_start, 1)} °C</text>`;
+  // temp line
+  let line = ''; s.forEach((p, i) => { line += `${i ? 'L' : 'M'}${X(i).toFixed(1)} ${Y(p.temp).toFixed(1)} `; });
+  g += `<path d="${line.trim()}" fill="none" stroke="var(--sh,#4da3ff)" stroke-width="2.2" stroke-linejoin="round"/>`;
+  // lowest point marker
+  let miV = Infinity, miI = 0; s.forEach((p, i) => { if (p.temp < miV) { miV = p.temp; miI = i; } });
+  g += `<circle cx="${X(miI).toFixed(1)}" cy="${Y(miV).toFixed(1)}" r="3.5" fill="${COL.sh}"/>`;
+  g += `<text class="axis" x="${X(miI).toFixed(1)}" y="${(Y(miV) + 13).toFixed(1)}" text-anchor="middle" style="font-size:9px">Tief ${fmt(miV, 1)} °C</text>`;
+  // recovery marker
+  if (rep.rec_ts) {
+    const xr = xForTs(rep.rec_ts);
+    g += `<line x1="${xr.toFixed(1)}" x2="${xr.toFixed(1)}" y1="${top}" y2="${base}" stroke="${COL.pv}" stroke-width="1" stroke-dasharray="2 2" opacity="0.8"/>`;
+    g += `<circle cx="${xr.toFixed(1)}" cy="${Y(rep.t_start).toFixed(1)}" r="3.5" fill="${COL.pv}"/>`;
+    g += `<text class="axis" x="${Math.min(CW - padR - 2, xr + 3).toFixed(1)}" y="${(top + 10).toFixed(1)}" fill="${COL.pv}" style="font-size:9px">wieder warm</text>`;
+  }
+  // y axis labels
+  [lo + span * 0.15, lo + span * 0.85].forEach(v => { g += `<text class="axis" x="${padL - 4}" y="${(Y(v) + 3).toFixed(1)}" text-anchor="end">${fmt(v, 1)}</text>`; });
+  // x time labels
+  [0, Math.floor(n / 2), n - 1].forEach(i => { const hhmm = new Date(s[i].ts * 1000).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }); g += `<text class="axis" x="${X(i).toFixed(1)}" y="${h - 6}" text-anchor="${i === 0 ? 'start' : i === n - 1 ? 'end' : 'middle'}">${hhmm}</text>`; });
+  const tips = s.map(p => `<b>${new Date(p.ts * 1000).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}</b> · innen <b>${fmt(p.temp, 1)} °C</b>`);
+  return svg(h, g, { kind: 'area', pad: padL, padR, n, h, tips });
+}
+function paintDhwImpact(r) {
+  const head = $('dhw-head'), kpis = $('dhw-kpis'), ch = $('dhw-chart'), repNote = $('dhw-rep-note'),
+    legend = $('dhw-legend'), byout = $('dhw-byout'), evs = $('dhw-events'), note = $('dhw-note');
+  const clear = () => [kpis, legend, byout, evs].forEach(e => { if (e) e.innerHTML = ''; });
+  if (!r || !r.ok || !r.n) {
+    const why = r && r.reason === 'no_temp'
+      ? 'Dafür brauche ich <b>Innentemperatur über die Zeit</b> aus deinen Bosch-Raumthermostaten – die sammelt die App im Betrieb. Nach ein paar Tagen erscheint hier die Auswertung.'
+      : r && r.reason === 'no_dhw'
+        ? 'Im Zeitraum habe ich keine klar abgegrenzte <b>Warmwasser-Phase</b> gefunden (oder sie hat die Heizung nicht spürbar pausiert).'
+        : 'Noch keine Daten – kommt, sobald WP-Betrieb und Raumtemperaturen über ein paar Tage vorliegen.';
+    if (ch) ch.innerHTML = `<div class="note" style="padding:14px 0;text-align:center">${why}</div>`;
+    [repNote, note].forEach(e => { if (e) e.innerHTML = ''; }); if (head) head.innerHTML = ''; clear(); return;
+  }
+  if (head) head.innerHTML = `<span style="color:var(--muted)">${r.n} WW-Phasen</span>`;
+  const kpi = (v, l) => `<div class="kpi sm"><div class="v">${v}</div><div class="l">${l}</div></div>`;
+  if (kpis) kpis.innerHTML =
+    kpi('−' + fmt(r.avg_drop, 1).replace('-', '') + ' °C', 'Ø Abkühlung') +
+    kpi(r.avg_recov_min != null ? '~' + fmt(r.avg_recov_min, 0) + ' min' : '–', 'Ø wieder warm') +
+    kpi(fmt(r.share_recovered, 0) + ' %', 'erreichen Startwert');
+  // representative phase
+  const rep = r.representative;
+  if (rep && ch) {
+    ch.innerHTML = `<div style="touch-action:none">${dhwEventChart(rep)}</div>`;
+    const when = new Date(rep.start * 1000).toLocaleString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    if (repNote) repNote.innerHTML = `${esc(when)} · WW dauerte <b>${fmt(rep.dur_min, 0)} min</b>${rep.outdoor != null ? ` · außen ${fmt(rep.outdoor, 0)} °C` : ''}: ` +
+      `innen von <b>${fmt(rep.t_start, 1)} °C</b> auf <b>${fmt(rep.t_min, 1)} °C</b> gefallen (−${fmt(rep.drop, 1)} °C)` +
+      (rep.recov_min != null ? `, nach <b>${fmt(rep.recov_min, 0)} min</b> wieder bei ${fmt(rep.t_start, 1)} °C.` : ', Startwert im Fenster nicht wieder erreicht.');
+  }
+  if (legend) legend.innerHTML =
+    `<div class="it"><span class="sw" style="background:${COL.sh}"></span>Innentemperatur</div>` +
+    `<div class="it"><span class="sw" style="background:${COL.hp};opacity:.4"></span>Warmwasser (Heizung pausiert)</div>` +
+    `<div class="it"><span class="sw" style="background:var(--accent2)"></span>Startwert</div>` +
+    `<div class="it"><span class="sw" style="background:${COL.pv}"></span>wieder warm</div>`;
+  // by outdoor temperature
+  if (byout) {
+    const rows = (r.by_outdoor || []).filter(b => b.n > 0);
+    byout.innerHTML = rows.length ? `<h2 style="font-size:14px;margin:4px 0 6px">Je nach Außentemperatur</h2>` + rows.map(b =>
+      `<div style="display:flex;justify-content:space-between;gap:8px;font-size:12.5px;padding:5px 0;border-bottom:1px solid var(--line)">` +
+      `<span>${esc(b.label)} <span style="color:var(--muted)">· ${b.n}×</span></span>` +
+      `<span style="white-space:nowrap">−<b>${fmt(b.avg_drop, 1)} °C</b>${b.avg_recov_min != null ? ` <span style="color:var(--muted)">· ~${fmt(b.avg_recov_min, 0)} min zurück</span>` : ''}</span></div>`).join('') : '';
+  }
+  // recent events (newest first)
+  if (evs) {
+    const list = (r.events || []).slice().reverse().slice(0, 8);
+    const when = ts => new Date(ts * 1000).toLocaleString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    evs.innerHTML = `<h2 style="font-size:14px;margin:12px 0 6px">Letzte Warmwasser-Phasen</h2>` + list.map(e =>
+      `<div style="display:flex;justify-content:space-between;gap:8px;font-size:12.5px;padding:6px 0;border-bottom:1px solid var(--line)">` +
+      `<span>${esc(when(e.start))} <span style="color:var(--muted)">· ${fmt(e.dur_min, 0)} min${e.outdoor != null ? ` · ${fmt(e.outdoor, 0)} °C` : ''}</span></span>` +
+      `<span style="white-space:nowrap">−<b>${fmt(e.drop, 1)} °C</b> <span style="color:var(--muted)">· ${e.recovered ? '~' + fmt(e.recov_min, 0) + ' min' : 'nicht erreicht'}</span></span></div>`).join('');
+  }
+  if (note) note.innerHTML = `Über <b>${r.n} Warmwasser-Phasen</b>: die Heizung pausiert im Schnitt <b>${fmt(r.avg_dur_min, 0)} min</b>, dabei kühlt das Haus um <b>~${fmt(r.avg_drop, 1)} °C</b> ab (max. ${fmt(r.max_drop, 1)} °C) und ist nach <b>~${r.median_recov_min != null ? fmt(r.median_recov_min, 0) : '?'} min</b> (Median) wieder auf dem Ausgangswert. ` +
+    `<span style="color:var(--muted)">Je kälter draußen, desto größer der Dip. Ist er dir zu groß: Warmwasser-Zeiten in Schwachlast legen, WW-Soll/Hysterese senken, oder die WW-Ladung zeitlich begrenzen – dann pausiert die Heizung kürzer. Innentemperatur kommt aus deinen Bosch-Thermostaten, die WW-Phasen aus der Wärmepumpe.</span>`;
 }
 
 /* ---- Hydraulischer Abgleich: step guide + data-driven room worklist ------- */
@@ -9466,6 +9579,7 @@ const HEAT_SUBS = ['heizung', 'abgleich', 'effizienz', 'einstellung'];
 const HEAT_SUB_MAP = {
   'help-card': 'abgleich',
   'hp-card': 'heizung', 'hd-card': 'heizung', 'roomtemp-card': 'heizung', 'hts-card': 'heizung', 'rts-card': 'heizung', 'win-card': 'heizung',
+  'dhw-card': 'abgleich',
   'obs-card': 'abgleich', 'am-card': 'abgleich', 'tm-card': 'abgleich', 'hl-card': 'abgleich',
   'flow-card': 'abgleich', 'opt-card': 'abgleich', 'ha-card': 'abgleich', 'layout-card': 'abgleich',
   'hc-card': 'einstellung', 'hpctl-card': 'einstellung', 'roomsync-card': 'einstellung',
@@ -9508,6 +9622,7 @@ function switchView(v) {
     if (typeof renderLayout === 'function') renderLayout();
     if (typeof initHpControls === 'function') initHpControls();
     if (typeof renderRoomSync === 'function') renderRoomSync();
+    if (typeof renderDhwImpact === 'function') renderDhwImpact();
   }
 }
 
@@ -9627,6 +9742,16 @@ function init() {
       renderLoadPeaks();
     });
     lpd.querySelectorAll('button').forEach(x => x.classList.toggle('on', parseInt(x.dataset.lpd, 10) === lpDays()));
+  }
+  const dwd = $('dhw-days');
+  if (dwd) {
+    dwd.addEventListener('click', e => {
+      const b = e.target.closest('button'); if (!b) return;
+      _dwDays = parseInt(b.dataset.dwd, 10); try { localStorage.setItem('bhe_dw_days', String(_dwDays)); } catch (err) {}
+      dwd.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+      renderDhwImpact();
+    });
+    dwd.querySelectorAll('button').forEach(x => x.classList.toggle('on', parseInt(x.dataset.dwd, 10) === dwDays()));
   }
   // tap/hover a day (or month) bar to read its exact values
   const hd = $('h-daily');

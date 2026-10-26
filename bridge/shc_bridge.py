@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import bisect
 import http.client
 import json
 import math
@@ -1105,6 +1106,14 @@ class Store:
                 " ON CONFLICT(ts) DO UPDATE SET temp=excluded.temp,"
                 " setpoint=excluded.setpoint", (ts, temp, setpoint))
 
+    def room_temp_add_bulk(self, rows: list[tuple]):
+        """rows: (ts, temp, setpoint) – bulk insert of the house-average temp."""
+        with self.lock, self.conn:
+            self.conn.executemany(
+                "INSERT INTO room_temp(ts,temp,setpoint) VALUES(?,?,?)"
+                " ON CONFLICT(ts) DO UPDATE SET temp=excluded.temp,"
+                " setpoint=excluded.setpoint", rows)
+
     def room_temp_hourly(self, since_ts: int) -> dict:
         """Average logged indoor temp per hour (hour-start ts -> temp)."""
         with self.lock:
@@ -1623,6 +1632,153 @@ def _meter_daily_kwh(store: "Store") -> dict | None:
         return None
     return {"daily_kwh": (last["kwh"] - first["kwh"]) / span, "span_days": span,
             "first_ts": first["ts"], "last_ts": last["ts"]}
+
+
+def compute_dhw_impact(store: "Store", days: float = 14, hp_live: dict | None = None) -> dict:
+    """Comfort cost of hot-water (DHW) priority: while the heat pump makes warm
+    water, space heating pauses and the house cools. This correlates the HP's
+    DHW phases (HomeCom `mode`) with the measured average indoor temperature
+    (Bosch thermostats) and, per DHW phase, measures:
+      • how far the indoor temperature fell (T at DHW-start − lowest point), and
+      • how long after heating resumed it took to climb back to the T at
+        DHW-start ("warm again").
+    Aggregated over the window, plus one representative phase for a chart."""
+    now = int(time.time())
+    days = max(1.0, min(60.0, float(days)))
+    since = int(now - days * 86400)
+    temp = [(int(r["ts"]), float(r["temp"])) for r in store.room_temp_series(since)
+            if r.get("temp") is not None]
+    if len(temp) < 6:
+        return {"ok": True, "n": 0, "reason": "no_temp", "days": days}
+    temp.sort()
+    tts = [t for t, _ in temp]
+    tvs = [v for _, v in temp]
+
+    def temp_at(ts, maxgap=2 * 3600):
+        """Linear interpolation on the indoor-temp series (None if no reading
+        within maxgap on both sides)."""
+        i = bisect.bisect_left(tts, ts)
+        if i <= 0:
+            return tvs[0] if abs(tts[0] - ts) <= maxgap else None
+        if i >= len(tts):
+            return tvs[-1] if abs(tts[-1] - ts) <= maxgap else None
+        t0, t1, v0, v1 = tts[i - 1], tts[i], tvs[i - 1], tvs[i]
+        if (ts - t0) > maxgap and (t1 - ts) > maxgap:
+            return None
+        return v0 if t1 == t0 else v0 + (v1 - v0) * (ts - t0) / (t1 - t0)
+
+    hp = sorted((s for s in store.hp_samples_since(since) if s.get("ts")),
+                key=lambda s: s["ts"])
+
+    def is_dhw(s):
+        m = (s.get("mode") or "").lower()
+        return "dhw" in m or "water" in m or "ww" in m or "warm" in m
+
+    # contiguous DHW runs, then merge runs split by a short non-DHW gap (<20 min)
+    runs, i, n = [], 0, len(hp)
+    while i < n:
+        if is_dhw(hp[i]):
+            j, outs = i, []
+            while j < n and is_dhw(hp[j]):
+                if hp[j].get("outdoor_c") is not None:
+                    outs.append(float(hp[j]["outdoor_c"]))
+                j += 1
+            runs.append([hp[i]["ts"], hp[j - 1]["ts"], outs])
+            i = j
+        else:
+            i += 1
+    MERGE = 20 * 60
+    merged = []
+    for r in runs:
+        if merged and r[0] - merged[-1][1] <= MERGE:
+            merged[-1][1] = r[1]
+            merged[-1][2] += r[2]
+        else:
+            merged.append(r[:])
+
+    events = []
+    for k, (st, en, outs) in enumerate(merged):
+        if en - st < 600:                         # ignore <10-min blips
+            continue
+        t_start = temp_at(st)
+        if t_start is None:
+            continue
+        nxt = merged[k + 1][0] if k + 1 < len(merged) else now
+        # keep it a short-timescale event so a later scheduled night-setback is
+        # not mistaken for the DHW dip: the low point is during DHW + up to 1 h
+        # lag, the climb-back is given up to 2 h (or until the next DHW phase).
+        dip_end = min(en + 3600, nxt, now)
+        rec_end = min(en + 7200, nxt, now)
+        dip_pts = [(t, v) for t, v in temp if st <= t <= dip_end]
+        if len(dip_pts) < 2:
+            continue
+        t_min_v = min(v for _, v in dip_pts)
+        t_min_ts = min(t for t, v in dip_pts if v == t_min_v)
+        drop = max(0.0, t_start - t_min_v)
+        rec_ts = None                             # first return to the start temp
+        for t, v in temp:
+            if t < max(en, t_min_ts):
+                continue
+            if t > rec_end:
+                break
+            if v >= t_start - 0.05:
+                rec_ts = t
+                break
+        out_avg = round(sum(outs) / len(outs), 1) if outs else None
+        events.append({
+            "start": st, "end": en, "rec_ts": rec_ts,
+            "dur_min": round((en - st) / 60.0),
+            "t_start": round(t_start, 1), "t_min": round(t_min_v, 1),
+            "drop": round(drop, 2),
+            "recov_min": (round((rec_ts - en) / 60.0) if rec_ts else None),
+            "outdoor": out_avg, "recovered": rec_ts is not None,
+        })
+
+    if not events:
+        return {"ok": True, "n": 0, "reason": "no_dhw", "days": days,
+                "n_dhw_total": len(merged), "temp_points": len(temp)}
+
+    drops = [e["drop"] for e in events]
+    recs = [e["recov_min"] for e in events if e["recov_min"] is not None]
+
+    def med(a):
+        a = sorted(a)
+        return a[len(a) // 2] if a else None
+
+    # drop vs. outdoor temperature (colder outside → bigger dip / slower recovery)
+    buckets = [("kalt (< 3 °C)", -99, 3), ("3–8 °C", 3, 8),
+               ("8–13 °C", 8, 13), ("mild (≥ 13 °C)", 13, 99)]
+    by_out = []
+    for lbl, lo, hi in buckets:
+        es = [e for e in events if e["outdoor"] is not None and lo <= e["outdoor"] < hi]
+        if es:
+            rs = [e["recov_min"] for e in es if e["recov_min"] is not None]
+            by_out.append({"label": lbl, "n": len(es),
+                           "avg_drop": round(sum(d["drop"] for d in es) / len(es), 2),
+                           "avg_recov_min": (round(sum(rs) / len(rs)) if rs else None)})
+
+    # representative phase for the chart: most recent clear dip that recovered
+    cand = [e for e in events if e["drop"] >= 0.2 and e["recovered"]] or events
+    rep_e = max(cand, key=lambda x: x["start"])
+    a = rep_e["start"] - 30 * 60
+    b = (rep_e["rec_ts"] or rep_e["end"]) + 30 * 60
+    rep = dict(rep_e)
+    rep["series"] = [{"ts": t, "temp": round(v, 2)} for t, v in temp if a <= t <= b]
+
+    return {
+        "ok": True, "days": days, "n": len(events),
+        "avg_drop": round(sum(drops) / len(drops), 2),
+        "median_drop": round(med(drops), 2),
+        "max_drop": round(max(drops), 2),
+        "avg_recov_min": (round(sum(recs) / len(recs)) if recs else None),
+        "median_recov_min": (round(med(recs)) if recs else None),
+        "share_recovered": round(sum(1 for e in events if e["recovered"]) / len(events) * 100),
+        "avg_dur_min": round(sum(e["dur_min"] for e in events) / len(events)),
+        "by_outdoor": by_out,
+        "events": events[-24:],
+        "representative": rep,
+        "n_dhw_total": len(merged),
+    }
 
 
 def compute_load_peaks(store: "Store", days: float = 7, hp_live: dict | None = None) -> dict:
@@ -5200,8 +5356,12 @@ def seed_demo(store: Store, days: int = 90):
     print(f"[demo] inserted {len(rows)} samples for {len(DEMO_DEVICES)} devices.")
 
     # heat-pump history (cumulative kWh counters, like the real emon values)
-    hp_rows = []
+    # + a correlated house-average indoor temperature: it drifts DOWN whenever
+    # DHW priority pauses space heating, and recovers toward the setpoint once
+    # heating resumes – so the "Warmwasser kostet Komfort" analysis has data.
+    hp_rows, rt_rows = [], []
     e_kwh = h_kwh = 0.0
+    indoor = 21.5
     t = start
     while t <= now:
         op = _demo_hp(t)
@@ -5211,9 +5371,20 @@ def seed_demo(store: Store, days: int = 90):
         hp_rows.append((DEMO_HP_GW, int(t.timestamp()), round(e_kwh, 4), op["elec_w"],
                         round(op["heat_w"] / 1000.0, 3), op["modulation"], op["outdoor_c"],
                         round(h_kwh, 4), op["heat_w"], op["mode"], op["supply_c"], op["return_c"]))
+        hr = t.hour + t.minute / 60.0
+        setp = 20.5 if (hr < 6 or hr >= 22) else 21.5      # mild night setback
+        if is_away(t):
+            setp = 18.0
+        if op["mode"] == "dhw":                            # heating paused → cool
+            indoor += (op["outdoor_c"] - indoor) * (dt_h / 30.0)
+        else:                                              # heating on → recover
+            indoor += (setp - indoor) * (dt_h / 0.8)
+        indoor += 0.04 * math.sin(t.timestamp() / 611.0)   # small sensor wiggle
+        rt_rows.append((int(t.timestamp()), round(indoor, 1), setp))
         t += step
     store.add_hp_samples_bulk(hp_rows)
-    print(f"[demo] inserted {len(hp_rows)} heat-pump samples.")
+    store.room_temp_add_bulk(rt_rows)
+    print(f"[demo] inserted {len(hp_rows)} heat-pump samples + {len(rt_rows)} indoor-temp rows.")
 
     # a demo AEG washing machine: a growing lifetime kWh counter plus a few
     # wash cycles, so the appliance card has something to show in demo mode.
@@ -7093,6 +7264,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json(self.ctx.calc_get(
                     ("loadpeaks", round(lpd, 2)), 60,
                     lambda: compute_load_peaks(self.store, lpd, self._hp_live())))
+            if path == "/api/heatpump/dhwimpact":
+                try:
+                    dwd = max(1.0, min(60.0, float(qs.get("days", ["14"])[0])))
+                except ValueError:
+                    dwd = 14.0
+                return self._send_json(self.ctx.calc_get(
+                    ("dhwimpact", round(dwd, 2)), 120,
+                    lambda: compute_dhw_impact(self.store, dwd, self._hp_live())))
             if path == "/api/discover":
                 found = discover_shc()
                 return self._send_json({
