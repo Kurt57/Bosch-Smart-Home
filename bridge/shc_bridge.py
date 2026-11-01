@@ -1484,23 +1484,53 @@ def _local_midnight(ts: int) -> int:
     return int(d.timestamp())
 
 
+# A 16 A Schuko plug tops out near 3680 W; a measured interval implying a much
+# higher average power is a counter artefact (a device that was offline and then
+# reports a counter that jumped by many days' worth of energy at once), not real
+# consumption. Deltas above this per-hour rate are not trusted.
+MAX_PLUG_W = 3800.0
+# Beyond this gap between two consecutive samples the device (or the bridge) was
+# offline; a counter jump across it belongs to the offline period, not to the
+# bucket where the device reappears, so we never attribute it here.
+MAX_SAMPLE_GAP_H = 2.0
+
+
+def _counter_delta_ok(d: float, dt_h: float) -> bool:
+    """A cumulative-counter delta is trusted only when the interval is short and
+    the implied average power is physically plausible for a plug."""
+    return 0.0 <= d <= MAX_PLUG_W * dt_h * 1.1 and 0.0 < dt_h <= MAX_SAMPLE_GAP_H
+
+
 def _energy_for_bucket(samples: list[dict]) -> float:
     """Energy (Wh) for a list of samples of ONE device, time-ordered.
 
-    Prefer the cumulative energy counter delta; fall back to integrating power
-    over time if the counter is flat/unavailable or resets.
+    Sums the cumulative energy-counter deltas over CONSECUTIVE samples, but
+    trusts each delta only when the interval is short and the implied power is
+    plausible (see _counter_delta_ok). A counter that jumps after the device was
+    unreachable — or resets on a power-cycle — would otherwise dump many days of
+    energy onto the single day the device reappears (and then be counted again),
+    which is exactly the "whole total shows up as today" artefact. When the
+    counter is flat/unavailable (a module that reports only power), we integrate
+    the measured power instead. Implausible jumps and long offline gaps
+    contribute nothing rather than a false spike.
     """
     if len(samples) < 2:
         return 0.0
-    counter_delta = samples[-1]["energy_wh"] - samples[0]["energy_wh"]
-    if counter_delta > 0:
-        return counter_delta
-    # Fallback: trapezoidal integration of power (W) over time (h).
+    live_counter = (samples[-1]["energy_wh"] - samples[0]["energy_wh"]) > 0.5
     wh = 0.0
     for a, b in zip(samples, samples[1:]):
         dt_h = (b["ts"] - a["ts"]) / 3600.0
-        if 0 < dt_h < 6:  # ignore huge gaps (bridge was offline)
-            wh += (a["power_w"] + b["power_w"]) / 2.0 * dt_h
+        if dt_h <= 0 or dt_h > MAX_SAMPLE_GAP_H:   # offline gap → unknown, skip
+            continue
+        if live_counter:
+            d = b["energy_wh"] - a["energy_wh"]
+            if _counter_delta_ok(d, dt_h):
+                wh += d                            # trusted counter delta
+            # else: reset / implausible jump → skip (don't dump it onto this day)
+        else:                                      # counter dead → integrate power
+            pa = min(max(a["power_w"] or 0.0, 0.0), MAX_PLUG_W)
+            pb = min(max(b["power_w"] or 0.0, 0.0), MAX_PLUG_W)
+            wh += (pa + pb) / 2.0 * dt_h
     return wh
 
 
@@ -4981,7 +5011,9 @@ def compute_overview(store: Store, days: int, price: float,
         for s in rows:
             if prev is not None:
                 delta = s["energy_wh"] - prev["energy_wh"]
-                if 0 < delta < 1e6 and (s["ts"] - prev["ts"]) < 21600:
+                dt_h = (s["ts"] - prev["ts"]) / 3600.0
+                # same guard as _energy_for_bucket: reject offline-jump artefacts
+                if _counter_delta_ok(delta, dt_h):
                     sh_hour[datetime.fromtimestamp(prev["ts"]).hour] += delta / 1000.0
             prev = s
     hp_hour = [0.0] * 24

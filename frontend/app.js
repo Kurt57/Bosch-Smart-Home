@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v179';   // short tag shown always-on in the header
-const APP_VERSION = 'v179 · 2026-10-26 · „Warmwasser kostet Komfort" bekommt Hebel-Vorschläge: aus deinen eigenen Daten berechnete, konkrete Maßnahmen, den Innentemperatur-Dip zu verkleinern (WW in die Mittagszeit legen, Ladedauer begrenzen, Früh-WW entzerren, WW-Soll senken) – je mit geschätzter Ersparnis in °C, sortiert nach Wirkung'
+const APP_BUILD = 'v180';   // short tag shown always-on in the header
+const APP_VERSION = 'v180 · 2026-11-01 · Bugfix Zählerstände: War ein Stecker zwischenzeitlich nicht erreichbar und sein Energiezähler sprang beim Wiederverbinden (oder nach Aus-/Einstecken) um viele Tage auf einmal, wurde dieser ganze Sprung fälschlich als Verbrauch „heute" gebucht (und doppelt gezählt). Zählerdifferenzen werden jetzt nur noch übernommen, wenn das Intervall kurz und die daraus folgende Leistung für einen Stecker plausibel ist (≤ ~3,8 kW); unplausible Sprünge und Offline-Lücken erzeugen keine Spitze mehr'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
