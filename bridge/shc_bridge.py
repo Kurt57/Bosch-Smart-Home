@@ -3031,6 +3031,37 @@ def compute_hp_day(store: "Store", date_str: str | None = None,
             "sup": avg(bk["sup"]), "ret": avg(bk["ret"]), "out": avg(bk["out"]),
         })
 
+    # ---- per-room indoor temperatures for the SAME day (Bosch thermostats),
+    # bucketed to the same grid so they overlay the heat-pump operation -------- #
+    ROOM_PAL = ["#3ba9ff", "#ff6b8a", "#4be0b0", "#ffb64d", "#b794f6", "#f78fb3",
+                "#7ed6df", "#e77f67"]
+    racc: dict[str, list] = {}
+    rsp: dict[str, list] = {}
+    for r in store.room_log_since(start):
+        if r.get("ts", 0) >= end:
+            continue
+        rm, tv = r.get("room"), r.get("temp")
+        if not rm or tv is None:
+            continue
+        acc = racc.setdefault(rm, [None] * nb)
+        bi = min(nb - 1, max(0, (r["ts"] - start) // bw))
+        if acc[bi] is None:
+            acc[bi] = [tv, 1]
+        else:
+            acc[bi][0] += tv
+            acc[bi][1] += 1
+        if r.get("setpoint") is not None:
+            rsp.setdefault(rm, []).append(r["setpoint"])
+    rooms_out = []
+    for i, rm in enumerate(sorted(racc.keys())):
+        temps = [round(s[0] / s[1], 2) if s else None for s in racc[rm]]
+        if not any(v is not None for v in temps):
+            continue
+        sps = sorted(rsp.get(rm) or [])
+        sp = round(sps[len(sps) // 2], 1) if sps else None
+        rooms_out.append({"room": rm, "color": ROOM_PAL[i % len(ROOM_PAL)],
+                          "setpoint": sp, "temps": temps})
+
     # ---- chronological event log ------------------------------------------ #
     events = []
     for st, a, b in segs:
@@ -3040,7 +3071,7 @@ def compute_hp_day(store: "Store", date_str: str | None = None,
             events.append({"ts": a, "kind": "heater", "dur_s": b - a})
     events.sort(key=lambda e: e["ts"])
 
-    return {**meta, "n": len(rows), "kpis": kpis, "series": series,
+    return {**meta, "n": len(rows), "kpis": kpis, "series": series, "rooms": rooms_out,
             "segments": [{"state": s[0], "start": s[1], "end": s[2]} for s in segs],
             "heater": [{"start": a, "end": b} for a, b in heat_segs],
             "events": events, "comp_max_w": round(comp_max)}
@@ -5726,7 +5757,13 @@ def seed_demo(store: Store, days: int = 90):
     # heating resumes – so the "Warmwasser kostet Komfort" analysis has data.
     # finer than the device grid so short defrost cycles (~10 min) are captured
     hp_step = timedelta(minutes=5)
-    hp_rows, rt_rows = [], []
+    hp_rows, rt_rows, rl_rows = [], [], []
+    # a few demo rooms at different levels/responsiveness, so the per-room
+    # temperature overlay in the day-timeline has distinct, chronologically
+    # varying curves: (name, base °C, setpoint, responsiveness to the house swing)
+    demo_rooms = [("Wohnzimmer", 21.8, 22.0, 1.0), ("Schlafzimmer", 19.2, 19.0, 0.6),
+                  ("Bad", 23.0, 24.0, 1.2), ("Küche", 21.2, 21.0, 1.0),
+                  ("Arbeitszimmer", 20.0, 21.0, 0.8)]
     e_kwh = h_kwh = 0.0
     indoor = 21.5
     t = start
@@ -5747,11 +5784,21 @@ def seed_demo(store: Store, days: int = 90):
         else:                                              # heating on → recover
             indoor += (setp - indoor) * (dt_h / 0.8)
         indoor += 0.04 * math.sin(t.timestamp() / 611.0)   # small sensor wiggle
-        rt_rows.append((int(t.timestamp()), round(indoor, 1), setp))
+        ts = int(t.timestamp())
+        rt_rows.append((ts, round(indoor, 1), setp))
+        swing = indoor - 21.5                              # the house's live deviation
+        for k, (nm, rbase, rsp, resp) in enumerate(demo_rooms):
+            rt = rbase + swing * resp + 0.05 * math.sin(t.timestamp() / (480.0 + 37 * k))
+            if is_away(t):
+                rt -= 2.0
+            valve = 90.0 if rt < rsp - 0.2 else 20.0
+            rl_rows.append((ts, nm, round(rt, 1), rsp, valve))
         t += hp_step
     store.add_hp_samples_bulk(hp_rows)
     store.room_temp_add_bulk(rt_rows)
-    print(f"[demo] inserted {len(hp_rows)} heat-pump samples + {len(rt_rows)} indoor-temp rows.")
+    store.room_log_add_bulk(rl_rows)
+    print(f"[demo] inserted {len(hp_rows)} heat-pump samples + {len(rt_rows)} indoor-temp"
+          f" + {len(rl_rows)} per-room rows.")
 
     # a demo AEG washing machine: a growing lifetime kWh counter plus a few
     # wash cycles, so the appliance card has something to show in demo mode.

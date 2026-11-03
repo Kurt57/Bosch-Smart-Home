@@ -93,8 +93,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v182';   // short tag shown always-on in the header
-const APP_VERSION = 'v182 · 2026-11-03 · Zwei neue WP-Karten: „Tagesvergleich" (zwei Tage A/B nebeneinander mit Kennzahl-Differenzen + beiden Zustandsbändern, grün = besser) und „Takt-Trend" (Verdichter-Takte/Tag + Min/Takt über Wochen, mit optionaler Abgleich-Marke und Vorher/Nachher-Schnitt). Backend-Refactor: gemeinsame Tages-Kennzahlen inkl. Min/Takt und Ø Außentemperatur. ' +
+const APP_BUILD = 'v183';   // short tag shown always-on in the header
+const APP_VERSION = 'v183 · 2026-11-03 · „Tagesverlauf Wärmepumpe" kombiniert jetzt die Raumtemperaturen: je Raum ein-/ausschaltbar werden die Innentemperaturen (Bosch-Thermostate) auf dieselbe Zeitachse wie WP-Zustände, Leistung und Modulation gelegt – so siehst du chronologisch, wie jeder Raum auf Heizen/Pause/Warmwasser reagiert (eigener, enger Temperaturbereich, Werte auch im Tooltip). ' +
+  'v182 · Zwei neue WP-Karten: „Tagesvergleich" (zwei Tage A/B nebeneinander mit Kennzahl-Differenzen + beiden Zustandsbändern, grün = besser) und „Takt-Trend" (Verdichter-Takte/Tag + Min/Takt über Wochen, mit optionaler Abgleich-Marke und Vorher/Nachher-Schnitt). Backend-Refactor: gemeinsame Tages-Kennzahlen inkl. Min/Takt und Ø Außentemperatur. ' +
   'v181 · Neu (Wärmepumpe → Heizung): „Tagesverlauf Wärmepumpe" – ein chronologisches Zeitachsen-Diagramm eines Tages mit Zustandsband (Heizung/Warmwasser/Abtauen/Kühlen/Pause) + Zuheizer-Spur, Strom & Wärme (kW), Modulation %, COP und Vor-/Rücklauf/Außen-Temperaturen (alle ein-/ausblendbar), Tages-Kennzahlen (Takte, Pausen, Abtauzyklen, Zuheizer-Zeit, Ø Modulation), Ereignis-Verlauf und Tag-für-Tag-Blättern. Ideal, um die Wirkung des hydraulischen Abgleichs zu sehen. Abtauen/Zuheizer werden aus dem Betrieb erkannt'
 const $ = (id) => document.getElementById(id);
 
@@ -292,6 +293,7 @@ const INFO = {
   'hp-day': () => 'Ein <b>chronologischer Tagesverlauf</b> deiner Wärmepumpe: oben <b>Strom &amp; Wärme (kW)</b>, darunter optional <b>Modulation %</b>, <b>COP</b> und <b>Vorlauf/Rücklauf/Außen °C</b>, ganz unten ein <b>Zustandsband</b> (Heizung · Warmwasser · Abtauen · Kühlen · Pause) plus eine <b>Zuheizer</b>-Spur. ' +
     'Jede Kennzahl ist <b>ein-/ausblendbar</b>, und du blätterst mit ‹ › durch die <b>Tage</b> (heute, gestern …). Unten der <b>Ereignis-Verlauf</b>: wann welcher Zustand wie lange lief. ' +
     'So siehst du die Wirkung von Einstellungen wie dem <b>hydraulischen Abgleich</b>: läuft die WP jetzt <b>länger und ruhiger durch</b> (wenige Takte) oder <b>taktet</b> sie (viele kurze Pausen)? ' +
+    'Über die <b>Räume</b>-Chips legst du einzelne <b>Raumtemperaturen</b> (aus deinen Bosch-Thermostaten) auf dieselbe Zeitachse – so siehst du chronologisch, wie jeder Raum auf Heizen, Pausen und Warmwasser reagiert. ' +
     '<b>Abtauen</b> &amp; <b>Zuheizer</b> werden aus dem Betrieb <b>erkannt</b> (Wärme bricht ein / Leistung über dem Verdichter-Limit), nicht aus einem Gerätesignal.',
   'hp-compare': () => 'Stellt <b>zwei Tage direkt gegenüber</b> – perfekt für „vorher/nachher", z.&nbsp;B. ein Tag vor und einer nach dem <b>hydraulischen Abgleich</b>. ' +
     'Die Tabelle zeigt je Kennzahl Tag A, Tag B und die Differenz; <b>grün</b> markiert eine Verbesserung (weniger <b>Takte</b>, mehr <b>Min/Takt</b> &amp; Laufzeit). Darunter die beiden <b>Zustandsbänder</b> zum direkten Hinsehen. ' +
@@ -4950,9 +4952,11 @@ function _hpdArea(series, acc, X, Y, base) {
   series.forEach((s, i) => { const v = acc(s); if (v == null) { flush(); return; } run.push([X(i), Y(v)]); });
   flush(); return out;
 }
-function hpdTips(series, tg) {
-  return series.map(s => {
-    if (s.p == null && s.h == null && s.mod == null && s.out == null) return null;
+function hpdTips(series, tg, rooms, roomOn) {
+  const act = (rooms || []).filter(r => roomOn && roomOn(r.room));
+  return series.map((s, i) => {
+    const hasRoom = act.some(r => (r.temps || [])[i] != null);
+    if (s.p == null && s.h == null && s.mod == null && s.out == null && !hasRoom) return null;
     const hhmm = new Date(s.t * 1000).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
     const parts = [];
     if (tg.p && s.p != null) parts.push(`<span style="color:#ef6c4d">⚡ ${fmt(s.p, 2)} kW</span>`);
@@ -4962,8 +4966,28 @@ function hpdTips(series, tg) {
     if (tg.sup && s.sup != null) parts.push(`VL ${fmt(s.sup, 1)}°`);
     if (tg.ret && s.ret != null) parts.push(`RL ${fmt(s.ret, 1)}°`);
     if (tg.out && s.out != null) parts.push(`Außen ${fmt(s.out, 1)}°`);
+    act.forEach(r => { const v = (r.temps || [])[i]; if (v != null) parts.push(`<span style="color:${r.color}">●</span>${esc(r.room)} ${fmt(v, 1)}°`); });
     return `<b>${hhmm}</b> · ${parts.join(' · ')}`;
   });
+}
+// room-toggle state (default: a room is shown unless explicitly switched off)
+function hpdRoomTg() { try { const v = JSON.parse(localStorage.getItem('bhe_hpd_rooms') || 'null'); if (v && typeof v === 'object') return v; } catch (e) {} return {}; }
+function hpdRoomOn(room) { return hpdRoomTg()[room] !== false; }
+function hpdRoomToggle(room) { const m = hpdRoomTg(); m[room] = !(m[room] !== false); try { localStorage.setItem('bhe_hpd_rooms', JSON.stringify(m)); } catch (e) {} if (_hpDayShown) paintHpDay(_hpDayShown); }
+// per-room indoor temperatures over the day (tight axis so small changes show)
+function hpdRooms(rooms, tips) {
+  const act = (rooms || []).filter(r => hpdRoomOn(r.room) && (r.temps || []).some(v => v != null));
+  if (!act.length) return '';
+  const h = 120, padL = 42, padR = 14, top = 10, base = h - 18;
+  const X = i => padL + (CW - padL - padR) * (i / (_HPDN - 1));
+  const vals = []; act.forEach(r => r.temps.forEach(v => { if (v != null) vals.push(v); }));
+  const lo = Math.min(...vals) - 0.4, hi = Math.max(...vals) + 0.4, span = Math.max(2, hi - lo);
+  const Y = v => top + (1 - (v - lo) / span) * (base - top);
+  let g = '';
+  [lo + span * 0.12, lo + span * 0.5, lo + span * 0.88].forEach(v => { g += `<line class="gl" x1="${padL}" x2="${CW - 4}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}"/><text class="axis" x="0" y="${(Y(v) + 3).toFixed(1)}">${fmt(v, 1)}°</text>`; });
+  act.forEach(r => { g += `<path d="${_hpdLine(r.temps, v => v, X, Y)}" fill="none" stroke="${r.color}" stroke-width="1.8"/>`; });
+  g += `<text class="axis" x="${CW - 2}" y="${(top + 2).toFixed(1)}" text-anchor="end" fill="var(--muted)">Räume °C</text>`;
+  return svg(h, g, { kind: 'area', pad: padL, padR, n: _HPDN, h, tips });
 }
 function hpdPower(series, tips, tg) {
   const h = 150, padL = 42, padR = 14, top = 12, base = h - 22;
@@ -5045,11 +5069,15 @@ function paintHpDay(r) {
     kpi(fmt(k.max_power_kw, 1) + ' kW', 'Spitze elektr.') +
     kpi(k.avg_mod != null ? fmt(k.avg_mod, 0) + ' %' : '–', 'Ø Modulation');
   if (tgEl) tgEl.innerHTML = HPD_SERIES.map(s => { const on = !!tg[s.key]; return `<button class="hpd-t" data-hpt="${s.key}" aria-pressed="${on}" style="padding:6px 10px;border-radius:999px;font-size:12px;cursor:pointer;border:1px solid ${on ? s.color : 'var(--line)'};background:${on ? 'color-mix(in srgb,' + s.color + ' 20%,transparent)' : 'transparent'};color:var(--fg)"><span style="color:${s.color}">●</span> ${esc(s.label)}${s.unit ? (' ' + esc(s.unit)) : ''}</button>`; }).join('');
-  const tips = hpdTips(r.series || [], tg);
+  const rr = $('hpd-rooms');
+  if (rr) rr.innerHTML = (r.rooms || []).length
+    ? `<span style="font-size:11px;color:var(--muted);align-self:center;margin-right:2px">Räume:</span>` + (r.rooms || []).map(rm => { const on = hpdRoomOn(rm.room); return `<button class="hpd-rt" data-hpr="${esc(rm.room)}" aria-pressed="${on}" style="padding:5px 9px;border-radius:999px;font-size:11.5px;cursor:pointer;border:1px solid ${on ? rm.color : 'var(--line)'};background:${on ? 'color-mix(in srgb,' + rm.color + ' 20%,transparent)' : 'transparent'};color:var(--fg)"><span style="color:${rm.color}">●</span> ${esc(rm.room)}</button>`; }).join('') : '';
+  const tips = hpdTips(r.series || [], tg, r.rooms || [], hpdRoomOn);
   let html = '';
   if (tg.p || tg.h) html += `<div style="touch-action:none">${hpdPower(r.series, tips, tg)}</div>`;
   if (tg.mod || tg.cop) html += `<div style="touch-action:none;margin-top:3px">${hpdModCop(r.series, tips, tg)}</div>`;
   if (tg.sup || tg.ret || tg.out) { const t = hpdTemp(r.series, tips, tg); if (t) html += `<div style="touch-action:none;margin-top:3px">${t}</div>`; }
+  const rp = hpdRooms(r.rooms || [], tips); if (rp) html += `<div style="touch-action:none;margin-top:3px">${rp}</div>`;
   html += `<div style="touch-action:none;margin-top:2px">${hpdRibbon(r)}</div>`;
   if (ch) ch.innerHTML = html;
   // ribbon legend: only the states that actually occurred + heater
@@ -5068,6 +5096,7 @@ function paintHpDay(r) {
     }).join('') : '<div class="note">Keine Zustandswechsel an diesem Tag.</div>';
   }
   if (note) note.innerHTML = `Ein <b>Takt</b> ist ein Verdichterstart; viele kurze Takte (häufige Pausen) deuten auf eine zu hohe Leistung / zu wenig Abnahme hin – nach gutem <b>hydraulischem Abgleich</b> läuft die WP meist <b>länger und ruhiger durch</b>. ` +
+    `Über die <b>Räume</b>-Chips blendest du einzelne Raumtemperaturen ein und siehst chronologisch, wie sie auf Heizbetrieb und Pausen reagieren. ` +
     `<span style="color:var(--muted)"><b>Abtauen</b> und <b>Zuheizer</b> sind aus dem Betrieb <b>erkannt</b> (Wärme bricht ein bzw. Leistung über dem Verdichter-Limit ~${r.comp_max_w ? fmt(r.comp_max_w / 1000, 1) + ' kW' : '–'}), nicht aus einem Gerätesignal – als Hinweis zu verstehen. Tipp/Overlay auf dem Diagramm zeigt die Werte zur Uhrzeit.</span>`;
 }
 
@@ -9987,6 +10016,8 @@ function init() {
     if (pp) { e.stopPropagation(); ppSetPrio(pp.dataset.pp, pp.getAttribute('aria-pressed') !== 'true'); return; }
     const hpt = e.target.closest('.hpd-t');
     if (hpt) { e.stopPropagation(); hpdToggle(hpt.dataset.hpt); return; }
+    const hpr = e.target.closest('.hpd-rt');
+    if (hpr) { e.stopPropagation(); hpdRoomToggle(hpr.dataset.hpr); return; }
     const t = $('toast'); if (t && !t.hidden) t.hidden = true;
   });
   $('hist-range').addEventListener('click', e => {
