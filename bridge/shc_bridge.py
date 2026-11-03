@@ -2851,6 +2851,111 @@ HP_IDLE_W = 40.0                 # below this the heat pump is in standby / paus
 HP_MAX_KW = 12.0                 # plausible electrical ceiling (compressor + heater)
 
 
+def _hp_day_metrics(rows: list[dict]) -> tuple:
+    """Operating KPIs + state segments for ONE day's heat-pump samples.
+    Returns (kpis, segments, heater_segments, comp_max_w). Shared by the day
+    timeline and the multi-day trend. Defrost / backup-heater are derived from
+    the physical signatures (heat collapses while the compressor draws;
+    electrical power above the compressor envelope)."""
+    def cop_of(s):
+        p, h = s.get("power_w") or 0.0, s.get("heat_w") or 0.0
+        return (h / p) if p > 50 else 0.0
+
+    comp_pw = [s["power_w"] for s in rows if (s.get("power_w") or 0) > 150
+               and cop_of(s) >= 2.0]
+    comp_max = max(comp_pw) if comp_pw else 3000.0
+
+    def state_of(s):
+        p = s.get("power_w") or 0.0
+        m = (s.get("mode") or "").lower()
+        o = s.get("outdoor_c")
+        if p <= HP_IDLE_W or m in ("", "off", "standby"):
+            return "idle"
+        if m == "dhw" or "water" in m or "ww" in m:
+            return "water"
+        if "cool" in m:
+            return "cooling"
+        if m in ("ch", "heat", "heating") and cop_of(s) < 0.6 and p > 250 \
+                and (o is None or o < 9.0):
+            return "defrost"
+        return "heating"
+
+    def heater_on(s):
+        return (s.get("power_w") or 0.0) > comp_max * 1.15 and cop_of(s) < 1.6
+
+    segs, heat_segs = [], []
+    for i in range(len(rows) - 1):
+        a, b = rows[i], rows[i + 1]
+        if b["ts"] - a["ts"] > 2 * 3600:
+            continue
+        st = state_of(a)
+        if segs and segs[-1][0] == st and a["ts"] - segs[-1][2] <= 2 * 3600:
+            segs[-1][2] = b["ts"]
+        else:
+            segs.append([st, a["ts"], b["ts"]])
+        if heater_on(a):
+            if heat_segs and a["ts"] - heat_segs[-1][1] <= 2 * 3600:
+                heat_segs[-1][1] = b["ts"]
+            else:
+                heat_segs.append([a["ts"], b["ts"]])
+    segs = [s for s in segs if s[2] - s[1] >= 60] or segs
+
+    elec_wh = heat_wh = 0.0
+    runtime_s = pause_s = 0.0
+    mode_s = {"heating": 0.0, "water": 0.0, "cooling": 0.0, "defrost": 0.0, "idle": 0.0}
+    heater_s = 0.0
+    starts = 0
+    mod_sum = mod_n = 0
+    out_sum = out_n = 0.0
+    maxp = 0.0
+    prev_run = None
+    for i in range(len(rows) - 1):
+        a, b = rows[i], rows[i + 1]
+        dt_s = b["ts"] - a["ts"]
+        st = state_of(a)
+        run = st != "idle"
+        if 0 < dt_s <= 2 * 3600:
+            dt_h = dt_s / 3600.0
+            pa = min(max(a.get("power_w") or 0.0, 0.0), HP_MAX_KW * 1000)
+            pb = min(max(b.get("power_w") or 0.0, 0.0), HP_MAX_KW * 1000)
+            elec_wh += (pa + pb) / 2.0 * dt_h
+            ha = max(a.get("heat_w") or 0.0, 0.0)
+            hb = max(b.get("heat_w") or 0.0, 0.0)
+            heat_wh += (ha + hb) / 2.0 * dt_h
+            mode_s[st] += dt_s
+            (runtime_s, pause_s) = (runtime_s + dt_s, pause_s) if run else (runtime_s, pause_s + dt_s)
+            if heater_on(a):
+                heater_s += dt_s
+        if prev_run is not None and (not prev_run) and run:
+            starts += 1
+        prev_run = run
+        if run and a.get("modulation") is not None:
+            mod_sum += a["modulation"]
+            mod_n += 1
+        if a.get("outdoor_c") is not None:
+            out_sum += a["outdoor_c"]
+            out_n += 1
+        maxp = max(maxp, a.get("power_w") or 0.0)
+    maxp = max(maxp, rows[-1].get("power_w") or 0.0)
+
+    kpis = {
+        "elec_kwh": round(elec_wh / 1000.0, 2), "heat_kwh": round(heat_wh / 1000.0, 2),
+        "cop": round(heat_wh / elec_wh, 2) if elec_wh > 1 else None,
+        "runtime_min": round(runtime_s / 60.0), "pause_min": round(pause_s / 60.0),
+        "starts": starts, "defrost_count": sum(1 for s in segs if s[0] == "defrost"),
+        "defrost_min": round(mode_s["defrost"] / 60.0),
+        "heater_min": round(heater_s / 60.0),
+        "max_power_kw": round(maxp / 1000.0, 2),
+        "avg_mod": round(mod_sum / mod_n) if mod_n else None,
+        "min_per_start": round(runtime_s / 60.0 / starts) if starts else None,
+        "heating_min": round(mode_s["heating"] / 60.0),
+        "water_min": round(mode_s["water"] / 60.0),
+        "cooling_min": round(mode_s["cooling"] / 60.0),
+        "avg_outdoor": round(out_sum / out_n, 1) if out_n else None,
+    }
+    return kpis, segs, heat_segs, comp_max
+
+
 def compute_hp_day(store: "Store", date_str: str | None = None,
                    hp_live: dict | None = None) -> dict:
     """Chronological one-day timeline of the heat pump: a state ribbon
@@ -2883,104 +2988,7 @@ def compute_hp_day(store: "Store", date_str: str | None = None,
     if len(rows) < 2:
         return {**meta, "n": len(rows)}
 
-    def cop_of(s):
-        p, h = s.get("power_w") or 0.0, s.get("heat_w") or 0.0
-        return (h / p) if p > 50 else 0.0
-
-    # compressor-only max power (for backup-heater detection): the top of the
-    # power seen while the unit was clearly compressor-only (COP ≥ 2)
-    comp_pw = [s["power_w"] for s in rows if (s.get("power_w") or 0) > 150
-               and cop_of(s) >= 2.0]
-    comp_max = max(comp_pw) if comp_pw else 3000.0
-
-    def state_of(s):
-        p = s.get("power_w") or 0.0
-        m = (s.get("mode") or "").lower()
-        o = s.get("outdoor_c")
-        if p <= HP_IDLE_W or m in ("", "off", "standby"):
-            return "idle"
-        if m == "dhw" or "water" in m or "ww" in m:
-            return "water"
-        if "cool" in m:
-            return "cooling"
-        if m in ("ch", "heat", "heating") and cop_of(s) < 0.6 and p > 250 \
-                and (o is None or o < 9.0):
-            return "defrost"
-        return "heating"
-
-    def heater_on(s):
-        return (s.get("power_w") or 0.0) > comp_max * 1.15 and cop_of(s) < 1.6
-
-    # ---- state segments + heater segments (from RAW samples) --------------- #
-    segs, heat_segs = [], []
-    for i in range(len(rows) - 1):
-        a, b = rows[i], rows[i + 1]
-        if b["ts"] - a["ts"] > 2 * 3600:        # gap → leave a hole in the ribbon
-            continue
-        st = state_of(a)
-        if segs and segs[-1][0] == st and a["ts"] - segs[-1][2] <= 2 * 3600:
-            segs[-1][2] = b["ts"]
-        else:
-            segs.append([st, a["ts"], b["ts"]])
-        if heater_on(a):
-            if heat_segs and a["ts"] - heat_segs[-1][1] <= 2 * 3600:
-                heat_segs[-1][1] = b["ts"]
-            else:
-                heat_segs.append([a["ts"], b["ts"]])
-    # drop sub-minute slivers
-    segs = [s for s in segs if s[2] - s[1] >= 60] or segs
-
-    # ---- KPIs (power integration – robust to counter quirks) -------------- #
-    elec_wh = heat_wh = 0.0
-    runtime_s = pause_s = 0.0
-    mode_s = {"heating": 0.0, "water": 0.0, "cooling": 0.0, "defrost": 0.0, "idle": 0.0}
-    heater_s = 0.0
-    starts = 0
-    mod_sum = mod_n = 0
-    maxp = 0.0
-    prev_run = None
-    for i in range(len(rows) - 1):
-        a, b = rows[i], rows[i + 1]
-        dt_s = b["ts"] - a["ts"]
-        st = state_of(a)
-        run = st != "idle"
-        if 0 < dt_s <= 2 * 3600:
-            dt_h = dt_s / 3600.0
-            pa = min(max(a.get("power_w") or 0.0, 0.0), HP_MAX_KW * 1000)
-            pb = min(max(b.get("power_w") or 0.0, 0.0), HP_MAX_KW * 1000)
-            elec_wh += (pa + pb) / 2.0 * dt_h
-            ha = max(a.get("heat_w") or 0.0, 0.0)
-            hb = max(b.get("heat_w") or 0.0, 0.0)
-            heat_wh += (ha + hb) / 2.0 * dt_h
-            mode_s[st] += dt_s
-            (runtime_s, pause_s) = (runtime_s + dt_s, pause_s) if run else (runtime_s, pause_s + dt_s)
-            if heater_on(a):
-                heater_s += dt_s
-        if prev_run is not None and (not prev_run) and run:
-            starts += 1
-        prev_run = run
-        if run and a.get("modulation") is not None:
-            mod_sum += a["modulation"]
-            mod_n += 1
-        maxp = max(maxp, a.get("power_w") or 0.0)
-    maxp = max(maxp, rows[-1].get("power_w") or 0.0)
-
-    elec_kwh = round(elec_wh / 1000.0, 2)
-    heat_kwh = round(heat_wh / 1000.0, 2)
-    defrost_cnt = sum(1 for s in segs if s[0] == "defrost")
-    kpis = {
-        "elec_kwh": elec_kwh, "heat_kwh": heat_kwh,
-        "cop": round(heat_wh / elec_wh, 2) if elec_wh > 1 else None,
-        "runtime_min": round(runtime_s / 60.0), "pause_min": round(pause_s / 60.0),
-        "starts": starts, "defrost_count": defrost_cnt,
-        "defrost_min": round(mode_s["defrost"] / 60.0),
-        "heater_min": round(heater_s / 60.0),
-        "max_power_kw": round(maxp / 1000.0, 2),
-        "avg_mod": round(mod_sum / mod_n) if mod_n else None,
-        "heating_min": round(mode_s["heating"] / 60.0),
-        "water_min": round(mode_s["water"] / 60.0),
-        "cooling_min": round(mode_s["cooling"] / 60.0),
-    }
+    kpis, segs, heat_segs, comp_max = _hp_day_metrics(rows)
 
     # ---- chart series: bucket the day into ~6-min slots ------------------- #
     nb = 240
@@ -3036,6 +3044,38 @@ def compute_hp_day(store: "Store", date_str: str | None = None,
             "segments": [{"state": s[0], "start": s[1], "end": s[2]} for s in segs],
             "heater": [{"start": a, "end": b} for a, b in heat_segs],
             "events": events, "comp_max_w": round(comp_max)}
+
+
+def compute_hp_trend(store: "Store", days: int = 21, hp_live: dict | None = None) -> dict:
+    """Per-day operating KPIs over the last `days` days, to see a trend: how
+    many compressor starts (Takte) per day, how long each cycle lasts
+    (min/Takt), runtime, Ø modulation, COP and defrost count – so the effect of
+    a hydraulic-balancing change shows up as the unit running longer and calmer.
+    Ø outdoor is included as weather context (cold days cycle less on their
+    own)."""
+    now = int(time.time())
+    days = max(7, min(90, int(days)))
+    base = datetime.fromtimestamp(now)
+    start0 = int((base - timedelta(days=days - 1)).replace(
+        hour=0, minute=0, second=0, microsecond=0).timestamp())
+    by_day: dict[str, list] = {}
+    for s in store.hp_samples_since(start0):
+        if s.get("ts"):
+            by_day.setdefault(_local_day(s["ts"]), []).append(s)
+    daily = []
+    for day in sorted(by_day):
+        drows = by_day[day]
+        if len(drows) < 2:
+            continue
+        k, _segs, _h, _c = _hp_day_metrics(drows)
+        daily.append({
+            "date": day, "starts": k["starts"], "runtime_min": k["runtime_min"],
+            "min_per_start": k["min_per_start"], "avg_mod": k["avg_mod"],
+            "cop": k["cop"], "defrost_count": k["defrost_count"],
+            "elec_kwh": k["elec_kwh"], "heat_kwh": k["heat_kwh"],
+            "heater_min": k["heater_min"], "avg_outdoor": k["avg_outdoor"],
+        })
+    return {"ok": True, "days": days, "n": len(daily), "daily": daily}
 
 
 def compute_heat_timeseries(store: "Store", days: int = 4) -> dict:
@@ -7604,6 +7644,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json(self.ctx.calc_get(
                     ("hpday", dts or "today"), 45,
                     lambda: compute_hp_day(self.store, dts or None, self._hp_live())))
+            if path == "/api/heatpump/trend":
+                try:
+                    trd = max(7, min(90, int(qs.get("days", ["21"])[0])))
+                except ValueError:
+                    trd = 21
+                return self._send_json(self.ctx.calc_get(
+                    ("hptrend", trd), 300,
+                    lambda: compute_hp_trend(self.store, trd, self._hp_live())))
             if path == "/api/discover":
                 found = discover_shc()
                 return self._send_json({

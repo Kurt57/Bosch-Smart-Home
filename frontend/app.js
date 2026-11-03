@@ -93,8 +93,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v181';   // short tag shown always-on in the header
-const APP_VERSION = 'v181 · 2026-11-03 · Neu (Wärmepumpe → Heizung): „Tagesverlauf Wärmepumpe" – ein chronologisches Zeitachsen-Diagramm eines Tages mit Zustandsband (Heizung/Warmwasser/Abtauen/Kühlen/Pause) + Zuheizer-Spur, Strom & Wärme (kW), Modulation %, COP und Vor-/Rücklauf/Außen-Temperaturen (alle ein-/ausblendbar), Tages-Kennzahlen (Takte, Pausen, Abtauzyklen, Zuheizer-Zeit, Ø Modulation), Ereignis-Verlauf und Tag-für-Tag-Blättern. Ideal, um die Wirkung des hydraulischen Abgleichs zu sehen. Abtauen/Zuheizer werden aus dem Betrieb erkannt'
+const APP_BUILD = 'v182';   // short tag shown always-on in the header
+const APP_VERSION = 'v182 · 2026-11-03 · Zwei neue WP-Karten: „Tagesvergleich" (zwei Tage A/B nebeneinander mit Kennzahl-Differenzen + beiden Zustandsbändern, grün = besser) und „Takt-Trend" (Verdichter-Takte/Tag + Min/Takt über Wochen, mit optionaler Abgleich-Marke und Vorher/Nachher-Schnitt). Backend-Refactor: gemeinsame Tages-Kennzahlen inkl. Min/Takt und Ø Außentemperatur. ' +
+  'v181 · Neu (Wärmepumpe → Heizung): „Tagesverlauf Wärmepumpe" – ein chronologisches Zeitachsen-Diagramm eines Tages mit Zustandsband (Heizung/Warmwasser/Abtauen/Kühlen/Pause) + Zuheizer-Spur, Strom & Wärme (kW), Modulation %, COP und Vor-/Rücklauf/Außen-Temperaturen (alle ein-/ausblendbar), Tages-Kennzahlen (Takte, Pausen, Abtauzyklen, Zuheizer-Zeit, Ø Modulation), Ereignis-Verlauf und Tag-für-Tag-Blättern. Ideal, um die Wirkung des hydraulischen Abgleichs zu sehen. Abtauen/Zuheizer werden aus dem Betrieb erkannt'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -292,6 +293,12 @@ const INFO = {
     'Jede Kennzahl ist <b>ein-/ausblendbar</b>, und du blätterst mit ‹ › durch die <b>Tage</b> (heute, gestern …). Unten der <b>Ereignis-Verlauf</b>: wann welcher Zustand wie lange lief. ' +
     'So siehst du die Wirkung von Einstellungen wie dem <b>hydraulischen Abgleich</b>: läuft die WP jetzt <b>länger und ruhiger durch</b> (wenige Takte) oder <b>taktet</b> sie (viele kurze Pausen)? ' +
     '<b>Abtauen</b> &amp; <b>Zuheizer</b> werden aus dem Betrieb <b>erkannt</b> (Wärme bricht ein / Leistung über dem Verdichter-Limit), nicht aus einem Gerätesignal.',
+  'hp-compare': () => 'Stellt <b>zwei Tage direkt gegenüber</b> – perfekt für „vorher/nachher", z.&nbsp;B. ein Tag vor und einer nach dem <b>hydraulischen Abgleich</b>. ' +
+    'Die Tabelle zeigt je Kennzahl Tag A, Tag B und die Differenz; <b>grün</b> markiert eine Verbesserung (weniger <b>Takte</b>, mehr <b>Min/Takt</b> &amp; Laufzeit). Darunter die beiden <b>Zustandsbänder</b> zum direkten Hinsehen. ' +
+    '<b>Fair vergleichen:</b> zwei Tage mit ähnlicher <b>Ø Außentemperatur</b> wählen – kältere Tage takten von allein weniger.',
+  'hp-trend': () => 'Zeigt über <b>Wochen</b>, wie oft die Wärmepumpe pro Tag <b>taktet</b> (Verdichterstarts, Balken) und wie lang jeder Lauf dauert (<b>Min/Takt</b>, grüne Linie). ' +
+    'Ziel nach einem guten Abgleich: <b>weniger Takte, längere Läufe</b>. Trägst du oben dein <b>Abgleich-Datum</b> ein, setze ich eine Marke und rechne den Schnitt <b>vorher vs. nachher</b> aus (Takte, Min/Takt, Laufzeit) – deine Verbesserung in einer Zahl. ' +
+    '<span>Weil kältere Tage von allein weniger takten, zeige ich die <b>Ø Außentemperatur</b> mit – am aussagekräftigsten bei ähnlichem Wetter.</span>',
   'dhw-impact': () => 'Die Compress 6800i hat <b>Warmwasser-Vorrang</b>: macht sie Warmwasser, <b>pausiert die Heizung</b> solange. Diese Karte misst, was das für deinen <b>Komfort</b> bedeutet. ' +
     'Dazu wird die <b>Warmwasser-Phase</b> der Wärmepumpe (aus HomeCom) mit der gemessenen <b>Innentemperatur</b> (aus deinen Bosch-Thermostaten) überlagert. Je Phase: ' +
     'wie viel die Innentemperatur vom Wert <b>bei WW-Start</b> bis zum Tiefpunkt <b>fällt</b> – und wie lange es nach dem Heizungs-Neustart dauert, bis dieser <b>Startwert wieder erreicht</b> ist. ' +
@@ -5064,6 +5071,124 @@ function paintHpDay(r) {
     `<span style="color:var(--muted)"><b>Abtauen</b> und <b>Zuheizer</b> sind aus dem Betrieb <b>erkannt</b> (Wärme bricht ein bzw. Leistung über dem Verdichter-Limit ~${r.comp_max_w ? fmt(r.comp_max_w / 1000, 1) + ' kW' : '–'}), nicht aus einem Gerätesignal – als Hinweis zu verstehen. Tipp/Overlay auf dem Diagramm zeigt die Werte zur Uhrzeit.</span>`;
 }
 
+// ===== Tagesvergleich (zwei Tage nebeneinander) ============================ #
+let _hpcData = {};
+function hpcGet() {
+  try { const v = JSON.parse(localStorage.getItem('bhe_hpc') || 'null'); if (v && v.a && v.b) return v; } catch (e) {}
+  const t = new Date(), b = new Date(t), a = new Date(t); b.setDate(b.getDate() - 1); a.setDate(a.getDate() - 7);
+  return { a: _hpdDateStr(a), b: _hpdDateStr(b) };
+}
+async function renderHpCompare(force) {
+  const card = $('hpc-card'); if (!card) return;
+  const ia = $('hpc-a'), ib = $('hpc-b'), cfg = hpcGet(), today = _hpdDateStr(new Date());
+  if (ia) { ia.max = today; if (!ia.value || force) ia.value = cfg.a; }
+  if (ib) { ib.max = today; if (!ib.value || force) ib.value = cfg.b; }
+  const a = ia ? ia.value : cfg.a, b = ib ? ib.value : cfg.b;
+  if (!a || !b) return;
+  try { localStorage.setItem('bhe_hpc', JSON.stringify({ a, b })); } catch (e) {}
+  const getDay = async d => { if (_hpcData[d]) return _hpcData[d]; const r = await api('/api/heatpump/day?date=' + d); _hpcData[d] = r; return r; };
+  const tbl = $('hpc-table');
+  try { const [ra, rb] = await Promise.all([getDay(a), getDay(b)]); paintHpCompare(ra, rb); }
+  catch (e) { if (tbl) tbl.innerHTML = '<div class="note">Nur mit laufender Bridge verfügbar.</div>'; }
+}
+function _hpcDate(r) { if (!r || !r.date) return '–'; const p = r.date.split('-'), WD = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So']; return (WD[r.weekday] || '') + ', ' + p[2] + '.' + p[1] + '.'; }
+function paintHpCompare(ra, rb) {
+  const tbl = $('hpc-table'), rib = $('hpc-ribbons'), leg = $('hpc-legend'), note = $('hpc-note');
+  const ka = (ra && ra.kpis) || {}, kb = (rb && rb.kpis) || {};
+  const okA = ra && ra.ok && ra.n > 1, okB = rb && rb.ok && rb.n > 1;
+  const metr = [
+    ['Takte', 'starts', '×', -1], ['Min/Takt', 'min_per_start', ' min', 1],
+    ['Laufzeit', 'runtime_min', ' min', 1], ['Pause', 'pause_min', ' min', 0],
+    ['Abtauen', 'defrost_count', '×', 0], ['Ø Modulation', 'avg_mod', ' %', 0],
+    ['Arbeitszahl', 'cop', '', 1], ['Strom', 'elec_kwh', ' kWh', 0],
+    ['Wärme', 'heat_kwh', ' kWh', 0], ['Ø Außen', 'avg_outdoor', ' °C', 0],
+  ];
+  const num = (v, u) => v == null ? '–' : fmt(v, (Number.isInteger(v) ? 0 : (Math.abs(v) < 10 ? (u === '' || u === ' kWh' ? 2 : 1) : 0))) + (v == null ? '' : u);
+  let html = `<div style="display:grid;grid-template-columns:1.25fr 1fr 1fr 0.9fr;gap:3px 6px;font-size:12.5px;align-items:center">` +
+    `<div></div><div style="text-align:right;font-weight:600">A · ${esc(_hpcDate(ra))}</div>` +
+    `<div style="text-align:right;font-weight:600">B · ${esc(_hpcDate(rb))}</div><div style="text-align:right;color:var(--muted)">Δ</div>`;
+  metr.forEach(([lbl, key, unit, dir]) => {
+    const va = ka[key], vb = kb[key];
+    let dtxt = '', dcol = 'var(--muted)';
+    if (typeof va === 'number' && typeof vb === 'number') {
+      const dd = vb - va, s = dd > 0 ? '+' : '';
+      dtxt = s + fmt(dd, (Number.isInteger(dd) ? 0 : (Math.abs(dd) < 10 ? 1 : 0))) + unit.trim();
+      if (dir !== 0 && dd !== 0) dcol = ((dir < 0) ? dd < 0 : dd > 0) ? COL.pv : '#ff8a8a';
+    }
+    html += `<div>${esc(lbl)}</div><div style="text-align:right">${num(va, unit)}</div>` +
+      `<div style="text-align:right">${num(vb, unit)}</div><div style="text-align:right;color:${dcol};font-weight:600">${dtxt}</div>`;
+  });
+  html += `</div>`;
+  if (tbl) tbl.innerHTML = (okA || okB) ? html : '<div class="note">Für die gewählten Tage liegen keine Wärmepumpen-Daten vor.</div>';
+  if (rib) { let rh = ''; [['A', ra], ['B', rb]].forEach(([l, r]) => { if (r && r.segments && r.segments.length) rh += `<div style="font-size:11px;color:var(--muted);margin:6px 0 2px">${l} · ${esc(_hpcDate(r))}</div><div style="touch-action:none">${hpdRibbon(r)}</div>`; }); rib.innerHTML = rh; }
+  if (leg) { const seen = new Set(); [ra, rb].forEach(r => (r && r.segments || []).forEach(s => seen.add(s.state))); leg.innerHTML = Object.keys(HP_ST).filter(s => seen.has(s)).map(s => `<div class="it"><span class="sw" style="background:${HP_ST[s].color}"></span>${HP_ST[s].label}</div>`).join(''); }
+  if (note) note.innerHTML = `Grün = Verbesserung von A → B (weniger <b>Takte</b>, mehr <b>Min/Takt</b> &amp; Laufzeit). ` +
+    `<span style="color:var(--muted)">Fairer Vergleich: zwei Tage mit <b>ähnlicher Ø Außentemperatur</b> wählen – kältere Tage takten von allein weniger.</span>`;
+}
+
+// ===== Takt-Trend über Wochen (+ Abgleich-Marke, vorher/nachher) =========== #
+let _hptDays = null, _hptData = {};
+function hptDays() { if (_hptDays == null) { try { _hptDays = parseInt(localStorage.getItem('bhe_hpt_days'), 10) || 30; } catch (e) { _hptDays = 30; } } return _hptDays; }
+function hptMark() { try { return localStorage.getItem('bhe_hp_abgleich') || ''; } catch (e) { return ''; } }
+async function renderHpTrend() {
+  const card = $('hpt-card'); if (!card) return;
+  const mk = $('hpt-mark'); if (mk && !mk.value) mk.value = hptMark();
+  const d = hptDays();
+  if (_hptData[d]) { paintHpTrend(_hptData[d]); return; }
+  const ch = $('hpt-chart'); if (ch && !_hptData[d]) ch.innerHTML = '<div class="note" style="padding:14px 0;text-align:center">Lade Trend …</div>';
+  try { const r = await api('/api/heatpump/trend?days=' + d); _hptData[d] = r; paintHpTrend(r); }
+  catch (e) { if (ch) ch.innerHTML = '<div class="note">Nur mit laufender Bridge verfügbar.</div>'; }
+}
+function hptChart(daily, mark) {
+  const h = 200, pad = 30, top = 12, base = h - 24, n = daily.length;
+  const bw = (CW - pad * 2) / Math.max(1, n), iw = Math.max(2, bw * 0.6);
+  const Xc = i => pad + i * bw + bw / 2;
+  const sc = niceScale(Math.max(4, ...daily.map(x => x.starts || 0))), yMax = sc.max;
+  const Y = v => top + (1 - Math.max(0, Math.min(yMax, v)) / yMax) * (base - top);
+  let g = gridLines(h, top, base, pad, yMax, { step: sc.step, unit: 'Takte' });
+  daily.forEach((x, i) => { const y = Y(x.starts || 0), xx = pad + i * bw + (bw - iw) / 2; g += `<rect x="${xx.toFixed(1)}" y="${y.toFixed(1)}" width="${iw.toFixed(1)}" height="${Math.max(0, base - y).toFixed(1)}" rx="1.5" fill="${COL.hp}" opacity="0.8"/>`; });
+  const mps = daily.map(x => x.min_per_start).filter(v => v != null);
+  const mSc = niceScale(Math.max(60, ...mps, 1)), mMax = mSc.max;
+  const Yr = v => top + (1 - Math.max(0, Math.min(mMax, v)) / mMax) * (base - top);
+  let line = '', pen = false;
+  daily.forEach((x, i) => { if (x.min_per_start == null) { pen = false; return; } line += (pen ? 'L' : 'M') + Xc(i).toFixed(1) + ' ' + Yr(x.min_per_start).toFixed(1) + ' '; pen = true; });
+  g += `<path d="${line.trim()}" fill="none" stroke="${COL.pv}" stroke-width="2"/>`;
+  for (let k = 0; k <= mMax + 1e-6; k += mSc.step) g += `<text class="axis" x="${CW - 2}" y="${(Yr(k) + 3).toFixed(1)}" text-anchor="end" fill="${COL.pv}">${fmt(k, 0)}</text>`;
+  const stepL = Math.max(1, Math.ceil(n / 6));
+  daily.forEach((x, i) => { if (i % stepL === 0 || i === n - 1) { const p = x.date.split('-'); g += `<text class="axis" x="${Xc(i).toFixed(1)}" y="${h - 6}" text-anchor="middle">${p[2]}.${p[1]}</text>`; } });
+  if (mark) { const idx = daily.findIndex(x => x.date >= mark); if (idx >= 0) { const mx = pad + idx * bw; g += `<line x1="${mx.toFixed(1)}" x2="${mx.toFixed(1)}" y1="${top}" y2="${base}" stroke="#ffd166" stroke-width="1.5" stroke-dasharray="4 3"/><text class="axis" x="${(mx + 3).toFixed(1)}" y="${(top + 8).toFixed(1)}" fill="#ffd166">Abgleich</text>`; } }
+  const tips = daily.map(x => { const p = x.date.split('-'); return `<b>${p[2]}.${p[1]}.</b> · ${x.starts} Takte · ${x.min_per_start != null ? x.min_per_start + ' min/Takt' : '–'} · Ø Mod ${x.avg_mod != null ? x.avg_mod + '%' : '–'} · COP ${x.cop != null ? fmt(x.cop, 2) : '–'} · außen ${x.avg_outdoor != null ? fmt(x.avg_outdoor, 1) + '°' : '–'}`; });
+  return svg(h, g, { kind: 'bar', pad, n, h, tips });
+}
+function paintHpTrend(r) {
+  const daily = (r && r.daily) || [], ch = $('hpt-chart'), ba = $('hpt-ba'), leg = $('hpt-legend'), note = $('hpt-note');
+  if (!daily.length) { if (ch) ch.innerHTML = '<div class="note" style="padding:14px 0;text-align:center">Noch keine Tagesdaten – kommt nach ein paar Betriebstagen.</div>'; [ba, leg].forEach(e => { if (e) e.innerHTML = ''; }); if (note) note.innerHTML = ''; return; }
+  const mark = hptMark();
+  if (ch) ch.innerHTML = `<div style="touch-action:none">${hptChart(daily, mark)}</div>`;
+  if (leg) leg.innerHTML = `<div class="it"><span class="sw" style="background:${COL.hp}"></span>Takte/Tag</div><div class="it"><span class="sw" style="background:${COL.pv}"></span>Min/Takt</div>` + (mark ? `<div class="it"><span class="sw" style="background:#ffd166"></span>Abgleich</div>` : '');
+  if (ba) {
+    if (mark) {
+      const before = daily.filter(x => x.date < mark), after = daily.filter(x => x.date >= mark);
+      const avg = (a, k) => { const v = a.map(x => x[k]).filter(x => x != null); return v.length ? v.reduce((s, y) => s + y, 0) / v.length : null; };
+      const mkd = mark.split('-').reverse().join('.');
+      const row = (lbl, k, unit, dir) => {
+        const b = avg(before, k), a = avg(after, k); if (b == null || a == null) return '';
+        const pct = b !== 0 ? Math.round((a - b) / Math.abs(b) * 100) : 0;
+        const col = (a - b) === 0 ? 'var(--muted)' : ((dir < 0 ? a < b : a > b) ? COL.pv : '#ff8a8a');
+        return `<div style="display:flex;justify-content:space-between;gap:8px;font-size:13px;padding:5px 0;border-bottom:1px solid var(--line)"><span>${lbl}</span><span>Ø <b>${fmt(b, b < 10 ? 1 : 0)}</b> → <b>${fmt(a, a < 10 ? 1 : 0)}</b>${unit} <span style="color:${col};font-weight:600">(${pct > 0 ? '+' : ''}${pct}%)</span></span></div>`;
+      };
+      ba.innerHTML = (before.length && after.length)
+        ? `<div style="border:1px solid var(--accent);border-radius:12px;padding:10px 12px;margin-bottom:12px;background:color-mix(in srgb,var(--accent) 7%,transparent)">` +
+        `<div style="font-weight:600;font-size:13px;margin-bottom:4px">Vorher → nachher (ab ${mkd})</div>` +
+        row('Takte/Tag', 'starts', '×', -1) + row('Min/Takt', 'min_per_start', ' min', 1) +
+        row('Laufzeit/Tag', 'runtime_min', ' min', 1) + row('Ø Außentemp', 'avg_outdoor', ' °C', 0) + `</div>`
+        : `<div class="note" style="margin-bottom:10px">Marke auf ${esc(mkd)} gesetzt – sobald Tage <b>vor</b> und <b>nach</b> diesem Datum vorliegen, erscheint hier der Vorher/Nachher-Schnitt.</div>`;
+    } else ba.innerHTML = '';
+  }
+  if (note) note.innerHTML = `Die <b>Min/Takt</b>-Linie ist das beste Maß für ruhigen Lauf: höher = längere, seltenere Läufe. Setze oben dein <b>Abgleich-Datum</b>, dann rechne ich den Schnitt <b>vorher/nachher</b>. ` +
+    `<span style="color:var(--muted)">Weil kältere Tage von allein weniger takten, steht die <b>Ø Außentemperatur</b> dabei – vergleiche am besten Phasen mit ähnlichem Wetter.</span>`;
+}
+
 /* ---- Hydraulischer Abgleich: step guide + data-driven room worklist ------- */
 function renderHydronic() {
   const card = $('ha-card'); if (!card) return;
@@ -9782,7 +9907,8 @@ async function doPair() {
 const HEAT_SUBS = ['heizung', 'abgleich', 'effizienz', 'einstellung'];
 const HEAT_SUB_MAP = {
   'help-card': 'abgleich',
-  'hp-card': 'heizung', 'hpd-card': 'heizung', 'hd-card': 'heizung', 'roomtemp-card': 'heizung', 'hts-card': 'heizung', 'rts-card': 'heizung', 'win-card': 'heizung',
+  'hp-card': 'heizung', 'hpd-card': 'heizung', 'hpc-card': 'heizung', 'hd-card': 'heizung', 'roomtemp-card': 'heizung', 'hts-card': 'heizung', 'rts-card': 'heizung', 'win-card': 'heizung',
+  'hpt-card': 'effizienz',
   'dhw-card': 'abgleich',
   'obs-card': 'abgleich', 'am-card': 'abgleich', 'tm-card': 'abgleich', 'hl-card': 'abgleich',
   'flow-card': 'abgleich', 'opt-card': 'abgleich', 'ha-card': 'abgleich', 'layout-card': 'abgleich',
@@ -9828,6 +9954,8 @@ function switchView(v) {
     if (typeof renderRoomSync === 'function') renderRoomSync();
     if (typeof renderDhwImpact === 'function') renderDhwImpact();
     if (typeof renderHpDay === 'function') renderHpDay();
+    if (typeof renderHpCompare === 'function') renderHpCompare();
+    if (typeof renderHpTrend === 'function') renderHpTrend();
   }
 }
 
@@ -9952,6 +10080,19 @@ function init() {
   }
   const hpp = $('hpd-prev'); if (hpp) hpp.addEventListener('click', () => hpdShift(-1));
   const hpn = $('hpd-next'); if (hpn) hpn.addEventListener('click', () => hpdShift(1));
+  ['hpc-a', 'hpc-b'].forEach(id => { const el = $(id); if (el) el.addEventListener('change', () => renderHpCompare()); });
+  const htd = $('hpt-days');
+  if (htd) htd.addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    _hptDays = parseInt(b.dataset.htd, 10); try { localStorage.setItem('bhe_hpt_days', String(_hptDays)); } catch (err) {}
+    htd.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+    renderHpTrend();
+  });
+  if (htd) htd.querySelectorAll('button').forEach(x => x.classList.toggle('on', parseInt(x.dataset.htd, 10) === hptDays()));
+  const htm = $('hpt-mark');
+  if (htm) htm.addEventListener('change', () => { try { htm.value ? localStorage.setItem('bhe_hp_abgleich', htm.value) : localStorage.removeItem('bhe_hp_abgleich'); } catch (e) {} const d = hptDays(); if (_hptData[d]) paintHpTrend(_hptData[d]); });
+  const htmc = $('hpt-mark-clear');
+  if (htmc) htmc.addEventListener('click', () => { try { localStorage.removeItem('bhe_hp_abgleich'); } catch (e) {} if ($('hpt-mark')) $('hpt-mark').value = ''; const d = hptDays(); if (_hptData[d]) paintHpTrend(_hptData[d]); });
   const dwd = $('dhw-days');
   if (dwd) {
     dwd.addEventListener('click', e => {
