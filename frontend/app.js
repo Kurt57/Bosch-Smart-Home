@@ -93,8 +93,8 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v180';   // short tag shown always-on in the header
-const APP_VERSION = 'v180 · 2026-11-01 · Bugfix Zählerstände: War ein Stecker zwischenzeitlich nicht erreichbar und sein Energiezähler sprang beim Wiederverbinden (oder nach Aus-/Einstecken) um viele Tage auf einmal, wurde dieser ganze Sprung fälschlich als Verbrauch „heute" gebucht (und doppelt gezählt). Zählerdifferenzen werden jetzt nur noch übernommen, wenn das Intervall kurz und die daraus folgende Leistung für einen Stecker plausibel ist (≤ ~3,8 kW); unplausible Sprünge und Offline-Lücken erzeugen keine Spitze mehr'
+const APP_BUILD = 'v181';   // short tag shown always-on in the header
+const APP_VERSION = 'v181 · 2026-11-03 · Neu (Wärmepumpe → Heizung): „Tagesverlauf Wärmepumpe" – ein chronologisches Zeitachsen-Diagramm eines Tages mit Zustandsband (Heizung/Warmwasser/Abtauen/Kühlen/Pause) + Zuheizer-Spur, Strom & Wärme (kW), Modulation %, COP und Vor-/Rücklauf/Außen-Temperaturen (alle ein-/ausblendbar), Tages-Kennzahlen (Takte, Pausen, Abtauzyklen, Zuheizer-Zeit, Ø Modulation), Ereignis-Verlauf und Tag-für-Tag-Blättern. Ideal, um die Wirkung des hydraulischen Abgleichs zu sehen. Abtauen/Zuheizer werden aus dem Betrieb erkannt'
 const $ = (id) => document.getElementById(id);
 
 // Unregister the service worker, drop all caches, and reload fresh code.
@@ -288,6 +288,10 @@ const INFO = {
   roomsync: () => 'Zeigt je Raum <b>Ist</b>-Temperatur, <b>Soll</b> und <b>Feuchte</b> aus deinen Bosch-Raumthermostaten – und prüft, ob die <b>Wärmepumpe über die HomeCom-API eine gemessene Raumtemperatur entgegennimmt</b>. ' +
     'Bei der Compress 6800i ist das normalerweise <b>nicht</b> vorgesehen: Die WP ist witterungsgeführt und misst die Raumtemperatur über ihre <b>eigene Raumstation</b>, nicht über einen API-Eingang. Schreibbar ist nur der <b>Raum-Soll</b>. ' +
     'Der Energiemanager kann genau diesen Soll als Hebel nutzen (anheben/absenken je nach gemessener Ist-Temperatur). Ob dein konkretes Gerät doch einen Ist-Eingang hat, sagt dir die Prüfung oben.',
+  'hp-day': () => 'Ein <b>chronologischer Tagesverlauf</b> deiner Wärmepumpe: oben <b>Strom &amp; Wärme (kW)</b>, darunter optional <b>Modulation %</b>, <b>COP</b> und <b>Vorlauf/Rücklauf/Außen °C</b>, ganz unten ein <b>Zustandsband</b> (Heizung · Warmwasser · Abtauen · Kühlen · Pause) plus eine <b>Zuheizer</b>-Spur. ' +
+    'Jede Kennzahl ist <b>ein-/ausblendbar</b>, und du blätterst mit ‹ › durch die <b>Tage</b> (heute, gestern …). Unten der <b>Ereignis-Verlauf</b>: wann welcher Zustand wie lange lief. ' +
+    'So siehst du die Wirkung von Einstellungen wie dem <b>hydraulischen Abgleich</b>: läuft die WP jetzt <b>länger und ruhiger durch</b> (wenige Takte) oder <b>taktet</b> sie (viele kurze Pausen)? ' +
+    '<b>Abtauen</b> &amp; <b>Zuheizer</b> werden aus dem Betrieb <b>erkannt</b> (Wärme bricht ein / Leistung über dem Verdichter-Limit), nicht aus einem Gerätesignal.',
   'dhw-impact': () => 'Die Compress 6800i hat <b>Warmwasser-Vorrang</b>: macht sie Warmwasser, <b>pausiert die Heizung</b> solange. Diese Karte misst, was das für deinen <b>Komfort</b> bedeutet. ' +
     'Dazu wird die <b>Warmwasser-Phase</b> der Wärmepumpe (aus HomeCom) mit der gemessenen <b>Innentemperatur</b> (aus deinen Bosch-Thermostaten) überlagert. Je Phase: ' +
     'wie viel die Innentemperatur vom Wert <b>bei WW-Start</b> bis zum Tiefpunkt <b>fällt</b> – und wie lange es nach dem Heizungs-Neustart dauert, bis dieser <b>Startwert wieder erreicht</b> ist. ' +
@@ -4873,6 +4877,191 @@ function paintDhwImpact(r) {
   }
   if (note) note.innerHTML = `Über <b>${r.n} Warmwasser-Phasen</b>: die Heizung pausiert im Schnitt <b>${fmt(r.avg_dur_min, 0)} min</b>, dabei kühlt das Haus um <b>~${fmt(r.avg_drop, 1)} °C</b> ab (max. ${fmt(r.max_drop, 1)} °C) und ist nach <b>~${r.median_recov_min != null ? fmt(r.median_recov_min, 0) : '?'} min</b> (Median) wieder auf dem Ausgangswert. ` +
     `<span style="color:var(--muted)">Je kälter draußen, desto größer der Dip. Ist er dir zu groß: Warmwasser-Zeiten in Schwachlast legen, WW-Soll/Hysterese senken, oder die WW-Ladung zeitlich begrenzen – dann pausiert die Heizung kürzer. Innentemperatur kommt aus deinen Bosch-Thermostaten, die WW-Phasen aus der Wärmepumpe.</span>`;
+}
+
+// ===== Tagesverlauf Wärmepumpe: chronologische Zustände + Leistung ========= #
+const _HPDN = 240, _HPDBW = 360;           // 240 buckets of 6 min = one day
+const HP_ST = {
+  heating: { label: 'Heizung', color: '#ef6c4d' },
+  water: { label: 'Warmwasser', color: '#4da3ff' },
+  defrost: { label: 'Abtauen', color: '#7fd1e8' },
+  cooling: { label: 'Kühlen', color: '#38bdd8' },
+  idle: { label: 'Pause', color: '#49505f' },
+};
+const HP_HEATER = '#ff5d73';
+const HPD_SERIES = [
+  { key: 'p', label: 'Strom', unit: 'kW', color: '#ef6c4d' },
+  { key: 'h', label: 'Wärme', unit: 'kW', color: '#f6b93b' },
+  { key: 'mod', label: 'Modulation', unit: '%', color: '#a970ff' },
+  { key: 'cop', label: 'COP', unit: '', color: '#ffd166' },
+  { key: 'sup', label: 'Vorlauf', unit: '°C', color: '#ff8a5c' },
+  { key: 'ret', label: 'Rücklauf', unit: '°C', color: '#5c9bff' },
+  { key: 'out', label: 'Außen', unit: '°C', color: '#9aa4b2' },
+];
+const HPD_EV = {
+  heating: '🔥 Heizung', water: '🚿 Warmwasser', defrost: '❄️ Abtauen',
+  cooling: '❄️ Kühlen', idle: '⏸️ Pause', heater: '⚡ Zuheizer',
+};
+let _hpDayDate = null, _hpDayCur = null, _hpDayShown = null, _hpDayData = {}, _hpDayBusy = false;
+function hpdToggles() {
+  try { const v = JSON.parse(localStorage.getItem('bhe_hpd_tg') || 'null'); if (v && typeof v === 'object') return v; } catch (e) {}
+  return { p: true, h: true, mod: true, cop: false, sup: false, ret: false, out: false };
+}
+function hpdToggle(key) {
+  const t = hpdToggles(); t[key] = !t[key];
+  try { localStorage.setItem('bhe_hpd_tg', JSON.stringify(t)); } catch (e) {}
+  if (_hpDayShown) paintHpDay(_hpDayShown);
+}
+function _hpdDateStr(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+function hpdShift(delta) {
+  if (!_hpDayCur) return;
+  if (delta > 0 && _hpDayCur === _hpdDateStr(new Date())) return;
+  const d = new Date(_hpDayCur + 'T12:00:00'); d.setDate(d.getDate() + delta);
+  const ns = _hpdDateStr(d);
+  _hpDayDate = (ns === _hpdDateStr(new Date())) ? null : ns;
+  renderHpDay();
+}
+async function renderHpDay() {
+  const card = $('hpd-card'); if (!card) return;
+  const key = _hpDayDate || 'today';
+  if (_hpDayData[key] && key !== 'today') { paintHpDay(_hpDayData[key]); return; }
+  if (_hpDayBusy) return; _hpDayBusy = true;
+  const ch = $('hpd-chart'); if (ch && !_hpDayData[key]) ch.innerHTML = '<div class="note" style="padding:14px 0;text-align:center">Lade Tagesverlauf …</div>';
+  try { const r = await api('/api/heatpump/day' + (_hpDayDate ? ('?date=' + _hpDayDate) : '')); _hpDayData[key] = r; paintHpDay(r); }
+  catch (e) { if (ch) ch.innerHTML = '<div class="note">Nur mit laufender Bridge verfügbar.</div>'; }
+  finally { _hpDayBusy = false; }
+}
+// path builders that break over null gaps (device offline / future hours)
+function _hpdLine(series, acc, X, Y) {
+  let d = '', pen = false;
+  series.forEach((s, i) => { const v = acc(s); if (v == null) { pen = false; return; } d += (pen ? 'L' : 'M') + X(i).toFixed(1) + ' ' + Y(v).toFixed(1) + ' '; pen = true; });
+  return d.trim();
+}
+function _hpdArea(series, acc, X, Y, base) {
+  let out = '', run = [];
+  const flush = () => { if (run.length > 1) { let d = 'M' + run[0][0].toFixed(1) + ' ' + base.toFixed(1) + ' '; run.forEach(p => d += 'L' + p[0].toFixed(1) + ' ' + p[1].toFixed(1) + ' '); d += 'L' + run[run.length - 1][0].toFixed(1) + ' ' + base.toFixed(1) + ' Z'; out += '<path d="' + d + '"/>'; } run = []; };
+  series.forEach((s, i) => { const v = acc(s); if (v == null) { flush(); return; } run.push([X(i), Y(v)]); });
+  flush(); return out;
+}
+function hpdTips(series, tg) {
+  return series.map(s => {
+    if (s.p == null && s.h == null && s.mod == null && s.out == null) return null;
+    const hhmm = new Date(s.t * 1000).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+    const parts = [];
+    if (tg.p && s.p != null) parts.push(`<span style="color:#ef6c4d">⚡ ${fmt(s.p, 2)} kW</span>`);
+    if (tg.h && s.h != null) parts.push(`<span style="color:#f6b93b">🔥 ${fmt(s.h, 2)} kW</span>`);
+    if (tg.mod && s.mod != null) parts.push(`Mod ${fmt(s.mod, 0)} %`);
+    if (tg.cop && s.cop != null) parts.push(`COP ${fmt(s.cop, 2)}`);
+    if (tg.sup && s.sup != null) parts.push(`VL ${fmt(s.sup, 1)}°`);
+    if (tg.ret && s.ret != null) parts.push(`RL ${fmt(s.ret, 1)}°`);
+    if (tg.out && s.out != null) parts.push(`Außen ${fmt(s.out, 1)}°`);
+    return `<b>${hhmm}</b> · ${parts.join(' · ')}`;
+  });
+}
+function hpdPower(series, tips, tg) {
+  const h = 150, padL = 42, padR = 14, top = 12, base = h - 22;
+  const X = i => padL + (CW - padL - padR) * (i / (_HPDN - 1));
+  const vals = []; series.forEach(s => { if (tg.p && s.p != null) vals.push(s.p); if (tg.h && s.h != null) vals.push(s.h); });
+  const sc = niceScale(Math.max(0.5, ...vals)), yMax = sc.max;
+  const Y = v => top + (1 - Math.max(0, Math.min(yMax, v)) / yMax) * (base - top);
+  let g = gridLines(h, top, base, padL, yMax, { step: sc.step, unit: 'kW' });
+  if (tg.h) { g += `<g fill="#f6b93b" fill-opacity="0.15">${_hpdArea(series, s => s.h, X, Y, base)}</g><path d="${_hpdLine(series, s => s.h, X, Y)}" fill="none" stroke="#f6b93b" stroke-width="1.8"/>`; }
+  if (tg.p) { g += `<g fill="#ef6c4d" fill-opacity="0.22">${_hpdArea(series, s => s.p, X, Y, base)}</g><path d="${_hpdLine(series, s => s.p, X, Y)}" fill="none" stroke="#ef6c4d" stroke-width="2"/>`; }
+  return svg(h, g, { kind: 'area', pad: padL, padR, n: _HPDN, h, tips });
+}
+function hpdModCop(series, tips, tg) {
+  const h = 108, padL = 42, padR = 26, top = 10, base = h - 18;
+  const X = i => padL + (CW - padL - padR) * (i / (_HPDN - 1));
+  let g = '';
+  if (tg.mod) {
+    const Y = v => top + (1 - Math.max(0, Math.min(100, v)) / 100) * (base - top);
+    g += gridLines(h, top, base, padL, 100, { step: 50, unit: '%' });
+    g += `<g fill="#a970ff" fill-opacity="0.16">${_hpdArea(series, s => s.mod, X, Y, base)}</g><path d="${_hpdLine(series, s => s.mod, X, Y)}" fill="none" stroke="#a970ff" stroke-width="1.8"/>`;
+  }
+  if (tg.cop) {
+    const cops = series.map(s => s.cop).filter(v => v != null);
+    const sc = niceScale(Math.max(2, ...cops, 0.1)), yMax = sc.max;
+    const Y = v => top + (1 - Math.max(0, Math.min(yMax, v)) / yMax) * (base - top);
+    g += `<path d="${_hpdLine(series, s => s.cop, X, Y)}" fill="none" stroke="#ffd166" stroke-width="1.8"/>`;
+    for (let k = 0; k <= yMax + 1e-6; k += sc.step) g += `<text class="axis" x="${CW - 2}" y="${(Y(k) + 3).toFixed(1)}" text-anchor="end" fill="#ffd166">${fmt(k, 0)}</text>`;
+    g += `<text class="axis" x="${CW - 2}" y="${(top + 2).toFixed(1)}" text-anchor="end" fill="#ffd166">COP</text>`;
+  }
+  return svg(h, g, { kind: 'area', pad: padL, padR, n: _HPDN, h, tips });
+}
+function hpdTemp(series, tips, tg) {
+  const h = 108, padL = 42, padR = 14, top = 10, base = h - 18;
+  const X = i => padL + (CW - padL - padR) * (i / (_HPDN - 1));
+  const vals = []; ['sup', 'ret', 'out'].forEach(k => { if (tg[k]) series.forEach(s => { if (s[k] != null) vals.push(s[k]); }); });
+  if (!vals.length) return '';
+  const lo = Math.min(...vals) - 1, hi = Math.max(...vals) + 1, span = Math.max(4, hi - lo);
+  const Y = v => top + (1 - (v - lo) / span) * (base - top);
+  let g = '';
+  [lo + span * 0.12, lo + span * 0.5, lo + span * 0.88].forEach(v => { g += `<line class="gl" x1="${padL}" x2="${CW - 4}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}"/><text class="axis" x="0" y="${(Y(v) + 3).toFixed(1)}">${fmt(v, 0)}°</text>`; });
+  [['sup', '#ff8a5c'], ['ret', '#5c9bff'], ['out', '#9aa4b2']].forEach(([k, c]) => { if (tg[k]) g += `<path d="${_hpdLine(series, s => s[k], X, Y)}" fill="none" stroke="${c}" stroke-width="1.8"/>`; });
+  return svg(h, g, { kind: 'area', pad: padL, padR, n: _HPDN, h, tips });
+}
+function hpdRibbon(r) {
+  const h = 52, padL = 42, padR = 14, bandY = 6, bandH = 20, heatY = 29, heatH = 5, start = r.start;
+  const xf = ts => padL + (CW - padL - padR) * Math.max(0, Math.min(1, ((ts - start) / _HPDBW) / (_HPDN - 1)));
+  let g = `<rect x="${padL}" y="${bandY}" width="${(CW - padL - padR).toFixed(1)}" height="${bandH}" fill="#20252e"/>`;
+  (r.segments || []).forEach(s => { const x0 = xf(s.start), x1 = xf(s.end), c = (HP_ST[s.state] || {}).color || '#555'; g += `<rect x="${x0.toFixed(1)}" y="${bandY}" width="${Math.max(0.6, x1 - x0).toFixed(1)}" height="${bandH}" fill="${c}"/>`; });
+  (r.heater || []).forEach(s => { const x0 = xf(s.start), x1 = xf(s.end); g += `<rect x="${x0.toFixed(1)}" y="${heatY}" width="${Math.max(1.2, x1 - x0).toFixed(1)}" height="${heatH}" rx="1" fill="${HP_HEATER}"/>`; });
+  g += `<text class="axis" x="0" y="${(heatY + heatH).toFixed(1)}">Zuheiz.</text>`;
+  for (let hh = 0; hh <= 24; hh += 3) { const x = padL + (CW - padL - padR) * (hh / 24); g += `<text class="axis" x="${x.toFixed(1)}" y="${h - 2}" text-anchor="${hh === 0 ? 'start' : hh === 24 ? 'end' : 'middle'}">${hh}</text>`; }
+  if (r.is_today) { const nf = (Date.now() / 1000 - start) / 86400; if (nf > 0 && nf < 1) { const x = padL + (CW - padL - padR) * nf; g += `<line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${bandY}" y2="${bandY + bandH}" stroke="#fff" stroke-width="1.5" stroke-dasharray="2 2" opacity="0.7"/>`; } }
+  // ribbon readout: the state at the hovered time
+  const tips = []; for (let i = 0; i < _HPDN; i++) { const ts = start + i * _HPDBW; const seg = (r.segments || []).find(s => ts >= s.start && ts < s.end); const hhmm = new Date(ts * 1000).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }); tips.push(seg ? `<b>${hhmm}</b> · ${(HP_ST[seg.state] || {}).label || seg.state}` : null); }
+  return svg(h, g, { kind: 'area', pad: padL, padR, n: _HPDN, h, tips });
+}
+function _hpdHm(min) { min = Math.round(min || 0); return min < 60 ? min + ' min' : Math.floor(min / 60) + ' h ' + (min % 60) + ' min'; }
+function paintHpDay(r) {
+  _hpDayShown = r;
+  const kpisEl = $('hpd-kpis'), tgEl = $('hpd-tg'), ch = $('hpd-chart'), rl = $('hpd-ribbon-legend'),
+    evs = $('hpd-events'), note = $('hpd-note'), lbl = $('hpd-daylabel'), prev = $('hpd-prev'), nx = $('hpd-next');
+  const WD = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
+  if (r && r.date) { const p = r.date.split('-'); _hpDayCur = r.date; if (lbl) lbl.innerHTML = `${WD[r.weekday] || ''}, ${p[2]}.${p[1]}.${p[0]}` + (r.is_today ? ' · <span style="color:var(--accent2)">heute</span>' : ''); }
+  if (prev) { prev.disabled = !(r && r.has_prev); prev.style.opacity = (r && r.has_prev) ? '1' : '0.4'; }
+  if (nx) { nx.disabled = !(r && r.has_next); nx.style.opacity = (r && r.has_next) ? '1' : '0.4'; }
+  if (!r || !r.ok || !r.n || r.n < 2) {
+    if (ch) ch.innerHTML = '<div class="note" style="padding:16px 0;text-align:center">Für diesen Tag liegen keine Wärmepumpen-Daten vor.</div>';
+    [kpisEl, tgEl, rl, evs, note].forEach(e => { if (e) e.innerHTML = ''; }); return;
+  }
+  const k = r.kpis, tg = hpdToggles();
+  const kpi = (v, l) => `<div class="kpi sm"><div class="v">${v}</div><div class="l">${l}</div></div>`;
+  if (kpisEl) kpisEl.innerHTML =
+    kpi(kwh(k.elec_kwh, 1), 'Strom') + kpi(kwh(k.heat_kwh, 1), 'Wärme erzeugt') +
+    kpi(k.cop != null ? fmt(k.cop, 2) : '–', 'Ø Arbeitszahl') +
+    kpi(_hpdHm(k.runtime_min), 'Laufzeit') +
+    kpi(k.starts + '× · ' + _hpdHm(k.pause_min), 'Takte · Pause') +
+    kpi(k.defrost_count + '× · ' + k.defrost_min + ' min', 'Abtauen') +
+    kpi(k.heater_min > 0 ? _hpdHm(k.heater_min) : '–', 'Zuheizer') +
+    kpi(fmt(k.max_power_kw, 1) + ' kW', 'Spitze elektr.') +
+    kpi(k.avg_mod != null ? fmt(k.avg_mod, 0) + ' %' : '–', 'Ø Modulation');
+  if (tgEl) tgEl.innerHTML = HPD_SERIES.map(s => { const on = !!tg[s.key]; return `<button class="hpd-t" data-hpt="${s.key}" aria-pressed="${on}" style="padding:6px 10px;border-radius:999px;font-size:12px;cursor:pointer;border:1px solid ${on ? s.color : 'var(--line)'};background:${on ? 'color-mix(in srgb,' + s.color + ' 20%,transparent)' : 'transparent'};color:var(--fg)"><span style="color:${s.color}">●</span> ${esc(s.label)}${s.unit ? (' ' + esc(s.unit)) : ''}</button>`; }).join('');
+  const tips = hpdTips(r.series || [], tg);
+  let html = '';
+  if (tg.p || tg.h) html += `<div style="touch-action:none">${hpdPower(r.series, tips, tg)}</div>`;
+  if (tg.mod || tg.cop) html += `<div style="touch-action:none;margin-top:3px">${hpdModCop(r.series, tips, tg)}</div>`;
+  if (tg.sup || tg.ret || tg.out) { const t = hpdTemp(r.series, tips, tg); if (t) html += `<div style="touch-action:none;margin-top:3px">${t}</div>`; }
+  html += `<div style="touch-action:none;margin-top:2px">${hpdRibbon(r)}</div>`;
+  if (ch) ch.innerHTML = html;
+  // ribbon legend: only the states that actually occurred + heater
+  const seen = new Set((r.segments || []).map(s => s.state));
+  if (rl) rl.innerHTML = Object.keys(HP_ST).filter(s => seen.has(s)).map(s =>
+    `<div class="it"><span class="sw" style="background:${HP_ST[s].color}"></span>${HP_ST[s].label}</div>`).join('') +
+    ((r.heater || []).length ? `<div class="it"><span class="sw" style="background:${HP_HEATER}"></span>Zuheizer</div>` : '');
+  // chronological event log
+  if (evs) {
+    const when = ts => new Date(ts * 1000).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+    evs.innerHTML = (r.events || []).length ? (r.events || []).map(e => {
+      const col = e.kind === 'heater' ? HP_HEATER : (HP_ST[e.kind] || {}).color || '#888';
+      return `<div style="display:flex;justify-content:space-between;gap:8px;font-size:12.5px;padding:5px 0;border-bottom:1px solid var(--line)">` +
+        `<span><span style="color:${col}">●</span> <b>${when(e.ts)}</b> ${esc(HPD_EV[e.kind] || e.kind)}</span>` +
+        `<span style="color:var(--muted);white-space:nowrap">${_hpdHm(e.dur_s / 60)}</span></div>`;
+    }).join('') : '<div class="note">Keine Zustandswechsel an diesem Tag.</div>';
+  }
+  if (note) note.innerHTML = `Ein <b>Takt</b> ist ein Verdichterstart; viele kurze Takte (häufige Pausen) deuten auf eine zu hohe Leistung / zu wenig Abnahme hin – nach gutem <b>hydraulischem Abgleich</b> läuft die WP meist <b>länger und ruhiger durch</b>. ` +
+    `<span style="color:var(--muted)"><b>Abtauen</b> und <b>Zuheizer</b> sind aus dem Betrieb <b>erkannt</b> (Wärme bricht ein bzw. Leistung über dem Verdichter-Limit ~${r.comp_max_w ? fmt(r.comp_max_w / 1000, 1) + ' kW' : '–'}), nicht aus einem Gerätesignal – als Hinweis zu verstehen. Tipp/Overlay auf dem Diagramm zeigt die Werte zur Uhrzeit.</span>`;
 }
 
 /* ---- Hydraulischer Abgleich: step guide + data-driven room worklist ------- */
@@ -9593,7 +9782,7 @@ async function doPair() {
 const HEAT_SUBS = ['heizung', 'abgleich', 'effizienz', 'einstellung'];
 const HEAT_SUB_MAP = {
   'help-card': 'abgleich',
-  'hp-card': 'heizung', 'hd-card': 'heizung', 'roomtemp-card': 'heizung', 'hts-card': 'heizung', 'rts-card': 'heizung', 'win-card': 'heizung',
+  'hp-card': 'heizung', 'hpd-card': 'heizung', 'hd-card': 'heizung', 'roomtemp-card': 'heizung', 'hts-card': 'heizung', 'rts-card': 'heizung', 'win-card': 'heizung',
   'dhw-card': 'abgleich',
   'obs-card': 'abgleich', 'am-card': 'abgleich', 'tm-card': 'abgleich', 'hl-card': 'abgleich',
   'flow-card': 'abgleich', 'opt-card': 'abgleich', 'ha-card': 'abgleich', 'layout-card': 'abgleich',
@@ -9638,6 +9827,7 @@ function switchView(v) {
     if (typeof initHpControls === 'function') initHpControls();
     if (typeof renderRoomSync === 'function') renderRoomSync();
     if (typeof renderDhwImpact === 'function') renderDhwImpact();
+    if (typeof renderHpDay === 'function') renderHpDay();
   }
 }
 
@@ -9667,6 +9857,8 @@ function init() {
     if (gl) { e.stopPropagation(); showGloss(gl.dataset.g); return; }
     const pp = e.target.closest('.pp-prio');
     if (pp) { e.stopPropagation(); ppSetPrio(pp.dataset.pp, pp.getAttribute('aria-pressed') !== 'true'); return; }
+    const hpt = e.target.closest('.hpd-t');
+    if (hpt) { e.stopPropagation(); hpdToggle(hpt.dataset.hpt); return; }
     const t = $('toast'); if (t && !t.hidden) t.hidden = true;
   });
   $('hist-range').addEventListener('click', e => {
@@ -9758,6 +9950,8 @@ function init() {
     });
     lpd.querySelectorAll('button').forEach(x => x.classList.toggle('on', parseInt(x.dataset.lpd, 10) === lpDays()));
   }
+  const hpp = $('hpd-prev'); if (hpp) hpp.addEventListener('click', () => hpdShift(-1));
+  const hpn = $('hpd-next'); if (hpn) hpn.addEventListener('click', () => hpdShift(1));
   const dwd = $('dhw-days');
   if (dwd) {
     dwd.addEventListener('click', e => {
