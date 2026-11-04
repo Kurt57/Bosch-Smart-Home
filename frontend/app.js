@@ -93,8 +93,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v184';   // short tag shown always-on in the header
-const APP_VERSION = 'v184 · 2026-11-04 · Fix: die ‹ ›-Tagesnavigation lief über den Kartenrand hinaus (Buttons wurden full-width) – behoben. Performance: der Wärme-Tab lädt jetzt nur noch die Karten des aktiven Unter-Tabs (Heizung/Abgleich/Effizienz/Einstellung) statt beim Öffnen ~20 API-Abfragen gleichzeitig zu starten; die übrigen laden erst beim Wechsel auf ihren Unter-Tab. Der Tagesverlauf lädt immer nur EINEN Tag, der Takt-Trend erst beim Öffnen von „Effizienz". ' +
+const APP_BUILD = 'v185';   // short tag shown always-on in the header
+const APP_VERSION = 'v185 · 2026-11-04 · Tagesverlauf lesbarer: Zeitachse zoombar (Auto / 1h / 2h / 4h / 8h / 16h / Tag; Auto passt sich an die vorhandenen Daten an, damit ein kurzer Betrieb nicht in 24 h zerquetscht wird). Raumtemperatur-Linien werden jetzt verbunden (die Thermostate messen punktuell/selten – kleine Lücken werden interpoliert, große bleiben offen). Achse re-bucketet beim Zoomen für volle Auflösung. ' +
+  'v184 · Fix ‹ ›-Tagesnavigation + Wärme-Tab lädt nur den aktiven Unter-Tab. Performance: der Wärme-Tab lädt jetzt nur noch die Karten des aktiven Unter-Tabs (Heizung/Abgleich/Effizienz/Einstellung) statt beim Öffnen ~20 API-Abfragen gleichzeitig zu starten; die übrigen laden erst beim Wechsel auf ihren Unter-Tab. Der Tagesverlauf lädt immer nur EINEN Tag, der Takt-Trend erst beim Öffnen von „Effizienz". ' +
   'v183 · „Tagesverlauf Wärmepumpe" kombiniert jetzt die Raumtemperaturen: je Raum ein-/ausschaltbar werden die Innentemperaturen (Bosch-Thermostate) auf dieselbe Zeitachse wie WP-Zustände, Leistung und Modulation gelegt – so siehst du chronologisch, wie jeder Raum auf Heizen/Pause/Warmwasser reagiert (eigener, enger Temperaturbereich, Werte auch im Tooltip). ' +
   'v182 · Zwei neue WP-Karten: „Tagesvergleich" (zwei Tage A/B nebeneinander mit Kennzahl-Differenzen + beiden Zustandsbändern, grün = besser) und „Takt-Trend" (Verdichter-Takte/Tag + Min/Takt über Wochen, mit optionaler Abgleich-Marke und Vorher/Nachher-Schnitt). Backend-Refactor: gemeinsame Tages-Kennzahlen inkl. Min/Takt und Ø Außentemperatur. ' +
   'v181 · Neu (Wärmepumpe → Heizung): „Tagesverlauf Wärmepumpe" – ein chronologisches Zeitachsen-Diagramm eines Tages mit Zustandsband (Heizung/Warmwasser/Abtauen/Kühlen/Pause) + Zuheizer-Spur, Strom & Wärme (kW), Modulation %, COP und Vor-/Rücklauf/Außen-Temperaturen (alle ein-/ausblendbar), Tages-Kennzahlen (Takte, Pausen, Abtauzyklen, Zuheizer-Zeit, Ø Modulation), Ereignis-Verlauf und Tag-für-Tag-Blättern. Ideal, um die Wirkung des hydraulischen Abgleichs zu sehen. Abtauen/Zuheizer werden aus dem Betrieb erkannt'
@@ -4890,7 +4891,47 @@ function paintDhwImpact(r) {
 }
 
 // ===== Tagesverlauf Wärmepumpe: chronologische Zustände + Leistung ========= #
-const _HPDN = 240, _HPDBW = 360;           // 240 buckets of 6 min = one day
+const _HPDN = 200;                          // buckets across the VISIBLE window
+// zoom span for the day view (hours, or 'auto'/'day')
+function hpdSpan() { try { return localStorage.getItem('bhe_hpd_span') || 'auto'; } catch (e) { return 'auto'; } }
+function hpdSetSpan(s) { try { localStorage.setItem('bhe_hpd_span', s); } catch (e) {} if (_hpDayShown) paintHpDay(_hpDayShown); }
+// visible [w0,w1] window from the chosen span + the day's data extent
+function hpdWindow(r, span) {
+  const dayS = r.start, dayE = r.start + 86400, nowS = Math.floor(Date.now() / 1000);
+  const ds = r.data_start || dayS, de = r.data_end || dayE;
+  if (span === 'day') return { w0: dayS, w1: dayE };
+  if (span === 'auto') {
+    let a = ds, b = r.is_today ? Math.max(de, Math.min(nowS, dayE)) : de;
+    if (b - a < 3600) b = a + 3600;
+    const pad = (b - a) * 0.03; return { w0: Math.max(dayS, a - pad), w1: Math.min(dayE, b + pad) };
+  }
+  const H = Math.max(1, parseFloat(span)) * 3600;
+  let b = r.is_today ? Math.min(nowS, dayE) : de, a = b - H;
+  if (a < dayS) { a = dayS; b = Math.min(dayE, a + H); }
+  if (b > dayE) { b = dayE; a = Math.max(dayS, b - H); }
+  return { w0: a, w1: b };
+}
+// bucket the raw samples into nb slots over [w0,w1]
+function hpdBucket(raw, w0, w1, nb) {
+  const bw = (w1 - w0) / nb, keys = ['p', 'h', 'mod', 'cop', 'sup', 'ret', 'out'];
+  const acc = Array.from({ length: nb }, () => ({ p: [], h: [], mod: [], cop: [], sup: [], ret: [], out: [] }));
+  (raw || []).forEach(s => { if (s.t < w0 || s.t >= w1) return; let i = Math.floor((s.t - w0) / bw); if (i < 0) i = 0; if (i >= nb) i = nb - 1; keys.forEach(k => { if (s[k] != null) acc[i][k].push(s[k]); }); });
+  const av = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;
+  return acc.map((a, i) => { const o = { t: Math.round(w0 + (i + 0.5) * bw) }; keys.forEach(k => o[k] = av(a[k])); return o; });
+}
+// bucket room point-measurements into nb slots, then connect across small gaps
+// by linear interpolation (the thermostats report sparsely → dotty otherwise)
+function hpdBucketRooms(rooms, w0, w1, nb) {
+  const bw = (w1 - w0) / nb, maxGap = Math.max(1, Math.round(2700 / bw));  // ~45 min
+  return (rooms || []).map(r => {
+    const slots = Array.from({ length: nb }, () => []);
+    (r.points || []).forEach(p => { if (p.t < w0 || p.t >= w1) return; let i = Math.floor((p.t - w0) / bw); if (i < 0) i = 0; if (i >= nb) i = nb - 1; slots[i].push(p.temp); });
+    const vals = slots.map(a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : null);
+    const idx = []; vals.forEach((v, i) => { if (v != null) idx.push(i); });
+    for (let k = 0; k < idx.length - 1; k++) { const a = idx[k], b = idx[k + 1]; if (b - a > 1 && b - a <= maxGap) for (let j = a + 1; j < b; j++) vals[j] = vals[a] + (vals[b] - vals[a]) * (j - a) / (b - a); }
+    return { room: r.room, color: r.color, setpoint: r.setpoint, vals };
+  });
+}
 const HP_ST = {
   heating: { label: 'Heizung', color: '#ef6c4d' },
   water: { label: 'Warmwasser', color: '#4da3ff' },
@@ -4953,10 +4994,9 @@ function _hpdArea(series, acc, X, Y, base) {
   series.forEach((s, i) => { const v = acc(s); if (v == null) { flush(); return; } run.push([X(i), Y(v)]); });
   flush(); return out;
 }
-function hpdTips(series, tg, rooms, roomOn) {
-  const act = (rooms || []).filter(r => roomOn && roomOn(r.room));
-  return series.map((s, i) => {
-    const hasRoom = act.some(r => (r.temps || [])[i] != null);
+function hpdTips(vb, tg, rvb) {
+  return vb.map((s, i) => {
+    const hasRoom = (rvb || []).some(r => r.vals[i] != null);
     if (s.p == null && s.h == null && s.mod == null && s.out == null && !hasRoom) return null;
     const hhmm = new Date(s.t * 1000).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
     const parts = [];
@@ -4967,7 +5007,7 @@ function hpdTips(series, tg, rooms, roomOn) {
     if (tg.sup && s.sup != null) parts.push(`VL ${fmt(s.sup, 1)}°`);
     if (tg.ret && s.ret != null) parts.push(`RL ${fmt(s.ret, 1)}°`);
     if (tg.out && s.out != null) parts.push(`Außen ${fmt(s.out, 1)}°`);
-    act.forEach(r => { const v = (r.temps || [])[i]; if (v != null) parts.push(`<span style="color:${r.color}">●</span>${esc(r.room)} ${fmt(v, 1)}°`); });
+    (rvb || []).forEach(r => { const v = r.vals[i]; if (v != null) parts.push(`<span style="color:${r.color}">●</span>${esc(r.room)} ${fmt(v, 1)}°`); });
     return `<b>${hhmm}</b> · ${parts.join(' · ')}`;
   });
 }
@@ -4975,20 +5015,21 @@ function hpdTips(series, tg, rooms, roomOn) {
 function hpdRoomTg() { try { const v = JSON.parse(localStorage.getItem('bhe_hpd_rooms') || 'null'); if (v && typeof v === 'object') return v; } catch (e) {} return {}; }
 function hpdRoomOn(room) { return hpdRoomTg()[room] !== false; }
 function hpdRoomToggle(room) { const m = hpdRoomTg(); m[room] = !(m[room] !== false); try { localStorage.setItem('bhe_hpd_rooms', JSON.stringify(m)); } catch (e) {} if (_hpDayShown) paintHpDay(_hpDayShown); }
-// per-room indoor temperatures over the day (tight axis so small changes show)
-function hpdRooms(rooms, tips) {
-  const act = (rooms || []).filter(r => hpdRoomOn(r.room) && (r.temps || []).some(v => v != null));
+// per-room indoor temperatures (tight axis so small changes show); rvb carries
+// the windowed, gap-connected values per room
+function hpdRooms(rvb, tips) {
+  const act = (rvb || []).filter(r => r.vals.some(v => v != null));
   if (!act.length) return '';
-  const h = 120, padL = 42, padR = 14, top = 10, base = h - 18;
-  const X = i => padL + (CW - padL - padR) * (i / (_HPDN - 1));
-  const vals = []; act.forEach(r => r.temps.forEach(v => { if (v != null) vals.push(v); }));
+  const h = 120, padL = 42, padR = 14, top = 10, base = h - 18, n = act[0].vals.length;
+  const X = i => padL + (CW - padL - padR) * (i / (n - 1));
+  const vals = []; act.forEach(r => r.vals.forEach(v => { if (v != null) vals.push(v); }));
   const lo = Math.min(...vals) - 0.4, hi = Math.max(...vals) + 0.4, span = Math.max(2, hi - lo);
   const Y = v => top + (1 - (v - lo) / span) * (base - top);
   let g = '';
   [lo + span * 0.12, lo + span * 0.5, lo + span * 0.88].forEach(v => { g += `<line class="gl" x1="${padL}" x2="${CW - 4}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}"/><text class="axis" x="0" y="${(Y(v) + 3).toFixed(1)}">${fmt(v, 1)}°</text>`; });
-  act.forEach(r => { g += `<path d="${_hpdLine(r.temps, v => v, X, Y)}" fill="none" stroke="${r.color}" stroke-width="1.8"/>`; });
+  act.forEach(r => { g += `<path d="${_hpdLine(r.vals, v => v, X, Y)}" fill="none" stroke="${r.color}" stroke-width="1.8"/>`; });
   g += `<text class="axis" x="${CW - 2}" y="${(top + 2).toFixed(1)}" text-anchor="end" fill="var(--muted)">Räume °C</text>`;
-  return svg(h, g, { kind: 'area', pad: padL, padR, n: _HPDN, h, tips });
+  return svg(h, g, { kind: 'area', pad: padL, padR, n, h, tips });
 }
 function hpdPower(series, tips, tg) {
   const h = 150, padL = 42, padR = 14, top = 12, base = h - 22;
@@ -5032,18 +5073,20 @@ function hpdTemp(series, tips, tg) {
   [['sup', '#ff8a5c'], ['ret', '#5c9bff'], ['out', '#9aa4b2']].forEach(([k, c]) => { if (tg[k]) g += `<path d="${_hpdLine(series, s => s[k], X, Y)}" fill="none" stroke="${c}" stroke-width="1.8"/>`; });
   return svg(h, g, { kind: 'area', pad: padL, padR, n: _HPDN, h, tips });
 }
-function hpdRibbon(r) {
-  const h = 52, padL = 42, padR = 14, bandY = 6, bandH = 20, heatY = 29, heatH = 5, start = r.start;
-  const xf = ts => padL + (CW - padL - padR) * Math.max(0, Math.min(1, ((ts - start) / _HPDBW) / (_HPDN - 1)));
-  let g = `<rect x="${padL}" y="${bandY}" width="${(CW - padL - padR).toFixed(1)}" height="${bandH}" fill="#20252e"/>`;
-  (r.segments || []).forEach(s => { const x0 = xf(s.start), x1 = xf(s.end), c = (HP_ST[s.state] || {}).color || '#555'; g += `<rect x="${x0.toFixed(1)}" y="${bandY}" width="${Math.max(0.6, x1 - x0).toFixed(1)}" height="${bandH}" fill="${c}"/>`; });
-  (r.heater || []).forEach(s => { const x0 = xf(s.start), x1 = xf(s.end); g += `<rect x="${x0.toFixed(1)}" y="${heatY}" width="${Math.max(1.2, x1 - x0).toFixed(1)}" height="${heatH}" rx="1" fill="${HP_HEATER}"/>`; });
+function hpdRibbon(r, w0, w1) {
+  const h = 52, padL = 42, padR = 14, bandY = 6, bandH = 20, heatY = 29, heatH = 5, W = CW - padL - padR;
+  const xf = ts => padL + W * Math.max(0, Math.min(1, (ts - w0) / (w1 - w0)));
+  let g = `<rect x="${padL}" y="${bandY}" width="${W.toFixed(1)}" height="${bandH}" fill="#20252e"/>`;
+  (r.segments || []).forEach(s => { if (s.end <= w0 || s.start >= w1) return; const x0 = xf(s.start), x1 = xf(s.end), c = (HP_ST[s.state] || {}).color || '#555'; g += `<rect x="${x0.toFixed(1)}" y="${bandY}" width="${Math.max(0.6, x1 - x0).toFixed(1)}" height="${bandH}" fill="${c}"/>`; });
+  (r.heater || []).forEach(s => { if (s.end <= w0 || s.start >= w1) return; const x0 = xf(s.start), x1 = xf(s.end); g += `<rect x="${x0.toFixed(1)}" y="${heatY}" width="${Math.max(1.2, x1 - x0).toFixed(1)}" height="${heatH}" rx="1" fill="${HP_HEATER}"/>`; });
   g += `<text class="axis" x="0" y="${(heatY + heatH).toFixed(1)}">Zuheiz.</text>`;
-  for (let hh = 0; hh <= 24; hh += 3) { const x = padL + (CW - padL - padR) * (hh / 24); g += `<text class="axis" x="${x.toFixed(1)}" y="${h - 2}" text-anchor="${hh === 0 ? 'start' : hh === 24 ? 'end' : 'middle'}">${hh}</text>`; }
-  if (r.is_today) { const nf = (Date.now() / 1000 - start) / 86400; if (nf > 0 && nf < 1) { const x = padL + (CW - padL - padR) * nf; g += `<line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${bandY}" y2="${bandY + bandH}" stroke="#fff" stroke-width="1.5" stroke-dasharray="2 2" opacity="0.7"/>`; } }
-  // ribbon readout: the state at the hovered time
-  const tips = []; for (let i = 0; i < _HPDN; i++) { const ts = start + i * _HPDBW; const seg = (r.segments || []).find(s => ts >= s.start && ts < s.end); const hhmm = new Date(ts * 1000).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }); tips.push(seg ? `<b>${hhmm}</b> · ${(HP_ST[seg.state] || {}).label || seg.state}` : null); }
-  return svg(h, g, { kind: 'area', pad: padL, padR, n: _HPDN, h, tips });
+  // time ticks adapted to the window span
+  const spanH = (w1 - w0) / 3600, stepS = (spanH <= 2 ? 0.5 : spanH <= 6 ? 1 : spanH <= 16 ? 2 : 3) * 3600;
+  for (let t = Math.ceil(w0 / stepS) * stepS; t <= w1 + 1; t += stepS) { const x = xf(t); g += `<text class="axis" x="${x.toFixed(1)}" y="${h - 2}" text-anchor="middle">${new Date(t * 1000).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}</text>`; }
+  const nowS = Math.floor(Date.now() / 1000);
+  if (r.is_today && nowS > w0 && nowS < w1) { const x = xf(nowS); g += `<line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${bandY}" y2="${bandY + bandH}" stroke="#fff" stroke-width="1.5" stroke-dasharray="2 2" opacity="0.7"/>`; }
+  const nb = 160, tips = []; for (let i = 0; i < nb; i++) { const ts = w0 + (i + 0.5) * (w1 - w0) / nb; const seg = (r.segments || []).find(s => ts >= s.start && ts < s.end); tips.push(seg ? `<b>${new Date(ts * 1000).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}</b> · ${(HP_ST[seg.state] || {}).label || seg.state}` : null); }
+  return svg(h, g, { kind: 'area', pad: padL, padR, n: nb, h, tips });
 }
 function _hpdHm(min) { min = Math.round(min || 0); return min < 60 ? min + ' min' : Math.floor(min / 60) + ' h ' + (min % 60) + ' min'; }
 function paintHpDay(r) {
@@ -5056,7 +5099,7 @@ function paintHpDay(r) {
   if (nx) { nx.disabled = !(r && r.has_next); nx.style.opacity = (r && r.has_next) ? '1' : '0.4'; }
   if (!r || !r.ok || !r.n || r.n < 2) {
     if (ch) ch.innerHTML = '<div class="note" style="padding:16px 0;text-align:center">Für diesen Tag liegen keine Wärmepumpen-Daten vor.</div>';
-    [kpisEl, tgEl, rl, evs, note].forEach(e => { if (e) e.innerHTML = ''; }); return;
+    [kpisEl, tgEl, rl, evs, note, $('hpd-rooms')].forEach(e => { if (e) e.innerHTML = ''; }); return;
   }
   const k = r.kpis, tg = hpdToggles();
   const kpi = (v, l) => `<div class="kpi sm"><div class="v">${v}</div><div class="l">${l}</div></div>`;
@@ -5073,13 +5116,19 @@ function paintHpDay(r) {
   const rr = $('hpd-rooms');
   if (rr) rr.innerHTML = (r.rooms || []).length
     ? `<span style="font-size:11px;color:var(--muted);align-self:center;margin-right:2px">Räume:</span>` + (r.rooms || []).map(rm => { const on = hpdRoomOn(rm.room); return `<button class="hpd-rt" data-hpr="${esc(rm.room)}" aria-pressed="${on}" style="padding:5px 9px;border-radius:999px;font-size:11.5px;cursor:pointer;border:1px solid ${on ? rm.color : 'var(--line)'};background:${on ? 'color-mix(in srgb,' + rm.color + ' 20%,transparent)' : 'transparent'};color:var(--fg)"><span style="color:${rm.color}">●</span> ${esc(rm.room)}</button>`; }).join('') : '';
-  const tips = hpdTips(r.series || [], tg, r.rooms || [], hpdRoomOn);
+  // zoom window + bucketing at the visible span
+  const span = hpdSpan(), win = hpdWindow(r, span);
+  const vb = hpdBucket(r.raw || [], win.w0, win.w1, _HPDN);
+  const rvb = hpdBucketRooms((r.rooms || []).filter(rm => hpdRoomOn(rm.room)), win.w0, win.w1, _HPDN);
+  const sp = $('hpd-span');
+  if (sp) sp.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.hsp === String(span)));
+  const tips = hpdTips(vb, tg, rvb);
   let html = '';
-  if (tg.p || tg.h) html += `<div style="touch-action:none">${hpdPower(r.series, tips, tg)}</div>`;
-  if (tg.mod || tg.cop) html += `<div style="touch-action:none;margin-top:3px">${hpdModCop(r.series, tips, tg)}</div>`;
-  if (tg.sup || tg.ret || tg.out) { const t = hpdTemp(r.series, tips, tg); if (t) html += `<div style="touch-action:none;margin-top:3px">${t}</div>`; }
-  const rp = hpdRooms(r.rooms || [], tips); if (rp) html += `<div style="touch-action:none;margin-top:3px">${rp}</div>`;
-  html += `<div style="touch-action:none;margin-top:2px">${hpdRibbon(r)}</div>`;
+  if (tg.p || tg.h) html += `<div style="touch-action:none">${hpdPower(vb, tips, tg)}</div>`;
+  if (tg.mod || tg.cop) html += `<div style="touch-action:none;margin-top:3px">${hpdModCop(vb, tips, tg)}</div>`;
+  if (tg.sup || tg.ret || tg.out) { const t = hpdTemp(vb, tips, tg); if (t) html += `<div style="touch-action:none;margin-top:3px">${t}</div>`; }
+  const rp = hpdRooms(rvb, tips); if (rp) html += `<div style="touch-action:none;margin-top:3px">${rp}</div>`;
+  html += `<div style="touch-action:none;margin-top:2px">${hpdRibbon(r, win.w0, win.w1)}</div>`;
   if (ch) ch.innerHTML = html;
   // ribbon legend: only the states that actually occurred + heater
   const seen = new Set((r.segments || []).map(s => s.state));
@@ -5097,7 +5146,7 @@ function paintHpDay(r) {
     }).join('') : '<div class="note">Keine Zustandswechsel an diesem Tag.</div>';
   }
   if (note) note.innerHTML = `Ein <b>Takt</b> ist ein Verdichterstart; viele kurze Takte (häufige Pausen) deuten auf eine zu hohe Leistung / zu wenig Abnahme hin – nach gutem <b>hydraulischem Abgleich</b> läuft die WP meist <b>länger und ruhiger durch</b>. ` +
-    `Über die <b>Räume</b>-Chips blendest du einzelne Raumtemperaturen ein und siehst chronologisch, wie sie auf Heizbetrieb und Pausen reagieren. ` +
+    `Mit <b>Auto / 1h … Tag</b> zoomst du die Zeitachse (Auto passt sich an die vorhandenen Daten an). Über die <b>Räume</b>-Chips blendest du einzelne Raumtemperaturen ein und siehst chronologisch, wie sie auf Heizbetrieb und Pausen reagieren. ` +
     `<span style="color:var(--muted)"><b>Abtauen</b> und <b>Zuheizer</b> sind aus dem Betrieb <b>erkannt</b> (Wärme bricht ein bzw. Leistung über dem Verdichter-Limit ~${r.comp_max_w ? fmt(r.comp_max_w / 1000, 1) + ' kW' : '–'}), nicht aus einem Gerätesignal – als Hinweis zu verstehen. Tipp/Overlay auf dem Diagramm zeigt die Werte zur Uhrzeit.</span>`;
 }
 
@@ -5150,7 +5199,7 @@ function paintHpCompare(ra, rb) {
   });
   html += `</div>`;
   if (tbl) tbl.innerHTML = (okA || okB) ? html : '<div class="note">Für die gewählten Tage liegen keine Wärmepumpen-Daten vor.</div>';
-  if (rib) { let rh = ''; [['A', ra], ['B', rb]].forEach(([l, r]) => { if (r && r.segments && r.segments.length) rh += `<div style="font-size:11px;color:var(--muted);margin:6px 0 2px">${l} · ${esc(_hpcDate(r))}</div><div style="touch-action:none">${hpdRibbon(r)}</div>`; }); rib.innerHTML = rh; }
+  if (rib) { let rh = ''; [['A', ra], ['B', rb]].forEach(([l, r]) => { if (r && r.segments && r.segments.length) rh += `<div style="font-size:11px;color:var(--muted);margin:6px 0 2px">${l} · ${esc(_hpcDate(r))}</div><div style="touch-action:none">${hpdRibbon(r, r.start, r.start + 86400)}</div>`; }); rib.innerHTML = rh; }
   if (leg) { const seen = new Set(); [ra, rb].forEach(r => (r && r.segments || []).forEach(s => seen.add(s.state))); leg.innerHTML = Object.keys(HP_ST).filter(s => seen.has(s)).map(s => `<div class="it"><span class="sw" style="background:${HP_ST[s].color}"></span>${HP_ST[s].label}</div>`).join(''); }
   if (note) note.innerHTML = `Grün = Verbesserung von A → B (weniger <b>Takte</b>, mehr <b>Min/Takt</b> &amp; Laufzeit). ` +
     `<span style="color:var(--muted)">Fairer Vergleich: zwei Tage mit <b>ähnlicher Ø Außentemperatur</b> wählen – kältere Tage takten von allein weniger.</span>`;
@@ -10111,6 +10160,8 @@ function init() {
   }
   const hpp = $('hpd-prev'); if (hpp) hpp.addEventListener('click', () => hpdShift(-1));
   const hpn = $('hpd-next'); if (hpn) hpn.addEventListener('click', () => hpdShift(1));
+  const hsp = $('hpd-span');
+  if (hsp) hsp.addEventListener('click', e => { const b = e.target.closest('button'); if (b) hpdSetSpan(b.dataset.hsp); });
   ['hpc-a', 'hpc-b'].forEach(id => { const el = $(id); if (el) el.addEventListener('change', () => renderHpCompare()); });
   const htd = $('hpt-days');
   if (htd) htd.addEventListener('click', e => {

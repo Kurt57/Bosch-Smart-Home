@@ -2990,52 +2990,28 @@ def compute_hp_day(store: "Store", date_str: str | None = None,
 
     kpis, segs, heat_segs, comp_max = _hp_day_metrics(rows)
 
-    # ---- chart series: bucket the day into ~6-min slots ------------------- #
-    nb = 240
-    bw = 86400 // nb                              # 360 s
-    buckets = [None] * nb
-    for s in rows:
-        bi = min(nb - 1, (s["ts"] - start) // bw)
-        bk = buckets[bi]
-        if bk is None:
-            bk = buckets[bi] = {"p": [], "h": [], "m": [], "sup": [], "ret": [], "out": []}
-        if s.get("power_w") is not None:
-            bk["p"].append(s["power_w"])
-        if s.get("heat_w") is not None:
-            bk["h"].append(s["heat_w"])
-        if s.get("modulation") is not None:
-            bk["m"].append(s["modulation"])
-        if s.get("supply_c") is not None:
-            bk["sup"].append(s["supply_c"])
-        if s.get("return_c") is not None:
-            bk["ret"].append(s["return_c"])
-        if s.get("outdoor_c") is not None:
-            bk["out"].append(s["outdoor_c"])
-
-    def avg(a):
-        return round(sum(a) / len(a), 2) if a else None
-
-    series = []
-    for i, bk in enumerate(buckets):
-        t = start + i * bw
-        if bk is None:
-            series.append({"t": t})
-            continue
-        pw, hw = avg(bk["p"]), avg(bk["h"])
-        series.append({
-            "t": t,
+    # ---- raw per-sample series (capped), so the client can zoom the time
+    # axis to any span and re-bucket at full resolution -------------------- #
+    cap = 720
+    stride = max(1, len(rows) // cap)
+    raw = []
+    for i in range(0, len(rows), stride):
+        s = rows[i]
+        pw, hw = s.get("power_w"), s.get("heat_w")
+        raw.append({
+            "t": s["ts"],
             "p": round(pw / 1000.0, 3) if pw is not None else None,
             "h": round(hw / 1000.0, 3) if hw is not None else None,
-            "mod": avg(bk["m"]),
+            "mod": s.get("modulation"),
             "cop": round(hw / pw, 2) if (pw and pw > 50 and hw) else None,
-            "sup": avg(bk["sup"]), "ret": avg(bk["ret"]), "out": avg(bk["out"]),
+            "sup": s.get("supply_c"), "ret": s.get("return_c"), "out": s.get("outdoor_c"),
         })
 
-    # ---- per-room indoor temperatures for the SAME day (Bosch thermostats),
-    # bucketed to the same grid so they overlay the heat-pump operation -------- #
+    # ---- per-room indoor temperatures for the SAME day as RAW points (the
+    # thermostats report sparse point measurements; the client connects them) - #
     ROOM_PAL = ["#3ba9ff", "#ff6b8a", "#4be0b0", "#ffb64d", "#b794f6", "#f78fb3",
                 "#7ed6df", "#e77f67"]
-    racc: dict[str, list] = {}
+    rlog: dict[str, list] = {}
     rsp: dict[str, list] = {}
     for r in store.room_log_since(start):
         if r.get("ts", 0) >= end:
@@ -3043,24 +3019,18 @@ def compute_hp_day(store: "Store", date_str: str | None = None,
         rm, tv = r.get("room"), r.get("temp")
         if not rm or tv is None:
             continue
-        acc = racc.setdefault(rm, [None] * nb)
-        bi = min(nb - 1, max(0, (r["ts"] - start) // bw))
-        if acc[bi] is None:
-            acc[bi] = [tv, 1]
-        else:
-            acc[bi][0] += tv
-            acc[bi][1] += 1
+        rlog.setdefault(rm, []).append((r["ts"], tv))
         if r.get("setpoint") is not None:
             rsp.setdefault(rm, []).append(r["setpoint"])
     rooms_out = []
-    for i, rm in enumerate(sorted(racc.keys())):
-        temps = [round(s[0] / s[1], 2) if s else None for s in racc[rm]]
-        if not any(v is not None for v in temps):
-            continue
+    for i, rm in enumerate(sorted(rlog.keys())):
+        pts = sorted(rlog[rm])
+        rstride = max(1, len(pts) // 360)
+        prs = [{"t": p[0], "temp": round(p[1], 2)} for p in pts[::rstride]]
         sps = sorted(rsp.get(rm) or [])
         sp = round(sps[len(sps) // 2], 1) if sps else None
         rooms_out.append({"room": rm, "color": ROOM_PAL[i % len(ROOM_PAL)],
-                          "setpoint": sp, "temps": temps})
+                          "setpoint": sp, "points": prs})
 
     # ---- chronological event log ------------------------------------------ #
     events = []
@@ -3071,7 +3041,8 @@ def compute_hp_day(store: "Store", date_str: str | None = None,
             events.append({"ts": a, "kind": "heater", "dur_s": b - a})
     events.sort(key=lambda e: e["ts"])
 
-    return {**meta, "n": len(rows), "kpis": kpis, "series": series, "rooms": rooms_out,
+    return {**meta, "n": len(rows), "kpis": kpis, "raw": raw, "rooms": rooms_out,
+            "data_start": rows[0]["ts"], "data_end": rows[-1]["ts"],
             "segments": [{"state": s[0], "start": s[1], "end": s[2]} for s in segs],
             "heater": [{"start": a, "end": b} for a, b in heat_segs],
             "events": events, "comp_max_w": round(comp_max)}
