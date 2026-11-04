@@ -93,8 +93,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v183';   // short tag shown always-on in the header
-const APP_VERSION = 'v183 · 2026-11-03 · „Tagesverlauf Wärmepumpe" kombiniert jetzt die Raumtemperaturen: je Raum ein-/ausschaltbar werden die Innentemperaturen (Bosch-Thermostate) auf dieselbe Zeitachse wie WP-Zustände, Leistung und Modulation gelegt – so siehst du chronologisch, wie jeder Raum auf Heizen/Pause/Warmwasser reagiert (eigener, enger Temperaturbereich, Werte auch im Tooltip). ' +
+const APP_BUILD = 'v184';   // short tag shown always-on in the header
+const APP_VERSION = 'v184 · 2026-11-04 · Fix: die ‹ ›-Tagesnavigation lief über den Kartenrand hinaus (Buttons wurden full-width) – behoben. Performance: der Wärme-Tab lädt jetzt nur noch die Karten des aktiven Unter-Tabs (Heizung/Abgleich/Effizienz/Einstellung) statt beim Öffnen ~20 API-Abfragen gleichzeitig zu starten; die übrigen laden erst beim Wechsel auf ihren Unter-Tab. Der Tagesverlauf lädt immer nur EINEN Tag, der Takt-Trend erst beim Öffnen von „Effizienz". ' +
+  'v183 · „Tagesverlauf Wärmepumpe" kombiniert jetzt die Raumtemperaturen: je Raum ein-/ausschaltbar werden die Innentemperaturen (Bosch-Thermostate) auf dieselbe Zeitachse wie WP-Zustände, Leistung und Modulation gelegt – so siehst du chronologisch, wie jeder Raum auf Heizen/Pause/Warmwasser reagiert (eigener, enger Temperaturbereich, Werte auch im Tooltip). ' +
   'v182 · Zwei neue WP-Karten: „Tagesvergleich" (zwei Tage A/B nebeneinander mit Kennzahl-Differenzen + beiden Zustandsbändern, grün = besser) und „Takt-Trend" (Verdichter-Takte/Tag + Min/Takt über Wochen, mit optionaler Abgleich-Marke und Vorher/Nachher-Schnitt). Backend-Refactor: gemeinsame Tages-Kennzahlen inkl. Min/Takt und Ø Außentemperatur. ' +
   'v181 · Neu (Wärmepumpe → Heizung): „Tagesverlauf Wärmepumpe" – ein chronologisches Zeitachsen-Diagramm eines Tages mit Zustandsband (Heizung/Warmwasser/Abtauen/Kühlen/Pause) + Zuheizer-Spur, Strom & Wärme (kW), Modulation %, COP und Vor-/Rücklauf/Außen-Temperaturen (alle ein-/ausblendbar), Tages-Kennzahlen (Takte, Pausen, Abtauzyklen, Zuheizer-Zeit, Ø Modulation), Ereignis-Verlauf und Tag-für-Tag-Blättern. Ideal, um die Wirkung des hydraulischen Abgleichs zu sehen. Abtauen/Zuheizer werden aus dem Betrieb erkannt'
 const $ = (id) => document.getElementById(id);
@@ -9951,6 +9952,21 @@ function assignHeatSubs() {
     el.dataset.hs = HEAT_SUB_MAP[el.id] || 'effizienz';
   });
 }
+// Which renders belong to which Wärme sub-tab, so we only fetch the cards the
+// user is actually looking at (opening the whole tab used to fire ~20 heavy API
+// calls at once → slow). Each sub-tab loads lazily the first time it's shown.
+const HEAT_SUB_RENDER = {
+  heizung: ['renderHpDay', 'renderHeatingDiag', 'renderRoomTemps', 'renderHeatTimeseries', 'renderRoomTs', 'renderWindows', 'renderHpCompare'],
+  abgleich: ['renderObservation', 'renderAutomeasure', 'renderThermal', 'renderHeatload', 'renderFlow', 'renderOptimize', 'renderHydronic', 'renderLayout', 'renderDhwImpact'],
+  effizienz: ['renderHpTrend'],
+  einstellung: ['renderHeatingCurve', 'initHpControls', 'renderRoomSync'],
+};
+function renderHeatSub(sub) {
+  (HEAT_SUB_RENDER[sub] || []).forEach(name => {
+    const fn = window[name];
+    if (typeof fn === 'function') { try { fn(false); } catch (e) {} }
+  });
+}
 function setHeatSub(sub) {
   if (HEAT_SUBS.indexOf(sub) < 0) sub = 'heizung';
   const sec = document.getElementById('v-heatpump'); if (!sec) return;
@@ -9958,33 +9974,17 @@ function setHeatSub(sub) {
   document.querySelectorAll('#heat-subnav button').forEach(b => b.classList.toggle('on', b.dataset.hs === sub));
   try { localStorage.setItem('bhe_heat_sub', sub); } catch (e) {}
   try { window.scrollTo({ top: 0, behavior: 'instant' in window ? 'instant' : 'auto' }); } catch (e) {}
+  // render this sub-tab's cards only while the Wärme view is actually visible
+  if (sec.classList.contains('on')) renderHeatSub(sub);
 }
 function switchView(v) {
   document.querySelectorAll('.view').forEach(s => s.classList.toggle('on', s.id === 'v-' + v));
   document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
   window.scrollTo({ top: 0, behavior: 'instant' in window ? 'instant' : 'auto' });
-  // lazily load the heating-check + heating-curve when the Wärme tab is opened
+  // lazily load ONLY the active Wärme sub-tab when the tab is opened
   if (v === 'heatpump') {
-    if (typeof renderHeatingDiag === 'function') renderHeatingDiag(false);
-    if (typeof renderRoomTemps === 'function') renderRoomTemps(false);
-    if (typeof renderHeatingCurve === 'function') renderHeatingCurve(false);
-    if (typeof renderHeatTimeseries === 'function') renderHeatTimeseries(false);
-    if (typeof renderRoomTs === 'function') renderRoomTs(false);
-    if (typeof renderWindows === 'function') renderWindows(false);
-    if (typeof renderObservation === 'function') renderObservation(false);
-    if (typeof renderAutomeasure === 'function') renderAutomeasure(false);
-    if (typeof renderThermal === 'function') renderThermal(false);
-    if (typeof renderHeatload === 'function') renderHeatload(false);
-    if (typeof renderFlow === 'function') renderFlow(false);
-    if (typeof renderOptimize === 'function') renderOptimize(false);
-    if (typeof renderHydronic === 'function') renderHydronic();
-    if (typeof renderLayout === 'function') renderLayout();
-    if (typeof initHpControls === 'function') initHpControls();
-    if (typeof renderRoomSync === 'function') renderRoomSync();
-    if (typeof renderDhwImpact === 'function') renderDhwImpact();
-    if (typeof renderHpDay === 'function') renderHpDay();
-    if (typeof renderHpCompare === 'function') renderHpCompare();
-    if (typeof renderHpTrend === 'function') renderHpTrend();
+    let sub = 'heizung'; try { sub = localStorage.getItem('bhe_heat_sub') || 'heizung'; } catch (e) {}
+    setHeatSub(sub);
   }
 }
 
