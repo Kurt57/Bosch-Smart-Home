@@ -1738,6 +1738,16 @@ def compute_dhw_impact(store: "Store", days: float = 14, hp_live: dict | None = 
         else:
             merged.append(r[:])
 
+    # A DHW dip only "costs comfort" if the house measurably cooled AND the
+    # cooling was the warm-water phase's doing. Two confounders are separated
+    # out so the card stops crying wolf:
+    #   • negligible dips (< MIN_DROP): nothing to recover — don't alarm.
+    #   • night-setback drift: overnight the house cools on its own schedule,
+    #     so the indoor temp never climbs back to the DHW-start value even when
+    #     the DHW dip itself was essentially zero. That is NOT a warm-water cost.
+    # Each event gets a `status`: minimal / recovered / open / setback.
+    MIN_DROP = 0.15          # °C — below this the dip is practically nothing
+    REC_TOL = 0.1            # °C — "warm again" tolerance back to the start temp
     events = []
     for k, (st, en, outs) in enumerate(merged):
         if en - st < 600:                         # ignore <10-min blips
@@ -1763,17 +1773,34 @@ def compute_dhw_impact(store: "Store", days: float = 14, hp_live: dict | None = 
                 continue
             if t > rec_end:
                 break
-            if v >= t_start - 0.05:
+            if v >= t_start - REC_TOL:
                 rec_ts = t
                 break
+        # did the house turn back up after the low point, or keep sliding down?
+        post = [v for t, v in temp if t_min_ts <= t <= rec_end]
+        rebound = round(max(post) - t_min_v, 2) if post else 0.0
+        # was the house already cooling before DHW even started? (night setback)
+        t_before = temp_at(st - 3600)
+        falling_before = t_before is not None and t_start < t_before - 0.1
+        if drop < MIN_DROP:
+            status = "minimal"                    # WW barely cost any comfort
+        elif rec_ts is not None:
+            status = "recovered"                  # dipped, then heating caught up
+        elif rebound < 0.1 or falling_before:
+            status = "setback"                    # house on a downward night curve
+        else:
+            status = "open"                       # real dip, still catching up
         out_avg = round(sum(outs) / len(outs), 1) if outs else None
         events.append({
             "start": st, "end": en, "rec_ts": rec_ts,
             "dur_min": round((en - st) / 60.0),
             "t_start": round(t_start, 1), "t_min": round(t_min_v, 1),
-            "drop": round(drop, 2),
-            "recov_min": (round((rec_ts - en) / 60.0) if rec_ts else None),
-            "outdoor": out_avg, "recovered": rec_ts is not None,
+            "drop": round(drop, 2), "rebound": rebound,
+            # a negligible dip has nothing to "recover", so it contributes no
+            # recovery time to the stats (it would otherwise log a bogus 0 min)
+            "recov_min": (round((rec_ts - en) / 60.0) if (rec_ts and status != "minimal") else None),
+            "outdoor": out_avg, "recovered": rec_ts is not None and status != "minimal",
+            "status": status,
         })
 
     if not events:
@@ -1782,6 +1809,12 @@ def compute_dhw_impact(store: "Store", days: float = 14, hp_live: dict | None = 
 
     drops = [e["drop"] for e in events]
     recs = [e["recov_min"] for e in events if e["recov_min"] is not None]
+    meaningful = [e for e in events if e["status"] != "minimal"]
+    expectable = [e for e in events if e["status"] in ("recovered", "open")]
+    n_minimal = sum(1 for e in events if e["status"] == "minimal")
+    n_setback = sum(1 for e in events if e["status"] == "setback")
+    n_open = sum(1 for e in events if e["status"] == "open")
+    n_recovered = sum(1 for e in events if e["status"] == "recovered")
 
     def med(a):
         a = sorted(a)
@@ -1877,9 +1910,13 @@ def compute_dhw_impact(store: "Store", days: float = 14, hp_live: dict | None = 
         "avg_drop": round(sum(drops) / len(drops), 2),
         "median_drop": round(med(drops), 2),
         "max_drop": round(max(drops), 2),
+        "avg_drop_meaningful": (round(sum(e["drop"] for e in meaningful) / len(meaningful), 2) if meaningful else None),
         "avg_recov_min": (round(sum(recs) / len(recs)) if recs else None),
         "median_recov_min": (round(med(recs)) if recs else None),
-        "share_recovered": round(sum(1 for e in events if e["recovered"]) / len(events) * 100),
+        "share_recovered": (round(n_recovered / len(expectable) * 100) if expectable else None),
+        "n_recovered": n_recovered, "n_open": n_open,
+        "n_minimal": n_minimal, "n_setback": n_setback,
+        "n_meaningful": len(meaningful),
         "avg_dur_min": round(sum(e["dur_min"] for e in events) / len(events)),
         "by_outdoor": by_out,
         "dayparts": dayparts,
