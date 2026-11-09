@@ -93,8 +93,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v186';   // short tag shown always-on in the header
-const APP_VERSION = 'v186 · 2026-11-07 · „Warmwasser kostet Komfort" ehrlicher: ein −0,0 °C-Dip wird nicht mehr als „nicht erreicht" gewertet. Jede WW-Phase wird eingeordnet – kaum Abkühlung / wieder warm / noch am Erholen / Nachtabsenkung. Nachts kühlt das Haus planmäßig ab (Nachtabsenkung), nicht wegen des Warmwassers – das wird jetzt so benannt statt alarmierend „Startwert nicht erreicht". KPI zeigt, wie viele Phasen überhaupt spürbar abgekühlt sind. ' +
+const APP_BUILD = 'v187';   // short tag shown always-on in the header
+const APP_VERSION = 'v187 · 2026-11-09 · „Warmwasser kostet Komfort" korrigiert: KEINE Annahme mehr über eine Nachtabsenkung (die war falsch). Der echte Grund für „nicht erreicht" ist jetzt gemessen – die WW-Phasen sitzen dicht hintereinander: nach einer Phase bleibt oft nur wenig Heizzeit, bevor die nächste kommt. Phasen heißen jetzt kaum Abkühlung / wieder warm / danach nur X min Heizen / noch nicht zurück, plus Median-Heizzeit zwischen den Phasen. ' +
+  'v186 · „Warmwasser kostet Komfort" ehrlicher: ein −0,0 °C-Dip wird nicht mehr als „nicht erreicht" gewertet; jede WW-Phase wird eingeordnet. ' +
   'v185 · Tagesverlauf lesbarer: Zeitachse zoombar (Auto / 1h / 2h / 4h / 8h / 16h / Tag; Auto passt sich an die vorhandenen Daten an, damit ein kurzer Betrieb nicht in 24 h zerquetscht wird). Raumtemperatur-Linien werden jetzt verbunden (die Thermostate messen punktuell/selten – kleine Lücken werden interpoliert, große bleiben offen). Achse re-bucketet beim Zoomen für volle Auflösung. ' +
   'v184 · Fix ‹ ›-Tagesnavigation + Wärme-Tab lädt nur den aktiven Unter-Tab. Performance: der Wärme-Tab lädt jetzt nur noch die Karten des aktiven Unter-Tabs (Heizung/Abgleich/Effizienz/Einstellung) statt beim Öffnen ~20 API-Abfragen gleichzeitig zu starten; die übrigen laden erst beim Wechsel auf ihren Unter-Tab. Der Tagesverlauf lädt immer nur EINEN Tag, der Takt-Trend erst beim Öffnen von „Effizienz". ' +
   'v183 · „Tagesverlauf Wärmepumpe" kombiniert jetzt die Raumtemperaturen: je Raum ein-/ausschaltbar werden die Innentemperaturen (Bosch-Thermostate) auf dieselbe Zeitachse wie WP-Zustände, Leistung und Modulation gelegt – so siehst du chronologisch, wie jeder Raum auf Heizen/Pause/Warmwasser reagiert (eigener, enger Temperaturbereich, Werte auch im Tooltip). ' +
@@ -4865,9 +4866,9 @@ function paintDhwImpact(r) {
       `innen von <b>${fmt(rep.t_start, 1)} °C</b> auf <b>${fmt(rep.t_min, 1)} °C</b> gefallen (−${fmt(rep.drop, 1)} °C)` +
       (rep.recov_min != null
         ? `, nach <b>${fmt(rep.recov_min, 0)} min</b> wieder bei ${fmt(rep.t_start, 1)} °C.`
-        : rep.status === 'setback'
-          ? ' – danach kühlt das Haus planmäßig weiter ab (Nachtabsenkung), nicht wegen des Warmwassers.'
-          : ' – im 2-Std-Fenster noch nicht ganz zurück.');
+        : rep.status === 'tight'
+          ? ` – danach kam nach nur <b>${fmt(rep.heat_min, 0)} min</b> Heizen schon die nächste WW-Phase, kaum Zeit zum Aufheizen.`
+          : ' – auch nach ausreichend Heizzeit noch nicht ganz zurück.');
   }
   if (legend) legend.innerHTML =
     `<div class="it"><span class="sw" style="background:${COL.sh}"></span>Innentemperatur</div>` +
@@ -4891,9 +4892,9 @@ function paintDhwImpact(r) {
         return `<span style="color:var(--muted)">−${fmt(e.drop, 1)} °C · kaum Abkühlung</span>`;
       if (e.status === 'recovered')
         return `−<b>${fmt(e.drop, 1)} °C</b> <span style="color:var(--muted)">· ~${fmt(e.recov_min, 0)} min zurück</span>`;
-      if (e.status === 'open')
-        return `−<b>${fmt(e.drop, 1)} °C</b> <span style="color:var(--muted)">· noch am Erholen</span>`;
-      return `−<b>${fmt(e.drop, 1)} °C</b> <span style="color:var(--muted)">· Nachtabsenkung</span>`;
+      if (e.status === 'tight')
+        return `−<b>${fmt(e.drop, 1)} °C</b> <span style="color:var(--muted)">· danach nur ${fmt(e.heat_min, 0)} min Heizen</span>`;
+      return `−<b>${fmt(e.drop, 1)} °C</b> <span style="color:var(--muted)">· noch nicht zurück</span>`;
     };
     evs.innerHTML = `<h2 style="font-size:14px;margin:12px 0 6px">Letzte Warmwasser-Phasen</h2>` + list.map(e =>
       `<div style="display:flex;justify-content:space-between;gap:8px;font-size:12.5px;padding:6px 0;border-bottom:1px solid var(--line)">` +
@@ -4901,13 +4902,16 @@ function paintDhwImpact(r) {
       `<span style="white-space:nowrap">${right(e)}</span></div>`).join('');
   }
   if (note) {
-    const nm = r.n_minimal || 0, ns = r.n_setback || 0, nr = r.n_recovered || 0, no = r.n_open || 0;
+    const nm = r.n_minimal || 0, nt = r.n_tight || 0, nr = r.n_recovered || 0, no = r.n_open || 0;
     const parts = [`Über <b>${r.n} Warmwasser-Phasen</b> pausiert die Heizung im Schnitt <b>${fmt(r.avg_dur_min, 0)} min</b>; typisch kühlt das Haus dabei um <b>~${fmt(r.avg_drop, 1)} °C</b> ab (max. ${fmt(r.max_drop, 1)} °C).`];
     if (nm) parts.push(`<b>${nm}×</b> war die Abkühlung praktisch null – da kostet Warmwasser quasi keinen Komfort.`);
-    if (nr) parts.push(`Wo die Heizung danach aufholen konnte, war es nach <b>~${r.median_recov_min != null ? fmt(r.median_recov_min, 0) : '?'} min</b> (Median) wieder auf dem Ausgangswert${no ? `, ${no}× noch am Erholen` : ''}.`);
-    if (ns) parts.push(`<b>${ns}×</b> wurde der Startwert nicht wieder erreicht – das liegt aber an der <b>Nachtabsenkung</b>: nachts kühlt dein Haus planmäßig weiter ab, unabhängig vom Warmwasser. Das ist kein WW-Komfortverlust.`);
+    if (nr) parts.push(`Wo die Heizung danach aufholen konnte, war es nach <b>~${r.median_recov_min != null ? fmt(r.median_recov_min, 0) : '?'} min</b> (Median) wieder auf dem Ausgangswert${no ? `, ${no}× war die Zeit noch nicht ganz genug` : ''}.`);
+    if (nt) parts.push(`<b>${nt}×</b> wurde der Startwert nicht wieder erreicht – aber nicht, weil Warmwasser so viel kostet, sondern weil danach <b>kaum Heizzeit</b> blieb: die nächste WW-Phase kam zu schnell, das Haus hatte keine Chance aufzuheizen.`);
+    if (r.median_heat_min != null) parts.push(r.median_heat_min < 45
+      ? `Zwischen zwei WW-Phasen liegen im Median nur <b>~${fmt(r.median_heat_min, 0)} min</b> Heizen – die Phasen sitzen also dicht hintereinander.`
+      : `Zwischen zwei WW-Phasen liegen im Median <b>~${fmt(r.median_heat_min, 0)} min</b> Heizen – meist also genug Zeit zum Aufheizen.`);
     note.innerHTML = parts.join(' ') +
-      ` <span style="color:var(--muted)">Je kälter draußen, desto größer der Dip. Willst du ihn kleiner: Warmwasser in die Mittagszeit/Schwachlast legen, WW-Soll/Hysterese senken oder die Ladung zeitlich begrenzen – dann pausiert die Heizung kürzer. Innentemperatur kommt aus deinen Bosch-Thermostaten, die WW-Phasen aus der Wärmepumpe.</span>`;
+      ` <span style="color:var(--muted)">Je kälter draußen, desto größer der Dip. Willst du den Komfortverlust kleiner: die WW-Phasen <b>entzerren</b> (WW-Hysterese/Soll senken, Zeitfenster), damit zwischendurch länger geheizt wird, oder WW in die Mittagszeit legen. Innentemperatur kommt aus deinen Bosch-Thermostaten, die WW-Phasen aus der Wärmepumpe – über eine Nachtabsenkung wird hier bewusst <b>nichts</b> angenommen.</span>`;
   }
 }
 

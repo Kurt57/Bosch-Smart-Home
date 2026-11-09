@@ -1738,16 +1738,22 @@ def compute_dhw_impact(store: "Store", days: float = 14, hp_live: dict | None = 
         else:
             merged.append(r[:])
 
-    # A DHW dip only "costs comfort" if the house measurably cooled AND the
-    # cooling was the warm-water phase's doing. Two confounders are separated
-    # out so the card stops crying wolf:
-    #   • negligible dips (< MIN_DROP): nothing to recover — don't alarm.
-    #   • night-setback drift: overnight the house cools on its own schedule,
-    #     so the indoor temp never climbs back to the DHW-start value even when
-    #     the DHW dip itself was essentially zero. That is NOT a warm-water cost.
-    # Each event gets a `status`: minimal / recovered / open / setback.
+    # A DHW dip only "costs comfort" if the house measurably cooled AND there
+    # was a fair chance for the heating to catch back up. Each phase gets a
+    # `status`: minimal / recovered / tight / open.
+    #   • minimal  (< MIN_DROP): nothing to recover — don't alarm.
+    #   • recovered: dipped, then climbed back to the start temp.
+    #   • tight    : didn't climb back, but the HEATING WINDOW before the next
+    #                DHW phase was too short to expect it (WW phases back-to-back
+    #                with little heating in between). Not alarming — expected.
+    #   • open     : real dip, had enough heating time afterwards, still didn't
+    #                climb back → the genuinely interesting case.
+    # No assumption about night-setback etc.: the discriminator is the measured
+    # heating gap (`heat_min`), i.e. how long the heating actually ran before
+    # the next warm-water phase interrupted it.
     MIN_DROP = 0.15          # °C — below this the dip is practically nothing
     REC_TOL = 0.1            # °C — "warm again" tolerance back to the start temp
+    SHORT_HEAT = 45          # min — below this the heating window is "too short"
     events = []
     for k, (st, en, outs) in enumerate(merged):
         if en - st < 600:                         # ignore <10-min blips
@@ -1756,9 +1762,10 @@ def compute_dhw_impact(store: "Store", days: float = 14, hp_live: dict | None = 
         if t_start is None:
             continue
         nxt = merged[k + 1][0] if k + 1 < len(merged) else now
-        # keep it a short-timescale event so a later scheduled night-setback is
-        # not mistaken for the DHW dip: the low point is during DHW + up to 1 h
-        # lag, the climb-back is given up to 2 h (or until the next DHW phase).
+        # heating window after this DHW phase, before the next DHW phase starts
+        heat_min = round((min(nxt, now) - en) / 60.0)
+        # the low point is during DHW + up to 1 h lag; the climb-back gets up to
+        # 2 h, but never past the next DHW phase (that's the whole point).
         dip_end = min(en + 3600, nxt, now)
         rec_end = min(en + 7200, nxt, now)
         dip_pts = [(t, v) for t, v in temp if st <= t <= dip_end]
@@ -1776,26 +1783,20 @@ def compute_dhw_impact(store: "Store", days: float = 14, hp_live: dict | None = 
             if v >= t_start - REC_TOL:
                 rec_ts = t
                 break
-        # did the house turn back up after the low point, or keep sliding down?
-        post = [v for t, v in temp if t_min_ts <= t <= rec_end]
-        rebound = round(max(post) - t_min_v, 2) if post else 0.0
-        # was the house already cooling before DHW even started? (night setback)
-        t_before = temp_at(st - 3600)
-        falling_before = t_before is not None and t_start < t_before - 0.1
         if drop < MIN_DROP:
             status = "minimal"                    # WW barely cost any comfort
         elif rec_ts is not None:
             status = "recovered"                  # dipped, then heating caught up
-        elif rebound < 0.1 or falling_before:
-            status = "setback"                    # house on a downward night curve
+        elif heat_min < SHORT_HEAT:
+            status = "tight"                      # next WW too soon — no heat time
         else:
-            status = "open"                       # real dip, still catching up
+            status = "open"                       # had the time, still not back
         out_avg = round(sum(outs) / len(outs), 1) if outs else None
         events.append({
             "start": st, "end": en, "rec_ts": rec_ts,
-            "dur_min": round((en - st) / 60.0),
+            "dur_min": round((en - st) / 60.0), "heat_min": heat_min,
             "t_start": round(t_start, 1), "t_min": round(t_min_v, 1),
-            "drop": round(drop, 2), "rebound": rebound,
+            "drop": round(drop, 2),
             # a negligible dip has nothing to "recover", so it contributes no
             # recovery time to the stats (it would otherwise log a bogus 0 min)
             "recov_min": (round((rec_ts - en) / 60.0) if (rec_ts and status != "minimal") else None),
@@ -1812,9 +1813,12 @@ def compute_dhw_impact(store: "Store", days: float = 14, hp_live: dict | None = 
     meaningful = [e for e in events if e["status"] != "minimal"]
     expectable = [e for e in events if e["status"] in ("recovered", "open")]
     n_minimal = sum(1 for e in events if e["status"] == "minimal")
-    n_setback = sum(1 for e in events if e["status"] == "setback")
+    n_tight = sum(1 for e in events if e["status"] == "tight")
     n_open = sum(1 for e in events if e["status"] == "open")
     n_recovered = sum(1 for e in events if e["status"] == "recovered")
+    # how packed are the WW phases? heating window between consecutive phases
+    heat_gaps = sorted(e["heat_min"] for e in events if e["heat_min"] is not None)
+    med_heat_min = heat_gaps[len(heat_gaps) // 2] if heat_gaps else None
 
     def med(a):
         a = sorted(a)
@@ -1885,9 +1889,9 @@ def compute_dhw_impact(store: "Store", days: float = 14, hp_live: dict | None = 
         if dm >= overall_drop + 0.12:
             levers.append({
                 "icon": "🌅", "title": "Früh-WW (4–9 Uhr) entzerren", "benefit_c": round(dm - overall_drop, 1),
-                "detail": f"Morgens (4–9 Uhr) ist der Dip mit −{dm:.1f} °C überdurchschnittlich – da ist das Haus "
-                          f"nach der Nachtabsenkung ohnehin am kühlsten. Die WW-Ladung ein bis zwei Stunden später "
-                          f"(wenn es draußen wärmer wird) legen glättet den Tiefpunkt."})
+                "detail": f"Morgens (4–9 Uhr) ist der Dip mit −{dm:.1f} °C überdurchschnittlich – da ist es "
+                          f"draußen am kältesten und der Warmwasser-Bedarf am höchsten. Die WW-Ladung ein bis zwei "
+                          f"Stunden später (wenn es draußen wärmer wird) legen glättet den Tiefpunkt."})
     # Lever 4 — lower the hot-water target (directional, always sensible)
     levers.append({
         "icon": "🌡️", "title": "WW-Soll etwas senken (z. B. 55 → 50 °C)", "benefit_c": None,
@@ -1915,8 +1919,9 @@ def compute_dhw_impact(store: "Store", days: float = 14, hp_live: dict | None = 
         "median_recov_min": (round(med(recs)) if recs else None),
         "share_recovered": (round(n_recovered / len(expectable) * 100) if expectable else None),
         "n_recovered": n_recovered, "n_open": n_open,
-        "n_minimal": n_minimal, "n_setback": n_setback,
+        "n_minimal": n_minimal, "n_tight": n_tight,
         "n_meaningful": len(meaningful),
+        "median_heat_min": med_heat_min,
         "avg_dur_min": round(sum(e["dur_min"] for e in events) / len(events)),
         "by_outdoor": by_out,
         "dayparts": dayparts,
