@@ -122,6 +122,9 @@
     border:none; font-weight:700; font-size:15px; margin-top:12px;
     background:linear-gradient(90deg,var(--grad1),var(--grad2)); color:#04121f}
   .btn.sec{background:var(--card2); color:var(--ink); border:1px solid var(--line)}
+  /* display:block above would otherwise override the hidden attribute – hidden
+     buttons (e.g. "Stop" while nothing runs) used to stay visible */
+  .btn[hidden]{display:none}
   .note{color:var(--muted); font-size:12px; line-height:1.5}
   .badge{display:inline-block; font-size:11px; padding:2px 8px; border-radius:20px;
     background:var(--card2); color:var(--muted); border:1px solid var(--line)}
@@ -480,34 +483,28 @@
       <button data-hs="effizienz">📊 Effizienz</button>
       <button data-hs="einstellung">⚙️ Einstellung</button>
     </div>
-    <div class="card" id="help-card">
-      <details id="help-waerme">
-        <summary style="cursor:pointer;font-weight:700;font-size:15px">🧭 So nutzt du die Heiz-Analyse <span style="color:var(--muted);font-weight:400;font-size:12px">(antippen zum Ein-/Ausklappen)</span></summary>
-        <div class="note" style="margin:8px 0 12px;border-left:3px solid var(--warn);padding-left:10px">
-          Zwei Phasen – bitte nicht verwechseln. <b>Jetzt noch nichts auf 30 °C stellen und keine Ventile aufreißen</b> –
-          das überhitzt nur und bringt fürs Modell nichts.</div>
-        <div style="border-left:3px solid var(--accent);padding-left:12px;margin-bottom:14px">
-          <div style="font-weight:700;margin-bottom:4px">📊 Phase 1 – jetzt: Daten sammeln (läuft automatisch)</div>
-          <div style="font-size:13px;line-height:1.65">
-            Einfach <b>normal weiterleben</b>, Soll-Temperaturen auf deinen Wohlfühlwerten lassen.
-            Dann unten <b>🤖 Auto-Messung starten</b>: sie senkt nachts die Sollwerte selbst (erzwingt freies Auskühlen → daraus kommt τ)
-            und stellt morgens die <b>exakt vorherigen</b> Werte zurück – du musst an den Thermostaten nichts drehen.
-            <b>Voraussetzung:</b> Wärmepumpe/HomeCom verbunden (liefert die Außentemperatur). Einmalig die <b>Flächen</b> je Raum
-            in der Verteiler-Karte eintragen. Nach <b>3–5 Nächten</b> stehen τ, Heizlast&nbsp;(W), Ziel-Durchfluss&nbsp;(l/min) und die
-            Abgleich-Priorität belastbar da – Auto-Messung <b>stoppt dann von selbst</b>. Die „Geführte Beobachtungsphase" zeigt dir nur den Fortschritt.
-          </div>
-        </div>
-        <div style="border-left:3px solid var(--warn);padding-left:12px">
-          <div style="font-weight:700;margin-bottom:4px">🔧 Phase 2 – später: Abgleich am Verteiler (von Hand)</div>
-          <div style="font-size:13px;line-height:1.65">
-            <b>Erst hier</b> die Thermostate voll öffnen – und auch dann nur, damit der <b>Verteiler</b> (nicht die Einzelraumregelung)
-            die Verteilung bestimmt, nur für diese Einstell-Session, nicht als Dauerzustand. Dann 🚰 <b>Ziel-Durchfluss</b> an den
-            Durchflussmessern (Tacosetter) einstellen, über 🔁 <b>Schrittweise Optimierung</b> einen Kreis nach dem empfohlenen Schritt
-            nachjustieren (die App misst 1–2 Tage die Wirkung), und zuletzt die <b>Heizkurve absenken</b> – das ist der eigentliche
-            Effizienzgewinn. Danach die Thermostate wieder normal regeln lassen.
-          </div>
-        </div>
+    <div class="card" id="ab-card">
+      <h2><span class="info" data-info="abgleich" role="button" aria-label="Info">i</span>⚖️ Hydraulischer Abgleich <span class="r" id="ab-head"></span></h2>
+      <div id="ab-phase"><div class="note">Lade …</div></div>
+      <div id="ab-next" style="margin-top:10px"></div>
+      <div id="ab-kpis" style="margin-top:10px"></div>
+      <div id="ab-summary" style="margin-top:10px"></div>
+      <div id="ab-op" style="margin-top:12px"></div>
+      <details id="ab-howto" style="margin-top:12px">
+        <summary style="cursor:pointer;font-weight:600;font-size:13px">📖 So läuft der Abgleich ab (Anleitung in 6 Schritten)</summary>
+        <div id="ab-howto-body" style="margin-top:10px"></div>
       </details>
+      <div style="display:flex;gap:10px;align-items:center;margin-top:12px">
+        <button class="btn sec" id="ab-refresh" style="width:auto;padding:6px 14px;margin:0">🔄 Neu berechnen</button>
+        <span class="note" id="ab-note" style="margin:0"></span>
+      </div>
+    </div>
+    <div class="card" id="abr-card">
+      <h2><span class="info" data-info="ab-rooms" role="button" aria-label="Info">i</span>🏠 Räume &amp; Heizkreise <span class="r" id="abr-head"></span></h2>
+      <div class="note" style="margin-bottom:6px">Eine Zeile je Raum: <b>Versorgung</b> (gemessen), <b>Ziel-Durchfluss je Kreis</b> für den Tacosetter und dein <b>Ist-Wert</b>.
+        Raum antippen für Details (Trägheit, Heizlast, Wunschtemperatur).</div>
+      <div id="abr-body"></div>
+      <div class="note" id="abr-note" style="margin-top:10px"></div>
     </div>
     <div class="card" id="hp-card">
       <h2>🔥 Wärmepumpe · Live</h2>
@@ -666,24 +663,6 @@
       <div id="rts-logic" style="margin-top:12px"></div>
       <div class="note" id="rts-note" style="margin-top:8px"></div>
     </div>
-    <div class="card" id="dhw-card">
-      <h2><span class="info" data-info="dhw-impact" role="button" aria-label="Info">i</span>🚿 Warmwasser kostet Komfort <span class="r" id="dhw-head"></span></h2>
-      <div class="note" style="margin-bottom:10px">Macht die WP <b>Warmwasser</b>, pausiert die <b>Heizung</b> (Warmwasser-Vorrang) und das Haus kühlt etwas aus. Hier: um wie viel die <b>Innentemperatur</b> sinkt – und wie lange es dauert, bis sie nach dem Heizungs-Neustart wieder den <b>Ausgangswert</b> erreicht.</div>
-      <div class="seg" id="dhw-days" style="margin:0 0 12px">
-        <button data-dwd="7">7 T</button>
-        <button data-dwd="14" class="on">14 T</button>
-        <button data-dwd="30">30 T</button>
-      </div>
-      <div class="grid3" id="dhw-kpis"></div>
-      <div id="dhw-levers" style="margin-top:14px"></div>
-      <h2 style="font-size:15px;margin-top:16px">Beispiel-Warmwasserphase</h2>
-      <div class="note" id="dhw-rep-note" style="margin-bottom:6px"></div>
-      <div id="dhw-chart"></div>
-      <div class="legend" id="dhw-legend" style="margin-top:8px"></div>
-      <div id="dhw-byout" style="margin-top:14px"></div>
-      <div id="dhw-events" style="margin-top:14px"></div>
-      <div class="note" id="dhw-note" style="margin-top:12px"></div>
-    </div>
     <div class="card" id="win-card">
       <h2><span class="info" data-info="windows" role="button" aria-label="Info">i</span>🪟 Fenster &amp; Lüften <span class="r" id="win-head"></span></h2>
       <div class="note" id="win-status" style="margin-bottom:8px"></div>
@@ -696,158 +675,88 @@
       <div id="win-logic" style="margin-top:12px"></div>
       <div class="note" id="win-note" style="margin-top:8px"></div>
     </div>
-    <div class="card" id="obs-card">
-      <h2><span class="info" data-info="observation" role="button" aria-label="Info">i</span>🔭 Geführte Beobachtungsphase <span class="r" id="obs-head"></span></h2>
-      <div class="note" style="margin-bottom:10px">Ein <b>mehrtägiger Mess-Ablauf</b>, der das thermische Modell belastbar macht:
-        ich protokolliere ab Start automatisch, zähle je Raum die sauberen <b>Auskühl-/Aufheizphasen</b>, erkenne <b>Störungen</b>
-        (offene Fenster, fehlende Nachtabsenkung) und sage dir den <b>einen nächsten Schritt</b>. Ändert selbst <b>nichts</b> an der Heizung.</div>
-      <div id="obs-next" style="margin-bottom:10px"></div>
-      <div id="obs-overall" style="margin-bottom:12px"></div>
-      <div id="obs-steps"></div>
-      <div id="obs-rooms" style="margin-top:12px"></div>
-      <div id="obs-dist" style="margin-top:12px"></div>
-      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px">
-        <label style="margin:0">Zieldauer
-          <select id="obs-days" style="width:auto;padding:5px 10px;margin:0">
-            <option value="5">5 Tage</option>
-            <option value="7" selected>7 Tage</option>
-            <option value="10">10 Tage</option>
-            <option value="14">14 Tage</option>
-          </select></label>
-        <label style="margin:0;display:flex;align-items:center;gap:6px;font-size:13px">
-          <input type="checkbox" id="obs-setback" checked style="width:auto;margin:0"> Nachtabsenkung geplant</label>
-        <button class="btn" id="obs-start" style="width:auto;padding:7px 16px;margin:0">▶︎ Beobachtung starten</button>
-        <button class="btn sec" id="obs-stop" style="width:auto;padding:7px 16px;margin:0" hidden>⏹ Beenden</button>
-      </div>
-      <div class="note" id="obs-note" style="margin-top:8px"></div>
-    </div>
-    <div class="card" id="am-card" hidden>
-      <h2><span class="info" data-info="automeasure" role="button" aria-label="Info">i</span>🤖 Auto-Messung (Thermostate) <span class="r" id="am-head"></span></h2>
-      <div class="note" style="margin-bottom:10px;border-left:3px solid var(--warn);padding-left:10px">
-        <b>Aktive Steuerung:</b> senkt im <b>Nachtfenster</b> die Raum-Solltemperaturen ab, um saubere
-        <b>Auskühlphasen</b> (τ) zu erzwingen, und stellt morgens die <b>exakt vorherigen</b> Werte wieder her.
-        Senkt nur ab (hebt nie an), nie unter die <b>Mindesttemperatur</b>, stoppt automatisch nach genug Nächten.
-        ⚠︎ Schreibt <b>real</b> an deine Bosch-Thermostate.</div>
-      <div id="am-status" style="margin-bottom:10px"></div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-bottom:10px">
-        <label style="margin:0;font-size:13px">Absenkung (K)
-          <input id="am-setback" type="number" step="0.5" min="1" max="5" value="4" style="padding:5px 7px;margin:2px 0 0"></label>
-        <label style="margin:0;font-size:13px">Mindesttemperatur (°C)
-          <input id="am-floor" type="number" step="0.5" min="12" max="20" value="15" style="padding:5px 7px;margin:2px 0 0"></label>
-        <label style="margin:0;font-size:13px">Fenster von (Std)
-          <input id="am-start" type="number" step="1" min="0" max="23" value="23" style="padding:5px 7px;margin:2px 0 0"></label>
-        <label style="margin:0;font-size:13px">bis (Std)
-          <input id="am-end" type="number" step="1" min="0" max="23" value="5" style="padding:5px 7px;margin:2px 0 0"></label>
-        <label style="margin:0;font-size:13px">max. Nächte
-          <input id="am-nights" type="number" step="1" min="1" max="14" value="5" style="padding:5px 7px;margin:2px 0 0"></label>
-      </div>
-      <div style="display:flex;gap:10px;flex-wrap:wrap">
-        <button class="btn" id="am-arm" style="width:auto;padding:7px 16px;margin:0">▶︎ Auto-Messung starten</button>
-        <button class="btn sec" id="am-disarm" style="width:auto;padding:7px 16px;margin:0" hidden>⏹ Stop &amp; zurückstellen</button>
-      </div>
-      <div id="am-log" style="margin-top:12px"></div>
-      <div class="note" id="am-note" style="margin-top:8px"></div>
-    </div>
-    <div class="card" id="tm-card">
-      <h2><span class="info" data-info="thermal" role="button" aria-label="Info">i</span>🧪 Thermisches Raummodell <span class="r" id="tm-head"></span></h2>
-      <div class="note" style="margin-bottom:10px">Für jeden Raum lerne ich aus dem Verlauf ein eigenes <b>thermisches Modell</b>:
-        <b>Trägheit τ</b> (wie langsam er auskühlt), <b>Aufheizrate</b> und ob er sein <b>Soll</b> erreicht.
-        Daraus leite ich ab, welche Räume <b>mehr</b> und welche <b>weniger</b> Durchfluss brauchen – mit
-        ehrlicher Kennzeichnung <span style="color:#4be0b0">gemessen</span> / <span style="color:#ffb64d">abgeleitet</span> /
-        <span style="color:#f78fb3">geschätzt</span> und <b>Konfidenz</b> je Raum.</div>
-      <div id="tm-assess"></div>
-      <div id="tm-priority" style="margin-top:12px"></div>
-      <div id="tm-rooms" style="margin-top:12px"></div>
-      <div id="tm-logic" style="margin-top:12px"></div>
-      <div id="tm-next" style="margin-top:12px"></div>
-      <button class="btn sec" id="tm-refresh" style="margin-top:10px">🔄 Modell aktualisieren</button>
-      <div class="note" id="tm-note" style="margin-top:8px"></div>
-    </div>
-    <div class="card" id="hl-card">
-      <h2><span class="info" data-info="heatload" role="button" aria-label="Info">i</span>📐 Heizlast je Raum (W) <span class="r" id="hl-head"></span></h2>
-      <div class="note" style="margin-bottom:10px">Die <b>Heizlast je Raum in Watt</b> bei Auslegungstemperatur – aus der <b>gemessenen</b>
-        Gebäude-Wärmekennlinie (Heizleistung über Außentemperatur), aufgeteilt über <b>τ je Raum</b> (Modell) und die
-        <b>Fläche</b> (Verteiler-Karte). Die Summe ist auf die gemessene Gesamtlast <b>kalibriert</b>; jeder Wert hat ein
-        <b>Unsicherheitsband</b>. <b>Kein</b> normgerechter Heizlast-Nachweis.</div>
-      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
-        <label style="margin:0">Auslegungstemperatur
-          <select id="hl-design" style="width:auto;padding:5px 10px;margin:0">
-            <option value="-10">−10 °C</option>
-            <option value="-12" selected>−12 °C</option>
-            <option value="-14">−14 °C</option>
-            <option value="-16">−16 °C</option>
-          </select></label>
-        <button class="btn sec" id="hl-refresh" style="width:auto;padding:6px 14px;margin:0">🔄 Neu berechnen</button>
-      </div>
-      <div id="hl-summary"></div>
-      <div id="hl-rooms" style="margin-top:12px"></div>
-      <div id="hl-logic" style="margin-top:12px"></div>
-      <div class="note" id="hl-note" style="margin-top:8px"></div>
-    </div>
-    <div class="card" id="flow-card">
-      <h2><span class="info" data-info="flow" role="button" aria-label="Info">i</span>🚰 Ziel-Durchfluss je Kreis (l/min) <span class="r" id="flow-head"></span></h2>
-      <div class="note" style="margin-bottom:10px">Der <b>Einstellwert für die Durchflussmesser (Tacosetter)</b> je Heizkreis –
-        physikalisch aus der <b>echten Heizlast</b> (Modul „Heizlast") und der gewählten <b>Spreizung je Kreis</b>:
-        l/min = Q ÷ (1,163 × ΔT × 60). Gruppiert nach <b>Verteiler</b> (aus der Verteiler-Karte).</div>
-      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
-        <label style="margin:0">Spreizung je Kreis
-          <select id="flow-spread" style="width:auto;padding:5px 10px;margin:0">
-            <option value="4">4 K</option>
-            <option value="5" selected>5 K</option>
-            <option value="6">6 K</option>
-            <option value="7">7 K</option>
-            <option value="8">8 K</option>
-          </select></label>
-        <button class="btn sec" id="flow-refresh" style="width:auto;padding:6px 14px;margin:0">🔄 Neu berechnen</button>
-      </div>
-      <div id="flow-context" style="margin-bottom:10px"></div>
-      <div id="flow-body"></div>
-      <div class="note" id="flow-note" style="margin-top:8px"></div>
-    </div>
     <div class="card" id="opt-card">
-      <h2><span class="info" data-info="optimize" role="button" aria-label="Info">i</span>🔁 Schrittweise Optimierung <span class="r" id="opt-head"></span></h2>
-      <div class="note" style="margin-bottom:10px">Der <b>Regelkreis</b>: ich schlage <b>einen</b> konkreten Schritt vor (welcher Kreis auf/zu),
-        du führst ihn am Verteiler aus und protokollierst ihn – dann messe ich über die nächsten Tage die <b>Wirkung</b>
-        (erreicht der Raum jetzt sein Soll?) und schlage den nächsten Schritt vor. Am Ende: Heizkurve absenken für die Effizienz.
-        <b>Schreibt nichts</b> an die Wärmepumpe.</div>
-      <div id="opt-rec" style="margin-bottom:12px"></div>
-      <div id="opt-eff" style="margin-bottom:12px"></div>
-      <div style="border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:12px">
-        <div style="font-weight:700;margin-bottom:8px">Schritt protokollieren</div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-          <select id="opt-room" style="width:auto;padding:5px 10px;margin:0"></select>
-          <select id="opt-action" style="width:auto;padding:5px 10px;margin:0">
-            <option value="open">aufdrehen</option>
-            <option value="throttle">androsseln</option>
-          </select>
-          <input id="opt-delta" type="number" step="0.1" inputmode="decimal" placeholder="± l/min" style="width:90px;padding:5px 7px;margin:0">
-          <input id="opt-note" type="text" placeholder="Notiz (optional)" style="flex:1;min-width:140px;padding:5px 7px;margin:0">
-          <button class="btn" id="opt-log" style="width:auto;padding:6px 14px;margin:0">＋ Schritt speichern</button>
-        </div>
+      <h2><span class="info" data-info="optimize" role="button" aria-label="Info">i</span>🔁 Schritt-Protokoll <span class="r" id="opt-head"></span></h2>
+      <div class="note" style="margin-bottom:10px">Halte hier fest, was du am Verteiler verstellt hast – ich messe dann über die nächsten 1–2 Tage die <b>Wirkung</b>.
+        Immer nur <b>ein</b> Kreis pro Schritt. Schreibt <b>nichts</b> an die Heizung.</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+        <select id="opt-room" style="width:auto;padding:5px 10px;margin:0"></select>
+        <select id="opt-action" style="width:auto;padding:5px 10px;margin:0">
+          <option value="open">aufgedreht</option>
+          <option value="throttle">angedrosselt</option>
+        </select>
+        <input id="opt-delta" type="text" inputmode="decimal" placeholder="± l/min" style="width:84px;padding:5px 7px;margin:0">
+        <input id="opt-note-inp" type="text" placeholder="Notiz (optional)" style="flex:1;min-width:120px;padding:5px 7px;margin:0">
+        <button class="btn" id="opt-log" style="width:auto;padding:6px 14px;margin:0">＋ Schritt speichern</button>
       </div>
       <div id="opt-steps"></div>
-      <div style="display:flex;gap:10px;margin-top:8px">
+      <div style="display:none;gap:10px;margin-top:8px" id="opt-tools">
         <button class="btn sec" id="opt-undo" style="width:auto;padding:6px 14px;margin:0">↩︎ Letzten Schritt löschen</button>
         <button class="btn sec" id="opt-reset" style="width:auto;padding:6px 14px;margin:0">Verlauf zurücksetzen</button>
       </div>
-      <div class="note" id="opt-note" style="margin-top:8px"></div>
+      <div class="note" id="opt-msg" style="margin-top:8px"></div>
     </div>
-    <div class="card" id="ha-card">
-      <h2><span class="info" data-info="hydronic" role="button" aria-label="Info">i</span>⚖️ Hydraulischer Abgleich <span class="r" id="ha-head"></span></h2>
-      <div class="note" style="margin-bottom:10px">Sorgt dafür, dass <b>jeder Heizkreis die richtige Wassermenge</b> bekommt – damit alle Räume
-        gleichmäßig warm werden und die Wärmepumpe mit dem <b>niedrigsten</b> Vorlauf auskommt. Unten: die konkreten Schritte
-        und – aus deinen Thermostaten – <b>welcher Raum zuerst</b> dran ist.</div>
-      <div id="ha-work"></div>
-      <div id="ha-steps" style="margin-top:12px"></div>
-      <div class="note" id="ha-note" style="margin-top:10px"></div>
+    <div class="card" id="abd-card">
+      <details id="abd-det">
+        <summary style="cursor:pointer;font-weight:700;font-size:15px">🔬 Datenlage &amp; Messung <span id="abd-head" style="float:right;font-weight:600;font-size:12px"></span></summary>
+        <div id="abd-body" style="margin-top:12px"></div>
+        <div id="am-box" hidden style="margin-top:16px;border-top:1px solid var(--line);padding-top:14px">
+          <div style="font-weight:700;margin-bottom:8px"><span class="info" data-info="automeasure" role="button" aria-label="Info" style="float:right">i</span>🤖 Auto-Messung (optional – liefert die Trägheit τ) <span id="am-head" style="font-size:12px;font-weight:600;margin-left:6px"></span></div>
+          <div class="note" style="margin-bottom:10px;border-left:3px solid var(--warn);padding-left:10px">
+            <b>Aktive Steuerung:</b> senkt im <b>Nachtfenster</b> die Raum-Solltemperaturen ab, um saubere
+            <b>Auskühlphasen</b> (τ) zu erzwingen, und stellt morgens die <b>exakt vorherigen</b> Werte wieder her.
+            Senkt nur ab (hebt nie an), nie unter die <b>Mindesttemperatur</b>, stoppt automatisch nach genug Nächten.
+            ⚠︎ Schreibt <b>real</b> an deine Bosch-Thermostate.</div>
+          <div id="am-status" style="margin-bottom:10px"></div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-bottom:10px">
+            <label style="margin:0;font-size:13px">Absenkung (K)
+              <input id="am-setback" type="number" step="0.5" min="1" max="5" value="4" style="padding:5px 7px;margin:2px 0 0"></label>
+            <label style="margin:0;font-size:13px">Mindesttemperatur (°C)
+              <input id="am-floor" type="number" step="0.5" min="12" max="20" value="15" style="padding:5px 7px;margin:2px 0 0"></label>
+            <label style="margin:0;font-size:13px">Fenster von (Std)
+              <input id="am-start" type="number" step="1" min="0" max="23" value="23" style="padding:5px 7px;margin:2px 0 0"></label>
+            <label style="margin:0;font-size:13px">bis (Std)
+              <input id="am-end" type="number" step="1" min="0" max="23" value="5" style="padding:5px 7px;margin:2px 0 0"></label>
+            <label style="margin:0;font-size:13px">max. Nächte
+              <input id="am-nights" type="number" step="1" min="1" max="14" value="5" style="padding:5px 7px;margin:2px 0 0"></label>
+          </div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap">
+            <button class="btn" id="am-arm" style="width:auto;padding:7px 16px;margin:0">▶︎ Auto-Messung starten</button>
+            <button class="btn sec" id="am-disarm" style="width:auto;padding:7px 16px;margin:0" hidden>⏹ Stop &amp; zurückstellen</button>
+          </div>
+          <div id="am-log" style="margin-top:12px"></div>
+          <div class="note" id="am-note" style="margin-top:8px"></div>
+        </div>
+      </details>
     </div>
     <div class="card" id="layout-card">
-      <h2><span class="info" data-info="layout" role="button" aria-label="Info">i</span>🧭 Verteiler &amp; Heizkreise</h2>
-      <div class="note" style="margin-bottom:10px">Ordne deine Räume den <b>Heizkreisverteilern</b> zu und gib je Raum <b>Fläche</b>, die Anzahl der
-        <b>Schläuche/Kreise</b> (z. B. Wohnzimmer 3) und grob die <b>Kreislänge</b> an. Daraus rechne ich den <b>Durchfluss je Schlauch
-        (l/min)</b> – den Wert, den du am Tacosetter einstellst. Heizlast-proportional; über alle Geräte gespeichert.</div>
-      <div id="lay-body"></div>
-      <div class="note" id="lay-note" style="margin-top:8px"></div>
+      <details id="lay-det">
+        <summary style="cursor:pointer;font-weight:700;font-size:15px">🧭 Verteiler einrichten <span id="lay-head" style="float:right;font-weight:600;font-size:12px;color:var(--muted)"></span></summary>
+        <div class="note" style="margin:10px 0">Einmalige Stammdaten: je Raum <b>Verteiler</b>, beheizte <b>Fläche</b> und Anzahl der <b>Kreise/Schläuche</b>
+          – plus die drei <b>Annahmen</b> (W/m², Spreizung, Auslegungstemperatur), aus denen die l/min-Werte oben entstehen. Über alle Geräte gespeichert.</div>
+        <div id="lay-body"></div>
+        <div class="note" id="lay-note" style="margin-top:8px"></div>
+      </details>
+    </div>
+    <div class="card" id="dhw-card">
+      <h2><span class="info" data-info="dhw-impact" role="button" aria-label="Info">i</span>🚿 Warmwasser kostet Komfort <span class="r" id="dhw-head"></span></h2>
+      <div class="note" style="margin-bottom:10px">Macht die WP <b>Warmwasser</b>, pausiert die <b>Heizung</b> (Warmwasser-Vorrang) und das Haus kühlt etwas aus. Hier: um wie viel die <b>Innentemperatur</b> sinkt – und wie lange es dauert, bis sie nach dem Heizungs-Neustart wieder den <b>Ausgangswert</b> erreicht.</div>
+      <div class="seg" id="dhw-days" style="margin:0 0 12px">
+        <button data-dwd="7">7 T</button>
+        <button data-dwd="14" class="on">14 T</button>
+        <button data-dwd="30">30 T</button>
+      </div>
+      <div class="grid3" id="dhw-kpis"></div>
+      <div id="dhw-pattern" style="margin-top:14px"></div>
+      <div id="dhw-levers" style="margin-top:14px"></div>
+      <h2 style="font-size:15px;margin-top:16px">Beispiel-Warmwasserphase</h2>
+      <div class="note" id="dhw-rep-note" style="margin-bottom:6px"></div>
+      <div id="dhw-chart"></div>
+      <div class="legend" id="dhw-legend" style="margin-top:8px"></div>
+      <div id="dhw-byout" style="margin-top:14px"></div>
+      <div id="dhw-events" style="margin-top:14px"></div>
+      <div class="note" id="dhw-note" style="margin-top:12px"></div>
+      <div id="dhw-op" style="margin-top:10px"></div>
     </div>
     <div class="card" id="roomsync-card">
       <h2><span class="info" data-info="roomsync" role="button" aria-label="Info">i</span>🌡️ Raumtemperatur ↔ Wärmepumpe <span class="r" id="roomsync-head"></span></h2>

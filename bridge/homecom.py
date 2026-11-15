@@ -315,6 +315,117 @@ class HomeComClient:
             elif isinstance(vv, str):
                 mode = vv or "off"
         out["mode"] = mode or "off"
+
+        # hot-water tank: actual temperature + the setpoint it is charging to.
+        # Logged over time by the bridge, so a hot-water phase can be judged on
+        # what the tank really did (reached its target or not) instead of a guess.
+        out["dhw_c"] = self._num(get("/resource/dhwCircuits/dhw1/actualTemp"))
+        out["dhw_set_c"] = self._num(get("/resource/dhwCircuits/dhw1/currentSetpoint"))
+        return out
+
+    # -- operating state (read-only ground truth) ------------------------- #
+    @staticmethod
+    def _summarise_switch_program(res) -> dict | None:
+        """Best-effort summary of a Bosch switch programme resource
+        ({"switchPoints": [{"dayOfWeek","setpoint","time"}, …]}). Returns None
+        when the device answers in a shape we do not recognise – the caller then
+        says "not readable" rather than guessing."""
+        pts = res.get("switchPoints") if isinstance(res, dict) else None
+        if not isinstance(pts, list) or not pts:
+            return None
+        levels, reduced, comfort = set(), [], []
+        for p in pts:
+            if not isinstance(p, dict):
+                continue
+            sp = str(p.get("setpoint") or "").lower()
+            t = p.get("time")
+            if not sp or not isinstance(t, (int, float)):
+                continue
+            levels.add(sp)
+            is_reduced = any(k in sp for k in ("eco", "low", "night", "reduc", "off"))
+            (reduced if is_reduced else comfort).append(int(t))
+        if not levels:
+            return None
+
+        def med(a):
+            a = sorted(a)
+            return a[len(a) // 2] if a else None
+
+        return {"levels": sorted(levels), "n_points": len(pts),
+                "has_reduced": bool(reduced),
+                "reduced_start_min": med(reduced), "comfort_start_min": med(comfort)}
+
+    def read_opstate(self, gateway_id: str) -> dict:
+        """How the heating is ACTUALLY set, read from the device: the heating
+        circuit's operation mode (manual = one fixed room setpoint, auto = time
+        programme switching between temperature levels), those levels, and the
+        hot-water mode / setpoints. A handful of targeted GETs – no tree crawl.
+        Any value the device does not expose comes back as None."""
+        prefix = f"{API_BASE}{gateway_id}"
+        failed = 0
+
+        def raw(path):
+            nonlocal failed
+            try:
+                return self._api_get(prefix + path)
+            except AuthExpiredError:
+                raise
+            except HomeComError:
+                failed += 1
+                return None
+
+        def val(path):
+            res = raw(path)
+            if isinstance(res, dict):
+                v = res.get("value")
+                return None if isinstance(v, (list, dict)) else v
+            return None
+
+        def first_child(root, default):
+            res = raw(root)
+            refs = res.get("references") if isinstance(res, dict) else None
+            for r in refs or []:
+                rid = r.get("id") if isinstance(r, dict) else None
+                if isinstance(rid, str):
+                    name = rid.rstrip("/").split("/")[-1]
+                    if name and name not in ("heatingCircuits", "dhwCircuits"):
+                        return name
+            return default
+
+        hc = first_child("/resource/heatingCircuits", "hc1")
+        dhw = first_child("/resource/dhwCircuits", "dhw1")
+        H = f"/resource/heatingCircuits/{hc}"
+        W = f"/resource/dhwCircuits/{dhw}"
+        out = {
+            "gateway": gateway_id, "hc": hc, "dhw": dhw,
+            "hc_mode": val(H + "/operationMode"),
+            "hc_status": val(H + "/overallStatus"),
+            "hc_setpoint": val(H + "/currentRoomSetpoint"),
+            "hc_manual": val(H + "/temperatureRoomManual"),
+            "hc_comfort": val(H + "/temperatureLevels/comfort2"),
+            "hc_eco": val(H + "/temperatureLevels/eco"),
+            "hc_control": val(H + "/controlType"),
+            "hc_max_flow": val(H + "/maxFlowTemp"),
+            "dhw_mode": val(W + "/operationMode"),
+            "dhw_setpoint": val(W + "/currentSetpoint"),
+            "dhw_actual": val(W + "/actualTemp"),
+            "dhw_high": val(W + "/temperatureLevels/high"),
+            "dhw_eco": val(W + "/temperatureLevels/eco"),
+            "dhw_low": val(W + "/temperatureLevels/low"),
+            "dhw_charge": val(W + "/charge"),
+            "dhw_charge_dur": val(W + "/chargeDuration"),
+            "program": None,
+        }
+        # the time programme only matters (and is only read) in auto mode
+        if str(out["hc_mode"] or "").lower() == "auto":
+            name = val(H + "/activeSwitchProgram") or val(H + "/currentSwitchProgram")
+            res = raw(f"{H}/switchPrograms/{name}") if isinstance(name, str) and name else None
+            if not isinstance(res, dict):
+                first = first_child(H + "/switchPrograms", None)
+                res = raw(f"{H}/switchPrograms/{first}") if first else None
+            out["program"] = self._summarise_switch_program(res)
+        out["failed"] = failed
+        out["readable"] = out["hc_mode"] is not None or out["dhw_mode"] is not None
         return out
 
     def raw(self, gateway_id: str, resource_path: str):

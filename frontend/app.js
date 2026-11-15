@@ -93,8 +93,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v187';   // short tag shown always-on in the header
-const APP_VERSION = 'v187 · 2026-11-09 · „Warmwasser kostet Komfort" korrigiert: KEINE Annahme mehr über eine Nachtabsenkung (die war falsch). Der echte Grund für „nicht erreicht" ist jetzt gemessen – die WW-Phasen sitzen dicht hintereinander: nach einer Phase bleibt oft nur wenig Heizzeit, bevor die nächste kommt. Phasen heißen jetzt kaum Abkühlung / wieder warm / danach nur X min Heizen / noch nicht zurück, plus Median-Heizzeit zwischen den Phasen. ' +
+const APP_BUILD = 'v188';   // short tag shown always-on in the header
+const APP_VERSION = 'v188 · 2026-11-15 · Abgleich-Tab neu aufgebaut: aus zehn Karten wurden fünf. Eine Statuskarte mit dem EINEN nächsten Schritt, EINE Raumliste (Versorgung gemessen · Ziel-Durchfluss je Kreis · dein Ist-Wert · Details zum Aufklappen), Schritt-Protokoll, Datenlage und Verteiler-Einrichtung (eingeklappt). Datenfehler behoben: Phantom-Räume „hz_1 …“ verschwinden (Ursache behoben), nur noch ein ΔT und damit EIN l/min-Wert je Kreis, Räume werden gegen ihre Wunschtemperatur bzw. den Hausschnitt beurteilt statt gegen den hochgedrehten Thermostat. Neu „Betrieb – gelesen & gemessen“: Betriebsart der Wärmepumpe (HomeCom), Modus der Thermostate und ob nachts wirklich abgesenkt wurde – ohne Annahmen. Warmwasser-Karte erkennt Ladeketten (gleich lange Ladungen, die sofort neu starten) und protokolliert ab jetzt die Speichertemperatur. ' +
+  'v187 · 2026-11-09 · „Warmwasser kostet Komfort" korrigiert: KEINE Annahme mehr über eine Nachtabsenkung (die war falsch). Der echte Grund für „nicht erreicht" ist jetzt gemessen – die WW-Phasen sitzen dicht hintereinander: nach einer Phase bleibt oft nur wenig Heizzeit, bevor die nächste kommt. Phasen heißen jetzt kaum Abkühlung / wieder warm / danach nur X min Heizen / noch nicht zurück, plus Median-Heizzeit zwischen den Phasen. ' +
   'v186 · „Warmwasser kostet Komfort" ehrlicher: ein −0,0 °C-Dip wird nicht mehr als „nicht erreicht" gewertet; jede WW-Phase wird eingeordnet. ' +
   'v185 · Tagesverlauf lesbarer: Zeitachse zoombar (Auto / 1h / 2h / 4h / 8h / 16h / Tag; Auto passt sich an die vorhandenen Daten an, damit ein kurzer Betrieb nicht in 24 h zerquetscht wird). Raumtemperatur-Linien werden jetzt verbunden (die Thermostate messen punktuell/selten – kleine Lücken werden interpoliert, große bleiben offen). Achse re-bucketet beim Zoomen für volle Auflösung. ' +
   'v184 · Fix ‹ ›-Tagesnavigation + Wärme-Tab lädt nur den aktiven Unter-Tab. Performance: der Wärme-Tab lädt jetzt nur noch die Karten des aktiven Unter-Tabs (Heizung/Abgleich/Effizienz/Einstellung) statt beim Öffnen ~20 API-Abfragen gleichzeitig zu starten; die übrigen laden erst beim Wechsel auf ihren Unter-Tab. Der Tagesverlauf lädt immer nur EINEN Tag, der Takt-Trend erst beim Öffnen von „Effizienz". ' +
@@ -402,38 +403,38 @@ const INFO = {
     'und dann das <b>Ventil schließt</b>, wie schnell ein Raum nach Ventil-zu wieder <b>auskühlt</b> (K/h) und <b>warum</b> die WP ' +
     'pausiert (meist: alle Räume am Soll → Ventile zu → keine Abnahme). Einen Raum wählen zeigt zusätzlich die Ventilöffnung ' +
     'als Schattierung. Wird aus deinen Bosch-Raumthermostaten mitgeloggt (ab jetzt).',
-  'layout': () => 'Dein <b>Heizkreis-Layout</b>: welche Räume an welchem <b>Verteiler</b> hängen, plus <b>Fläche</b> und grobe ' +
-    '<b>Kreislänge</b> je Raum. Daraus rechne ich eine <b>heizlast-proportionale Durchfluss-Startverteilung (l/min)</b> pro Kreis ' +
-    '– der praktische Startwert für die Durchflussmesser (Tacosetter) am Verteiler. Formel: Heizlast ≈ Fläche × spez. Last (W/m²), ' +
-    'Durchfluss = Heizlast ÷ (1,16 × Spreizung ΔT). Länge ist nachrangig (beeinflusst den Pumpendruck, nicht den Ziel-Durchfluss). ' +
-    'Danach feinjustieren über den <b>Hydraulischen Abgleich</b>. Alles nur lokal gespeichert.',
-  'optimize': () => '<b>Schrittweise Abgleich-Optimierung als Regelkreis.</b> Statt alles auf einmal zu verstellen: ein konkreter ' +
-    'Schritt, dann messen, dann der nächste. Die App nennt <b>genau einen</b> nächsten Handgriff (z. B. „Büro aufdrehen, ein kleiner ' +
-    'Schritt +0,2–0,3 l/min"), priorisiert nach dem Raum-Modell (größtes Defizit zuerst, Reserve-Raum im Gegenzug androsseln). Du ' +
-    'führst ihn am Verteiler aus und <b>protokollierst</b> ihn; dabei friert die App eine <b>Momentaufnahme</b> des Raums ein ' +
-    '(Defizit, Soll-Erreichung, τ). Über die nächsten 1–2 Tage vergleicht sie den neuen Zustand und bewertet den Schritt als ' +
-    '<b>wirksam / kaum Effekt / verschlechtert / zu weit gedrosselt</b>. Erst wenn <b>alle</b> Räume ihr Soll erreichen, kommt der ' +
-    'eigentliche Effizienz-Schritt: die <b>Heizkurve absenken</b> (kühlerer Vorlauf → höhere Arbeitszahl), gekoppelt an die ' +
-    'Heizkurven-Karte und die geschätzte Ersparnis. <b>Wichtig:</b> die App <b>schreibt nicht</b> an die Wärmepumpe – sie führt nur ' +
-    'Buch über deine Handgriffe und misst die Wirkung. Datenbasierte Selbstoptimierung, kein normgerechter Abgleich.',
-  'flow': () => '<b>Ziel-Durchfluss je Heizkreis (l/min)</b> – der Einstellwert für die Durchflussmesser/Tacosetter am Verteiler. ' +
-    'Physikalisch aus Energieerhaltung: Q = ṁ·c·ΔT, praktisch <b>l/min = Q ÷ (1,163 × ΔT × 60)</b>, mit Q = der gemessen/abgeleiteten ' +
-    '<b>Heizlast je Raum</b> (Modul Heizlast) und ΔT = der <b>gewählten Auslege-Spreizung je Kreis</b> (bei Fußbodenheizung typ. 4–7 K). ' +
-    '<b>Wichtig – nicht verwechseln:</b> diese Spreizung je Kreis ist <b>nicht</b> die zentral gemessene System-Spreizung (Vorlauf − ' +
-    'Rücklauf an der WP). Erst wenn <b>jeder</b> Kreis auf seinen Zielwert eingestellt ist, teilen sich alle Kreise dieselbe Spreizung ' +
-    'und die zentrale entspricht ihr; die zentrale Spreizung in die Kreis-Rechnung einzusetzen würde die Durchflüsse falsch ' +
-    'dimensionieren. Höhere Spreizung → weniger Durchfluss (aber kühlerer Rücklauf). Gruppiert nach Verteiler mit Teilsummen. ' +
-    '<b>Hinweis:</b> ein Wert je Raum; hat ein Raum mehrere Schleifen, teile den l/min-Wert gleichmäßig darauf auf. ' +
-    'Startwerte für den Abgleich, kein Norm-Nachweis.',
-  'heatload': () => '<b>Heizlast je Raum in Watt.</b> Physikalisch begründet und <b>kalibriert</b>: Zuerst die <b>Gebäude-Wärmekennlinie</b> ' +
-    '(Energiesignatur) – die gemessene Heizleistung über der Außentemperatur ergibt per Regression eine Gerade; bei der ' +
-    '<b>Auslegungstemperatur</b> liefert sie die Gesamt-Heizlast. Pro Raum ist die Verlustleistung UA ∝ <b>Fläche ÷ τ</b> ' +
-    '(aus τ = C/UA und gleicher Estrich-Speichermasse je m² – die unbekannte Konstante kürzt sich bei der Kalibrierung heraus). ' +
-    'Die Summe der Raum-Lasten wird exakt auf die gemessene Gesamtlast <b>skaliert</b>; daraus Q je Raum = UA·(Soll − Auslegung) ' +
-    'mit einem <b>Unsicherheitsband</b> aus τ-Streuung, Flächen-Toleranz und Kennlinien-Streuung. ' +
-    '<b>Ehrlich:</b> Flächen sind eingegeben, der Split ist abgeleitet (kein Durchfluss je Kreis gemessen), die Gleich-Estrich-' +
-    'Annahme ist eine Näherung. Das ist eine <b>datenbasierte Schätzung</b>, kein normgerechter Heizlast-Nachweis (DIN EN 12831) ' +
-    'und ersetzt keine Fachplanung.',
+  'optimize': () => '<b>Schritt-Protokoll.</b> Der hydraulische Abgleich einer Fußbodenheizung ist ein Regelkreis: einen Kreis ' +
+    'ein wenig verstellen, abwarten, messen. Hier hältst du fest, <b>welchen Kreis</b> du auf- oder zugedreht hast. Beim Speichern ' +
+    'merkt sich die App den aktuellen Stand des Raums und vergleicht ihn nach <b>1–2 Tagen</b> mit dem neuen: Hat der Raum ' +
+    '<b>aufgeholt</b>, war der Schritt wirksam; ist nichts passiert, braucht es einen größeren Schritt; wird ein gedrosselter Raum ' +
+    'zu kühl, war es zu viel. Immer nur <b>ein</b> Kreis pro Schritt – sonst lässt sich die Wirkung nicht zuordnen. ' +
+    'Die App schreibt dabei <b>nichts</b> an Wärmepumpe oder Verteiler.',
+  'abgleich': () => '<b>Hydraulischer Abgleich</b> verteilt das Heizwasser so auf die Heizkreise, dass jeder Raum die passende ' +
+    'Menge bekommt. Ohne Abgleich bekommen kurze, nahe Kreise zu viel und lange, ferne zu wenig – man dreht dann den Vorlauf hoch, ' +
+    'damit auch der kälteste Raum warm wird, und das kostet bei der Wärmepumpe viel Effizienz.<br><br>' +
+    '<b>Woran die App die Schieflage erkennt:</b> an der <b>gemessenen</b> Raumtemperatur der letzten 24 Stunden im Vergleich zur ' +
+    '<b>Wunschtemperatur</b> des Raums. Sind die Thermostate hochgedreht (Einstell-Phase), regelt keiner mehr ab – dann zählt, wie weit ' +
+    'ein Raum vom <b>Schnitt aller Räume</b> abweicht: Wer deutlich darunter liegt, bekommt zu wenig Wasser, wer darüber liegt, zu viel. ' +
+    'Liegt das ganze Haus gleichmäßig zu hoch, ist das kein Verteil-Problem, sondern Sache der <b>Heizkurve</b>.<br><br>' +
+    'Im normalen Regelbetrieb gleichen die Thermostate Schieflagen selbst aus; dort zählt, ob ein Raum seinen Sollwert hält und ' +
+    'wie viel der Zeit er Wärme anfordert.<br><br>' +
+    '<b>„Betrieb – gelesen &amp; gemessen"</b> zeigt, wie die Heizung wirklich eingestellt ist: Betriebsart und Sollwerte der Wärmepumpe ' +
+    '(aus HomeCom gelesen), Modus der Raumthermostate (aus Bosch Smart Home gelesen) und ob die Sollwerte in den letzten Nächten ' +
+    'tatsächlich abgesenkt wurden (gemessen). Die App nimmt hier nichts an.<br><br>' +
+    'Datenbasierte Selbstoptimierung – <b>kein</b> normgerechter Abgleich (Verfahren B für Förderungen macht der Fachbetrieb).',
+  'ab-rooms': () => '<b>Eine Zeile je Raum</b> – alles, was früher auf fünf Karten verteilt war.<br><br>' +
+    '<b>Versorgung (gemessen):</b> Der Punkt im Balken zeigt, wie weit der Raum abweicht – links zu kalt, rechts zu warm, das grüne ' +
+    'Band (±0,7 K) passt. Grundlage ist der Mittelwert der letzten 24 Stunden, ohne Zeiten mit offenem Fenster.<br><br>' +
+    '<b>Wunschtemperatur:</b> das, was der Raum haben <b>soll</b> – bewusst nicht der Thermostat-Sollwert, denn der steht in der ' +
+    'Einstell-Phase auf 25 °C und würde jeden Raum „4 K zu kalt" aussehen lassen. Die App nimmt deinen eingetragenen Wert, sonst den ' +
+    'normalen Sollwert aus der Zeit davor. In den Details änderbar.<br><br>' +
+    '<b>Ziel l/min je Kreis:</b> Startwert für den Durchflussmesser (Tacosetter): Heizlast des Raums ÷ (1,163 × Spreizung × 60), ' +
+    'geteilt durch die Anzahl der Kreise. Die Heizlast kommt aus der gemessenen Gebäude-Kennlinie, solange die belastbar ist, ' +
+    'sonst aus Fläche × W/m². <b>Ein</b> ΔT, <b>eine</b> Rechnung – Annahmen stehen unter „Verteiler einrichten".<br><br>' +
+    '<b>Ist:</b> dein abgelesener Wert. Die Bewertung richtet sich nach dem <b>gemessenen</b> Raum: Ein zu warmer Raum wird nie ' +
+    'aufgefordert, „auf den Zielwert hochzudrehen".<br><br>' +
+    '<b>Details:</b> Trägheit τ (wie lange der Raum Wärme hält – braucht eine heizfreie Phase zum Messen), Auskühl- und ' +
+    'Aufheizrate, Heizlast mit Unsicherheitsband. Ohne Durchfluss- oder Rücklaufmessung je Kreis bleibt das eine Schätzhilfe.',
   'automeasure': () => '<b>Auto-Messung – aktive Thermostat-Steuerung.</b> Statt dich nachts selbst absenken zu lassen, macht es die App: ' +
     'sie senkt im <b>Nachtfenster</b> die Raum-Solltemperaturen (schreibt über die lokale Bosch-SHC-API an die Thermostate), erzwingt ' +
     'so freie <b>Auskühlphasen</b> für die τ-Messung und stellt morgens die <b>exakt vorher gespeicherten</b> Sollwerte wieder her. ' +
@@ -441,31 +442,6 @@ const INFO = {
     'begrenzt zusätzlich hart auf 5–30 °C; die Originalwerte werden <b>vor</b> dem ersten Schreiben gespeichert, sodass auch nach ' +
     'einem Neustart korrekt zurückgestellt wird; „Stop" stellt sofort alles zurück; und es stoppt von selbst nach den eingestellten ' +
     'Nächten oder sobald jeder Raum genug τ-Daten hat. Nur im Live-Modus mit verbundener Bosch-Zentrale.',
-  'observation': () => '<b>Geführte Beobachtungsphase.</b> Ein kontrollierter, mehrtägiger Mess-Ablauf, der die Datenbasis für das ' +
-    'thermische Modell und den hydraulischen Abgleich schafft. Mit <b>Start</b> wird ein Zeitpunkt verankert und der Fortschritt ' +
-    '<b>ab jetzt</b> gemessen – unabhängig von alten Daten. Die App prüft fünf Schritte: (1) Thermostate voll geöffnet, ' +
-    '(2) Zieldauer erreicht, (3) genug freie <b>Auskühlphasen</b> je Raum (für τ), (4) genug <b>Aufheizphasen</b>, ' +
-    '(5) ausreichende <b>Außentemperatur-Spanne</b>. <b>Störungen</b> wie offene Fenster oder eine fehlende Nachtabsenkung ' +
-    'werden erkannt und erklärt (eine gestörte Auskühlphase wird verworfen – das ist Absicht, kein Fehler). Du bekommst immer ' +
-    '<b>genau eine</b> nächste Aktion. Der Ablauf <b>steuert die Heizung nicht</b>, er sammelt nur Daten und zeigt den Fortschritt.',
-  'thermal': () => '<b>Lernendes thermisches Raummodell.</b> Aus dem protokollierten Verlauf (Ist/Soll/Ventil je Raum + ' +
-    'Außentemperatur) schätze ich pro Raum ein RC-Modell: C·dT/dt = Q − UA·(T<sub>innen</sub>−T<sub>außen</sub>). Aus freien ' +
-    '<b>Auskühlphasen</b> (Ventil zu, keine Störung) ergibt sich die <b>Zeitkonstante τ = C/UA</b> (thermische Trägheit), aus ' +
-    '<b>Aufheizphasen</b> die Reaktion auf Wärmezufuhr. Räume, die <b>schnell auskühlen</b>, <b>langsam aufheizen</b> oder ihr ' +
-    '<b>Soll nie erreichen</b>, brauchen relativ <b>mehr Durchfluss</b> → Priorität für den Abgleich. ' +
-    '<b>Ehrlich:</b> Es gibt <b>keinen Messwert pro Heizkreis</b> (weder Durchfluss noch Vor-/Rücklauf je Raum), die an EINEN ' +
-    'Raum gelieferte Wärme ist also nicht direkt messbar. Werte sind als <span style="color:#4be0b0">gemessen</span>/' +
-    '<span style="color:#ffb64d">abgeleitet</span>/<span style="color:#f78fb3">geschätzt</span> gekennzeichnet; bei dünner ' +
-    'Datenlage steht der Raum in <b>Beobachtung</b>. Das ist eine <b>datenbasierte Optimierungshilfe</b>, kein ' +
-    'normgerechter hydraulischer Abgleich (Verfahren B/Heizlast → Fachbetrieb).',
-  'hydronic': () => '<b>Hydraulischer Abgleich</b> verteilt das Heizwasser so auf die Heizkreise, dass jeder Raum ' +
-    'genau die passende Menge bekommt. Ohne Abgleich bekommen kurze/nahe Kreise zu viel, lange/ferne zu wenig – ' +
-    'man dreht dann den Vorlauf hoch, damit auch der kälteste Raum warm wird, und das kostet bei der Wärmepumpe viel Effizienz. ' +
-    'Die App nutzt <b>Soll/Ist/Ventilstellung</b> deiner Räume, um die <b>Problemräume</b> zu finden: Räume mit offenem Ventil, die ' +
-    '<b>trotzdem zu kalt</b> sind, brauchen <b>mehr</b> Durchfluss (am Verteiler aufdrehen); Räume, die ihr Soll mit fast ' +
-    'geschlossenem Ventil erreichen, bekommen <b>zu viel</b> und können <b>angedrosselt</b> werden. ' +
-    'Der <b>rechnerische</b> Abgleich (Verfahren B, Heizlast je Raum) ist für Förderungen Pflicht und Sache des Fachbetriebs – ' +
-    'die hier gezeigte Beobachtungs-Methode ist die praktische Selbstoptimierung.',
   'hp-control': () => 'Schreibt Einstellungen <b>direkt an die Wärmepumpe</b> über die HomeCom-Cloud-API – z. B. ' +
     '<b>Betriebsart</b>, <b>Heizkurven-Niveau</b> oder <b>Soll-Temperaturen</b>. Die App fragt die Anlage, welche ' +
     'Ressourcen <b>änderbar</b> sind (die API meldet pro Wert „writeable" und den erlaubten Bereich), und bietet nur ' +
@@ -3105,7 +3081,6 @@ function paintHeatingDiag(r) {
     'Spalten <b>Fenster</b> (Tür-/Fensterkontakte) und <b>Luft</b> (Twinguard) werden automatisch aus Bosch gelesen – ' +
     'jeder Kontakt/Sensor bringt seinen Raum selbst mit, eine manuelle Zuordnung ist nicht nötig. ' +
     '€-Werte sind grobe Schätzungen (Sparanteil × WP-Jahresverbrauch × Strompreis).';
-  if (typeof renderHydronic === 'function') renderHydronic();   // worklist uses the same room data
 }
 
 /* ---- Heizkurve: flow temp vs. outdoor temp, drawn as a classic Heizkennlinie:
@@ -3561,6 +3536,11 @@ function targetSet(room, v) {
 // sensible default target when the user hasn't set one and the current setpoint
 // is cranked up (phase-2 aufdrehen, e.g. 30 °C): guess from the room name.
 function targetGuess(rm) {
+  // the bridge's own derivation first (current setpoint, else the normal
+  // setpoint from before the thermostats were opened up) – so this card and
+  // the balancing tab judge a room against the SAME target
+  const src = ((_abData && _abData.rooms) || (_tmData && _tmData.rooms) || []).find(x => x.room === rm.room);
+  if (src && src.target != null) return src.target;
   const sp = rm.setpoint;
   if (sp != null && sp <= 24.5) return sp;             // looks like a real comfort value
   const n = (rm.room || '').toLowerCase();
@@ -3627,7 +3607,7 @@ function paintRoomTemps() {
   const warm = rooms.filter(r => targetOf(r) - r.temp < -0.7).map(r => esc(r.room));
   // outdoor context: how representative is today for judging the balance?
   const out = _hdData && _hdData.kpis ? _hdData.kpis.outdoor_c : null;
-  const design = parseFloat(($('hl-design') || {}).value || '-12');
+  const design = parseFloat((typeof layoutModel === 'function' ? layoutModel().design : -12));
   let outLine = '';
   if (out != null) {
     const d = isFinite(design) ? design : -12;
@@ -3711,20 +3691,16 @@ function paintRoomTs(r) {
     'Einen Raum oben wählen zeigt zusätzlich, wann sein <b>Ventil offen</b> ist (leichte Schattierung = Raum verlangt Wärme).';
 }
 /* ---- Auto-Messung: active night-setback on the thermostats ---------------- */
-let _amData = null, _amBusy = false;
-async function renderAutomeasure(force) {
-  const card = $('am-card'); if (!card) return;
+let _amData = null;
+function renderAutomeasure() {
+  const box = $('am-box'); if (!box) return;
   // only show when it could actually work: demo, or live with a paired SHC cert
   const h = STATE.health || {};
   const avail = STATE.demo || h.mode === 'demo' || (h.mode === 'live' && h.has_cert);
-  card.hidden = !avail;
+  box.hidden = !avail;
   if (!avail) return;
-  if (_amData && !force) { paintAutomeasure(_amData); return; }
-  if (_amBusy) return;
-  _amBusy = true;
-  try { const r = await api('/api/automeasure'); _amData = r; paintAutomeasure(r); }
-  catch (e) { const s = $('am-status'); if (s) s.innerHTML = '<div class="note">Nur mit laufender Bridge verfügbar.</div>'; }
-  finally { _amBusy = false; }
+  const r = _amData || (_abData && _abData.automeasure);
+  if (r) paintAutomeasure(r);
 }
 async function amControl(action) {
   const note = $('am-note'); if (note) note.textContent = '';
@@ -3792,233 +3768,24 @@ function paintAutomeasure(r) {
     + 'Du kannst jederzeit <b>Stop</b> drücken – dann werden sofort alle Sollwerte zurückgestellt.';
 }
 
-/* ---- Geführte Beobachtungsphase: controlled multi-day data-collection ----- */
-let _obsData = null, _obsBusy = false;
-async function renderObservation(force) {
-  const card = $('obs-card'); if (!card) return;
-  if (_obsData && !force) { paintObservation(_obsData); return; }
-  if (_obsBusy) return;
-  _obsBusy = true;
-  const next = $('obs-next');
-  if (force && next) next.innerHTML = '<div class="note">Status wird berechnet …</div>';
-  try { const r = await api('/api/observation'); _obsData = r; paintObservation(r); }
-  catch (e) { if (next) next.innerHTML = '<div class="note">Nur mit laufender Bridge verfügbar.</div>'; }
-  finally { _obsBusy = false; }
-}
-async function obsControl(action) {
-  const btnS = $('obs-start'), btnP = $('obs-stop'), note = $('obs-note');
-  const days = parseInt(($('obs-days') || {}).value || '7', 10);
-  const setback = !!($('obs-setback') || {}).checked;
-  if (note) note.textContent = '';
-  try {
-    const path = action === 'start' ? '/api/observation/start' : '/api/observation/stop';
-    const body = action === 'start' ? { target_days: days, night_setback: setback } : {};
-    const r = await postJSON(path, body);
-    if (r && r.ok) { _obsData = r; paintObservation(r); }
-    else if (note) note.textContent = (r && r.error) || 'Aktion fehlgeschlagen.';
-  } catch (e) {
-    if (note) note.textContent = 'Nur möglich, wenn die Seite von der Bridge geöffnet ist.';
-  }
-}
+/* ==== Abgleich: ONE consolidated view ====================================== *
+ * The tab used to be ten cards, each fetching its own model and rendering its
+ * own per-room list (model, heat load, target flow, manifold table, priority,
+ * readiness, step form) – with numbers that could disagree between cards.
+ * /api/abgleich computes everything once; here it is painted as:
+ *   1. status + the single next step (+ how the heating is actually operated)
+ *   2. ONE row per room: supply · target flow per circuit · your reading
+ *   3. the step log with measured effect
+ *   4. data situation + Auto-Messung (collapsed)
+ *   5. manifold set-up (collapsed, see renderLayout)                         */
 function obsBar(p, col) {
   return `<div style="background:var(--line);border-radius:6px;height:9px;overflow:hidden;flex:1">` +
     `<div style="width:${Math.max(0, Math.min(100, p))}%;height:100%;background:${col}"></div></div>`;
 }
-function paintObservation(r) {
-  const head = $('obs-head'), next = $('obs-next'), overall = $('obs-overall'),
-    stepsEl = $('obs-steps'), roomsEl = $('obs-rooms'), distEl = $('obs-dist'),
-    btnS = $('obs-start'), btnP = $('obs-stop'), note = $('obs-note'),
-    daysSel = $('obs-days'), setback = $('obs-setback');
-  if (!r || !r.ok) { if (next) next.innerHTML = '<div class="note">Keine Daten.</div>'; return; }
-
-  // start/stop button visibility + prefill controls from server state
-  if (btnS) btnS.hidden = r.active;
-  if (btnP) btnP.hidden = !r.active;
-  if (daysSel && r.target_days) { daysSel.value = String(r.target_days); daysSel.disabled = r.active; }
-  if (setback) setback.disabled = r.active;
-
-  if (head) head.innerHTML = r.active
-    ? `<span style="color:var(--accent)">läuft · Tag ${r.elapsed_days} / ${r.target_days}</span>`
-    : `<span style="color:var(--muted)">nicht gestartet</span>`;
-
-  // next action — the single most important thing to do
-  if (next) {
-    const col = r.done ? '#4be0b0' : (r.active ? 'var(--accent)' : '#ffb64d');
-    next.innerHTML = `<div style="border:1px solid ${col};background:${col}14;border-radius:12px;padding:12px">` +
-      `<div style="font-size:12px;color:var(--muted);margin-bottom:3px">Nächster Schritt</div>` +
-      `<div style="font-size:14px;font-weight:600;line-height:1.5">${esc(r.next_action)}</div>` +
-      (r.eta_days != null && r.active && !r.done
-        ? `<div style="font-size:12px;color:var(--muted);margin-top:5px">Voraussichtlich bereit in ~${r.eta_days} Tag(en).</div>` : '') +
-      `</div>`;
-  }
-
-  // overall progress
-  if (overall) overall.innerHTML =
-    `<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">` +
-    `<b>Gesamtfortschritt</b><span style="color:var(--muted)">${r.overall}% · ${r.rooms_ready}/${r.n_rooms} Räume bereit</span></div>` +
-    `<div style="display:flex;gap:8px;align-items:center">${obsBar(r.overall, r.done ? '#4be0b0' : 'var(--accent)')}</div>`;
-
-  // step checklist
-  if (stepsEl) stepsEl.innerHTML = (r.steps || []).map(s => {
-    const icon = s.state === 'done' ? '✅' : (s.state === 'active' ? '🔄' : '⚪');
-    const col = s.state === 'done' ? '#4be0b0' : (s.state === 'active' ? 'var(--accent)' : 'var(--muted)');
-    return `<div style="margin-bottom:10px">` +
-      `<div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;margin-bottom:3px">` +
-        `<span>${icon} <b>${esc(s.title)}</b></span><span style="color:var(--muted)">${s.progress}%</span></div>` +
-      `<div style="display:flex;gap:8px;align-items:center;margin-bottom:3px">${obsBar(s.progress, col)}</div>` +
-      `<div style="font-size:12px;color:var(--muted);line-height:1.5">${esc(s.detail)}` +
-        (s.hint ? ` · ${esc(s.hint)}` : '') + `</div></div>`;
-  }).join('');
-
-  // per-room readiness
-  if (roomsEl) {
-    const rr = r.room_ready || [];
-    roomsEl.innerHTML = rr.length
-      ? `<div style="font-weight:700;margin-bottom:6px">Räume bereit?</div>` +
-        rr.map(x => {
-          const ok = x.status === 'bereit';
-          const col = ok ? '#4be0b0' : '#ffb64d';
-          return `<div class="devrow"><div class="nm"><b>${esc(x.room)}</b>` +
-            `<small>${x.n_tau}× Auskühlen · ${x.n_warm}× Aufheizen` +
-            (x.missing && x.missing.length ? ' · fehlt: ' + esc(x.missing[0]) : '') + `</small></div>` +
-            `<div class="val"><span style="color:${col};font-weight:600;font-size:12px">${ok ? '✓ bereit' : '⏳ ' + esc(x.confidence)}</span></div></div>`;
-        }).join('')
-      : '';
-  }
-
-  // disturbances
-  if (distEl) distEl.innerHTML = (r.disturbances || []).length
-    ? `<div style="font-weight:700;margin-bottom:6px">⚠︎ Störungen / Hinweise</div>` +
-      (r.disturbances || []).map(d => `<div style="font-size:13px;line-height:1.5;margin-bottom:4px">• ${esc(d)}</div>`).join('')
-    : '';
-
-  if (note) note.innerHTML = (r.demo ? '<b>Demo-Daten</b>. ' : '') +
-    'Der Fortschritt wird fortlaufend aktualisiert. Fenster-Öffnungen während einer Auskühlphase werden automatisch ' +
-    'ausgeklammert. Nach Abschluss liefert das <b>thermische Modell</b> belastbare τ-Werte und die Abgleich-Priorität.';
-}
-
-/* ---- Thermisches Raummodell (lernend): RC model + heat-demand ranking ---- */
-let _tmData = null, _tmBusy = false;
-async function renderThermal(force) {
-  const card = $('tm-card'); if (!card) return;
-  if (_tmData && !force) { paintThermal(_tmData); return; }
-  if (_tmBusy) return;
-  _tmBusy = true;
-  const assess = $('tm-assess');
-  if (force && assess) assess.innerHTML = '<div class="note">Modell wird aus dem protokollierten Verlauf berechnet …</div>';
-  try { const r = await api('/api/thermal?days=14'); _tmData = r; paintThermal(r); }
-  catch (e) { if (assess) assess.innerHTML = '<div class="note">Nur mit laufender Bridge verfügbar.</div>'; }
-  finally { _tmBusy = false; }
-}
-function tmConfColor(c) { return c === 'hoch' ? '#4be0b0' : (c === 'mittel' ? '#ffb64d' : '#f78fb3'); }
+let _tmData = null;                 // /api/thermal result (also used by the Heizung tab)
 function tmChip(txt, col) {
   return `<span style="display:inline-block;background:${col}22;color:${col};border:1px solid ${col}66;border-radius:999px;padding:2px 9px;font-size:12px;font-weight:600">${txt}</span>`;
 }
-function paintThermal(r) {
-  const assess = $('tm-assess'), prio = $('tm-priority'), roomsEl = $('tm-rooms'),
-    logic = $('tm-logic'), nextEl = $('tm-next'), head = $('tm-head'), note = $('tm-note');
-  if (!r || !r.ok) { if (assess) assess.innerHTML = '<div class="note">Keine Daten.</div>'; return; }
-  const a = r.assessment || {};
-  const ready = (r.rooms || []).filter(x => x.status === 'bereit').length;
-  const total = (r.rooms || []).length;
-  if (head) head.innerHTML = `<span style="color:var(--muted)">${ready}/${total} bereit · ${a.span_days || 0} Tage</span>`;
-
-  // --- Bestandsaufnahme (what we have / what's missing) ---
-  if (assess) {
-    const mlist = (a.measured || []).filter(Boolean);
-    const tag = (arr, col) => (arr || []).map(x => tmChip(x, col)).join(' ');
-    assess.innerHTML =
-      `<div style="font-weight:700;margin-bottom:6px">📋 Bestandsaufnahme (Datenlage)</div>` +
-      `<div class="grid2" style="gap:8px;margin-bottom:8px">` +
-        `<div class="kpi sm"><div class="v">${a.span_days || 0}</div><div class="l">Tage Verlauf</div></div>` +
-        `<div class="kpi sm"><div class="v">${a.n_room_samples || 0}</div><div class="l">Messpunkte</div></div>` +
-        `<div class="kpi sm"><div class="v">${a.n_rooms || 0}</div><div class="l">Räume</div></div>` +
-        `<div class="kpi sm"><div class="v">${a.heating_phases || 0}</div><div class="l">WP-Heizphasen</div></div>` +
-      `</div>` +
-      `<div style="font-size:13px;line-height:1.9">` +
-        `<div><span style="color:#4be0b0;font-weight:600">gemessen:</span> ${tag(mlist, '#4be0b0')}</div>` +
-        `<div><span style="color:#ffb64d;font-weight:600">abgeleitet:</span> ${tag(a.derived, '#ffb64d')}</div>` +
-        `<div><span style="color:#f78fb3;font-weight:600">geschätzt:</span> ${tag(a.estimated, '#f78fb3')}</div>` +
-      `</div>` +
-      `<div class="note" style="margin-top:8px;border-left:3px solid var(--warn);padding-left:10px">⚠︎ <b>Messlücke:</b> ${esc(a.gap || '')}</div>`;
-  }
-
-  // --- priority ranking for the hydraulic balance ---
-  if (prio) {
-    const p = r.priority || [];
-    if (!p.length) { prio.innerHTML = ''; }
-    else {
-      const maxI = Math.max.apply(null, p.map(x => x.index || 0)) || 1;
-      prio.innerHTML = `<div style="font-weight:700;margin-bottom:6px">🎯 Priorität für den Abgleich <span style="font-weight:400;color:var(--muted);font-size:12px">(relativer Wärmebedarf, geschätzt)</span></div>` +
-        p.map(x => {
-          const w = Math.round((x.index / maxI) * 100);
-          const col = x.deficit >= 0.6 ? '#ff6b8a' : (x.deficit >= 0.3 ? '#ffb64d' : '#3ba9ff');
-          return `<div style="margin-bottom:7px"><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:2px">` +
-            `<b>${esc(x.room)}</b><span style="color:var(--muted)">Index ${x.index}${x.deficit ? ' · Defizit ' + x.deficit + ' K' : ''} · ${x.confidence}</span></div>` +
-            `<div style="background:var(--line);border-radius:6px;height:9px;overflow:hidden"><div style="width:${w}%;height:100%;background:${col}"></div></div></div>`;
-        }).join('');
-    }
-  }
-
-  // --- per-room model cards ---
-  if (roomsEl) {
-    // metric tile with the "ist das okay?"-rating (colored dot + verdict word),
-    // tappable for the normal range + plain explanation.
-    const metric = (lbl, disp, unit, rk, rv) => {
-      const r = rateMetric(rk, rv);
-      const col = RATE_COL[r.lvl];
-      const dot = r.lvl === 'na' ? '○' : '●';
-      return `<div class="ratebadge" style="flex:1;min-width:92px;cursor:pointer" data-rk="${esc(rk)}" data-rv="${rv == null ? '' : esc(String(rv))}" data-rl="${esc(lbl)}">` +
-        `<div style="font-size:11px;color:var(--muted)"><span style="color:${col}">${dot}</span> ${lbl}` +
-        (r.lvl !== 'na' ? ` <span style="color:${col};font-weight:600">${esc(r.word)}</span>` : '') + `</div>` +
-        `<div style="font-weight:700;font-size:15px">${disp == null ? '–' : disp}${disp == null ? '' : (unit || '')}</div></div>`;
-    };
-    roomsEl.innerHTML = `<div style="font-weight:700;margin-bottom:4px">🏠 Modell je Raum</div>` + statusLegendHtml() +
-      (r.rooms || []).map(x => {
-        const cc = RATE_COL[rateMetric('confidence', x.confidence).lvl];
-        const statusChip = x.status === 'bereit'
-          ? tmChip('✓ Modell belastbar', '#4be0b0')
-          : tmChip('⏳ Beobachtung', '#ffb64d');
-        const defV = (x.setpoint != null && x.temp_now != null) ? (x.setpoint - x.temp_now) : null;
-        return `<div style="border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:10px">` +
-          `<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:8px">` +
-            `<b style="font-size:15px">${esc(x.room)}</b>` +
-            `<div style="display:flex;gap:6px;align-items:center">${statusChip}` +
-            `<span class="ratebadge" style="font-size:12px;color:${cc};font-weight:600;cursor:pointer" data-rk="confidence" data-rv="${esc(String(x.confidence))}" data-rl="Konfidenz">Konfidenz ${esc(x.confidence)}</span></div></div>` +
-          `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px">` +
-            metric('Ist / Soll', (x.temp_now != null ? fmt(x.temp_now, 1) : '–') + (x.setpoint != null ? ' / ' + fmt(x.setpoint, 0) : ''), '°', 'deficit', defV) +
-            metric('Trägheit τ', x.tau_h, ' h', 'tau', x.tau_h) +
-            metric('Auskühlrate', x.cooldown_kph, ' K/h', 'cooldown', x.cooldown_kph) +
-            metric('Aufheizrate', x.heatup_kph, ' K/h', 'heatup', x.heatup_kph) +
-            metric('Defizit', x.max_deficit, ' K', 'deficit', x.max_deficit) +
-          `</div>` +
-          `<div style="font-size:13px;line-height:1.5"><b>Befund:</b> ${esc(x.finding)}</div>` +
-          `<div style="font-size:13px;line-height:1.5;margin-top:3px"><b>Empfehlung:</b> ${esc(x.recommendation)}</div>` +
-          ((x.missing && x.missing.length)
-            ? `<div class="note" style="margin-top:6px">Noch nötig: ${x.missing.map(esc).join('; ')}.</div>` : '') +
-          `<div style="font-size:11px;color:var(--muted);margin-top:6px">Datenbasis: ${x.n} Punkte · ${x.n_tau}× τ · ${x.n_warm}× Aufheizen</div>` +
-          `</div>`;
-      }).join('');
-  }
-
-  if (logic) logic.innerHTML = (r.insights || []).length
-    ? `<div style="font-weight:700;margin-bottom:6px">🧠 Ableitung</div>` +
-      (r.insights || []).map(l => `<div style="font-size:13px;line-height:1.5;margin-bottom:5px">• ${l}</div>`).join('')
-    : '';
-
-  if (nextEl) nextEl.innerHTML = (r.next_observations || []).length
-    ? `<div style="font-weight:700;margin-bottom:6px">🔭 Als Nächstes beobachten (erhöht die Konfidenz)</div>` +
-      (r.next_observations || []).map(l => `<div style="font-size:13px;line-height:1.5;margin-bottom:5px">• ${esc(l)}</div>`).join('')
-    : '';
-
-  if (note) note.innerHTML = (r.demo ? '<b>Demo-Daten</b>. ' : '') +
-    'Das Modell lernt kontinuierlich mit: je länger protokolliert wird und je mehr ungestörte Auskühl-/Aufheizphasen vorliegen, ' +
-    'desto belastbarer τ und die Bedarfs-Reihenfolge. <b>Keine Scheingenauigkeit:</b> ohne Durchfluss-/Rücklauf-Messung je Kreis ' +
-    'bleiben die Durchfluss-Hinweise <i>relativ</i> und ersetzen keinen normgerechten Abgleich.';
-}
-
-/* ---- Heizlast je Raum (W): calibrated energy-signature split -------------- */
-let _hlData = null, _hlBusy = false;
 function hlAreas() {
   // room -> area (m²) from the locally stored Verteiler layout
   const l = (typeof layoutModel === 'function') ? layoutModel() : { rooms: {} };
@@ -4029,294 +3796,284 @@ function hlAreas() {
   });
   return out;
 }
-async function renderHeatload(force) {
-  const card = $('hl-card'); if (!card) return;
-  if (_hlData && !force) { paintHeatload(_hlData); return; }
-  if (_hlBusy) return;
-  _hlBusy = true;
-  const sum = $('hl-summary');
-  if (force && sum) sum.innerHTML = '<div class="note">Heizlast wird aus Kennlinie + τ + Flächen berechnet …</div>';
-  const design = parseFloat(($('hl-design') || {}).value || '-12');
-  try {
-    const r = await postJSON('/api/heatload', { areas: hlAreas(), design_c: design, spec_wm2: (parseFloat(layoutModel().q) || 40) });
-    _hlData = r; paintHeatload(r);
-  } catch (e) {
-    if (sum) sum.innerHTML = '<div class="note">Nur mit laufender Bridge verfügbar.</div>';
-  } finally { _hlBusy = false; }
-}
-function paintHeatload(r) {
-  const head = $('hl-head'), sum = $('hl-summary'), roomsEl = $('hl-rooms'),
-    logic = $('hl-logic'), note = $('hl-note');
-  if (!r || !r.ok) { if (sum) sum.innerHTML = '<div class="note">Keine Daten.</div>'; return; }
-  const ok = (r.rooms || []).filter(x => x.status === 'ok');
-  const areaMode = r.method === 'area';
-  if (head) head.innerHTML = r.q_total_design
-    ? `<span style="color:var(--muted)">${r.q_total_design} W @ ${r.design_c}°C${areaMode ? ' · geschätzt' : ''}</span>` : '';
-
-  if (sum) {
-    if (!r.q_total_design) {
-      sum.innerHTML = '<div class="note">Noch keine Daten – trage je Raum eine <b>Fläche</b> in der Verteiler-Karte ein '
-        + '(dann Schätzung aus der Fläche; eine gemessene Kennlinie macht es später genauer).</div>';
-    } else {
-      // label tappable (dotted) → plain-language explanation via glossV/showGloss
-      const kpi = (v, l, g) => `<div class="kpi sm"><div class="v">${v}</div><div class="l">${g ? glossV(l, g) : l}</div></div>`;
-      // In area mode the measured UA/Bilanzpunkt are NOT trustworthy (that was the
-      // whole reason for the fallback) – don't show them as if they were.
-      const tiles = areaMode
-        ? kpi(`${r.q_total_design} W`, `Gesamt @ ${r.design_c}°C`, 'qtotal') +
-          kpi(`${r.spec_wm2 != null ? fmt(r.spec_wm2, 0) : 40} W/m²`, 'angenommene Last', 'spec_wm2') +
-          kpi(`${Math.round((r.coverage || 0) * 100)}%`, 'Fläche erfasst', 'coverage') +
-          kpi('📐 Fläche', 'Methode')
-        : kpi(`${r.q_total_design} W`, `Gesamt @ ${r.design_c}°C`, 'qtotal') +
-          kpi(`${r.ua_total != null ? r.ua_total : '–'}`, 'Gebäude-UA (W/K)', 'ua') +
-          kpi(`${r.balance_c != null ? r.balance_c + '°C' : '–'}`, 'Bilanzpunkt', 'bilanzpunkt') +
-          kpi(`${Math.round((r.coverage || 0) * 100)}%`, 'Fläche erfasst', 'coverage');
-      sum.innerHTML = `<div class="grid2" style="gap:8px">${tiles}</div>` +
-        (r.signature ? `<div class="note" style="margin-top:6px">Kennlinie: ${r.signature.n} Punkte (${r.signature.src === 'csv' ? 'CSV' : 'Live'})`
-          + (r.signature.rel != null ? `, Streuung ±${Math.round(r.signature.rel * 100)}%` : '')
-          + (areaMode ? ' – <b style="color:#ffb64d">noch nicht belastbar</b>, daher Flächen-Schätzung' : '') + '.</div>' : '');
-    }
-  }
-
-  if (roomsEl) {
-    if (!ok.length) {
-      roomsEl.innerHTML = (r.rooms || []).length
-        ? `<div style="font-weight:700;margin-bottom:6px">Räume</div>` + (r.rooms || []).map(x =>
-            `<div class="devrow"><div class="nm"><b>${esc(x.room)}</b><small>${(x.missing || []).map(esc).join(' · ') || 'keine Daten'}</small></div>` +
-            `<div class="val"><span style="color:#ffb64d;font-size:12px">offen</span></div></div>`).join('')
-        : '';
-    } else {
-      const qmax = Math.max.apply(null, ok.map(x => x.q_hi || x.q_design || 0)) || 1;
-      roomsEl.innerHTML = `<div style="font-weight:700;margin-bottom:4px">Heizlast je Raum (± Unsicherheit)</div>` + statusLegendHtml() +
-        r.rooms.map(x => {
-          if (x.status !== 'ok') {
-            return `<div class="devrow"><div class="nm"><b>${esc(x.room)}</b><small>${(x.missing || []).map(esc).join(' · ')}</small></div>` +
-              `<div class="val"><span style="color:#ffb64d;font-size:12px">offen</span></div></div>`;
-          }
-          const w = (v) => Math.max(0, Math.min(100, (v / qmax) * 100));
-          const specCol = x.plausible ? 'var(--muted)' : '#ff6b8a';
-          // band bar: light range q_lo..q_hi with a solid marker at q_design
-          const loP = w(x.q_lo), hiP = w(x.q_hi), midP = w(x.q_design);
-          return `<div style="margin-bottom:11px">` +
-            `<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:3px">` +
-              `<b>${esc(x.room)}</b><span><b>${x.q_design} W</b> <span style="color:var(--muted)">(${x.q_lo}–${x.q_hi})</span></span></div>` +
-            `<div style="position:relative;background:var(--line);border-radius:6px;height:12px">` +
-              `<div style="position:absolute;left:${loP}%;width:${Math.max(1, hiP - loP)}%;top:0;height:100%;background:var(--accent);opacity:.28;border-radius:6px"></div>` +
-              `<div style="position:absolute;left:${midP}%;top:-2px;width:3px;height:16px;background:var(--accent);border-radius:2px"></div>` +
-            `</div>` +
-            `<div style="font-size:11px;color:var(--muted);margin-top:3px">` +
-              `${x.area} m² · τ ${x.tau_h != null ? x.tau_h + ' h' : '–'} · UA ${x.ua} W/K · ` +
-              `${x.spec} W/m² ${rateBadge('spec', x.spec, 'Spez. Last (W/m²)')} · ${rateBadge('confidence', x.confidence, 'Konfidenz')}</div>` +
-            `</div>`;
-        }).join('') +
-        (r.sum_q_design ? `<div class="note" style="margin-top:4px">Summe der Raum-Lasten: <b>${r.sum_q_design} W</b> `
-          + (r.method === 'area' ? '(aus Fläche × spez. Last geschätzt).' : '(auf die gemessene Gesamtlast kalibriert).') + `</div>` : '');
-    }
-  }
-
-  if (logic) logic.innerHTML = (r.insights || []).length
-    ? (r.insights || []).map(l => `<div style="font-size:13px;line-height:1.5;margin-bottom:5px">• ${l}</div>`).join('') : '';
-
-  if (note) note.innerHTML = (r.demo ? '<b>Demo-Daten</b>. ' : '') + esc(r.note || '');
-}
-
-/* ---- Ziel-Durchfluss je Kreis (l/min): Q-based, grouped by manifold -------- */
-let _flowData = null, _flowBusy = false;
-function flowManifoldOf(room, fallback) {
-  const l = (typeof layoutModel === 'function') ? layoutModel() : { rooms: {} };
-  const m = ((l.rooms || {})[room] || {}).manifold;
-  return m || fallback || 'Ohne Verteiler';
-}
-function flowLoopsOf(room) {
-  const l = (typeof layoutModel === 'function') ? layoutModel() : { rooms: {} };
-  return Math.max(1, Math.round(parseFloat(((l.rooms || {})[room] || {}).loops) || 1));
-}
 // Current (actual) tacosetter reading per room [l/min per circuit], entered by
 // the user. Stored device-independently in the bridge (bhe_ prefix → synced).
 function tacoKey(room) { return 'bhe_taco_' + room; }
 function tacoGet(room) { try { const v = parseFloat(localStorage.getItem(tacoKey(room))); return isFinite(v) ? v : null; } catch (e) { return null; } }
-// Compare actual vs recommended per-circuit flow → {txt, col} for display.
+// Compare the reading with the design recommendation → {txt, col}. The MEASURED
+// state of the room (cat) decides what to do; the design value is only a start
+// value, so a room that is too warm is never told to "open up to the target".
 function tacoDelta(ist, soll, cat) {
-  if (ist == null) return { txt: '', col: 'var(--muted)' };
-  const diff = ist - soll, pct = soll > 0 ? diff / soll * 100 : 0;
-  let col = Math.abs(pct) <= 15 ? '#4be0b0' : Math.abs(pct) <= 40 ? '#ffb64d' : '#ff6b8a';
-  let word = Math.abs(pct) <= 15 ? 'passt' : (diff > 0 ? 'zu hoch' : 'zu niedrig');
-  // Reconcile with the thermal model's verdict on the CURRENT state so the two
-  // cards don't contradict each other: a room the model calls "Reserve" already
-  // reaches its setpoint and cools slowly → being below the design recommendation
-  // is fine (don't open it up); an "under" room below the recommendation is the
-  // real candidate to open up.
-  if (cat === 'reserve' && diff < 0) { word = 'unter Empfehlung – Raum ist aber versorgt, Hochdrehen nicht nötig'; col = '#4be0b0'; }
-  else if (cat === 'under' && diff < 0) { word = 'zu niedrig – hier aufdrehen'; col = '#ff6b8a'; }
-  const sign = diff >= 0 ? '+' : '';
-  return { txt: `${sign}${fmt(diff, 1)} l/min · ${word}`, col };
+  if (ist == null || soll == null || !(soll > 0)) return { txt: '', col: 'var(--muted)' };
+  const diff = ist - soll, pct = diff / soll * 100;
+  const near = Math.abs(diff) <= Math.max(0.15, soll * 0.10);     // ≈ reading accuracy
+  const num = Math.abs(diff) < 0.05 ? '±0,0 l/min' : `${diff >= 0 ? '+' : '−'}${fmt(Math.abs(diff), 1)} l/min`;
+  let word = near ? 'passt zur Empfehlung' : (diff < 0 ? 'unter Empfehlung' : 'über Empfehlung');
+  let col = near ? '#4be0b0' : (Math.abs(pct) <= 40 ? '#ffb64d' : '#ff6b8a');
+  if (cat === 'under') {
+    if (diff < 0 && !near) { word = 'unter Empfehlung → aufdrehen'; col = '#ff6b8a'; }
+    else { word += ' – Raum ist trotzdem zu kalt: weiter öffnen'; col = '#ffb64d'; }
+  } else if (cat === 'reserve') {
+    if (diff > 0 && !near) { word = 'über Empfehlung → androsseln'; col = '#ffb64d'; }
+    else { word += ' – Raum ist trotzdem zu warm: nicht hochdrehen'; col = '#4be0b0'; }
+  } else if (cat === 'balanced' && !near) {
+    word += ' – Raum passt aber, so lassen'; col = '#4be0b0';
+  }
+  return { txt: `${num} · ${word}`, col };
 }
-async function renderFlow(force) {
-  const card = $('flow-card'); if (!card) return;
-  if (_flowData && !force) { paintFlow(_flowData); return; }
-  if (_flowBusy) return;
-  _flowBusy = true;
-  const body = $('flow-body');
-  if (force && body) body.innerHTML = '<div class="note">Durchfluss wird aus Heizlast + Spreizung berechnet …</div>';
-  const spread = parseFloat(($('flow-spread') || {}).value || '5');
-  const design = parseFloat(($('hl-design') || {}).value || '-12');
+// save ONE app setting and wait until the bridge has it (the balance view is
+// computed on the bridge from these settings, so a refetch must come after)
+async function abSaveSetting(key, value) {
+  const v = value == null ? null : String(value);
+  try { v == null ? localStorage.removeItem(key) : localStorage.setItem(key, v); } catch (e) {}
   try {
-    const r = await postJSON('/api/heatload', { areas: hlAreas(), design_c: design, spread_k: spread, spec_wm2: (parseFloat(layoutModel().q) || 40) });
-    _flowData = r; paintFlow(r);
-  } catch (e) { if (body) body.innerHTML = '<div class="note">Nur mit laufender Bridge verfügbar.</div>'; }
-  finally { _flowBusy = false; }
+    await postJSON('/api/settings', { settings: { [key]: v } });
+    if (typeof _lastSynced === 'object' && _lastSynced) { if (v == null) delete _lastSynced[key]; else _lastSynced[key] = v; }
+  } catch (e) { /* offline: the regular settings sweep retries later */ }
 }
-function paintFlow(r) {
-  const head = $('flow-head'), ctx = $('flow-context'), body = $('flow-body'), note = $('flow-note');
-  if (!r || !r.ok) { if (body) body.innerHTML = '<div class="note">Keine Daten.</div>'; return; }
-  const ok = (r.rooms || []).filter(x => x.status === 'ok' && x.flow_lmin != null);
-  if (head) head.innerHTML = r.total_flow_lmin != null
-    ? `<span style="color:var(--muted)">${r.total_flow_lmin} l/min · ΔT ${r.spread_k}K</span>` : '';
 
-  // central-vs-circuit context (the thing not to confuse)
-  if (ctx) {
-    const cs = r.central_spread;
-    ctx.innerHTML =
-      `<div style="display:flex;gap:8px;flex-wrap:wrap">` +
-        `<div class="kpi sm"><div class="v">${r.spread_k} K</div><div class="l">${glossV('Auslege-ΔT je Kreis', 'spread_k')} (gewählt)</div></div>` +
-        `<div class="kpi sm"><div class="v">${cs ? cs.spread_k + ' K' : '–'}</div><div class="l">zentral gemessen (System)</div></div>` +
-        (r.total_flow_lmin != null ? `<div class="kpi sm"><div class="v">${r.total_flow_lmin}</div><div class="l">${glossV('Σ l/min', 'flow_lmin')} (Auslegung)</div></div>` : '') +
-      `</div>` +
-      `<div class="note" style="margin-top:6px">Die <b>Kreis-Spreizung</b> (${r.spread_k} K) ist der Auslege-Zielwert je Kreis – ` +
-      `<b>nicht</b> die zentral gemessene System-Spreizung${cs ? ` (${cs.spread_k} K)` : ''}. Beide stimmen erst überein, ` +
-      `wenn alle Kreise auf ihren Zielwert eingestellt sind.</div>`;
+let _abData = null, _abBusy = false, _abAgain = false, _opData = null, _opBusy = false;
+const _abOpen = new Set();          // expanded room rows
+const AB_CAT = {
+  under: { t: 'zu kalt', icon: '🔺', c: '#ff6b8a' },
+  reserve: { t: 'zu warm', icon: '🔻', c: '#3ba9ff' },
+  balanced: { t: 'passt', icon: '✓', c: '#4be0b0' },
+  observing: { t: 'keine Daten', icon: '○', c: '#93a2c4' },
+  none: { t: 'ohne Thermostat', icon: '○', c: '#93a2c4' },
+};
+const sgn = (v, d = 1) => (v == null ? '–' : (v >= 0 ? '+' : '−') + fmt(Math.abs(v), d));
+
+async function renderAbgleich(force) {
+  const card = $('ab-card'); if (!card) return;
+  renderOpState(false);
+  if (_abData && !force) { paintAbgleich(_abData); return; }
+  // a forced refresh that arrives while one is in flight must not get lost
+  // (e.g. two quick edits) – it is replayed once the current one has finished
+  if (_abBusy) { if (force) _abAgain = true; return; }
+  _abBusy = true;
+  const note = $('ab-note'); if (note) note.textContent = _abData ? 'rechne neu …' : '';
+  try {
+    const r = await api('/api/abgleich' + (force ? '?force=1' : ''));
+    _abData = r; paintAbgleich(r);
+  } catch (e) {
+    const p = $('ab-phase'); if (p) p.innerHTML = '<div class="note">Nur mit laufender Bridge verfügbar.</div>';
+  } finally {
+    _abBusy = false; if (note) note.textContent = '';
+    if (_abAgain) { _abAgain = false; renderAbgleich(true); }
+  }
+}
+function paintAbgleich(r) {
+  if (!r || !r.ok) { const p = $('ab-phase'); if (p) p.innerHTML = '<div class="note">Keine Daten.</div>'; return; }
+  paintAbStatus(r); paintAbRooms(r); paintAbSteps(r); paintAbData(r);
+  if (typeof renderAutomeasure === 'function') renderAutomeasure();
+  const ln = $('lay-note');
+  if (ln) ln.innerHTML = r.layout_demo
+    ? '<b>Demo:</b> Die Raumliste oben nutzt ein Beispiel-Layout (5 Räume). Trage hier eigene Räume mit Fläche ein, um es zu ersetzen – die drei Annahmen wirken sofort.' : '';
+}
+
+/* ---- 1 · status + next step ------------------------------------------------ */
+function paintAbStatus(r) {
+  const head = $('ab-head'), ph = $('ab-phase'), nx = $('ab-next'), kp = $('ab-kpis'), sm = $('ab-summary'), how = $('ab-howto-body');
+  const phase = r.phase || {};
+  const pcol = { adjust: 'var(--accent)', finish: '#4be0b0', normal: '#4be0b0', nodata: '#ffb64d' }[phase.key] || 'var(--muted)';
+  if (head) head.innerHTML = `<span style="color:${pcol}">${esc(phase.label || '')}</span>`;
+  if (ph) ph.innerHTML = `<div style="font-size:13px;line-height:1.55">${r.demo ? '<b>Demo-Daten.</b> ' : ''}${phase.text || ''}</div>`;
+
+  if (nx) {
+    const n = r.next || {}, k = n.kind;
+    const col = k === 'done' || k === 'restore' ? '#4be0b0' : (k === 'open' ? '#ff6b8a' : (k === 'throttle' ? '#3ba9ff'
+      : (k === 'curve' ? '#b794f6' : 'var(--accent)')));
+    const icon = { open: '🔺', throttle: '🔻', curve: '📉', done: '✅', restore: '✅', wait: '⏳', observe: '⏳' }[k] || '➡️';
+    nx.innerHTML = `<div style="border:1px solid ${col};background:${col}14;border-radius:12px;padding:12px">` +
+      `<div style="font-size:12px;color:var(--muted);margin-bottom:3px">Nächster Schritt</div>` +
+      `<div style="font-size:15px;font-weight:700;margin-bottom:4px">${icon} ${esc(n.title || '')}</div>` +
+      `<div style="font-size:13px;line-height:1.55">${n.text || ''}</div></div>` +
+      (r.setup_hint ? `<div class="note" style="margin-top:8px;border-left:3px solid var(--accent);padding-left:10px">${r.setup_hint}</div>` : '');
   }
 
-  if (body) {
-    if (!ok.length) {
-      body.innerHTML = '<div class="note">Noch keine Heizlast je Raum vorhanden – erst <b>Beobachtung</b> (τ), <b>Flächen</b> '
-        + '(Verteiler-Karte) und die <b>Gesamt-Wärmekennlinie</b>. Danach erscheinen hier die l/min-Einstellwerte.</div>';
-    } else {
-      // banner when values are area-estimated (no reliable measured signature yet)
-      let banner = '';
-      if (r.method === 'area') {
-        banner = `<div style="background:#3ba9ff18;border:1px solid #3ba9ff55;border-radius:10px;padding:9px 11px;margin-bottom:10px;font-size:12px;line-height:1.45">` +
-          `📐 <b>Flächenbasierte Schätzung</b> (Annahme ${r.spec_wm2 != null ? fmt(r.spec_wm2, 0) : 40} W/m², anpassbar in der Verteiler-Karte). ` +
-          `Die gemessene Wärmekennlinie ist noch nicht belastbar – sobald genug Kaltwetter-Daten und Auskühlphasen (τ) da sind, ` +
-          `rechnet die App automatisch genauer. Die Werte hier passen jetzt zur Verteiler-Tabelle.</div>`;
-      }
-      // group by manifold
-      const groups = {};
-      r.rooms.forEach(x => {
-        const mf = flowManifoldOf(x.room, x.manifold);
-        (groups[mf] = groups[mf] || []).push(x);
-      });
-      // the Tacosetter value is PER LOOP: a room's flow splits over its loops
-      const perLoop = x => (x.flow_lmin || 0) / flowLoopsOf(x.room);
-      const fmax = Math.max.apply(null, ok.map(x => (x.flow_hi || x.flow_lmin || 0) / flowLoopsOf(x.room))) || 1;
-      let h = '', gi = 0;
-      Object.keys(groups).sort().forEach(mf => {
-        const items = groups[mf];
-        const sub = items.filter(x => x.flow_lmin != null).reduce((s, x) => s + x.flow_lmin, 0);
-        const loopsTot = items.filter(x => x.flow_lmin != null).reduce((s, x) => s + flowLoopsOf(x.room), 0);
-        h += `<div style="display:flex;justify-content:space-between;align-items:center;margin:12px 0 6px">` +
-          `<b style="font-size:14px">🧭 ${esc(mf)}</b>` +
-          `<span style="color:var(--muted);font-size:12px">${loopsTot} Kreise · Σ ${sub.toFixed(1)} l/min</span></div>`;
-        items.forEach(x => {
-          if (x.status !== 'ok' || x.flow_lmin == null) {
-            h += `<div class="devrow"><div class="nm"><b>${esc(x.room)}</b><small>${(x.missing || []).map(esc).join(' · ') || 'keine Heizlast'}</small></div>` +
-              `<div class="val"><span style="color:#ffb64d;font-size:12px">offen</span></div></div>`;
-            return;
-          }
-          const loops = flowLoopsOf(x.room);
-          const pl = Math.round(perLoop(x) * 100) / 100;
-          const plLo = Math.round(x.flow_lo / loops * 100) / 100, plHi = Math.round(x.flow_hi / loops * 100) / 100;
-          const w = (v) => Math.max(0, Math.min(100, (v / fmax) * 100));
-          const idx = gi++;
-          // Two separate data-quality flags, each shown with ⚠︎:
-          //  • veryLow: a room that barely cools → too-large τ → near-zero heat
-          //    load → near-zero flow (0.04). A thin-data artefact, not a set-point.
-          //  • implausible: spec. load (W/m²) outside a sane range → area/τ off.
-          const veryLow = pl < 0.3;
-          const implausible = x.plausible === false;
-          const flagged = veryLow || implausible;
-          const ist = tacoGet(x.room);
-          const d = tacoDelta(ist, pl, x.category);
-          // the thermal model's verdict on the CURRENT state – shown next to the
-          // room so the design-load recommendation doesn't read as a contradiction
-          const CAT = {
-            under: { t: '⚠︎ zu kalt', c: '#ff6b8a' },
-            reserve: { t: '✓ Reserve', c: '#4be0b0' },
-            balanced: { t: '✓ ausgewogen', c: '#4be0b0' },
-          };
-          const catInfo = CAT[x.category] || null;
-          const catChip = catInfo ? ` <span style="color:${catInfo.c};font-weight:400;font-size:11px">${catInfo.t}</span>` : '';
-          const istMark = ist != null
-            ? `<div style="position:absolute;left:${w(ist)}%;top:-2px;width:3px;height:16px;background:#ffb64d;border-radius:2px"></div>` : '';
-          h += `<div style="margin-bottom:10px">` +
-            `<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:3px">` +
-              `<b>${esc(x.room)}${catChip}${loops > 1 ? ` <span style="color:var(--muted);font-weight:400;font-size:12px">${loops} Kreise</span>` : ''}</b>` +
-              `<span><b style="color:${flagged ? '#ffb64d' : '#3ba9ff'}">${pl} l/min</b>${flagged ? ' ⚠︎' : ''}${loops > 1 ? ' <span style="color:var(--muted);font-size:11px">je Schlauch</span>' : ''} <span style="color:var(--muted)">(${plLo}–${plHi})</span></span></div>` +
-            `<div style="position:relative;background:var(--line);border-radius:6px;height:12px">` +
-              `<div style="position:absolute;left:${w(plLo)}%;width:${Math.max(1, w(plHi) - w(plLo))}%;top:0;height:100%;background:#3ba9ff;opacity:.3;border-radius:6px"></div>` +
-              `<div style="position:absolute;left:${w(pl)}%;top:-2px;width:3px;height:16px;background:#3ba9ff;border-radius:2px"></div>` +
-              `<div id="taco-m-${idx}">${istMark}</div>` +
-            `</div>` +
-            // actual (Ist) tacosetter input + comparison to the recommendation
-            `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:5px;font-size:12px">` +
-              `<label style="color:var(--muted)">Ist (je Schlauch):</label>` +
-              `<input class="taco-in" data-room="${esc(x.room)}" data-idx="${idx}" data-soll="${pl}" data-cat="${esc(x.category || '')}" data-fmax="${fmax.toFixed(3)}" type="text" inputmode="decimal" placeholder="z. B. ${pl}" value="${ist != null ? fmt(ist, 1) : ''}" ` +
-                `style="width:76px;padding:4px 6px;border-radius:8px;border:1px solid var(--line);background:var(--card2);color:var(--ink);font-size:13px"> l/min` +
-              `<span id="taco-d-${idx}" style="color:${d.col};font-weight:600">${d.txt}</span>` +
-            `</div>` +
-            `<div style="font-size:11px;color:var(--muted);margin-top:3px">` +
-              (loops > 1 ? `Raum gesamt ${x.flow_lmin} l/min · ` : '') +
-              `Heizlast ${x.q_design} W · ${x.area} m² · Konfidenz ${esc(x.confidence)}</div>` +
-            (veryLow ? `<div style="font-size:11px;color:#ffb64d;margin-top:4px;line-height:1.4">⚠︎ <b>Sehr niedrig – noch nicht als Sollwert übernehmen.</b> ` +
-              `Dieser Raum kühlt kaum aus, daher ist die Auskühl-Messung (τ) noch zu dünn und die Heizlast wird zu niedrig geschätzt. ` +
-              `Lass den Kreis vorerst bei <b>mindestens ~0,5 l/min</b> und sammle mehr Auskühlphasen (nachts, Fenster zu).</div>`
-              : implausible ? `<div style="font-size:11px;color:#ffb64d;margin-top:4px;line-height:1.4">⚠︎ <b>Wert noch unsicher.</b> ` +
-                `Spezifische Last ${x.spec != null ? '≈ <b>' + fmt(x.spec, 0) + ' W/m²</b> ' : ''}außerhalb des üblichen Bereichs (10–120) – ` +
-                `meist stimmt die <b>Fläche</b> (Verteiler-Karte) oder das <b>τ</b> noch nicht. Erst prüfen, dann als Startwert nehmen.</div>` : '') +
-            // reconcile with the room model: don't tell a well-supplied room to open up
-            (x.category === 'reserve' ? `<div style="font-size:11px;color:#4be0b0;margin-top:4px;line-height:1.4">✓ <b>Modell: gut versorgt (Reserve).</b> ` +
-              `Der Raum erreicht sein Soll und kühlt träge aus – die Zahl oben ist der rechnerische Auslege-Wert, aber du musst <b>nicht</b> auf ihn hochdrehen. ` +
-              `Eher leicht drosseln, dann bleibt mehr für unterversorgte Räume.</div>`
-              : x.category === 'under' ? `<div style="font-size:11px;color:#ff6b8a;margin-top:4px;line-height:1.4">⚠︎ <b>Modell: unterversorgt.</b> ` +
-                `Erreicht sein Soll nicht – hier beim Abgleich <b>zuerst aufdrehen</b> (Richtung Empfehlung).</div>` : '') +
-            `</div>`;
-        });
-      });
-      // legend for the two bar markers
-      h += `<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:11px;color:var(--muted);margin-top:4px">` +
-        `<span><span style="display:inline-block;width:3px;height:12px;background:#3ba9ff;vertical-align:middle;margin-right:4px"></span>Empfehlung</span>` +
-        `<span><span style="display:inline-block;width:3px;height:12px;background:#ffb64d;vertical-align:middle;margin-right:4px"></span>dein Ist-Wert</span></div>`;
-      body.innerHTML = banner + h;
+  if (kp) {
+    const ks = r.kpis || [];
+    kp.innerHTML = ks.length ? `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px">` +
+      ks.map(k => `<div class="kpi sm"><div class="v" style="color:${RATE_COL[k.tone] && k.tone !== 'na' ? RATE_COL[k.tone] : 'var(--ink)'}">${esc(k.v)}</div>` +
+        `<div class="l">${esc(k.l)}${k.hint ? `<br><span style="font-size:11px;opacity:.8">${esc(k.hint)}</span>` : ''}</div></div>`).join('') + `</div>` : '';
+  }
+
+  if (sm) {
+    const s = r.summary || {}, line = (icon, lbl, arr, col) => (arr && arr.length)
+      ? `<div style="font-size:13px;line-height:1.6"><span style="color:${col};font-weight:700">${icon} ${lbl}:</span> ${arr.map(esc).join(', ')}</div>` : '';
+    let h = line('🔺', 'aufdrehen', s.open, '#ff6b8a') + line('🔻', 'androsseln', s.throttle, '#3ba9ff') + line('✓', 'passt', s.even, '#4be0b0');
+    if ((r.stray_rooms || []).length) {
+      h += `<div class="note" style="margin-top:6px">ℹ️ ${r.stray_rooms.length} Fehl-Einträge ausgeblendet (${r.stray_rooms.slice(0, 7).map(esc).join(', ')}): ` +
+        `Bei einer einzelnen Abfrage kamen die Räume ohne Namen an und wurden unter ihrer internen Kennung protokolliert. ` +
+        `Das sind keine echten Räume – sie tauchen jetzt in keiner Auswertung mehr auf, und die Ursache ist behoben.</div>`;
     }
+    sm.innerHTML = h;
   }
 
-  if (note) note.innerHTML = (r.demo ? '<b>Demo-Daten</b>. ' : '') +
-    'Der <b style="color:#3ba9ff">blaue Wert/Strich ist die Empfehlung pro Schlauch/Kreis</b> – genau das stellst du am jeweiligen Durchflussmesser (Tacosetter) ein. ' +
-    'Trage deinen <b style="color:#ffb64d">aktuellen Ist-Wert</b> ein, dann siehst du direkt die Abweichung (grün = passt, gelb/rot = zu hoch/niedrig) und den orangen Strich im Balken. ' +
-    'Hat ein Raum mehrere Schläuche, ist die Gesamtmenge bereits gleichmäßig aufgeteilt. Startwerte, dann über die <b>Schrittweise Optimierung</b> feinjustieren – kein Norm-Nachweis. ' +
-    '<b style="color:#ffb64d">⚠︎-Werte</b> sind noch unsicher: entweder unrealistisch niedrig (Raum kühlt kaum aus → τ zu dünn → Kreis offen lassen ~0,5 l/min) oder die spezifische Last (W/m²) ist unplausibel (Fläche/τ prüfen) – nicht 1:1 übernehmen.';
+  if (how) {
+    const cur = { nodata: 1, normal: 3, adjust: 4, finish: 5 }[phase.key] || 0;
+    const step = (n, t) => `<div style="display:flex;gap:10px;margin-bottom:9px;${n === cur ? '' : 'opacity:.82'}">` +
+      `<div style="flex:0 0 22px;height:22px;border-radius:50%;background:${n === cur ? 'var(--accent)' : 'var(--card2)'};color:${n === cur ? '#06121f' : 'var(--muted)'};border:1px solid var(--line);font-weight:700;display:flex;align-items:center;justify-content:center;font-size:12px">${n}</div>` +
+      `<div style="font-size:13px;line-height:1.5">${t}${n === cur ? ' <span style="color:var(--accent);font-weight:600">← hier bist du</span>' : ''}</div></div>`;
+    how.innerHTML =
+      step(1, '<b>Stammdaten eintragen</b> (einmalig): unten unter „Verteiler einrichten" je Raum Fläche, Kreise und Verteiler.') +
+      step(2, '<b>Grundeinstellung:</b> an jedem Durchflussmesser (Tacosetter) den Ziel-Durchfluss „je Kreis" aus der Raumliste einstellen und deine Ist-Werte dort eintragen.') +
+      step(3, '<b>Einstell-Phase starten:</b> alle Raumthermostate für ein paar Tage hochdrehen (z. B. 25 °C). So bestimmt der <b>Verteiler</b> die Verteilung, nicht die Einzelraumregelung – und ich kann die Räume direkt miteinander vergleichen.') +
+      step(4, '<b>Nachjustieren, ein Kreis nach dem anderen:</b> den empfohlenen Schritt ausführen (±0,2–0,3 l/min), im Schritt-Protokoll speichern, 1–2 Tage warten. Fußbodenheizung reagiert träge.') +
+      step(5, '<b>Thermostate zurückstellen</b>, sobald alle Räume im Gleichlauf sind – sie müssen dann nur noch wenig eingreifen.') +
+      step(6, '<b>Heizkurve senken</b> (Karte „Heizkurve" unter „Einstellung"), bis der kälteste Raum gerade noch warm wird. Das ist der eigentliche Effizienzgewinn.') +
+      `<div class="note" style="margin-top:6px">Der Abgleich bleibt die ganze Saison gleich – wird es kälter, gleicht das die Heizkurve aus, nicht die Verteilung. ` +
+      `🔧 <b>Heizkörper statt Flächenheizung?</b> Dann über voreinstellbare Thermostatventile abgleichen. ` +
+      `📄 Für Förderung (BEG/BAFA) ist der rechnerische Abgleich „Verfahren B" Pflicht – das macht ein Fachbetrieb. Das hier ist die praktische Selbstoptimierung, kein Norm-Nachweis.</div>`;
+  }
 }
 
-/* ---- Schrittweise Optimierung (Regelkreis): log steps, measure effect ----- */
-let _optData = null, _optBusy = false;
-async function renderOptimize(force) {
-  const card = $('opt-card'); if (!card) return;
-  if (_optData && !force) { paintOptimize(_optData); return; }
-  if (_optBusy) return;
-  _optBusy = true;
-  const rec = $('opt-rec');
-  if (force && rec) rec.innerHTML = '<div class="note">Empfehlung wird berechnet …</div>';
-  try { const r = await api('/api/optimize'); _optData = r; paintOptimize(r); }
-  catch (e) { if (rec) rec.innerHTML = '<div class="note">Nur mit laufender Bridge verfügbar.</div>'; }
-  finally { _optBusy = false; }
+/* ---- how the heating is actually operated (read + measured) ---------------- */
+async function renderOpState(force) {
+  if (_opData && !force) { paintOpState(_opData); return; }
+  if (_opBusy) return;
+  _opBusy = true;
+  const el = $('ab-op'); if (el && !_opData) el.innerHTML = '<div class="note">Betrieb wird aus Wärmepumpe und Thermostaten gelesen …</div>';
+  try { _opData = await api('/api/heatpump/opstate' + (force ? '?force=1' : '')); paintOpState(_opData); }
+  catch (e) { if (el) el.innerHTML = ''; }
+  finally { _opBusy = false; }
 }
+function paintOpState(o) {
+  const el = $('ab-op'), dw = $('dhw-op');
+  if (!o || !o.ok) { if (el) el.innerHTML = ''; if (dw) dw.innerHTML = ''; return; }
+  const col = { none: '#4be0b0', none_measured: '#4be0b0', measured: '#ffb64d', hp_program: '#ffb64d', automeasure: 'var(--accent)', unknown: 'var(--muted)' }[o.state] || 'var(--muted)';
+  const row = l => `<div style="display:flex;gap:8px;font-size:12.5px;line-height:1.5;padding:5px 0;border-top:1px solid var(--line)">` +
+    `<div style="flex:0 0 20px">${l.icon || ''}</div><div style="flex:1;min-width:0"><b>${esc(l.label)}</b> ` +
+    `<span style="color:var(--muted);font-size:11px">· ${esc(l.src || '')}</span><br>${l.html}</div></div>`;
+  if (el) el.innerHTML = `<div style="border:1px solid var(--line);border-radius:12px;padding:11px 12px">` +
+    `<div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:4px">` +
+      `<b style="font-size:13px">🧾 Betrieb – gelesen &amp; gemessen</b>` +
+      `<a href="#" id="ab-op-refresh" style="font-size:12px;color:var(--accent);text-decoration:none">neu lesen</a></div>` +
+    `<div style="font-size:13px;line-height:1.5;margin-bottom:6px;border-left:3px solid ${col};padding-left:9px">${o.verdict || ''}</div>` +
+    (o.lines || []).map(row).join('') +
+    (o.hints || []).map(h => `<div class="note" style="margin-top:8px;border-left:3px solid var(--warn);padding-left:9px">💡 ${h}</div>`).join('') +
+    `</div>`;
+  // the hot-water card shows the same ground truth instead of assuming anything
+  if (dw) {
+    const dhwLine = (o.lines || []).find(l => l.label === 'Warmwasser');
+    dw.innerHTML = `<div class="note" style="border-left:3px solid ${col};padding-left:9px">` +
+      `<b>Betrieb (gelesen &amp; gemessen):</b> ${o.verdict || ''}` +
+      (dhwLine ? `<br><b>Warmwasser-Einstellung:</b> ${dhwLine.html} <span style="font-size:11px">(${esc(dhwLine.src)})</span>` : '') + `</div>`;
+  }
+}
+
+/* ---- 2 · one row per room ---------------------------------------------------- */
+function abRoomRow(x, idx, fmax) {
+  const cat = AB_CAT[x.category] || AB_CAT.none;
+  const open = _abOpen.has(x.room);
+  // the number that matters: vs. the house average while the thermostats are
+  // open, else vs. the room's own setpoint
+  const dv = x.open_mode && x.rel != null ? x.rel : x.dev;
+  let catTxt = cat.t;
+  if (x.category === 'reserve' && !x.open_mode) catTxt = 'Reserve';
+  const badge = `<span style="color:${cat.c};font-weight:700;white-space:nowrap">${cat.icon} ${catTxt}` +
+    (dv != null && (x.category === 'under' || x.category === 'reserve' || x.open_mode) ? ` ${sgn(dv)} K` : '') + `</span>`;
+  // deviation track: −4 … +4 K, shaded band = "in step"
+  let track = '';
+  if (dv != null) {
+    const pos = 50 + Math.max(-4, Math.min(4, dv)) / 4 * 50, band = 0.7 / 4 * 50;
+    track = `<div style="position:relative;height:8px;background:var(--line);border-radius:4px;margin:7px 0 5px">` +
+      `<div style="position:absolute;left:${50 - band}%;width:${band * 2}%;top:0;bottom:0;background:#4be0b033"></div>` +
+      `<div style="position:absolute;left:50%;top:-2px;width:1px;height:12px;background:var(--muted)"></div>` +
+      `<div style="position:absolute;left:calc(${pos}% - 5px);top:-1px;width:10px;height:10px;border-radius:50%;background:${cat.c};border:1px solid #0b1220"></div></div>`;
+  }
+  const meta = x.has_thermostat
+    ? (x.temp_24h != null ? `Ø 24 h <b>${fmt(x.temp_24h, 1)} °C</b>` : (x.temp_now != null ? `jetzt ${fmt(x.temp_now, 1)} °C` : 'keine aktuellen Werte')) +
+      (x.target != null ? ` · Wunsch ${fmt(x.target, 1)} °C` : '') +
+      (x.open_mode && x.setpoint != null ? ` · <span title="Thermostat hochgedreht">Thermostat ${fmt(x.setpoint, 0)} °C ↑</span>` : '')
+    : 'kein Thermostat';
+  // flow line: target per circuit + the user's reading
+  let flow;
+  if (x.flow_loop != null) {
+    const ist = tacoGet(x.room), d = tacoDelta(ist, x.flow_loop, x.category);
+    const low = x.flow_loop < 0.3 || x.plausible === false;
+    flow = `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12.5px;margin-top:2px">` +
+      `<span>Ziel <b style="color:${low ? '#ffb64d' : '#3ba9ff'}">${fmt(x.flow_loop, 2)} l/min</b>${low ? ' ⚠︎' : ''}` +
+      `<span style="color:var(--muted)"> je Kreis${x.loops > 1 ? ` (${x.loops}×)` : ''}</span></span>` +
+      `<span style="color:var(--muted)">· Ist</span>` +
+      `<input class="taco-in" data-room="${esc(x.room)}" data-idx="${idx}" data-soll="${x.flow_loop}" data-cat="${esc(x.category || '')}" type="text" inputmode="decimal" ` +
+        `placeholder="l/min" value="${ist != null ? fmt(ist, 1) : ''}" style="width:64px;padding:4px 6px;margin:0;border-radius:8px;border:1px solid var(--line);background:var(--card2);color:var(--ink);font-size:13px">` +
+      `<span id="taco-d-${idx}" style="color:${d.col};font-weight:600;flex:1;min-width:120px">${d.txt}</span></div>`;
+  } else {
+    flow = `<div class="note" style="margin-top:2px">Ziel-Durchfluss: ${(x.flow_missing || ['Fläche fehlt']).map(esc).join(' · ')} ` +
+      `<a href="#" data-ab-setup="1" style="color:var(--accent)">eintragen</a></div>`;
+  }
+  let det = '';
+  if (open) {
+    const tile = (lbl, val, badge) => `<div style="flex:1;min-width:96px"><div style="font-size:11px;color:var(--muted)">${lbl}</div>` +
+      `<div style="font-weight:700;font-size:14px">${val}</div>${badge ? `<div style="font-size:11px">${badge}</div>` : ''}</div>`;
+    const explicit = x.target_src === 'eingestellt';
+    det = `<div style="margin-top:10px;padding-top:10px;border-top:1px dashed var(--line)">` +
+      (x.has_thermostat ? `<div style="font-size:13px;line-height:1.5">${x.finding || ''}</div>` +
+        (x.recommendation ? `<div style="font-size:13px;line-height:1.5;margin-top:3px"><b>Tun:</b> ${x.recommendation}</div>` : '') : '') +
+      (x.has_thermostat ? `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12.5px;margin-top:10px">` +
+        `<label style="margin:0">Wunschtemperatur</label>` +
+        `<input class="tgt-in" data-room="${esc(x.room)}" type="number" step="0.5" min="10" max="30" value="${x.target != null ? x.target : ''}" style="width:70px;padding:4px 6px;margin:0"> °C` +
+        `<span style="color:var(--muted)">(${explicit ? 'von dir eingetragen' : 'automatisch: ' + esc(x.target_src || '')})</span>` +
+        (explicit ? `<a href="#" class="tgt-reset" data-room="${esc(x.room)}" style="color:var(--accent)">zurück auf automatisch</a>` : '') + `</div>` : '') +
+      `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px">` +
+        (x.has_thermostat ? tile('Trägheit τ', x.tau_h != null ? fmt(x.tau_h, 0) + ' h' : '–', x.tau_h != null ? rateBadge('tau', x.tau_h, 'Trägheit τ') : '<span style="color:var(--muted)">braucht eine heizfreie Phase</span>') : '') +
+        (x.has_thermostat ? tile('Auskühlrate', x.cooldown_kph != null ? fmt(x.cooldown_kph, 2) + ' K/h' : '–', x.cooldown_kph != null ? rateBadge('cooldown', x.cooldown_kph, 'Auskühlrate') : '') : '') +
+        (x.has_thermostat ? tile('Aufheizrate', x.heatup_kph != null ? fmt(x.heatup_kph, 2) + ' K/h' : '–', x.heatup_kph != null ? rateBadge('heatup', x.heatup_kph, 'Aufheizrate') : '') : '') +
+        (x.demand_share != null && !x.open_mode ? tile('fordert Wärme an', Math.round(x.demand_share * 100) + ' %', '<span style="color:var(--muted)">der letzten 48 h</span>') : '') +
+        (x.q_design != null ? tile('Heizlast', fmt(x.q_design, 0) + ' W', `<span style="color:var(--muted)">${fmt(x.q_lo, 0)}–${fmt(x.q_hi, 0)} W${x.estimated ? ' · geschätzt' : ''}</span>`) : '') +
+        (x.area ? tile('Fläche · Kreise', `${fmt(x.area, 0)} m² · ${x.loops}×`, x.flow_room != null ? `<span style="color:var(--muted)">Raum gesamt ${fmt(x.flow_room, 2)} l/min</span>` : '') : '') +
+      `</div>` +
+      (x.flow_loop != null && x.flow_loop < 0.3 ? `<div class="note" style="margin-top:8px;color:#ffb64d">⚠︎ Ziel-Durchfluss sehr niedrig – nicht 1:1 übernehmen, Kreis nicht unter ~0,5 l/min stellen.</div>` : '') +
+      (x.plausible === false ? `<div class="note" style="margin-top:8px;color:#ffb64d">⚠︎ Spezifische Last ${x.spec != null ? fmt(x.spec, 0) + ' W/m² ' : ''}außerhalb des üblichen Bereichs – Fläche prüfen.</div>` : '') +
+      (x.has_thermostat ? `<div style="font-size:11px;color:var(--muted);margin-top:8px">Datenbasis: ${x.n} Messpunkte · ${x.n_tau}× freie Auskühlung · ${x.n_warm}× Aufheizen` +
+        (x.missing && x.missing.length ? ` · für τ fehlt noch: ${x.missing.map(esc).join('; ')}` : '') + `</div>` : '') +
+      `</div>`;
+  }
+  return `<div style="border:1px solid ${x.category === 'under' || x.category === 'reserve' ? cat.c + '77' : 'var(--line)'};border-radius:12px;padding:11px 12px;margin-bottom:9px">` +
+    `<div class="abr-toggle" data-room="${esc(x.room)}" role="button" style="cursor:pointer">` +
+      `<div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">` +
+        `<b style="font-size:15px">${esc(x.room)}</b><span style="font-size:13px">${badge} <span style="color:var(--muted)">${open ? '▴' : '▾'}</span></span></div>` +
+      `<div style="font-size:12.5px;color:var(--muted);margin-top:2px">${meta}</div>${track}</div>` +
+    flow + det + `</div>`;
+}
+function paintAbRooms(r) {
+  const head = $('abr-head'), body = $('abr-body'), note = $('abr-note');
+  const rooms = r.rooms || [], t = r.totals || {};
+  if (head) head.innerHTML = `<span style="color:var(--muted)">${rooms.length} Räume${t.flow_total != null ? ` · Σ ${fmt(t.flow_total, 1)} l/min` : ''}</span>`;
+  if (!body) return;
+  if (!rooms.length) { body.innerHTML = '<div class="note">Noch keine Räume – koppele die Raumthermostate oder trage unten unter „Verteiler einrichten" Räume ein.</div>'; if (note) note.innerHTML = ''; return; }
+  let h = '', idx = 0;
+  (r.manifolds || [{ name: '' }]).forEach(m => {
+    const rs = rooms.filter(x => (x.manifold || '') === (m.name || ''));
+    if (!rs.length) return;
+    h += `<div style="display:flex;justify-content:space-between;align-items:baseline;margin:14px 0 7px">` +
+      `<b style="font-size:14px">🧭 ${m.name ? esc(m.name) : 'Ohne Verteiler'}</b>` +
+      `<span style="color:var(--muted);font-size:12px">${m.loops ? `${m.loops} Kreise · Σ ${fmt(m.flow, 1)} l/min` : `${rs.length} Räume`}</span></div>`;
+    rs.forEach(x => { h += abRoomRow(x, idx++); });
+  });
+  body.innerHTML = h;
+  if (note) {
+    const method = t.method === 'calibrated'
+      ? `Heizlast aus der <b>gemessenen Gebäude-Kennlinie</b> (${t.q_total != null ? fmt(t.q_total, 0) + ' W' : '–'} bei ${fmt(t.design_c, 0)} °C), über Fläche und Trägheit auf die Räume verteilt.`
+      : `Heizlast noch als <b>Flächen-Schätzung</b> (${fmt(t.spec_wm2, 0)} W/m² × Fläche = ${t.q_total != null ? fmt(t.q_total, 0) + ' W' : '–'}) – die gemessene Kennlinie ist dafür noch nicht belastbar.`;
+    note.innerHTML = (r.layout_demo ? '<b>Demo</b> mit Beispiel-Layout. ' : '') +
+      `<b>Punkt im Balken</b> = Abweichung des Raums (${(r.house || {}).open ? 'gegenüber dem Hausschnitt' : 'gegenüber seinem Sollwert'}); im grünen Band passt es. ` +
+      `<b style="color:#3ba9ff">Ziel l/min</b> = Startwert für den Tacosetter je Kreis: l/min = Heizlast ÷ (1,163 × ΔT × 60), mit ΔT <b>${fmt(t.spread_k, 0)} K</b>` +
+      (t.central_spread ? ` (zentral gemessen aktuell ${fmt(t.central_spread.spread_k, 1)} K)` : '') + `. ${method} ` +
+      `Entscheidend ist am Ende die <b>gemessene</b> Raumtemperatur, nicht der Rechenwert. ` +
+      `<a href="#" data-ab-setup="1" style="color:var(--accent)">Annahmen &amp; Flächen ändern</a> · kein normgerechter Abgleich.`;
+  }
+}
+
+/* ---- 3 · step log ------------------------------------------------------------ */
 async function optAction(path, body) {
-  const note = $('opt-note'); if (note) note.textContent = '';
+  const msg = $('opt-msg'); if (msg) msg.textContent = '';
   try {
     const r = await postJSON(path, body || {});
-    if (r && r.ok) { _optData = r; paintOptimize(r); }
-    else if (note) note.textContent = (r && r.error) || 'Aktion fehlgeschlagen.';
-  } catch (e) { if (note) note.textContent = 'Nur möglich, wenn die Seite von der Bridge geöffnet ist.'; }
+    if (r && r.ok) { await renderAbgleich(true); }
+    else if (msg) msg.textContent = (r && r.error) || 'Aktion fehlgeschlagen.';
+  } catch (e) { if (msg) msg.textContent = 'Nur möglich, wenn die Seite von der Bridge geöffnet ist.'; }
 }
 function optVerdictColor(v) {
   if (v === 'wirksam' || v === 'ok') return '#4be0b0';
@@ -4324,72 +4081,73 @@ function optVerdictColor(v) {
   if (v === 'kaum effekt') return '#ffb64d';
   return '#ff6b8a';   // verschlechtert / zu weit gedrosselt / unbekannt
 }
-function paintOptimize(r) {
-  const head = $('opt-head'), rec = $('opt-rec'), eff = $('opt-eff'),
-    sel = $('opt-room'), stepsEl = $('opt-steps'), note = $('opt-note');
-  if (!r || !r.ok) { if (rec) rec.innerHTML = '<div class="note">Keine Daten.</div>'; return; }
-  if (head) head.innerHTML = `<span style="color:var(--muted)">${r.n_steps || 0} Schritt(e)${r.balanced ? ' · ausgeglichen' : ''}</span>`;
-
-  // the single next recommendation
-  if (rec) {
-    const k = (r.recommendation || {}).kind;
-    const col = k === 'done' ? '#4be0b0' : (k === 'open' ? '#ff6b8a' : (k === 'throttle' ? '#3ba9ff'
-      : (k === 'curve' ? '#b794f6' : 'var(--accent)')));
-    const icon = k === 'open' ? '🔺' : (k === 'throttle' ? '🔻' : (k === 'curve' ? '📉' : (k === 'done' ? '✅' : '⏳')));
-    rec.innerHTML = `<div style="border:1px solid ${col};background:${col}14;border-radius:12px;padding:12px">` +
-      `<div style="font-size:12px;color:var(--muted);margin-bottom:3px">Nächster Schritt</div>` +
-      `<div style="font-size:15px;font-weight:700;margin-bottom:4px">${icon} ${esc((r.recommendation || {}).title || '')}</div>` +
-      `<div style="font-size:13px;line-height:1.55">${(r.recommendation || {}).text || ''}</div></div>`;
-  }
-
-  // efficiency coupling panel
-  if (eff) {
-    const e = r.efficiency;
-    eff.innerHTML = e
-      ? `<div style="display:flex;gap:8px;flex-wrap:wrap">` +
-          `<div class="kpi sm"><div class="v">${e.over_k > 0 ? '+' : ''}${e.over_k} K</div><div class="l">Kurve vs. Ziel</div></div>` +
-          `<div class="kpi sm"><div class="v">${e.efficient ? 'effizient' : (e.saving_pct ? '~' + Math.round(e.saving_pct * 100) + '%' : '–')}</div><div class="l">${e.efficient ? 'Vorlauf niedrig' : 'Sparpotenzial'}</div></div>` +
-        `</div>` +
-        `<div class="note" style="margin-top:4px">${esc(e.verdict || '')} Der Effizienzgewinn kommt, wenn nach dem Abgleich die Heizkurve sinkt.</div>`
-      : '';
-  }
-
-  // room dropdown (keep current selection)
+function paintAbSteps(r) {
+  const head = $('opt-head'), sel = $('opt-room'), act = $('opt-action'), stepsEl = $('opt-steps'), tools = $('opt-tools'), msg = $('opt-msg');
+  if (head) head.innerHTML = `<span style="color:var(--muted)">${r.n_steps || 0} Schritt(e)</span>`;
+  const rooms = (r.rooms || []).filter(x => x.has_thermostat);
   if (sel) {
-    const want = sel.value;
-    const opts = (r.rooms || []).map(x => {
-      const tag = x.category === 'under' ? ' ⚠︎ zu kalt' : (x.category === 'reserve' ? ' · Reserve' : '');
-      return `<option value="${esc(x.room)}">${esc(x.room)}${tag}</option>`;
-    }).join('');
-    if (sel.dataset.fill !== String((r.rooms || []).length) + (r.rooms || []).map(x => x.category).join('')) {
-      sel.innerHTML = opts; sel.dataset.fill = String((r.rooms || []).length) + (r.rooms || []).map(x => x.category).join('');
-      if (want) sel.value = want;
+    const sig = rooms.map(x => x.room + x.category).join('|');
+    if (sel.dataset.fill !== sig) {
+      const want = sel.value;
+      sel.innerHTML = rooms.map(x => {
+        const tag = x.category === 'under' ? ' – zu kalt' : (x.category === 'reserve' ? (x.open_mode ? ' – zu warm' : ' – Reserve') : '');
+        return `<option value="${esc(x.room)}">${esc(x.room)}${tag}</option>`;
+      }).join('');
+      sel.dataset.fill = sig;
+      // preselect what the next step proposes (unless the user already chose)
+      const n = r.next || {};
+      if (want && rooms.some(x => x.room === want)) sel.value = want;
+      else if (n.room && rooms.some(x => x.room === n.room)) { sel.value = n.room; if (act && n.action) act.value = n.action; }
     }
   }
-
-  // step history with measured effect
   if (stepsEl) {
     const hs = r.steps || [];
     stepsEl.innerHTML = hs.length
-      ? `<div style="font-weight:700;margin:4px 0 8px">Verlauf &amp; Wirkung</div>` + hs.map(s => {
-          const e = s.effect || {};
-          const vc = optVerdictColor(e.verdict);
-          const act = s.action === 'open' ? '🔺 aufgedreht' : '🔻 angedrosselt';
-          const delta = s.delta_lmin != null ? ` ${s.delta_lmin > 0 ? '+' : ''}${s.delta_lmin} l/min` : '';
+      ? hs.map(s => {
+          const e = s.effect || {}, vc = optVerdictColor(e.verdict);
+          const a = s.action === 'open' ? '🔺 aufgedreht' : '🔻 angedrosselt';
+          const delta = s.delta_lmin != null ? ` ${s.delta_lmin > 0 ? '+' : ''}${fmt(s.delta_lmin, 1)} l/min` : '';
           const when = new Date(s.ts * 1000).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' });
           return `<div style="border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:8px">` +
             `<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px">` +
-              `<b>${esc(s.room)}</b><span style="font-size:12px;color:var(--muted)">${when} · ${act}${delta}</span></div>` +
+              `<b>${esc(s.room)}</b><span style="font-size:12px;color:var(--muted)">${when} · ${a}${delta}</span></div>` +
             (s.note ? `<div style="font-size:12px;color:var(--muted);margin-top:2px">„${esc(s.note)}"</div>` : '') +
             `<div style="font-size:13px;line-height:1.5;margin-top:5px">` +
               `<span style="color:${vc};font-weight:600">${esc(e.verdict || '')}</span>` +
-              (e.days != null ? ` <span style="color:var(--muted)">(${e.days} T)</span>` : '') +
+              (e.days != null ? ` <span style="color:var(--muted)">(${fmt(e.days, 1)} T)</span>` : '') +
               ` – ${esc(e.line || '')}</div></div>`;
         }).join('')
       : '<div class="note">Noch keine Schritte protokolliert. Führe den empfohlenen Schritt am Verteiler aus und speichere ihn – dann messe ich die Wirkung.</div>';
   }
+  if (tools) tools.style.display = (r.steps || []).length ? 'flex' : 'none';
+  if (msg && !msg.textContent && r.curve) {
+    const c = r.curve;
+    msg.innerHTML = `Heizkurve im 30-Tage-Schnitt <b>${sgn(c.over_k)} K</b> gegenüber dem WP-freundlichen Ziel` +
+      (c.saving_pct && !c.efficient ? ` (~${Math.round(c.saving_pct * 100)} % Sparpotenzial)` : '') +
+      ` – senken lohnt sich erst, wenn die Räume im Gleichlauf sind.`;
+  }
+}
 
-  if (note) note.innerHTML = (r.demo ? '<b>Demo-Daten</b>. ' : '') + esc(r.note || '');
+/* ---- 4 · data situation ------------------------------------------------------ */
+function paintAbData(r) {
+  const head = $('abd-head'), body = $('abd-body'), d = r.data || {};
+  if (head) head.innerHTML = `<span style="color:${d.done ? '#4be0b0' : 'var(--muted)'}">${d.done ? '✓ reicht für den Abgleich' : (d.overall != null ? d.overall + ' %' : '')}</span>`;
+  if (!body) return;
+  const sb = d.setback || {};
+  body.innerHTML =
+    `<div style="font-size:13px;line-height:1.55;margin-bottom:10px">${esc(d.next_action || '')}</div>` +
+    `<div class="note" style="margin-bottom:10px">${fmt(d.span_days, 1)} Tage Verlauf · ${fmt(d.n_samples, 0)} Messpunkte · ${d.n_rooms || 0} Räume · ${d.heating_phases || 0} WP-Heizphasen` +
+      (sb.nights_checked ? ` · Sollwerte nachts: ${sb.nights_lowered ? `in ${sb.nights_lowered} von ${sb.nights_checked} Nächten abgesenkt` : `in den letzten ${sb.nights_checked} Nächten unverändert`}` : '') + `</div>` +
+    (d.steps || []).map(s => {
+      const col = s.state === 'done' ? '#4be0b0' : 'var(--accent)';
+      return `<div style="margin-bottom:10px">` +
+        `<div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;margin-bottom:3px">` +
+          `<span>${s.state === 'done' ? '✅' : '🔄'} <b>${esc(s.title)}</b></span><span style="color:var(--muted)">${s.progress}%</span></div>` +
+        `<div style="display:flex;gap:8px;align-items:center;margin-bottom:3px">${obsBar(s.progress, col)}</div>` +
+        `<div style="font-size:12px;color:var(--muted);line-height:1.5">${esc(s.detail)}${s.hint ? ' · ' + esc(s.hint) : ''}</div></div>`;
+    }).join('') +
+    ((d.disturbances || []).length ? (d.disturbances || []).map(x => `<div class="note" style="margin-bottom:4px">• ${esc(x)}</div>`).join('') : '') +
+    (d.gap ? `<div class="note" style="margin-top:8px;border-left:3px solid var(--warn);padding-left:10px">⚠︎ <b>Messlücke:</b> ${esc(d.gap)}</div>` : '');
 }
 
 /* ---- Verteiler & Heizkreise: layout + per-circuit flow (l/min) distribution */
@@ -4398,6 +4156,7 @@ function layoutSave(l) { try { localStorage.setItem('heatLayout', JSON.stringify
 function layoutModel() {
   const l = layoutLoad();
   l.q = (l.q != null ? l.q : 40); l.dt = (l.dt != null ? l.dt : 6);
+  l.design = (l.design != null ? l.design : -12);          // Auslegungs-Außentemperatur °C
   l.manifolds = Array.isArray(l.manifolds) ? l.manifolds : [];
   l.rooms = l.rooms || {};
   l.hidden = Array.isArray(l.hidden) ? l.hidden : [];   // rooms the user removed (stay gone)
@@ -4411,36 +4170,27 @@ function layoutSet(room, field, val) {
 }
 function knownRooms() {
   const s = new Set();
-  ((typeof _hdData !== 'undefined' && _hdData && _hdData.rooms) || []).forEach(r => r.room && s.add(r.room));
-  ((typeof _rtsData !== 'undefined' && _rtsData && _rtsData.rooms) || []).forEach(r => r.room && s.add(r.room));
+  // the bridge's cleaned room list first (no stray entries), then live views
+  ((typeof _abData !== 'undefined' && _abData && _abData.rooms) || []).forEach(r => r.has_thermostat && r.room && s.add(r.room));
+  const stray = new Set((typeof _abData !== 'undefined' && _abData && _abData.stray_rooms) || []);
+  ((typeof _hdData !== 'undefined' && _hdData && _hdData.rooms) || []).forEach(r => r.room && !stray.has(r.room) && s.add(r.room));
+  ((typeof _rtsData !== 'undefined' && _rtsData && _rtsData.rooms) || []).forEach(r => r.room && !stray.has(r.room) && s.add(r.room));
   return [...s];
-}
-// heat-load-proportional target flow per circuit: Q = area·q [W], l/h = Q/(1.163·ΔT)
-function layoutTargets() {
-  const l = layoutModel(), out = {};
-  for (const [room, cfg] of Object.entries(l.rooms)) {
-    const area = parseFloat(cfg.area) || 0; if (area <= 0) continue;
-    const qW = area * (parseFloat(l.q) || 40);
-    const lpm = qW / (1.163 * (parseFloat(l.dt) || 6) * 60);
-    const loops = Math.max(1, Math.round(parseFloat(cfg.loops) || 1));
-    out[room] = { lpm: Math.round(lpm * 10) / 10, manifold: cfg.manifold || '',
-      area, length: parseFloat(cfg.length) || null, qW: Math.round(qW),
-      loops, lpmPerLoop: Math.round(lpm / loops * 10) / 10 };
-  }
-  return out;
 }
 // Building-type quick picks for the specific heat load (W/m²) – so a layperson
 // taps their house type instead of guessing a number. Used when there is no
 // reliable measured signature yet (area-based estimate).
 const SPEC_PRESETS = [['Passivhaus ~15', 15], ['Neubau/KfW ~40', 40], ['saniert ~55', 55], ['teilsaniert ~80', 80], ['Altbau ~100', 100]];
-let _specRefreshT = null;
-function specRefresh() {
-  clearTimeout(_specRefreshT);
-  _specRefreshT = setTimeout(() => {
-    _hlData = null; _flowData = null;
-    if (typeof renderHeatload === 'function') renderHeatload(true);
-    if (typeof renderFlow === 'function') renderFlow(true);
-  }, 500);
+// After any layout edit: push the layout to the bridge, then recompute the
+// balance view there (debounced so typing a number does not fire per keystroke).
+let _layChangeT = null;
+function abLayoutChanged(delay) {
+  clearTimeout(_layChangeT);
+  _layChangeT = setTimeout(async () => {
+    let raw = null; try { raw = localStorage.getItem('heatLayout'); } catch (e) {}
+    await abSaveSetting('heatLayout', raw);
+    renderAbgleich(true);
+  }, delay == null ? 700 : delay);
 }
 function renderLayout() {
   const body = $('lay-body'); if (!body) return;
@@ -4451,7 +4201,7 @@ function renderLayout() {
   const inp = (ph, val, field, room, w) => `<input type="number" inputmode="decimal" data-lay="${field}" data-room="${esc(room)}" value="${val != null && val !== '' ? esc(String(val)) : ''}" placeholder="${ph}" style="width:${w || 58}px;padding:4px 6px;margin:0">`;
   const rowsHtml = rooms.map(room => { const cfg = l.rooms[room] || {};
     return `<tr><td style="padding:4px 6px">${esc(room)}</td>` +
-      `<td style="padding:4px 6px"><select data-lay="manifold" data-room="${esc(room)}" style="padding:4px 6px;margin:0;width:auto">${mfOpts(cfg.manifold || '')}</select></td>` +
+      `<td style="padding:4px 6px"><select data-lay="manifold" data-room="${esc(room)}" style="padding:4px 6px;margin:0;width:auto;max-width:112px;font-size:14px">${mfOpts(cfg.manifold || '')}</select></td>` +
       `<td style="padding:4px 6px;text-align:right">${inp('m²', cfg.area, 'area', room, 54)}</td>` +
       `<td style="padding:4px 6px;text-align:right">${inp('1', cfg.loops, 'loops', room, 42)}</td>` +
       `<td style="padding:4px 6px;text-align:right">${inp('m', cfg.length, 'length', room, 50)}</td>` +
@@ -4461,6 +4211,8 @@ function renderLayout() {
     `<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-bottom:10px;font-size:13px">` +
       `<label>Spez. Heizlast <input type="number" id="lay-q" value="${esc(String(l.q))}" style="width:58px;padding:4px 6px;margin:0"> W/m²</label>` +
       `<label>Spreizung ΔT <input type="number" id="lay-dt" value="${esc(String(l.dt))}" style="width:48px;padding:4px 6px;margin:0"> K</label>` +
+      `<label>Auslegung <select id="lay-design" style="width:auto;padding:4px 8px;margin:0">` +
+        [-10, -12, -14, -16].map(v => `<option value="${v}"${Number(l.design) === v ? ' selected' : ''}>${v} °C</option>`).join('') + `</select></label>` +
     `</div>` +
     `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:-2px 0 8px">` +
       `<span style="color:var(--muted);font-size:12px">Haustyp:</span>` +
@@ -4468,7 +4220,7 @@ function renderLayout() {
         return `<button class="btn sec specpre" data-sp="${v}" style="width:auto;padding:4px 10px;margin:0;font-size:12px${on ? ';border-color:var(--accent);color:var(--accent)' : ''}">${esc(lbl)}</button>`; }).join('') +
     `</div>` +
     (() => {
-      const bs = (typeof buildingSpec === 'function') ? buildingSpec(parseFloat(($('hl-design') || {}).value) || -12) : null;
+      const bs = (typeof buildingSpec === 'function') ? buildingSpec(parseFloat(l.design) || -12) : null;
       if (!bs || bs < 10 || bs > 200) return '';
       const on = Math.round(parseFloat(l.q)) === bs;
       return `<div style="margin:0 0 8px"><button class="btn sec specpre" data-sp="${bs}" style="width:auto;padding:5px 12px;margin:0;font-size:12px;border-color:var(--accent2)${on ? ';background:var(--accent2);color:#06121f' : ';color:var(--accent2)'}">📐 Aus meinem Gebäudemodell (~${bs} W/m²)</button></div>`;
@@ -4481,40 +4233,19 @@ function renderLayout() {
       `<input id="lay-mf-name" placeholder="z. B. EG" style="width:86px;padding:4px 6px;margin:0"><button class="btn sec" id="lay-mf-add" style="width:auto;padding:4px 10px;margin:0">+ Verteiler</button>` +
     `</div>` +
     (rooms.length
-      ? `<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="color:var(--muted);font-size:11px;text-transform:uppercase"><th style="text-align:left;padding:4px 6px">Raum</th><th style="text-align:left;padding:4px 6px">Verteiler</th><th style="text-align:right;padding:4px 6px">Fläche</th><th style="text-align:right;padding:4px 6px" title="Anzahl Heizschläuche/Kreise dieses Raums am Verteiler">Kreise</th><th style="text-align:right;padding:4px 6px">Länge</th><th style="padding:4px 6px"></th></tr></thead><tbody>${rowsHtml}</tbody></table>`
+      ? `<div style="overflow-x:auto;-webkit-overflow-scrolling:touch"><table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="color:var(--muted);font-size:11px;text-transform:uppercase"><th style="text-align:left;padding:4px 6px">Raum</th><th style="text-align:left;padding:4px 6px">Verteiler</th><th style="text-align:right;padding:4px 6px">Fläche</th><th style="text-align:right;padding:4px 6px" title="Anzahl Heizschläuche/Kreise dieses Raums am Verteiler">Kreise</th><th style="text-align:right;padding:4px 6px">Länge</th><th style="padding:4px 6px"></th></tr></thead><tbody>${rowsHtml}</tbody></table></div>`
       : '<div class="note">Noch keine Räume erkannt – öffne kurz den Heizungs-Check/Räume, oder füge unten manuell hinzu.</div>') +
     `<div style="display:flex;gap:6px;align-items:center;margin-top:8px;flex-wrap:wrap"><input id="lay-room-name" placeholder="Raum hinzufügen" style="width:140px;padding:4px 6px;margin:0"><button class="btn sec" id="lay-room-add" style="width:auto;padding:4px 10px;margin:0">+ Raum</button><button class="btn sec" id="lay-rooms-load" style="width:auto;padding:4px 10px;margin:0">🔄 Räume laden</button><button class="btn sec" id="lay-preset" style="width:auto;padding:4px 10px;margin:0">🏠 Mein Haus vorbefüllen</button></div>` +
     `<div class="note" id="lay-preset-note" style="margin-top:6px;display:none"></div>` +
-    `<div id="lay-result" style="margin-top:12px"></div>`;
-  computeLayoutResult();
-}
-function computeLayoutResult() {
-  const el = $('lay-result'); if (!el) return;
-  const t = layoutTargets(), l = layoutModel();
-  if (!Object.keys(t).length) { el.innerHTML = '<div class="note">Trag je Raum eine <b>Fläche</b> ein und ordne einen Verteiler zu – dann rechne ich die l/min-Startverteilung.</div>'; return; }
-  const byMf = {}, unassigned = [];
-  for (const [room, o] of Object.entries(t)) { if (o.manifold) (byMf[o.manifold] = byMf[o.manifold] || []).push([room, o]); else unassigned.push(room); }
-  let html = '';
-  [...new Set([...l.manifolds, ...Object.keys(byMf)])].forEach(mf => {
-    const list = byMf[mf] || []; if (!list.length) return;
-    const tot = list.reduce((a, [, o]) => a + o.lpm, 0);
-    const loopsTot = list.reduce((a, [, o]) => a + (o.loops || 1), 0);
-    const anyMulti = list.some(([, o]) => (o.loops || 1) > 1);
-    html += `<div style="font-weight:700;margin:8px 0 4px">🧭 ${esc(mf)} <span style="color:var(--muted);font-weight:400">· ${loopsTot} Kreise in ${list.length} Räumen · Σ ${fmt(tot, 1)} l/min</span></div>`;
-    html += `<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="color:var(--muted);font-size:10px;text-transform:uppercase">` +
-      `<th style="text-align:left;padding:2px 6px">Raum</th><th style="text-align:right;padding:2px 6px">Fläche</th>` +
-      `<th style="text-align:right;padding:2px 6px">Raum ges.</th>` + (anyMulti ? `<th style="text-align:right;padding:2px 6px">je Schlauch</th>` : '') +
-      `<th style="text-align:right;padding:2px 6px">Anteil</th></tr></thead><tbody>` +
-      list.sort((a, b) => b[1].lpm - a[1].lpm).map(([room, o]) =>
-        `<tr><td style="padding:3px 6px">${esc(room)}${(o.loops || 1) > 1 ? ` <span style="color:var(--muted);font-size:11px">${o.loops}×</span>` : ''}</td>` +
-        `<td style="padding:3px 6px;text-align:right;color:var(--muted)">${o.area} m²</td>` +
-        `<td style="padding:3px 6px;text-align:right"><b>${fmt(o.lpm, 1)}</b></td>` +
-        (anyMulti ? `<td style="padding:3px 6px;text-align:right"><b style="color:var(--accent2)">${(o.loops || 1) > 1 ? fmt(o.lpmPerLoop, 1) : fmt(o.lpm, 1)}</b></td>` : '') +
-        `<td style="padding:3px 6px;text-align:right;color:var(--muted)">${Math.round(o.lpm / tot * 100)}%</td></tr>`).join('') + `</tbody></table>`;
-  });
-  if (unassigned.length) html += `<div class="note" style="margin-top:6px">Ohne Verteiler (noch zuordnen): ${unassigned.map(esc).join(', ')}.</div>`;
-  html += `<div class="note" style="margin-top:8px">Stell an jedem <b>Durchflussmesser (Tacosetter)</b> den Wert <b>„je Schlauch"</b> ein (hat ein Raum mehrere Kreise, teilt sich seine Menge gleichmäßig darauf auf) – als <b>Startwert</b>, dann feinjustieren über den <b>Hydraulischen Abgleich</b>/die <b>Schrittweise Optimierung</b> oben.</div>`;
-  el.innerHTML = html;
+    `<div class="note" style="margin-top:10px">Die l/min-Werte je Kreis stehen oben in <b>„Räume &amp; Heizkreise"</b> – sie werden aus genau diesen Angaben gerechnet (eine Quelle, ein ΔT).</div>`;
+  const lh = $('lay-head');
+  if (lh) {
+    const nA = rooms.filter(r => parseFloat((l.rooms[r] || {}).area) > 0).length;
+    lh.textContent = rooms.length ? `${nA}/${rooms.length} Räume mit Fläche · ${l.manifolds.length} Verteiler` : 'noch leer';
+  }
+  // open the set-up by itself while it is still empty
+  const det = $('lay-det');
+  if (det && !det.dataset.auto) { det.dataset.auto = '1'; if (!rooms.some(r => parseFloat((l.rooms[r] || {}).area) > 0)) det.open = true; }
 }
 // one-tap preset for this household (areas + loops + manifold guess). Only the
 // user triggers it; values are merged so manually changed rooms aren't lost
@@ -4544,9 +4275,7 @@ function layoutPresetMyHouse() {
   Object.entries(LAYOUT_PRESET.rooms).forEach(([rm, v]) => { l.rooms[rm] = { ...(l.rooms[rm] || {}), ...v }; });
   l.hidden = (l.hidden || []).filter(h => !(h in LAYOUT_PRESET.rooms));   // un-hide rooms the preset adds
   layoutSave(l);
-  if (typeof _flushSettingsNow === 'function') _flushSettingsNow();
-  _hlData = null; _flowData = null;
-  renderLayout();
+  renderLayout(); abLayoutChanged(0);
   const n = $('lay-preset-note');
   if (n) {
     n.style.display = '';
@@ -4825,8 +4554,9 @@ function dhwEventChart(rep) {
 }
 function paintDhwImpact(r) {
   const head = $('dhw-head'), kpis = $('dhw-kpis'), ch = $('dhw-chart'), repNote = $('dhw-rep-note'),
-    legend = $('dhw-legend'), byout = $('dhw-byout'), evs = $('dhw-events'), note = $('dhw-note'), levEl = $('dhw-levers');
-  const clear = () => [kpis, legend, byout, evs, levEl].forEach(e => { if (e) e.innerHTML = ''; });
+    legend = $('dhw-legend'), byout = $('dhw-byout'), evs = $('dhw-events'), note = $('dhw-note'), levEl = $('dhw-levers'),
+    patEl = $('dhw-pattern');
+  const clear = () => [kpis, legend, byout, evs, levEl, patEl].forEach(e => { if (e) e.innerHTML = ''; });
   if (!r || !r.ok || !r.n) {
     const why = r && r.reason === 'no_temp'
       ? 'Dafür brauche ich <b>Innentemperatur über die Zeit</b> aus deinen Bosch-Raumthermostaten – die sammelt die App im Betrieb. Nach ein paar Tagen erscheint hier die Auswertung.'
@@ -4842,6 +4572,16 @@ function paintDhwImpact(r) {
     kpi('−' + fmt(r.avg_drop, 1).replace('-', '') + ' °C', 'Ø Abkühlung') +
     kpi(r.avg_recov_min != null ? '~' + fmt(r.avg_recov_min, 0) + ' min' : '–', 'Ø wieder warm') +
     kpi((r.n_meaningful != null ? r.n_meaningful : '?') + '×', `von ${r.n} spürbar`);
+  // measured charging pattern: equal-length charges that restart right away
+  if (patEl) {
+    const p = r.pattern;
+    if (p && p.html) {
+      const c = p.level === 'warn' ? '#ffb64d' : 'var(--accent)';
+      patEl.innerHTML = `<div style="border:1px solid ${c};background:${c}14;border-radius:12px;padding:11px 12px">` +
+        `<div style="font-weight:700;font-size:13.5px;margin-bottom:4px">🔁 Warum schaltet sie so oft um?</div>` +
+        `<div style="font-size:13px;line-height:1.55">${p.html}</div></div>`;
+    } else patEl.innerHTML = '';
+  }
   // concrete levers to shrink the dip (quantified from the user's own data)
   if (levEl) {
     const lv = r.levers || [];
@@ -4862,7 +4602,7 @@ function paintDhwImpact(r) {
   if (rep && ch) {
     ch.innerHTML = `<div style="touch-action:none">${dhwEventChart(rep)}</div>`;
     const when = new Date(rep.start * 1000).toLocaleString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
-    if (repNote) repNote.innerHTML = `${esc(when)} · WW dauerte <b>${fmt(rep.dur_min, 0)} min</b>${rep.outdoor != null ? ` · außen ${fmt(rep.outdoor, 0)} °C` : ''}: ` +
+    if (repNote) repNote.innerHTML = `${esc(when)} · WW dauerte <b>${fmt(rep.dur_min, 0)} min</b>${rep.outdoor != null ? ` · außen ${fmt(Math.round(rep.outdoor) + 0, 0)} °C` : ''}: ` +
       `innen von <b>${fmt(rep.t_start, 1)} °C</b> auf <b>${fmt(rep.t_min, 1)} °C</b> gefallen (−${fmt(rep.drop, 1)} °C)` +
       (rep.recov_min != null
         ? `, nach <b>${fmt(rep.recov_min, 0)} min</b> wieder bei ${fmt(rep.t_start, 1)} °C.`
@@ -4889,7 +4629,7 @@ function paintDhwImpact(r) {
     const when = ts => new Date(ts * 1000).toLocaleString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
     const right = e => {
       if (e.status === 'minimal')
-        return `<span style="color:var(--muted)">−${fmt(e.drop, 1)} °C · kaum Abkühlung</span>`;
+        return `<span style="color:var(--muted)">${e.drop >= 0.05 ? '−' + fmt(e.drop, 1) : '0,0'} °C · kaum Abkühlung</span>`;
       if (e.status === 'recovered')
         return `−<b>${fmt(e.drop, 1)} °C</b> <span style="color:var(--muted)">· ~${fmt(e.recov_min, 0)} min zurück</span>`;
       if (e.status === 'tight')
@@ -4898,7 +4638,10 @@ function paintDhwImpact(r) {
     };
     evs.innerHTML = `<h2 style="font-size:14px;margin:12px 0 6px">Letzte Warmwasser-Phasen</h2>` + list.map(e =>
       `<div style="display:flex;justify-content:space-between;gap:8px;font-size:12.5px;padding:6px 0;border-bottom:1px solid var(--line)">` +
-      `<span>${esc(when(e.start))} <span style="color:var(--muted)">· ${fmt(e.dur_min, 0)} min${e.outdoor != null ? ` · ${fmt(e.outdoor, 0)} °C` : ''}</span></span>` +
+      `<span>${esc(when(e.start))} <span style="color:var(--muted)">· ${fmt(e.dur_min, 0)} min${e.outdoor != null ? ` · ${fmt(Math.round(e.outdoor) + 0, 0)} °C` : ''}` +
+        (e.tank_end != null ? `<br>Speicher ${e.tank_start != null ? fmt(e.tank_start, 0) + ' → ' : ''}${fmt(e.tank_end, 0)} °C` +
+          (e.tank_set != null ? ` <span style="color:${e.tank_reached ? '#4be0b0' : '#ffb64d'}">(Soll ${fmt(e.tank_set, 0)} ${e.tank_reached ? 'erreicht' : 'nicht erreicht'})</span>` : '') : '') +
+      `</span></span>` +
       `<span style="white-space:nowrap">${right(e)}</span></div>`).join('');
   }
   if (note) {
@@ -4907,12 +4650,14 @@ function paintDhwImpact(r) {
     if (nm) parts.push(`<b>${nm}×</b> war die Abkühlung praktisch null – da kostet Warmwasser quasi keinen Komfort.`);
     if (nr) parts.push(`Wo die Heizung danach aufholen konnte, war es nach <b>~${r.median_recov_min != null ? fmt(r.median_recov_min, 0) : '?'} min</b> (Median) wieder auf dem Ausgangswert${no ? `, ${no}× war die Zeit noch nicht ganz genug` : ''}.`);
     if (nt) parts.push(`<b>${nt}×</b> wurde der Startwert nicht wieder erreicht – aber nicht, weil Warmwasser so viel kostet, sondern weil danach <b>kaum Heizzeit</b> blieb: die nächste WW-Phase kam zu schnell, das Haus hatte keine Chance aufzuheizen.`);
-    if (r.median_heat_min != null) parts.push(r.median_heat_min < 45
+    if (r.median_heat_min != null) parts.push(r.median_heat_min < 60
       ? `Zwischen zwei WW-Phasen liegen im Median nur <b>~${fmt(r.median_heat_min, 0)} min</b> Heizen – die Phasen sitzen also dicht hintereinander.`
       : `Zwischen zwei WW-Phasen liegen im Median <b>~${fmt(r.median_heat_min, 0)} min</b> Heizen – meist also genug Zeit zum Aufheizen.`);
     note.innerHTML = parts.join(' ') +
-      ` <span style="color:var(--muted)">Je kälter draußen, desto größer der Dip. Willst du den Komfortverlust kleiner: die WW-Phasen <b>entzerren</b> (WW-Hysterese/Soll senken, Zeitfenster), damit zwischendurch länger geheizt wird, oder WW in die Mittagszeit legen. Innentemperatur kommt aus deinen Bosch-Thermostaten, die WW-Phasen aus der Wärmepumpe – über eine Nachtabsenkung wird hier bewusst <b>nichts</b> angenommen.</span>`;
+      ` <span style="color:var(--muted)">Je kälter draußen, desto größer der Dip. Willst du den Komfortverlust kleiner: die WW-Phasen <b>entzerren</b> (WW-Hysterese/Soll senken, Zeitfenster), damit zwischendurch länger geheizt wird, oder WW in die Mittagszeit legen. Innentemperatur kommt aus deinen Bosch-Thermostaten, die WW-Phasen aus der Wärmepumpe.</span>`;
   }
+  // how the heating is really operated (read, not assumed) – shown below the note
+  if (_opData) paintOpState(_opData); else renderOpState(false);
 }
 
 // ===== Tagesverlauf Wärmepumpe: chronologische Zustände + Leistung ========= #
@@ -5291,72 +5036,6 @@ function paintHpTrend(r) {
   }
   if (note) note.innerHTML = `Die <b>Min/Takt</b>-Linie ist das beste Maß für ruhigen Lauf: höher = längere, seltenere Läufe. Setze oben dein <b>Abgleich-Datum</b>, dann rechne ich den Schnitt <b>vorher/nachher</b>. ` +
     `<span style="color:var(--muted)">Weil kältere Tage von allein weniger takten, steht die <b>Ø Außentemperatur</b> dabei – vergleiche am besten Phasen mit ähnlichem Wetter.</span>`;
-}
-
-/* ---- Hydraulischer Abgleich: step guide + data-driven room worklist ------- */
-function renderHydronic() {
-  const card = $('ha-card'); if (!card) return;
-  const work = $('ha-work'), steps = $('ha-steps'), note = $('ha-note'), head = $('ha-head');
-  const rooms = (_hdData && _hdData.rooms) ? _hdData.rooms : null;
-  // classify heating rooms from Soll/Ist/Ventil
-  let under = [], over = [], lead = null;
-  if (rooms) {
-    const heat = rooms.filter(r => String(r.roomControlMode || 'HEATING').toUpperCase() !== 'OFF' && !r.summerMode
-      && r.setpoint != null && r.temp != null);
-    // Use the controller's real heat demand (hasDemand → r.heating) where we have
-    // it; fall back to the valve % otherwise. dem: true=fordert Wärme an,
-    // false=satt, null=unbekannt.
-    heat.forEach(r => {
-      const d = r.temp - r.setpoint;                 // <0 = zu kalt
-      const dem = (typeof r.heating === 'boolean') ? r.heating : null;
-      // undersupplied: clearly cold AND still calling for heat (or valve open)
-      if (d <= -0.5 && dem !== false && (r.valve == null || r.valve >= 85)) under.push(r);
-      // oversupplied: at/above target AND satisfied (no demand), or valve throttled
-      else if (d >= -0.2 && (dem === false || (r.valve != null && r.valve <= 60))) over.push(r);
-    });
-    under.sort((a, b) => (a.temp - a.setpoint) - (b.temp - b.setpoint));   // coldest first
-    over.sort((a, b) => (b.temp - b.setpoint) - (a.temp - a.setpoint));    // most-overshooting first
-    lead = under[0] || null;
-  }
-  const chip = (txt, col) => `<span style="display:inline-block;background:${col}22;color:${col};border:1px solid ${col}66;border-radius:999px;padding:2px 9px;font-size:12px;font-weight:600">${txt}</span>`;
-  const demTxt = r => (typeof r.heating === 'boolean')
-    ? (r.heating ? ' · 🔥 heizt' : ' · ⏸ aus') : '';
-  const roomLine = (r, action, col) =>
-    `<div class="devrow"><div class="nm"><b>${esc(r.room)}</b>` +
-    `<small>Soll ${fmt(r.setpoint, 0)}° · Ist ${fmt(r.temp, 1)}°${r.valve != null ? ' · Ventil ' + r.valve + '%' : ''}${demTxt(r)}</small></div>` +
-    `<div class="val">${chip(action, col)}</div></div>`;
-  if (head) head.innerHTML = rooms ? (under.length || over.length
-    ? `<span style="color:#ffb64d">${under.length + over.length} Raum/Räume justieren</span>`
-    : `<span style="color:#4be0b0">ausgeglichen</span>`) : '';
-  if (work) {
-    if (!rooms) {
-      work.innerHTML = '<div class="note">Öffne/aktualisiere oben den <b>Heizungs-Check</b>, dann sortiere ich deine Räume hier in „aufdrehen" / „androsseln".</div>';
-    } else if (!under.length && !over.length) {
-      work.innerHTML = '<div class="note">✓ Aus den aktuellen Werten ist keine Schieflage erkennbar – alle Räume erreichen ihr Soll ohne stark gedrosselte Ventile. (Am aussagekräftigsten an einem kalten Tag mit voll geöffneten Thermostaten.)</div>';
-    } else {
-      let h = '';
-      if (under.length) h += `<div style="font-weight:700;color:#ff6b8a;margin:4px 0 6px">🔺 Mehr Durchfluss (am Verteiler aufdrehen)</div>` +
-        under.map(r => roomLine(r, 'aufdrehen', '#ff6b8a')).join('');
-      if (over.length) h += `<div style="font-weight:700;color:#3ba9ff;margin:12px 0 6px">🔻 Zu viel – androsseln (Reserve für die kalten Räume)</div>` +
-        over.map(r => roomLine(r, 'androsseln', '#3ba9ff')).join('');
-      work.innerHTML = h;
-    }
-  }
-  // step-by-step guide (Leitraum woven in when known)
-  const leadTxt = lead ? `<b>${esc(lead.room)}</b> (aktuell ${fmt(lead.temp, 1)}° / Soll ${fmt(lead.setpoint, 0)}°)` : 'der kälteste Raum';
-  const step = (n, t) => `<div style="display:flex;gap:10px;margin-bottom:9px"><div style="flex:0 0 22px;height:22px;border-radius:50%;background:var(--accent);color:#06121f;font-weight:700;display:flex;align-items:center;justify-content:center;font-size:12px">${n}</div><div style="font-size:13px;line-height:1.5">${t}</div></div>`;
-  if (steps) steps.innerHTML =
-    `<div style="font-weight:700;margin:4px 0 8px">So gehst du vor (Beobachtungs-Methode, für Flächenheizung mit Verteiler):</div>` +
-    step(1, '<b>Thermostate voll öffnen.</b> Alle Raumthermostate auf Maximum / „Heizen" – so bestimmt der Verteiler die Verteilung, nicht die Einzelraumregelung. Ein paar gleichmäßige Tage abwarten.') +
-    step(2, '<b>Grundeinstellung am Heizkreisverteiler.</b> Durchfluss (l/min an den Durchflussmessern / Tacosettern) grob nach Kreislänge/Raumgröße einstellen – lange Kreise & große Räume mehr, kleine Bäder weniger.') +
-    step(3, `<b>Beobachten.</b> 1–2 Tage schauen, welche Räume zu kühl bleiben und welche zu warm werden. Die App zeigt das oben live – <b>Leitraum</b> ist gerade ${leadTxt}: der bestimmt, wie hoch der Vorlauf mindestens sein muss.`) +
-    step(4, '<b>Nachjustieren in kleinen Schritten.</b> Zu kalte Räume: Durchfluss am Verteiler erhöhen. Zu warme: reduzieren. Immer nur ±0,2–0,5 l/min, dann wieder 1 Tag beobachten.') +
-    step(5, '<b>Vorlauf senken.</b> Wenn alle Räume gleichmäßig ihr Soll erreichen, die <b>Heizkurve</b> so weit absenken, bis der Leitraum gerade noch warm wird (siehe Heizkurven-Karte). Das ist der eigentliche Effizienzgewinn.') +
-    step(6, '<b>Wiederholen, dann Feintuning.</b> Schritte 3–5 wiederholen, bis es passt. Danach die Raumthermostate wieder dezent regeln lassen – sie müssen jetzt nur noch wenig eingreifen.');
-  if (note) note.innerHTML =
-    '🔧 <b>Heizkörper statt Flächenheizung?</b> Dann über <b>voreinstellbare Thermostatventile</b> abgleichen (oder Rücklauf-Methode: alle Rücklauftemperaturen angleichen). ' +
-    '📄 <b>Für Förderung (BEG/BAFA)</b> ist der <b>rechnerische</b> Abgleich „Verfahren B" (Heizlast je Raum) Pflicht – das macht ein Fachbetrieb mit Software. ' +
-    'Diese Anleitung ist die praktische Selbstoptimierung und kommt ohne Rechnung erstaunlich weit.';
 }
 
 /* ---- Wärmepumpe steuern (Experte): read + write HomeCom settings --------- */
@@ -10010,12 +9689,11 @@ async function doPair() {
  * Renders laufen beim Öffnen des Tabs weiter – die Unter-Tabs sind nur Ansicht. */
 const HEAT_SUBS = ['heizung', 'abgleich', 'effizienz', 'einstellung'];
 const HEAT_SUB_MAP = {
-  'help-card': 'abgleich',
+  'ab-card': 'abgleich', 'abr-card': 'abgleich', 'abd-card': 'abgleich',
   'hp-card': 'heizung', 'hpd-card': 'heizung', 'hpc-card': 'heizung', 'hd-card': 'heizung', 'roomtemp-card': 'heizung', 'hts-card': 'heizung', 'rts-card': 'heizung', 'win-card': 'heizung',
   'hpt-card': 'effizienz',
   'dhw-card': 'abgleich',
-  'obs-card': 'abgleich', 'am-card': 'abgleich', 'tm-card': 'abgleich', 'hl-card': 'abgleich',
-  'flow-card': 'abgleich', 'opt-card': 'abgleich', 'ha-card': 'abgleich', 'layout-card': 'abgleich',
+  'opt-card': 'abgleich', 'layout-card': 'abgleich',
   'hc-card': 'einstellung', 'hpctl-card': 'einstellung', 'roomsync-card': 'einstellung',
   // everything else in the Wärme view (COP/stats/theory charts) → Effizienz
 };
@@ -10031,7 +9709,7 @@ function assignHeatSubs() {
 // calls at once → slow). Each sub-tab loads lazily the first time it's shown.
 const HEAT_SUB_RENDER = {
   heizung: ['renderHpDay', 'renderHeatingDiag', 'renderRoomTemps', 'renderHeatTimeseries', 'renderRoomTs', 'renderWindows', 'renderHpCompare'],
-  abgleich: ['renderObservation', 'renderAutomeasure', 'renderThermal', 'renderHeatload', 'renderFlow', 'renderOptimize', 'renderHydronic', 'renderLayout', 'renderDhwImpact'],
+  abgleich: ['renderAbgleich', 'renderLayout', 'renderDhwImpact'],
   effizienz: ['renderHpTrend'],
   einstellung: ['renderHeatingCurve', 'initHpControls', 'renderRoomSync'],
 };
@@ -10377,8 +10055,6 @@ function init() {
       if (_hcData) paintHeatingCurve(_hcData); else renderHcDeviceNote(hcDevice());
     });
   });
-  const obsS = $('obs-start'); if (obsS) obsS.addEventListener('click', () => obsControl('start'));
-  const obsP = $('obs-stop'); if (obsP) obsP.addEventListener('click', () => obsControl('stop'));
   const amA = $('am-arm');
   if (amA) amA.addEventListener('click', () => {
     const sb = parseFloat(($('am-setback') || {}).value) || 4, fl = parseFloat(($('am-floor') || {}).value) || 15;
@@ -10386,40 +10062,56 @@ function init() {
       amControl('arm');
   });
   const amD = $('am-disarm'); if (amD) amD.addEventListener('click', () => amControl('disarm'));
-  const tmr = $('tm-refresh'); if (tmr) tmr.addEventListener('click', () => { renderThermal(true); renderObservation(true); });
-  const hlr = $('hl-refresh'); if (hlr) hlr.addEventListener('click', () => renderHeatload(true));
-  const hld = $('hl-design'); if (hld) hld.addEventListener('change', () => { renderHeatload(true); _flowData = null; renderFlow(true); });
-  const flr = $('flow-refresh'); if (flr) flr.addEventListener('click', () => renderFlow(true));
-  const fls = $('flow-spread'); if (fls) fls.addEventListener('change', () => renderFlow(true));
-  // Tacosetter Ist-Werte: live comparison to the recommendation, saved per room
-  const fb = $('flow-body');
-  if (fb) {
+  // ---- Abgleich: status card
+  const abR = $('ab-refresh'); if (abR) abR.addEventListener('click', () => { renderAbgleich(true); renderOpState(true); });
+  const abCard = $('ab-card');
+  if (abCard) abCard.addEventListener('click', e => {
+    if (e.target.id === 'ab-op-refresh') { e.preventDefault(); e.target.textContent = 'lese …'; renderOpState(true); }
+  });
+  // ---- Abgleich: room list (expand rows, flow-meter readings, comfort targets)
+  const openSetup = () => { const d = $('lay-det'); if (d) { d.open = true; d.scrollIntoView({ behavior: 'smooth', block: 'start' }); } };
+  const abrCard = $('abr-card');
+  if (abrCard) {
     const updTaco = (el) => {
-      const room = el.dataset.room, idx = el.dataset.idx;
-      const soll = parseFloat(el.dataset.soll) || 0, fmax = parseFloat(el.dataset.fmax) || 1;
+      const room = el.dataset.room, soll = parseFloat(el.dataset.soll) || 0;
       const raw = (el.value || '').trim().replace(',', '.');
       const ist = raw === '' ? null : parseFloat(raw);
       const valid = ist != null && isFinite(ist) && ist >= 0;
       try { if (!valid) localStorage.removeItem(tacoKey(room)); else localStorage.setItem(tacoKey(room), String(ist)); } catch (e) {}
       const d = tacoDelta(valid ? ist : null, soll, el.dataset.cat);
-      const ds = document.getElementById('taco-d-' + idx); if (ds) { ds.textContent = d.txt; ds.style.color = d.col; }
-      const mk = document.getElementById('taco-m-' + idx);
-      if (mk) mk.innerHTML = valid
-        ? `<div style="position:absolute;left:${Math.max(0, Math.min(100, ist / fmax * 100))}%;top:-2px;width:3px;height:16px;background:#ffb64d;border-radius:2px"></div>` : '';
+      const ds = document.getElementById('taco-d-' + el.dataset.idx); if (ds) { ds.textContent = d.txt; ds.style.color = d.col; }
     };
-    fb.addEventListener('input', e => { const el = e.target.closest && e.target.closest('.taco-in'); if (el) updTaco(el); });
-    fb.addEventListener('change', e => { const el = e.target.closest && e.target.closest('.taco-in'); if (el) { updTaco(el); if (typeof _flushSettingsNow === 'function') _flushSettingsNow(); } });
+    abrCard.addEventListener('input', e => { const el = e.target.closest && e.target.closest('.taco-in'); if (el) updTaco(el); });
+    abrCard.addEventListener('change', async e => {
+      const taco = e.target.closest && e.target.closest('.taco-in');
+      if (taco) { updTaco(taco); if (typeof _flushSettingsNow === 'function') _flushSettingsNow(); return; }
+      const tgt = e.target.closest && e.target.closest('.tgt-in');
+      if (tgt) {            // comfort target changed → the bridge re-judges every room
+        const v = parseFloat(String(tgt.value).replace(',', '.'));
+        await abSaveSetting(targetKey(tgt.dataset.room), isFinite(v) && v >= 10 && v <= 30 ? v : null);
+        renderAbgleich(true);
+      }
+    });
+    abrCard.addEventListener('click', async e => {
+      if (e.target.closest('[data-ab-setup]')) { e.preventDefault(); openSetup(); return; }
+      const rs = e.target.closest('.tgt-reset');
+      if (rs) { e.preventDefault(); await abSaveSetting(targetKey(rs.dataset.room), null); renderAbgleich(true); return; }
+      if (e.target.closest('input,select,a,label')) return;       // don't toggle while typing
+      const tg = e.target.closest('.abr-toggle');
+      if (tg) { const rm = tg.dataset.room; _abOpen.has(rm) ? _abOpen.delete(rm) : _abOpen.add(rm); if (_abData) paintAbRooms(_abData); }
+    });
   }
+  // ---- Abgleich: step log
   const optLog = $('opt-log');
   if (optLog) optLog.addEventListener('click', () => {
     const room = ($('opt-room') || {}).value; if (!room) return;
     const body = { room, action: ($('opt-action') || {}).value || 'open' };
-    const d = parseFloat(($('opt-delta') || {}).value); if (!isNaN(d)) body.delta_lmin = d;
-    const nt = (($('opt-note') || {}).value || '').trim(); if (nt) body.note = nt;
+    const d = parseFloat(String(($('opt-delta') || {}).value || '').replace(',', '.')); if (!isNaN(d)) body.delta_lmin = d;
+    const nt = (($('opt-note-inp') || {}).value || '').trim(); if (nt) body.note = nt;
     optAction('/api/optimize/step', body).then(() => { const n = $('opt-note-inp'); if (n) n.value = ''; const di = $('opt-delta'); if (di) di.value = ''; });
   });
   const optUndo = $('opt-undo'); if (optUndo) optUndo.addEventListener('click', () => optAction('/api/optimize/undo', {}));
-  const optReset = $('opt-reset'); if (optReset) optReset.addEventListener('click', () => { if (confirm('Den gesamten Optimierungs-Verlauf löschen?')) optAction('/api/optimize/reset', {}); });
+  const optReset = $('opt-reset'); if (optReset) optReset.addEventListener('click', () => { if (confirm('Den gesamten Schritt-Verlauf löschen?')) optAction('/api/optimize/reset', {}); });
   const rtsSel = $('rts-room');
   if (rtsSel) rtsSel.addEventListener('change', () => { _rtsSel = rtsSel.value; if (_rtsData) paintRoomTs(_rtsData); });
   const rtsRange = $('rts-range');
@@ -10428,16 +10120,16 @@ function init() {
   if (layCard) {
     layCard.addEventListener('input', e => {
       const t = e.target;
-      if (t.id === 'lay-q') { const l = layoutModel(); l.q = t.value; layoutSave(l); computeLayoutResult(); specRefresh(); }
-      else if (t.id === 'lay-dt') { const l = layoutModel(); l.dt = t.value; layoutSave(l); computeLayoutResult(); specRefresh(); }
-      else if (t.dataset.lay && t.dataset.room) {
-        layoutSet(t.dataset.room, t.dataset.lay, t.value); computeLayoutResult();
-        if (t.dataset.lay === 'area' || t.dataset.lay === 'loops') { _hlData = null; _flowData = null; }
+      if (t.id === 'lay-q') { const l = layoutModel(); l.q = t.value; layoutSave(l); abLayoutChanged(); }
+      else if (t.id === 'lay-dt') { const l = layoutModel(); l.dt = t.value; layoutSave(l); abLayoutChanged(); }
+      else if (t.dataset.lay && t.dataset.room && t.tagName !== 'SELECT') {
+        layoutSet(t.dataset.room, t.dataset.lay, t.value); abLayoutChanged();
       }
     });
     layCard.addEventListener('change', e => {
       const t = e.target;
-      if (t.dataset.lay === 'manifold' && t.dataset.room) { layoutSet(t.dataset.room, 'manifold', t.value); computeLayoutResult(); _flowData = null; }
+      if (t.dataset.lay === 'manifold' && t.dataset.room) { layoutSet(t.dataset.room, 'manifold', t.value); abLayoutChanged(0); }
+      else if (t.id === 'lay-design') { const l = layoutModel(); l.design = parseFloat(t.value); layoutSave(l); abLayoutChanged(0); }
     });
     layCard.addEventListener('click', e => {
       const sp = e.target.closest('.specpre');
@@ -10447,7 +10139,7 @@ function init() {
         const l = layoutModel(); l.q = v; layoutSave(l);
         const qin = $('lay-q'); if (qin) qin.value = v;
         document.querySelectorAll('.specpre').forEach(b => { const on = Math.round(parseFloat(b.dataset.sp)) === v; b.style.borderColor = on ? 'var(--accent)' : ''; b.style.color = on ? 'var(--accent)' : ''; });
-        computeLayoutResult(); specRefresh();
+        abLayoutChanged(0);
         return;
       }
       const rdel = e.target.closest('[data-roomdel]');
@@ -10457,16 +10149,15 @@ function init() {
           const l = layoutModel(); delete l.rooms[rm];
           if (!l.hidden.includes(rm)) l.hidden.push(rm);   // stays gone even if it's a live thermostat room
           layoutSave(l);
-          if (typeof _flushSettingsNow === 'function') _flushSettingsNow();   // persist now, survive quick reload
-          _hlData = null; _flowData = null; renderLayout();
+          renderLayout(); abLayoutChanged(0);       // persist now + drop the room from the balance view
         }
         return;
       }
       const del = e.target.closest('[data-mfdel]');
-      if (del) { e.preventDefault(); const l = layoutModel(); l.manifolds = l.manifolds.filter(m => m !== del.dataset.mfdel); Object.values(l.rooms).forEach(r => { if (r.manifold === del.dataset.mfdel) delete r.manifold; }); layoutSave(l); renderLayout(); return; }
-      if (e.target.id === 'lay-mf-add') { const v = ($('lay-mf-name').value || '').trim(); if (v) { const l = layoutModel(); if (!l.manifolds.includes(v)) l.manifolds.push(v); layoutSave(l); renderLayout(); } return; }
-      if (e.target.id === 'lay-room-add') { const v = ($('lay-room-name').value || '').trim(); if (v) { const l = layoutModel(); l.rooms[v] = l.rooms[v] || {}; layoutSave(l); renderLayout(); } return; }
-      if (e.target.id === 'lay-rooms-load') { const l = layoutModel(); l.hidden = []; layoutSave(l); if (typeof _flushSettingsNow === 'function') _flushSettingsNow(); renderLayout(); return; }
+      if (del) { e.preventDefault(); const l = layoutModel(); l.manifolds = l.manifolds.filter(m => m !== del.dataset.mfdel); Object.values(l.rooms).forEach(r => { if (r.manifold === del.dataset.mfdel) delete r.manifold; }); layoutSave(l); renderLayout(); abLayoutChanged(0); return; }
+      if (e.target.id === 'lay-mf-add') { const v = ($('lay-mf-name').value || '').trim(); if (v) { const l = layoutModel(); if (!l.manifolds.includes(v)) l.manifolds.push(v); layoutSave(l); renderLayout(); abLayoutChanged(0); } return; }
+      if (e.target.id === 'lay-room-add') { const v = ($('lay-room-name').value || '').trim(); if (v) { const l = layoutModel(); l.rooms[v] = l.rooms[v] || {}; l.hidden = l.hidden.filter(h => h !== v); layoutSave(l); renderLayout(); abLayoutChanged(0); } return; }
+      if (e.target.id === 'lay-rooms-load') { const l = layoutModel(); l.hidden = []; layoutSave(l); renderLayout(); abLayoutChanged(0); return; }
       if (e.target.id === 'lay-preset') {
         if (confirm('Verteiler-Layout mit deinen Hauswerten vorbefüllen (Flächen, Stränge, Verteiler Küche/Schlafzimmer/OG)? Bestehende Angaben zu diesen Räumen werden überschrieben.'))
           layoutPresetMyHouse();

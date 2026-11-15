@@ -106,6 +106,20 @@ siehe **[docs/SETUP.md](docs/SETUP.md)**.
 * `openssl` (nur einmalig fürs Erzeugen des Client-Zertifikats).
 * iPhone im gleichen WLAN.
 
+## Bekannter Stolperstein: Safari lädt die Seite nicht neu
+
+Zeigt Safari beim **Neuladen** „Safari kann die Seite nicht öffnen … HTTP-URL mit
+aktiviertem Modus ‚HTTPS-Only'", liegt das nicht an der App: Die Bridge liefert im
+Heimnetz über **HTTP** aus, und Safari blockiert das, wenn in den Safari-Einstellungen
+die **Warnung bei nicht sicherer Verbindung** (*Not Secure Connection Warning*)
+eingeschaltet ist. Eingetippte Adressen nimmt Safari davon aus, ein Neuladen nicht –
+und für lokale Adressen bietet es kein „trotzdem fortfahren" an.
+
+* Abhilfe ohne Einstellung zu ändern: Adresse neu aufrufen (Lesezeichen) oder im
+  Verlauf einen Schritt zurück und wieder vor.
+* Dauerhaft: die genannte Warnung in den Safari-Einstellungen ausschalten (Safari
+  warnt dann auch bei fremden HTTP-Seiten nicht mehr).
+
 ## Datenschutz
 
 Alle Daten bleiben lokal (SQLite in `bridge/energy.db`). Zertifikat, Passwort

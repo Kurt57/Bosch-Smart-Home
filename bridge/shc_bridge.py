@@ -683,6 +683,15 @@ class SHCClient:
                     rooms[r.get("id")] = r.get("name")
         except Exception:
             pass
+        # Remember the last good id→name map per controller. If the rooms lookup
+        # fails for one poll we reuse it instead of falling back to the raw room
+        # id ("hz_3") – that fallback used to log each room a second time under
+        # its id, which then showed up as phantom rooms in the analyses.
+        cached = _ROOM_NAMES.setdefault(self.ip, {})
+        if rooms:
+            cached.update({k: v for k, v in rooms.items() if k and v})
+        else:
+            rooms = dict(cached)
 
         # serviceId -> state, keyed by deviceId. Prefer the bulk endpoint.
         svc = {}
@@ -726,7 +735,9 @@ class SHCClient:
         def room_rec(room_id):
             name = rooms.get(room_id) or room_id or "—"
             return by_room.setdefault(room_id or name, {
-                "room": name, "setpoint": None, "temp": None, "valve": None,
+                # unnamed = the name could not be resolved and is just the raw id
+                "room": name, "unnamed": not rooms.get(room_id),
+                "setpoint": None, "temp": None, "valve": None,
                 "valves": [], "operationMode": None, "roomControlMode": None,
                 "boost": False, "summerMode": False, "low": False, "offset": None,
                 "childLock": False, "faults": [], "devices": 0, "rcc_device": None,
@@ -859,6 +870,55 @@ class SHCClient:
         return out
 
 
+_RAW_ROOM_ID = re.compile(r"^hz_\d+$")      # the SHC's internal room ids
+_ROOM_NAMES: dict = {}                      # SHC ip -> {room id: name}, last good lookup
+
+
+def _loggable_climate(climate: list[dict]) -> list[dict]:
+    """The rooms of a thermostat snapshot that should go into the room log:
+    heating rooms with a temperature. Rooms whose NAME could not be resolved
+    (raw id only) are skipped whenever other rooms in the same snapshot did
+    resolve – logging them would create a duplicate room under its id."""
+    rows = [r for r in climate
+            if str(r.get("roomControlMode") or "HEATING").upper() != "OFF"
+            and not r.get("summerMode")
+            and isinstance(r.get("temp"), (int, float))]
+    if any(not r.get("unnamed") for r in rows):
+        rows = [r for r in rows if not r.get("unnamed")]
+    return rows
+
+
+def _drop_stray_rooms(rows: list[dict]) -> list[dict]:
+    """Remove "rooms" that are logging artefacts rather than real rooms.
+
+    When the SHC's room-name lookup fails for a single poll, the thermostat
+    records fall back to their raw room id (``hz_1`` …) and are logged under
+    that name – one stray sample per room, which then surfaces as an extra
+    empty room in every per-room analysis. A room is dropped when it holds only
+    a sliver of the busiest room's samples AND (its name is a raw SHC id, or it
+    has fewer than 3 samples). Real rooms – including ones named by id on
+    installations whose names never resolve – carry a full share and stay."""
+    if not rows:
+        return rows
+    counts: dict = {}
+    for r in rows:
+        counts[r.get("room")] = counts.get(r.get("room"), 0) + 1
+    stray = _stray_room_names(counts)
+    return [r for r in rows if r.get("room") not in stray] if stray else rows
+
+
+def _stray_room_names(counts: dict) -> set:
+    """The rule behind :func:`_drop_stray_rooms`, on a room -> sample-count map."""
+    if not counts:
+        return set()
+    top = max(counts.values())
+    if top < 20:                       # too little data overall to judge
+        return set()
+    return {rm for rm, n in counts.items()
+            if n < max(3, top * 0.02)
+            and (n < 3 or (isinstance(rm, str) and _RAW_ROOM_ID.match(rm)))}
+
+
 # --------------------------------------------------------------------------- #
 # Storage
 # --------------------------------------------------------------------------- #
@@ -949,6 +1009,12 @@ class Store:
             )
             self.conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_roomlog ON room_log(ts)"
+            )
+            # hot-water tank temperature + the setpoint it charges to, per
+            # heat-pump poll – lets a DHW phase be judged on what the tank did
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS dhw_log("
+                " ts INTEGER PRIMARY KEY, temp REAL, setpoint REAL)"
             )
             # AEG / Electrolux appliances (washer, dryer, …) and their readings
             self.conn.execute(
@@ -1157,11 +1223,64 @@ class Store:
                 " ON CONFLICT(ts,room) DO UPDATE SET temp=excluded.temp,"
                 " setpoint=excluded.setpoint, valve=excluded.valve", rows)
 
-    def room_log_since(self, since_ts: int) -> list[dict]:
+    def room_log_since(self, since_ts: int, clean: bool = True) -> list[dict]:
+        """Per-room thermostat log. With ``clean`` (default) stray rooms are
+        dropped – see :func:`_drop_stray_rooms` – so a one-off glitch poll does
+        not surface as an extra "room" in every analysis."""
         with self.lock:
             cur = self.conn.execute(
                 "SELECT ts,room,temp,setpoint,valve FROM room_log WHERE ts>=? ORDER BY ts ASC",
                 (since_ts,))
+            rows = [dict(r) for r in cur.fetchall()]
+        return _drop_stray_rooms(rows) if clean else rows
+
+    def room_log_counts(self, since_ts: int) -> dict:
+        """room -> number of logged samples since ``since_ts`` (unfiltered)."""
+        with self.lock:
+            cur = self.conn.execute(
+                "SELECT room, COUNT(*) AS n FROM room_log WHERE ts>=? GROUP BY room", (since_ts,))
+            return {r["room"]: int(r["n"]) for r in cur.fetchall()}
+
+    def room_setpoint_modes(self, since_ts: int, max_sp: float = 24.5) -> dict:
+        """room -> the setpoint that was in effect most often by day (8–22 h)
+        since ``since_ts``, ignoring cranked-up values above ``max_sp``. Used to
+        recover a room's normal comfort setpoint while the thermostats are
+        deliberately opened up for balancing."""
+        with self.lock:
+            cur = self.conn.execute(
+                "SELECT room, ROUND(setpoint*2)/2.0 AS sp, COUNT(*) AS n FROM room_log"
+                " WHERE ts>=? AND setpoint IS NOT NULL AND setpoint<=?"
+                " AND CAST(strftime('%H', ts, 'unixepoch', 'localtime') AS INTEGER) BETWEEN 8 AND 21"
+                " GROUP BY room, sp", (since_ts, max_sp))
+            best: dict = {}
+            for r in cur.fetchall():
+                rm, sp, n = r["room"], r["sp"], r["n"]
+                if sp is None:
+                    continue
+                if rm not in best or n > best[rm][1]:
+                    best[rm] = (float(sp), int(n))
+        return {rm: v[0] for rm, v in best.items() if v[1] >= 6}
+
+    # -- hot-water tank log ---------------------------------------------- #
+    def dhw_log_add(self, ts: int, temp, setpoint=None):
+        if temp is None:
+            return
+        with self.lock, self.conn:
+            self.conn.execute(
+                "INSERT OR REPLACE INTO dhw_log(ts,temp,setpoint) VALUES(?,?,?)",
+                (int(ts), float(temp), float(setpoint) if setpoint is not None else None))
+
+    def dhw_log_add_bulk(self, rows: list[tuple]):
+        """rows: (ts, temp, setpoint) – demo/test seeding."""
+        with self.lock, self.conn:
+            self.conn.executemany(
+                "INSERT OR REPLACE INTO dhw_log(ts,temp,setpoint) VALUES(?,?,?)", rows)
+
+    def dhw_log_since(self, since_ts: int) -> list[dict]:
+        with self.lock:
+            cur = self.conn.execute(
+                "SELECT ts,temp,setpoint FROM dhw_log WHERE ts>=? AND temp IS NOT NULL"
+                " ORDER BY ts ASC", (since_ts,))
             return [dict(r) for r in cur.fetchall()]
 
     def room_log_count(self) -> int:
@@ -1901,6 +2020,114 @@ def compute_dhw_impact(store: "Store", days: float = 14, hp_live: dict | None = 
     # quantified levers first (by benefit), directional ones last
     levers.sort(key=lambda l: (l["benefit_c"] is None, -(l["benefit_c"] or 0)))
 
+    # ---- what the TANK did per charge (read, when the device reports it) ---- #
+    tank_rows = store.dhw_log_since(since - 1800)
+    tank_ts = [r["ts"] for r in tank_rows]
+
+    def tank_at(ts, tol=900):
+        if not tank_rows:
+            return None
+        i = bisect.bisect_left(tank_ts, ts)
+        best = None
+        for j in (i - 1, i):
+            if 0 <= j < len(tank_rows) and abs(tank_ts[j] - ts) <= tol:
+                if best is None or abs(tank_ts[j] - ts) < abs(tank_ts[best] - ts):
+                    best = j
+        return tank_rows[best] if best is not None else None
+
+    for e in events:
+        a, b = tank_at(e["start"]), tank_at(e["end"])
+        e["tank_start"] = round(a["temp"], 1) if a else None
+        e["tank_end"] = round(b["temp"], 1) if b else None
+        sp = (b or a or {}).get("setpoint") if (a or b) else None
+        e["tank_set"] = round(sp, 1) if sp is not None else None
+        # reached = the charge ended at (about) its setpoint, i.e. it finished
+        # by itself; clearly below = it was cut off before the tank was full
+        e["tank_reached"] = (e["tank_end"] >= e["tank_set"] - 1.5
+                             if (e["tank_end"] is not None and e["tank_set"] is not None) else None)
+
+    # ---- charging pattern: why does it switch so often? (measured) ---------- #
+    long_e = [e for e in events if e["dur_min"] >= 45]
+    cap_min, capped = None, []
+    for e in long_e:                            # densest ±6-min cluster of durations
+        grp = [x for x in long_e if abs(x["dur_min"] - e["dur_min"]) <= 6]
+        if len(grp) > len(capped):
+            capped = grp
+    if len(capped) >= 3 and len(capped) >= 0.3 * len(long_e):
+        cap_min = med([x["dur_min"] for x in capped])
+        if cap_min < 60:
+            cap_min, capped = None, []
+    else:
+        capped = []
+    # chains: the next charge started after less than an hour of heating
+    chains, cur_chain = [], []
+    for e in events:
+        cur_chain.append(e)
+        if not (e["heat_min"] is not None and e["heat_min"] < 60):
+            if len(cur_chain) >= 2:
+                chains.append(cur_chain)
+            cur_chain = []
+    if len(cur_chain) >= 2:
+        chains.append(cur_chain)
+    chain_gaps = [e["heat_min"] for ch in chains for e in ch[:-1] if e["heat_min"] is not None]
+    span_d = max(1.0, (now - max(since, events[0]["start"])) / 86400.0)
+    dhw_h_day = sum(e["dur_min"] for e in events) / 60.0 / span_d
+    tank_e = [e for e in events if e["tank_reached"] is not None]
+    n_short = sum(1 for e in tank_e if not e["tank_reached"])
+    cap_tank = [e for e in capped if e["tank_reached"] is not None]
+    cap_short = sum(1 for e in cap_tank if not e["tank_reached"])
+    pattern = {
+        "cap_min": cap_min, "n_capped": len(capped), "n_long": len(long_e),
+        "n_chains": len(chains), "longest_chain": max((len(c) for c in chains), default=0),
+        "chain_gap_min": (med(chain_gaps) if chain_gaps else None),
+        "hours_per_day": round(dhw_h_day, 1), "time_share": round(dhw_h_day / 24.0 * 100),
+        "tank": ({"n": len(tank_e), "n_short": n_short,
+                  "avg_end": round(sum(e["tank_end"] for e in tank_e) / len(tank_e), 1),
+                  "setpoint": med([e["tank_set"] for e in tank_e])} if tank_e else None),
+        "level": "info", "html": "",
+    }
+    parts = []
+    if cap_min:
+        txt = (f"<b>{len(capped)} von {len(long_e)}</b> längeren Ladungen dauerten fast exakt gleich lang "
+               f"(<b>~{cap_min:.0f} min</b>)")
+        if chain_gaps:
+            txt += (f", und in <b>{len(chains)} Ketten</b> startete die nächste schon nach "
+                    f"~{med(chain_gaps):.0f} min Heizen")
+        txt += ". "
+        if cap_tank and cap_short >= 0.6 * len(cap_tank):
+            avg_end = sum(e["tank_end"] for e in cap_tank) / len(cap_tank)
+            sp_ = med([e["tank_set"] for e in cap_tank])
+            txt += (f"Dabei endeten {cap_short} von {len(cap_tank)} davon <b>unter dem Soll</b> "
+                    f"(Speicher Ø {_de(avg_end)} °C bei Soll {_de(sp_)} °C). Die Ladung wird also nach "
+                    f"einer festen Zeit <b>abgebrochen, bevor der Speicher voll ist</b>, die Heizung darf "
+                    f"kurz ran, dann geht es von vorn los. Typische Ursachen: das <b>WW-Soll ist für die "
+                    f"Wärmepumpe bei dieser Außentemperatur zu hoch</b>, oder der Speicher verliert "
+                    f"ständig Wärme (z. B. eine dauernd laufende <b>Zirkulationspumpe</b>).")
+            pattern["level"] = "warn"
+        elif cap_tank:
+            txt += ("Der Speicher erreichte dabei meist sein Soll – die gleiche Dauer kommt also eher "
+                    "von einem festen Zeitprogramm als von einem Abbruch.")
+        else:
+            txt += ("Gleich lange Ladungen, die kurz darauf neu starten, sehen nach einer "
+                    "<b>Zeitbegrenzung der WW-Ladung</b> aus (maximale Ladedauer erreicht, danach eine "
+                    "Mindest-Heizzeit, dann die nächste Ladung). Ob der Speicher dabei sein Soll "
+                    "erreicht, protokolliert die App <b>ab jetzt</b> mit – dann steht hier, ob es ein "
+                    "Abbruch ist.")
+            pattern["level"] = "warn"
+        parts.append(txt)
+    elif chains:
+        parts.append(f"<b>{len(chains)}×</b> folgte die nächste WW-Ladung nach weniger als einer Stunde "
+                     f"Heizen (längste Kette: {pattern['longest_chain']} Ladungen).")
+    if dhw_h_day >= 4.0:
+        parts.append(f"Insgesamt macht die Wärmepumpe im Schnitt <b>{_de(dhw_h_day)} h pro Tag</b> "
+                     f"Warmwasser ({pattern['time_share']} % der Zeit) – üblich sind 1–3 h. In der Zeit "
+                     f"pausiert die Heizung.")
+        pattern["level"] = "warn"
+    if tank_e and not cap_min and n_short >= 0.5 * len(tank_e) and len(tank_e) >= 3:
+        parts.append(f"{n_short} von {len(tank_e)} Ladungen endeten unter dem Soll "
+                     f"(Speicher Ø {_de(pattern['tank']['avg_end'])} °C).")
+    pattern["html"] = " ".join(parts)
+
     # representative phase for the chart: most recent clear dip that recovered
     cand = [e for e in events if e["drop"] >= 0.2 and e["recovered"]] or events
     rep_e = max(cand, key=lambda x: x["start"])
@@ -1922,6 +2149,7 @@ def compute_dhw_impact(store: "Store", days: float = 14, hp_live: dict | None = 
         "n_minimal": n_minimal, "n_tight": n_tight,
         "n_meaningful": len(meaningful),
         "median_heat_min": med_heat_min,
+        "pattern": pattern,
         "avg_dur_min": round(sum(e["dur_min"] for e in events) / len(events)),
         "by_outdoor": by_out,
         "dayparts": dayparts,
@@ -3500,9 +3728,20 @@ def _temp_runs(pts: list[dict], kind: str) -> list[list]:
         va = a.get("valve")
         dtemp = tb - ta
         if kind == "cool":
-            # cooling: valve low/unknown AND no open window in this room (an open
-            # window is ventilation, not the room's natural heat loss → excluded)
-            ok = (dtemp <= 0.05 and (va is None or va <= 35)
+            # cooling: valve low AND no open window in this room (an open window
+            # is ventilation, not the room's natural heat loss → excluded).
+            # Without a valve reading (floor heating) the room must demonstrably
+            # NOT be heated: either the heat pump was not heating, or the
+            # thermostat was satisfied (setpoint below the room temperature).
+            # A room that is being heated while its temperature drifts down is
+            # not a free cool-down and used to yield wildly scattered τ values.
+            if va is not None:
+                unheated = va <= 35
+            else:
+                spa = a.get("setpoint")
+                unheated = (not (a.get("_heat") and b.get("_heat"))
+                            or (spa is not None and spa <= ta - 0.3))
+            ok = (dtemp <= 0.05 and unheated
                   and not a.get("_win") and not b.get("_win"))
         else:
             # warming: valve open, OR – for floor heating without a valve reading –
@@ -3520,21 +3759,94 @@ def _temp_runs(pts: list[dict], kind: str) -> list[list]:
     return runs
 
 
-def compute_thermal_model(store: "Store", days: int = 14) -> dict:
+def _guess_target(room: str) -> float:
+    """A sensible comfort temperature from the room name – last resort when
+    neither the user nor the setpoint history says what the room should have."""
+    n = (room or "").lower()
+    if re.search(r"bad|wc|dusch", n):
+        return 23.0
+    if re.search(r"schlaf", n):
+        return 18.0
+    if re.search(r"flur|diele|keller|g[äa]ste|abstell|hwr|technik|wasch", n):
+        return 19.0
+    if re.search(r"küche|kueche", n):
+        return 20.0
+    return 21.0
+
+
+def _room_targets(store: "Store", rooms: list, explicit: dict | None, now: int) -> dict:
+    """room -> (comfort target °C, source). The target is what the room SHOULD
+    have – deliberately not the raw thermostat setpoint, which is cranked up
+    (25–30 °C) while the valves are held open for balancing and would make
+    every room look like it "misses its setpoint by 4 K".
+
+    Order: the value the user entered → the setpoint in effect by day over the
+    last 3 days (if it is a normal value) → the normal setpoint from before the
+    thermostats were opened up (last 60 days) → a guess from the room name."""
+    explicit = explicit or {}
+    recent = store.room_setpoint_modes(now - 3 * 86400)
+    older = store.room_setpoint_modes(now - 60 * 86400)
+    out = {}
+    for rm in rooms:
+        v = explicit.get(rm)
+        try:
+            v = float(v) if v is not None else None
+        except (TypeError, ValueError):
+            v = None
+        if v is not None and 10.0 <= v <= 30.0:
+            out[rm] = (v, "eingestellt")
+        elif rm in recent:
+            out[rm] = (recent[rm], "Sollwert")
+        elif rm in older:
+            out[rm] = (older[rm], "früherer Sollwert")
+        else:
+            out[rm] = (_guess_target(rm), "geschätzt")
+    return out
+
+
+def _interval_lookup(ivs):
+    """Fast "is ts inside any interval?" test (merge + bisect) – the per-sample
+    membership checks below would otherwise be O(samples × intervals)."""
+    merged = []
+    for a, b in sorted((a, b) for a, b in ivs):
+        if merged and a <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b])
+    starts = [a for a, _ in merged]
+
+    def inside(ts):
+        i = bisect.bisect_right(starts, ts) - 1
+        return i >= 0 and merged[i][1] >= ts
+    return inside
+
+
+SUPPLY_BAND_K = 0.7        # a room this far off the house average needs adjusting
+
+
+def compute_thermal_model(store: "Store", days: int = 14, targets: dict | None = None,
+                          exclude: set | None = None) -> dict:
     """Per-room learning thermal model (RC: C·dT/dt = Q − UA·(T_in − T_out)).
 
-    From the logged room thermostats + the outdoor temperature we DERIVE, per
-    room: the thermal time constant τ = C/UA (inertia) from free cool-down
-    phases, the heat-up responsiveness while the valve is open, and whether the
-    room reaches its setpoint. These feed a *relative* heat-demand ranking that
-    prioritises rooms for the hydraulic balance. Confidence grows with the data;
-    where it is thin the room is flagged as still in its observation phase."""
+    Two separate things, deliberately not mixed:
+
+    • PHYSICS (derived, slow-changing): the thermal time constant τ = C/UA from
+      free cool-down phases and the heat-up rate. τ is a property of the
+      building, so it is learned from a longer history (≥ 45 days).
+    • SUPPLY (measured, last 24 h only): how each room sits against its comfort
+      target (``targets``: room -> °C as entered by the user; otherwise
+      recovered from the setpoint history). While the thermostats are opened up
+      the yardstick is a room's deviation relative to the other rooms – which is
+      exactly what hydraulic balancing equalises. A 14-day worst case would say
+      nothing about today."""
     now = int(time.time())
-    since = now - int(days) * 86400
+    win_days = max(int(days), 45)
+    since = now - win_days * 86400
     rows = store.room_log_since(since)
     hp_rows = store.hp_samples_since(since)
     omap = _outdoor_hourly_map(hp_rows)
     heat_iv = _heat_intervals(hp_rows, now)
+    in_heat = _interval_lookup(heat_iv)
     has_outdoor = len(omap) > 0
     hist = store.hp_history_count()
 
@@ -3546,15 +3858,19 @@ def compute_thermal_model(store: "Store", days: int = 14) -> dict:
         for rm in e.get("rooms") or []:
             win_by_room.setdefault(rm, []).append((e["start"], e["end"]))
 
-    def _in_any(ts, ivs):
-        return any(a <= ts <= b for a, b in ivs)
-
+    if targets is None:                 # the user's own comfort targets (synced app settings)
+        targets = _settings_targets(_app_settings(store))
+    exclude = exclude or set()
     byroom: dict[str, list] = {}
     for r in rows:
-        byroom.setdefault(r.get("room") or "—", []).append(r)
+        rm = r.get("room") or "—"
+        if rm in exclude:               # rooms the user removed from the manifold layout
+            continue
+        byroom.setdefault(rm, []).append(r)
 
     span_s = (max(p["ts"] for p in rows) - min(p["ts"] for p in rows)) if rows else 0
     span_days = span_s / 86400.0
+    tmap = _room_targets(store, list(byroom.keys()), targets, now)
 
     def _median(xs):
         s = sorted(xs)
@@ -3566,25 +3882,28 @@ def compute_thermal_model(store: "Store", days: int = 14) -> dict:
     def _conf_word(score):
         return "hoch" if score >= 0.66 else ("mittel" if score >= 0.33 else "niedrig")
 
+    day_ago, two_ago = now - 86400, now - 2 * 86400
     out_rooms = []
     for rm, pts in sorted(byroom.items()):
         pts.sort(key=lambda p: p["ts"])
         # annotate each sample: was a window open in this room, and was the heat
         # pump heating? (used to exclude ventilation from τ and to detect heat-up
         # phases on floor heating, where there is no valve % to key off.)
-        rm_wins = win_by_room.get(rm, [])
+        in_win = _interval_lookup(win_by_room[rm]) if win_by_room.get(rm) else None
         n_win_excluded = 0
         for p in pts:
-            wopen = _in_any(p["ts"], rm_wins) if rm_wins else False
+            wopen = in_win(p["ts"]) if in_win else False
             p["_win"] = wopen
-            p["_heat"] = _in_any(p["ts"], heat_iv) if heat_iv else False
+            p["_heat"] = in_heat(p["ts"])
             if wopen:
                 n_win_excluded += 1
         temps = [p["temp"] for p in pts if p.get("temp") is not None]
-        sps = [p["setpoint"] for p in pts if p.get("setpoint") is not None]
         if not temps:
             continue
-        sp = round(_median(sps), 1) if sps else None
+        # the setpoint that is in effect NOW (not a 14-day median, which lags
+        # behind for days after a change and then contradicts the live value)
+        sp = next((round(p["setpoint"], 1) for p in reversed(pts)
+                   if p.get("setpoint") is not None), None)
         temp_now = pts[-1].get("temp")
 
         # --- cool-down phases -> τ (derived) + cool-down rate (measured) ---
@@ -3596,20 +3915,20 @@ def compute_thermal_model(store: "Store", days: int = 14) -> dict:
                 continue
             cool_rates.append(drop / dur_h)
             if has_outdoor:
-                xy = []
-                for p in run:
-                    o = _outdoor_at(omap, p["ts"])
-                    if o is None:
-                        continue
-                    d = p["temp"] - o
-                    if d <= 0.4:
-                        continue
-                    xy.append(((p["ts"] - run[0]["ts"]) / 3600.0, math.log(d)))
-                fit = _linfit(xy)
-                if fit and fit[0] < -1e-3:
-                    tau = -1.0 / fit[0]
-                    if 1.0 <= tau <= 400.0:
-                        taus.append(tau)
+                # dT/dt = −(T − T_out)/τ  →  τ = mean driving difference ÷ cooling
+                # rate. Unlike a log-fit of (T − T_out) this stays stable when the
+                # outdoor temperature itself moves during the night (it usually
+                # falls faster than a screed floor cools, which made the log-fit
+                # return no value or a wildly wrong one).
+                drive = [p["temp"] - o for p in run
+                         for o in [_outdoor_at(omap, p["ts"])] if o is not None]
+                if len(drive) >= max(3, len(run) // 2):
+                    dmean = sum(drive) / len(drive)
+                    rate = drop / dur_h
+                    if dmean >= 2.0 and rate > 0.01:
+                        tau = dmean / rate
+                        if 1.0 <= tau <= 400.0:
+                            taus.append(tau)
 
         # --- heat-up phases -> responsiveness (derived) ---
         warm_rates = []
@@ -3632,106 +3951,152 @@ def compute_thermal_model(store: "Store", days: int = 14) -> dict:
         cool_kph = round(_median(cool_rates), 2) if cool_rates else None
         warm_kph = round(_median(warm_rates), 2) if warm_rates else None
 
-        # --- setpoint coverage (measured/derived) ---
-        reaches = sp is not None and max(temps) >= sp - 0.2
-        max_deficit = None
-        if sp is not None:
-            below = [sp - p["temp"] for p in pts
-                     if p.get("temp") is not None
-                     and any(a <= p["ts"] <= b for a, b in heat_iv)]
-            if not below:
-                below = [sp - t for t in temps]
-            md = max(below) if below else 0.0
-            max_deficit = round(md, 1) if md > 0.1 else 0.0
+        # --- supply: where the room sits against its target (measured, 24 h) ---
+        target, target_src = tmap.get(rm, (None, None))
+        # opened up = the thermostat asks for clearly more than the room should
+        # have, so it calls for heat permanently and the manifold decides
+        open_mode = bool(sp is not None and target is not None and sp - target >= 1.5)
+        fresh = (now - pts[-1]["ts"]) <= 3 * 3600
+        # temperatures while the room was asked to hold its comfort level and
+        # no window was open. "Comfort level" = the target, but never more than
+        # the thermostat actually asked for that day: this leaves out set-back
+        # hours without dropping every sample when the user's target is above
+        # the thermostat setpoint (the room then simply shows as too cold).
+        sp24 = [p["setpoint"] for p in pts if p["ts"] >= day_ago and p.get("setpoint") is not None]
+        hold = min(target, max(sp24)) if (target is not None and sp24) else target
+        t24 = [p["temp"] for p in pts
+               if p["ts"] >= day_ago and p.get("temp") is not None and not p["_win"]
+               and (hold is None or p.get("setpoint") is None or p["setpoint"] >= hold - 0.3)]
+        temp_24h = round(_median(t24), 1) if (len(t24) >= 4 and fresh) else None
+        dev = round(temp_24h - target, 1) if (temp_24h is not None and target is not None) else None
+        # share of the last 48 h in which the thermostat was calling for heat
+        d48 = [p for p in pts if p["ts"] >= two_ago and p.get("temp") is not None
+               and p.get("setpoint") is not None]
+        demand_share = (round(sum(1 for p in d48 if p["temp"] < p["setpoint"] - 0.15) / len(d48), 2)
+                        if len(d48) >= 8 else None)
 
-        # --- confidence (derived) ---
+        # --- confidence of the physics model (derived) ---
         n_tau, n_warm = len(taus), len(warm_rates)
         score = (min(1.0, span_days / 7.0) * 0.4
                  + min(1.0, n_tau / 3.0) * 0.35
                  + min(1.0, n_warm / 3.0) * 0.25)
         conf = _conf_word(score)
-
-        # --- relative heat-demand index (estimated) ---
-        # a room that cools fast (needs re-heating often), warms slowly (hard to
-        # satisfy) or never reaches its setpoint needs comparatively MORE flow.
-        demand = 0.0
-        if cool_kph is not None:
-            demand += min(1.5, cool_kph) / 1.5 * 0.4
-        if warm_kph is not None and warm_kph > 0:
-            demand += min(1.5, 1.0 / max(0.2, warm_kph)) / 1.5 * 0.3
-        if max_deficit:
-            demand += min(2.0, max_deficit) / 2.0 * 0.3
-        demand_index = round(demand, 2)
-
-        # --- status + finding + recommendation (honest, labelled) ---
         missing = []
         if n_tau < 2:
-            missing.append("1–2 ungestörte Auskühlphasen (Nacht-Absenkung, Fenster zu)")
+            missing.append("1–2 heizfreie Auskühlphasen (Raum einige Stunden unbeheizt, Fenster zu)")
         if n_warm < 2:
-            missing.append("1–2 klare Aufheizphasen (Ventil offen)")
+            missing.append("1–2 klare Aufheizphasen")
         if span_days < 5:
             missing.append(f"längerer Zeitraum (bisher {span_days:.1f} von ≥5 Tagen)")
         status = "bereit" if (conf != "niedrig" and not missing) else "beobachtung"
 
-        if sp is not None and not reaches and (max_deficit or 0) >= 0.6:
-            category = "under"
-            finding = (f"Erreicht Soll nicht (Defizit bis {max_deficit:.1f} K)"
-                       + (f", heizt langsam auf (~{warm_kph:.2f} K/h)" if warm_kph else "") + ".")
-            recommendation = ("Kandidat für MEHR Durchfluss beim Abgleich (Ventil/Durchflussbegrenzer "
-                              "weiter öffnen) bzw. Vorlauf prüfen – datenbasierter Hinweis, kein "
-                              "Norm-Abgleich.")
-        elif reaches and cool_kph is not None and cool_kph <= 0.4 and (max_deficit or 0) < 0.3:
-            category = "reserve"
-            finding = (f"Erreicht Soll zügig, kühlt träge aus (~{cool_kph:.2f} K/h"
-                       + (f", τ≈{tau_h:.0f} h" if tau_h else "") + ") – gut versorgt.")
-            recommendation = ("Reserve vorhanden: Durchfluss ggf. leicht drosseln, dann steht den "
-                              "unterversorgten Räumen mehr zur Verfügung.")
-        elif reaches:
-            category = "balanced"
-            finding = ("Erreicht Soll"
-                       + (f", τ≈{tau_h:.0f} h" if tau_h else "")
-                       + (f", Auskühlen ~{cool_kph:.2f} K/h" if cool_kph else "") + ".")
-            recommendation = "Ausgewogen – vorerst keine Änderung, weiter beobachten."
-        else:
-            category = "observing"
-            finding = "Noch zu wenig verwertbare Phasen für eine belastbare Aussage."
-            recommendation = "Beobachtungsphase – Daten sammeln (siehe fehlende Phasen)."
-
         out_rooms.append({
             "room": rm, "n": len(pts), "setpoint": sp,
             "temp_now": round(temp_now, 1) if temp_now is not None else None,
-            "reaches": reaches, "max_deficit": max_deficit,
+            "target": target, "target_src": target_src, "open_mode": open_mode,
+            "temp_24h": temp_24h, "dev": dev, "demand_share": demand_share,
             "tau_h": tau_h, "tau_cv": tau_cv,
             "cooldown_kph": cool_kph, "heatup_kph": warm_kph,
             "n_cool": len(cool_rates), "n_warm": n_warm, "n_tau": n_tau,
             "confidence": conf, "conf_score": round(score, 2),
-            "status": status, "missing": missing, "category": category,
-            "finding": finding, "recommendation": recommendation,
-            "demand_index": demand_index, "win_excluded": n_win_excluded,
+            "status": status, "missing": missing, "win_excluded": n_win_excluded,
         })
 
-    # relative priority ranking for the hydraulic balance (estimated)
-    ranked = sorted([r for r in out_rooms if r["demand_index"] > 0],
-                    key=lambda r: -r["demand_index"])
-    priority = [{"room": r["room"], "index": r["demand_index"],
+    # ---- house reference + per-room verdict ------------------------------- #
+    # Among the opened-up rooms the typical deviation from target is the common
+    # mode (that is the heating curve's job); what differs from it is imbalance.
+    open_devs = [r["dev"] for r in out_rooms if r["open_mode"] and r["dev"] is not None]
+    house_dev = round(_median(open_devs), 1) if open_devs else None
+    n_open = sum(1 for r in out_rooms if r["open_mode"])
+    house_open = bool(out_rooms) and n_open >= max(2, math.ceil(0.6 * len(out_rooms)))
+    for r in out_rooms:
+        dev, tgt, t24 = r["dev"], r["target"], r["temp_24h"]
+        ds = r["demand_share"]
+        rel = None
+        if dev is None:
+            cat = "observing"
+            finding = "Keine aktuellen Messwerte der letzten 24 Stunden."
+            reco = "Sobald der Thermostat wieder Werte liefert, erscheint hier die Einordnung."
+        elif r["open_mode"]:
+            rel = round(dev - house_dev, 1) if house_dev is not None else 0.0
+            if len(open_devs) < 2:
+                cat = "balanced"
+                finding = (f"Thermostat ist hochgedreht; Ø 24 h {_de(t24)} °C bei Wunsch {_de(tgt)} °C. "
+                           "Für einen Vergleich muss mindestens ein zweiter Raum offen sein.")
+                reco = "Für die Einstell-Phase alle Thermostate öffnen, dann vergleiche ich die Räume."
+            elif rel <= -SUPPLY_BAND_K:
+                cat = "under"
+                finding = (f"Liegt <b>{_de(abs(rel))} K unter dem Hausschnitt</b> "
+                           f"(Ø 24 h {_de(t24)} °C, Wunsch {_de(tgt)} °C) – bekommt im Vergleich zu wenig Wärme.")
+                reco = ("Durchfluss am Verteiler einen kleinen Schritt <b>erhöhen</b> "
+                        "(+0,2–0,3 l/min je Kreis), dann 1–2 Tage beobachten.")
+            elif rel >= SUPPLY_BAND_K:
+                cat = "reserve"
+                finding = (f"Liegt <b>{_de(rel)} K über dem Hausschnitt</b> "
+                           f"(Ø 24 h {_de(t24)} °C, Wunsch {_de(tgt)} °C) – bekommt mehr Wärme als nötig.")
+                reco = ("Kreis leicht <b>androsseln</b> (−0,2–0,3 l/min je Kreis); das gibt Durchfluss "
+                        "für die kühleren Räume frei.")
+            else:
+                cat = "balanced"
+                finding = (f"Im Gleichlauf mit dem Haus (Abweichung {'+' if rel >= 0 else '−'}{_de(abs(rel))} K; "
+                           f"Ø 24 h {_de(t24)} °C, Wunsch {_de(tgt)} °C).")
+                reco = "Nichts verstellen."
+        else:
+            call = f"{round(ds * 100)} % der Zeit" if ds is not None else None
+            if dev <= -0.5:
+                cat = "under"
+                finding = (f"Bleibt typisch <b>{_de(abs(dev))} K unter dem Sollwert</b> "
+                           f"(Ø 24 h {_de(t24)} °C bei {_de(tgt)} °C)"
+                           + (f", obwohl der Thermostat {call} Wärme anfordert" if call else "") + ".")
+                reco = ("Kandidat für <b>mehr Durchfluss</b>: am Verteiler einen kleinen Schritt öffnen "
+                        "(+0,2–0,3 l/min je Kreis), dann 1–2 Tage beobachten.")
+            elif ds is not None and ds <= 0.35:
+                cat = "reserve"
+                finding = (f"Hält den Sollwert (Ø 24 h {_de(t24)} °C bei {_de(tgt)} °C) und fordert nur "
+                           f"{call} Wärme an – hier ist <b>Reserve</b>.")
+                reco = ("Kann leicht gedrosselt werden, falls andere Räume zu wenig bekommen. "
+                        "Sonst so lassen.")
+            else:
+                cat = "balanced"
+                finding = (f"Hält den Sollwert (Ø 24 h {_de(t24)} °C bei {_de(tgt)} °C"
+                           + (f", fordert {call} Wärme an" if call else "") + ").")
+                reco = "Nichts verstellen."
+        # how much more heat the room needs, in K (positive = too cold)
+        need = None if dev is None else round(-(rel if r["open_mode"] and rel is not None else dev), 1)
+        r.update({
+            "rel": rel, "category": cat, "finding": finding, "recommendation": reco,
+            "need_k": need,
+            # kept for older step baselines / callers: typical shortfall in K
+            "reaches": bool(dev is not None and dev >= -0.3),
+            "max_deficit": (round(max(0.0, -dev), 1) if dev is not None else None),
+            "demand_index": max(0.0, need) if need is not None else 0.0,
+        })
+
+    # rooms that need attention first (largest shortfall first)
+    ranked = sorted([r for r in out_rooms if (r.get("need_k") or 0) >= 0.3],
+                    key=lambda r: -r["need_k"])
+    priority = [{"room": r["room"], "index": r["need_k"],
                  "deficit": r["max_deficit"], "confidence": r["confidence"]}
                 for r in ranked[:8]]
 
     # overall insights (derived from the same per-room category, so the summary
-    # and the room cards never contradict each other)
+    # and the room rows never contradict each other)
     insights = []
     under = [r["room"] for r in out_rooms if r["category"] == "under"]
     over = [r["room"] for r in out_rooms if r["category"] == "reserve"]
+    if house_open and house_dev is not None:
+        insights.append(
+            f"<b>Einstell-Modus:</b> {n_open} von {len(out_rooms)} Thermostaten sind hochgedreht, "
+            f"die Räume werden deshalb <b>untereinander</b> verglichen. Im Schnitt liegt das Haus "
+            f"{_de(abs(house_dev))} K {'über' if house_dev >= 0 else 'unter'} den Wunschtemperaturen.")
     if under:
-        insights.append("<b>Unterversorgt (mehr Durchfluss):</b> " + ", ".join(under)
-                        + " – beim Abgleich zuerst diese Kreise öffnen.")
+        insights.append("<b>Zu wenig Wärme (aufdrehen):</b> " + ", ".join(under) + ".")
     if over:
-        insights.append("<b>Reserve (ggf. drosseln):</b> " + ", ".join(over)
-                        + " – frei werdende Leistung geht an die unterversorgten Räume.")
+        insights.append("<b>Zu viel Wärme (androsseln):</b> " + ", ".join(over) + ".")
     ready = sum(1 for r in out_rooms if r["status"] == "bereit")
-    insights.append(f"{ready}/{len(out_rooms)} Räume mit belastbarem Modell "
-                    f"(Rest in Beobachtung). Zeitraum {span_days:.1f} Tage, "
-                    f"{len(rows)} Messpunkte" + ("" if has_outdoor else ", Außentemperatur fehlt → τ nicht bestimmbar") + ".")
+    insights.append(f"{ready}/{len(out_rooms)} Räume mit gemessener Trägheit τ. "
+                    f"Zeitraum {span_days:.1f} Tage, {len(rows)} Messpunkte"
+                    + ("" if has_outdoor else ", Außentemperatur fehlt → τ nicht bestimmbar") + ".")
 
     # what to collect next to raise confidence
     next_obs = []
@@ -3740,12 +4105,13 @@ def compute_thermal_model(store: "Store", days: int = 14) -> dict:
     if not has_outdoor:
         next_obs.append("Wärmepumpe/HomeCom verbinden – ohne Außentemperatur lässt sich τ nicht ableiten.")
     if any(r["n_tau"] < 2 for r in out_rooms):
-        next_obs.append("Nachts die Soll-Temperatur absenken: die freien Auskühlphasen liefern τ je Raum.")
+        next_obs.append("Für τ fehlen heizfreie Auskühlphasen: sie entstehen, wenn ein Raum einige "
+                        "Stunden nicht beheizt wird – z. B. über die Auto-Messung.")
     if any(r["n_warm"] < 2 for r in out_rooms):
         next_obs.append("Normale Aufheizphasen genügen – je mehr, desto genauer die Aufheizrate.")
 
     return {
-        "ok": True, "days_window": int(days),
+        "ok": True, "days_window": win_days,
         "assessment": {
             "span_days": round(span_days, 1),
             "n_room_samples": len(rows), "n_rooms": len(byroom),
@@ -3754,13 +4120,15 @@ def compute_thermal_model(store: "Store", days: int = 14) -> dict:
             "measured": ["Raumtemperatur", "Soll-Temperatur", "Ventilstellung",
                          "Außentemperatur" if has_outdoor else None, "WP Heiz-Phasen"],
             "derived": ["Zeitkonstante τ (Trägheit)", "Auskühlrate", "Aufheizrate",
-                        "Soll-Erreichung/Defizit"],
-            "estimated": ["relativer Wärmebedarf je Raum", "Priorität für den Abgleich"],
+                        "Abweichung vom Wunsch / vom Hausschnitt"],
+            "estimated": ["Heizlast je Raum", "Ziel-Durchfluss je Kreis"],
             "gap": ("Kein Messwert pro Heizkreis: weder Durchfluss noch Vor-/Rücklauf "
                     "je Raum werden erfasst. Die tatsächlich an EINEN Raum gelieferte "
                     "Wärme ist daher nicht messbar – dies ist eine datenbasierte "
                     "Optimierungshilfe, kein normgerechter hydraulischer Abgleich."),
         },
+        "house": {"open": house_open, "n_open": n_open, "dev": house_dev,
+                  "n_live": sum(1 for r in out_rooms if r["dev"] is not None)},
         "rooms": out_rooms, "priority": priority,
         "insights": insights, "next_observations": next_obs,
     }
@@ -3853,63 +4221,303 @@ def _obs_cfg(store: "Store"):
         return None
 
 
-def _detect_night_setback(room_rows: list[dict]) -> bool:
-    """True if the room setpoints are clearly lower at night (0–5 h) than by
-    day (11–20 h) – a night set-back produces clean free cool-down for τ."""
-    night, day = [], []
-    for r in room_rows:
-        sp = r.get("setpoint")
-        if sp is None:
+def _de(x, nd: int = 1) -> str:
+    """German number formatting for user-facing text (21.5 -> '21,5',
+    -0.8 -> '−0,8' with a real minus sign)."""
+    if x is None:
+        return "–"
+    return f"{x:.{nd}f}".replace(".", ",").replace("-", "−")
+
+
+def _measure_setback(room_rows: list[dict], nights: int = 5, now: int | None = None) -> dict:
+    """MEASURED night set-back over the last ``nights`` completed nights, from
+    the logged room setpoints – nothing is assumed. Per night (0–5 h) and room
+    the median setpoint is compared with the median of the day before
+    (11–20 h); a night counts as lowered when the house-average drop is
+    ≥ 0.8 K. Older data is ignored on purpose: a set-back that ran weeks ago
+    (e.g. the app's own Auto-Messung) says nothing about tonight."""
+    now = int(now or time.time())
+
+    def med(a):
+        a = sorted(a)
+        return a[len(a) // 2] if a else None
+
+    m0 = _local_midnight(now)
+    checked, lowered = [], []
+    for k in range(nights + 1):
+        m = m0 - k * 86400
+        if m + 5 * 3600 > now:                  # tonight is not over yet
             continue
-        h = datetime.fromtimestamp(r["ts"]).hour
-        if 0 <= h <= 5:
-            night.append(sp)
-        elif 11 <= h <= 20:
-            day.append(sp)
-    if len(night) < 5 or len(day) < 5:
-        return False
-    return (sum(day) / len(day)) - (sum(night) / len(night)) >= 0.8
+        if len(checked) >= nights:
+            break
+        n_by, d_by = {}, {}
+        for r in room_rows:
+            sp, ts = r.get("setpoint"), r["ts"]
+            if sp is None:
+                continue
+            if m <= ts < m + 5 * 3600:
+                n_by.setdefault(r.get("room"), []).append(sp)
+            elif m - 13 * 3600 <= ts < m - 4 * 3600:
+                d_by.setdefault(r.get("room"), []).append(sp)
+        drops, d_all, n_all = [], [], []
+        for rm, ns in n_by.items():
+            ds = d_by.get(rm) or []
+            if len(ns) < 3 or len(ds) < 3:
+                continue
+            drops.append(med(ds) - med(ns))
+            d_all.append(med(ds)); n_all.append(med(ns))
+        if not drops:
+            continue
+        drop = sum(drops) / len(drops)
+        night = {"ts": m, "drop": round(drop, 1), "rooms": len(drops),
+                 "day_sp": round(sum(d_all) / len(d_all), 1),
+                 "night_sp": round(sum(n_all) / len(n_all), 1),
+                 "lowered": drop >= 0.8}
+        checked.append(night)
+        if night["lowered"]:
+            lowered.append(night)
+    last = checked[0] if checked else None
+    return {
+        "nights_checked": len(checked), "nights_lowered": len(lowered),
+        "active": bool(last and last["lowered"]),      # the most recent night
+        "avg_drop": (round(sum(n["drop"] for n in lowered) / len(lowered), 1) if lowered else 0.0),
+        "day_sp": last["day_sp"] if last else None,
+        "night_sp": last["night_sp"] if last else None,
+        "nights": checked,
+    }
 
 
-def _rooms_valve_high(room_rows: list[dict]) -> set:
-    """Rooms seen with a (near) fully open valve – evidence the thermostat was
-    opened up so the manifold, not the room controller, sets the distribution."""
-    seen = set()
-    for r in room_rows:
-        v = r.get("valve")
-        if v is not None and v >= 80:
-            seen.add(r.get("room") or "—")
-    return seen
+def _demo_opstate_hc() -> dict:
+    """The demo heat pump's operating state, taken from the same synthetic
+    control tree the „Wärmepumpe steuern" card shows."""
+    c = {x["path"].split("/resource/", 1)[1]: x["value"] for x in _demo_controls()}
+    H, W = "heatingCircuits/hc1/", "dhwCircuits/dhw1/"
+    return {"gateway": DEMO_HP_GW, "hc": "hc1", "dhw": "dhw1",
+            "hc_mode": c.get(H + "operationMode"), "hc_status": c.get(H + "overallStatus"),
+            "hc_setpoint": c.get(H + "currentRoomSetpoint"),
+            "hc_manual": c.get(H + "temperatureRoomManual"),
+            "hc_comfort": c.get(H + "temperatureLevels/comfort2"),
+            "hc_eco": c.get(H + "temperatureLevels/eco"),
+            "hc_control": c.get(H + "controlType"), "hc_max_flow": c.get(H + "maxFlowTemp"),
+            "dhw_mode": c.get(W + "operationMode"), "dhw_setpoint": c.get(W + "currentSetpoint"),
+            "dhw_actual": c.get(W + "actualTemp"), "dhw_high": c.get(W + "temperatureLevels/high"),
+            "dhw_eco": c.get(W + "temperatureLevels/eco"), "dhw_low": c.get(W + "temperatureLevels/low"),
+            "dhw_charge": c.get(W + "charge"), "dhw_charge_dur": c.get(W + "chargeDuration"),
+            "program": None, "failed": 0, "readable": True, "read_ts": int(time.time())}
 
 
-def compute_observation(store: "Store", lookback_days: int = 21) -> dict:
-    """Status of the guided observation phase for the thermal model."""
+def compute_opstate(store: "Store", hc: dict | None = None, climate: list | None = None,
+                    hc_error: str | None = None) -> dict:
+    """How the heating is ACTUALLY operated – read, not assumed.
+
+    Three independent sources, each labelled with where it comes from:
+      • the heat pump's heating-circuit mode and levels (HomeCom, read),
+      • the room thermostats' mode (Bosch SHC, read),
+      • the logged room setpoints of the last nights (measured).
+    From these it states whether a night set-back is in effect. Where a source
+    is not available the answer says so instead of filling the gap."""
+    now = int(time.time())
+
+    def num(v):
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    sb = _measure_setback(store.room_log_since(now - 7 * 86400), nights=5, now=now)
+    am = _am_cfg(store) or {}
+    am_on = bool(am.get("enabled") or am.get("run"))
+    am_recent = any(e.get("action") == "absenken" and now - int(e.get("ts") or 0) < 6 * 86400
+                    for e in (am.get("log") or []))
+
+    lines, hints = [], []
+
+    # ---- heat pump (HomeCom) -------------------------------------------- #
+    hp = None
+    if hc and hc.get("readable"):
+        mode = str(hc.get("hc_mode") or "").lower() or None
+        manual, cur = num(hc.get("hc_manual")), num(hc.get("hc_setpoint"))
+        comfort, eco = num(hc.get("hc_comfort")), num(hc.get("hc_eco"))
+        prog = hc.get("program") if isinstance(hc.get("program"), dict) else None
+        room_sp = manual if (mode == "manual" and manual is not None) else cur
+        hp = {"mode": mode, "status": hc.get("hc_status"), "room_setpoint": room_sp,
+              "comfort": comfort, "eco": eco, "program": prog,
+              "max_flow": num(hc.get("hc_max_flow")), "control": hc.get("hc_control"),
+              "read_ts": hc.get("read_ts")}
+        if mode == "manual":
+            hp["schedule"] = "none"
+            txt = ("Betriebsart <b>manuell</b> – ein fester Raum-Soll"
+                   + (f" von <b>{_de(room_sp)} °C</b>" if room_sp is not None else "")
+                   + ", <b>kein Zeitprogramm</b>.")
+        elif mode == "auto":
+            hp["schedule"] = "program"
+            step = (comfort - eco) if (comfort is not None and eco is not None) else None
+            hp["program_step_k"] = round(step, 1) if step is not None else None
+            txt = "Betriebsart <b>Automatik</b> – ein Zeitprogramm schaltet zwischen den Stufen"
+            if comfort is not None and eco is not None:
+                txt += f" Komfort <b>{_de(comfort)} °C</b> und Eco <b>{_de(eco)} °C</b>"
+            if prog and prog.get("has_reduced") and prog.get("reduced_start_min") is not None:
+                t0, t1 = prog["reduced_start_min"], prog.get("comfort_start_min")
+                txt += (f"; abgesenkt ab ~{t0 // 60:02d}:{t0 % 60:02d} Uhr"
+                        + (f", Komfort ab ~{t1 // 60:02d}:{t1 % 60:02d} Uhr" if t1 is not None else ""))
+            elif prog and not prog.get("has_reduced"):
+                txt += "; im Programm steht aber <b>keine</b> abgesenkte Phase"
+            else:
+                txt += "; die Schaltzeiten liefert das Gerät nicht in lesbarer Form"
+            txt += "."
+        elif mode == "off":
+            hp["schedule"] = "off"
+            txt = "Heizkreis ist <b>aus</b>."
+        else:
+            hp["schedule"] = "unknown"
+            txt = (f"Betriebsart „{_esc(hc.get('hc_mode'))}\"." if hc.get("hc_mode") is not None
+                   else "Betriebsart des Heizkreises liefert das Gerät nicht.")
+        lines.append({"icon": "🔥", "label": "Wärmepumpe", "src": "aus HomeCom gelesen", "html": txt})
+        if room_sp is not None and room_sp >= 24.0 and mode in ("manual", "auto"):
+            hints.append(f"Der <b>Raum-Soll an der Wärmepumpe</b> steht auf <b>{_de(room_sp)} °C</b>. "
+                         "Bei der witterungsgeführten Regelung verschiebt das die ganze Heizkurve nach oben "
+                         "(höherer Vorlauf). Für die Einstell-Phase ist das in Ordnung – danach wieder auf "
+                         "deinen Wohlfühlwert stellen, das senkt den Vorlauf und spart Strom.")
+    else:
+        lines.append({"icon": "🔥", "label": "Wärmepumpe", "src": "HomeCom",
+                      "html": ("Betriebsart <b>nicht lesbar</b>"
+                               + (f" ({_esc(hc_error)})" if hc_error else " – HomeCom ist nicht verbunden") + "."),
+                      "missing": True})
+
+    # ---- room thermostats (SHC) ----------------------------------------- #
+    th = None
+    if climate is not None:
+        heat = [r for r in climate
+                if str(r.get("roomControlMode") or "HEATING").upper() != "OFF"
+                and not r.get("summerMode") and not r.get("unnamed")]
+        auto = sorted(r["room"] for r in heat if str(r.get("operationMode") or "").upper() == "AUTOMATIC")
+        manual_rooms = sorted(r["room"] for r in heat if str(r.get("operationMode") or "").upper() == "MANUAL")
+        sps = sorted(r["setpoint"] for r in heat if isinstance(r.get("setpoint"), (int, float)))
+        th = {"n": len(heat), "automatic": auto, "manual": manual_rooms,
+              "sp_min": sps[0] if sps else None, "sp_max": sps[-1] if sps else None}
+        if heat:
+            if not auto:
+                txt = (f"<b>{len(manual_rooms) or len(heat)} von {len(heat)}</b> im Modus <b>manuell</b> "
+                       "(feste Sollwerte, kein Zeitprogramm)")
+            else:
+                txt = (f"<b>{len(auto)} von {len(heat)}</b> im <b>Zeitprogramm</b> (Automatik): "
+                       + ", ".join(_esc(x) for x in auto[:6]) + ("…" if len(auto) > 6 else ""))
+            if sps:
+                txt += (f" · Sollwerte aktuell {_de(sps[0])} °C" if sps[0] == sps[-1]
+                        else f" · Sollwerte aktuell {_de(sps[0])}–{_de(sps[-1])} °C")
+            lines.append({"icon": "🌡️", "label": "Raumthermostate", "src": "aus Bosch Smart Home gelesen",
+                          "html": txt + "."})
+
+    # ---- measured from the setpoint log ---------------------------------- #
+    nc, nl = sb["nights_checked"], sb["nights_lowered"]
+    if nc:
+        if nl == 0:
+            txt = (f"In den letzten <b>{nc} Nächten</b> blieben die Raum-Sollwerte nachts <b>unverändert</b>"
+                   + (f" (Tag {_de(sb['day_sp'])} °C · Nacht {_de(sb['night_sp'])} °C)"
+                      if sb["day_sp"] is not None else "") + ".")
+        else:
+            txt = (f"In <b>{nl} von {nc}</b> Nächten lagen die Raum-Sollwerte nachts im Schnitt "
+                   f"<b>{_de(sb['avg_drop'])} K tiefer</b>"
+                   + (" – zuletzt aber nicht mehr" if not sb["active"] else "") + ".")
+        lines.append({"icon": "📏", "label": "Gemessen", "src": "aus dem Sollwert-Protokoll", "html": txt})
+    if am_on:
+        lines.append({"icon": "🤖", "label": "Auto-Messung", "src": "diese App",
+                      "html": (f"ist <b>eingeschaltet</b> und senkt von {am.get('start_h', 23)} bis "
+                               f"{am.get('end_h', 5)} Uhr die Raum-Sollwerte um {_de(float(am.get('setback_k', 4.0)), 0)} K "
+                               "(stellt sie morgens zurück).")})
+
+    # ---- hot water (HomeCom) --------------------------------------------- #
+    dhw = None
+    if hc and hc.get("readable") and (hc.get("dhw_mode") is not None or hc.get("dhw_setpoint") is not None):
+        dset, dact = num(hc.get("dhw_setpoint")), num(hc.get("dhw_actual"))
+        dhw = {"mode": hc.get("dhw_mode"), "setpoint": dset, "actual": dact,
+               "high": num(hc.get("dhw_high")), "eco": num(hc.get("dhw_eco")), "low": num(hc.get("dhw_low")),
+               "charge": hc.get("dhw_charge")}
+        parts = []
+        if hc.get("dhw_mode") is not None:
+            parts.append(f"Betriebsart <b>{_esc(hc.get('dhw_mode'))}</b>")
+        if dset is not None:
+            parts.append(f"Soll <b>{_de(dset)} °C</b>")
+        if dact is not None:
+            parts.append(f"Speicher aktuell <b>{_de(dact)} °C</b>")
+        lines.append({"icon": "🚿", "label": "Warmwasser", "src": "aus HomeCom gelesen",
+                      "html": " · ".join(parts) + "."})
+
+    # ---- verdict: is a night set-back in effect? -------------------------- #
+    hp_sched = hp["schedule"] if hp else None
+    th_auto = bool(th and th["automatic"])
+    hp_prog_reduces = bool(hp and hp_sched == "program"
+                           and (hp.get("program") or {}).get("has_reduced") is not False
+                           and (hp.get("program_step_k") or 0) >= 0.5)
+    if am_on or (sb["active"] and am_recent):
+        state = "automeasure"
+        verdict = ("Nachtabsenkung <b>durch die Auto-Messung dieser App</b> – nicht durch ein "
+                   "Zeitprogramm deiner Heizung.")
+    elif sb["active"]:
+        state = "measured"
+        verdict = (f"Nachtabsenkung <b>gemessen</b>: letzte Nacht lagen die Raum-Sollwerte "
+                   f"{_de(sb['nights'][0]['drop'])} K unter dem Tageswert.")
+    elif hp_prog_reduces:
+        state = "hp_program"
+        verdict = ("An den Raum-Sollwerten ist <b>keine</b> Absenkung messbar – die Wärmepumpe läuft aber "
+                   "im <b>Zeitprogramm</b> mit einer abgesenkten Stufe, sie kann nachts also selbst "
+                   "den Vorlauf senken.")
+    elif nc and nl == 0 and hp_sched == "none" and not th_auto:
+        state = "none"
+        verdict = ("<b>Keine Nachtabsenkung aktiv.</b> Wärmepumpe und Thermostate laufen mit festen "
+                   "Sollwerten, und in den letzten Nächten wurde auch keine gemessen.")
+    elif nc and nl == 0:
+        state = "none_measured"
+        verdict = ("<b>Keine Nachtabsenkung gemessen</b> – die Raum-Sollwerte blieben nachts unverändert"
+                   + (" (die Betriebsart der Wärmepumpe konnte ich nicht lesen)." if not hp else "."))
+    elif hp_sched == "none" and not th_auto and climate is not None:
+        state = "none"
+        verdict = "<b>Keine Nachtabsenkung eingestellt</b> – Wärmepumpe und Thermostate haben feste Sollwerte."
+    else:
+        state = "unknown"
+        verdict = ("Ob eine Nachtabsenkung läuft, lässt sich noch <b>nicht sagen</b> – es fehlen "
+                   "Sollwert-Messungen der letzten Nächte und die Betriebsart der Wärmepumpe.")
+
+    return {"ok": True, "ts": now, "state": state, "verdict": verdict,
+            "lines": lines, "hints": hints, "heatpump": hp, "thermostats": th,
+            "dhw": dhw, "measured": sb, "automeasure_on": am_on}
+
+
+def compute_observation(store: "Store", lookback_days: int = 21, tm: dict | None = None,
+                        targets: dict | None = None) -> dict:
+    """Data situation for the thermal model: how long has been logged, how many
+    rooms already have clean cool-down / heat-up phases, what is still missing.
+
+    This is about COLLECTING DATA only. Opening the thermostats belongs to the
+    separate adjusting phase and is not a step here (it used to be step 1, and
+    because floor-heating thermostats report no valve position it could never
+    complete – the card then asked forever to "open all thermostats")."""
     now = int(time.time())
     cfg = _obs_cfg(store)
     active = bool(cfg and cfg.get("active"))
     started = int(cfg["started_ts"]) if (cfg and cfg.get("started_ts")) else None
     target_days = int(cfg.get("target_days")) if (cfg and cfg.get("target_days")) else 7
-    want_setback = bool(cfg.get("night_setback")) if cfg else True
 
     since = started if (active and started) else now - lookback_days * 86400
     elapsed_days = max(0.0, (now - since) / 86400.0)
 
-    model_days = max(1, int(math.ceil(elapsed_days)) if active else lookback_days)
-    tm = compute_thermal_model(store, days=model_days)
+    if tm is None:
+        tm = compute_thermal_model(store, days=lookback_days, targets=targets)
     rooms = tm["rooms"]
     n_rooms = len(rooms)
     has_outdoor = tm["assessment"]["has_outdoor"]
+    span_days = tm["assessment"]["span_days"]
 
-    rl = store.room_log_since(int(since))
-    hp = store.hp_samples_since(int(since))
-    win_events = _window_events(store.window_log_since(int(since)), now)
+    hp = store.hp_samples_since(int(now - 45 * 86400))
+    win_events = _window_events(store.window_log_since(int(now - 14 * 86400)), now)
 
     outs = [s["outdoor_c"] for s in hp if s.get("outdoor_c") is not None]
     out_span = round(max(outs) - min(outs), 1) if outs else 0.0
     out_min = round(min(outs), 1) if outs else None
     out_max = round(max(outs), 1) if outs else None
-    night_setback = _detect_night_setback(rl)
-    valves_seen = _rooms_valve_high(rl)
+    # measured, last 5 nights only (not "at some point in the last weeks")
+    sb = _measure_setback(store.room_log_since(now - 7 * 86400), nights=5, now=now)
+    night_setback = sb["active"]
 
     tau_ok = sum(1 for r in rooms if r["n_tau"] >= 2)
     warm_ok = sum(1 for r in rooms if r["n_warm"] >= 2)
@@ -3918,143 +4526,131 @@ def compute_observation(store: "Store", lookback_days: int = 21) -> dict:
     def pct(x):
         return max(0, min(100, round(x * 100)))
 
-    # ---- protocol steps (derived state, each 0–100 %) ----
+    # ---- what the model needs (derived state, each 0–100 %) ----
     steps = []
-    s_open = (len(valves_seen) / n_rooms) if n_rooms else 0.0
+    s_days = min(1.0, span_days / target_days) if target_days else 0.0
     steps.append({
-        "key": "open", "title": "1 · Thermostate öffnen",
-        "progress": pct(s_open), "state": "done" if s_open >= 0.8 else "active",
-        "detail": (f"{len(valves_seen)}/{n_rooms} Räume mit voll geöffnetem Ventil erkannt"
-                   if n_rooms else "noch keine Raumdaten"),
-        "hint": "Alle Raumthermostate auf Maximum/„Heizen“ stellen, damit der Verteiler die Verteilung bestimmt."})
-
-    s_days = (elapsed_days / target_days) if (active and target_days) else 0.0
-    steps.append({
-        "key": "days", "title": f"2 · Zeitraum ({target_days} Tage)",
-        "progress": pct(s_days),
-        "state": ("done" if elapsed_days >= target_days else "active") if active else "todo",
-        "detail": (f"Tag {elapsed_days:.1f} von {target_days}" if active else "noch nicht gestartet"),
-        "hint": "Je länger protokolliert wird, desto belastbarer τ und die Bedarfs-Reihenfolge."})
-
-    s_tau = (tau_ok / n_rooms) if n_rooms else 0.0
-    steps.append({
-        "key": "cooldown", "title": "3 · Auskühlphasen sammeln",
-        "progress": pct(s_tau), "state": "done" if s_tau >= 0.8 else "active",
-        "detail": f"{tau_ok}/{n_rooms} Räume mit ≥2 freien Auskühlphasen (τ bestimmbar)",
-        "hint": ("Nachtabsenkung aktiv – liefert saubere Auskühlphasen. 👍" if night_setback
-                 else "Tipp: nachts die Soll-Temperatur 1–2 K absenken → freie Auskühlung je Raum.")})
+        "key": "days", "title": f"Zeitraum (Ziel {target_days} Tage)",
+        "progress": pct(s_days), "state": "done" if span_days >= target_days else "active",
+        "detail": f"{_de(span_days)} Tage protokolliert",
+        "hint": "Läuft automatisch mit, solange die Bridge läuft."})
 
     s_warm = (warm_ok / n_rooms) if n_rooms else 0.0
     steps.append({
-        "key": "heatup", "title": "4 · Aufheizphasen sammeln",
+        "key": "heatup", "title": "Aufheizphasen",
         "progress": pct(s_warm), "state": "done" if s_warm >= 0.8 else "active",
         "detail": f"{warm_ok}/{n_rooms} Räume mit ≥2 klaren Aufheizphasen",
-        "hint": "Normale Aufheizvorgänge genügen – je mehr, desto genauer die Aufheizrate."})
+        "hint": "Kommen im normalen Betrieb von selbst."})
+
+    s_tau = (tau_ok / n_rooms) if n_rooms else 0.0
+    steps.append({
+        "key": "cooldown", "title": "Heizfreie Auskühlphasen (für τ)",
+        "progress": pct(s_tau), "state": "done" if s_tau >= 0.8 else "active",
+        "detail": f"{tau_ok}/{n_rooms} Räume mit ≥2 freien Auskühlphasen",
+        "hint": ("In den letzten Nächten wurden die Sollwerte abgesenkt – das liefert sie."
+                 if night_setback else
+                 "Entstehen nur, wenn ein Raum einige Stunden nicht beheizt wird. Im Dauerbetrieb "
+                 "gibt es sie kaum – die Auto-Messung kann sie für ein paar Nächte erzeugen.")})
 
     s_span = min(1.0, out_span / 8.0) if has_outdoor else 0.0
     steps.append({
-        "key": "span", "title": "5 · Temperaturspanne außen",
+        "key": "span", "title": "Temperaturspanne außen",
         "progress": pct(s_span), "state": "done" if (has_outdoor and out_span >= 8.0) else "active",
-        "detail": (f"Außen {out_min}…{out_max} °C (Spanne {out_span} K, Ziel ≥8 K)"
+        "detail": (f"Außen {_de(out_min)} … {_de(out_max)} °C (Spanne {_de(out_span)} K, Ziel ≥ 8 K)"
                    if has_outdoor else "keine Außentemperatur (WP/HomeCom verbinden)"),
-        "hint": "Eine breitere Außen-Spanne macht die Heizkurve und die Bedarfs-Schätzung sicherer."})
+        "hint": "Mehr Wetterwechsel macht Heizkurve und Heizlast-Schätzung sicherer."})
 
     overall = round(sum(s["progress"] for s in steps) / len(steps))
-    done = active and elapsed_days >= target_days and ready >= max(1, round(n_rooms * 0.75))
+    # the supply comparison needs no τ – so "enough data" means time + heat-up
+    done = span_days >= target_days and s_warm >= 0.75
+    tau_complete = s_tau >= 0.8
 
-    # ---- disturbances during the window ----
+    # ---- notes on the window ----
     disturbances = []
     nwin = len(win_events)
     if nwin:
-        disturbances.append(f"{nwin}× Fenster geöffnet im Zeitraum – Auskühlphasen in den "
-                            f"betroffenen Räumen werden dabei als gestört verworfen (kein Fehler).")
-    if active and want_setback and not night_setback and elapsed_days >= 1:
-        disturbances.append("Keine klare Nachtabsenkung erkannt – ohne sie dauert es länger, "
-                            "bis saubere Auskühlphasen (τ) zusammenkommen.")
-    if has_outdoor and out_span < 4 and elapsed_days >= 2:
-        disturbances.append(f"Außentemperatur bisher nur {out_span} K Spanne – die Kurve/Heizlast "
-                            f"wird erst mit wechselhafterem Wetter belastbar.")
+        disturbances.append(f"{nwin}× Fenster geöffnet in den letzten 14 Tagen – solche Zeiten werden "
+                            f"bei der Auswertung automatisch ausgeklammert (kein Fehler).")
+    if has_outdoor and out_span < 4 and span_days >= 2:
+        disturbances.append(f"Außentemperatur bisher nur {_de(out_span)} K Spanne – Kennlinie/Heizlast "
+                            f"werden erst mit wechselhafterem Wetter belastbar.")
 
-    # ---- the single next concrete action (most actionable first, not just the
-    # first open step) ----
-    step_by = {s["key"]: s for s in steps}
     need_tau = [r["room"] for r in rooms if r["n_tau"] < 2]
-    if not active:
-        next_action = "Beobachtung starten (Button unten) – dann messe ich den Fortschritt ab jetzt."
-    elif done:
-        next_action = "Fertig: genug Daten. Weiter zum thermischen Modell und zur Abgleich-Priorität oben. ✅"
-    elif step_by["open"]["state"] != "done":
-        next_action = "Jetzt: alle Raumthermostate voll öffnen / auf „Heizen“ stellen."
-    elif step_by["cooldown"]["state"] != "done" and not night_setback:
-        next_action = ("Heute Abend die Soll-Temperatur 1–2 K absenken (Fenster zu) – liefert τ für "
-                       + (", ".join(need_tau[:4]) if need_tau else "die offenen Räume") + ".")
-    elif step_by["span"]["state"] != "done" and not has_outdoor:
+    if not n_rooms:
+        next_action = "Noch keine Raumdaten – Thermostate koppeln, dann protokolliert die Bridge automatisch."
+    elif not has_outdoor:
         next_action = "Wärmepumpe/HomeCom verbinden – ohne Außentemperatur lässt sich τ nicht ableiten."
+    elif not done:
+        next_action = (f"Weiterlaufen lassen ({_de(span_days)} von {target_days} Tagen) – "
+                       "die Daten kommen von selbst zusammen.")
+    elif not tau_complete:
+        next_action = ("Für den Abgleich reichen die Daten. Nur die Trägheit τ fehlt noch für "
+                       + (", ".join(need_tau[:4]) + ("…" if len(need_tau) > 4 else "")
+                          if need_tau else "einige Räume")
+                       + " – optional über die Auto-Messung nachholen.")
     else:
-        next_action = (f"Weiterlaufen lassen (Tag {elapsed_days:.1f} von {target_days}) – die offenen "
-                       f"Schritte vervollständigen sich mit der Zeit"
-                       + (f"; es fehlen noch Auskühlphasen für {', '.join(need_tau[:4])}" if need_tau else "") + ".")
+        next_action = "Genug Daten gesammelt. ✅"
 
-    # rough completion estimate
-    eta = None
-    if active and not done:
-        remaining_days = max(0.0, target_days - elapsed_days)
-        slow = (not night_setback) or (has_outdoor and out_span < 6)
-        eta = round(remaining_days + (2 if slow else 0))
-
-    # per-room readiness (compact)
     room_ready = [{"room": r["room"], "status": r["status"], "confidence": r["confidence"],
-                   "n_tau": r["n_tau"], "n_warm": r["n_warm"], "missing": r["missing"]}
+                   "n_tau": r["n_tau"], "n_warm": r["n_warm"], "n": r["n"], "missing": r["missing"]}
                   for r in rooms]
 
     return {
         "ok": True, "active": active, "started_ts": started,
-        "target_days": target_days, "night_setback_wanted": want_setback,
-        "elapsed_days": round(elapsed_days, 1), "overall": overall, "done": done,
+        "target_days": target_days,
+        "elapsed_days": round(elapsed_days, 1), "span_days": span_days,
+        "overall": overall, "done": done, "tau_complete": tau_complete,
         "n_rooms": n_rooms, "rooms_ready": ready,
-        "has_outdoor": has_outdoor, "night_setback": night_setback,
+        "has_outdoor": has_outdoor, "night_setback": night_setback, "setback": sb,
         "out_span": out_span, "out_min": out_min, "out_max": out_max,
-        "n_windows": nwin, "eta_days": eta,
+        "n_windows": nwin, "n_samples": tm["assessment"]["n_room_samples"],
+        "heating_phases": tm["assessment"]["heating_phases"],
         "steps": steps, "disturbances": disturbances, "next_action": next_action,
-        "room_ready": room_ready,
+        "room_ready": room_ready, "gap": tm["assessment"].get("gap"),
     }
 
 
 def _demo_observation() -> dict:
     now = int(time.time())
     steps = [
-        {"key": "open", "title": "1 · Thermostate öffnen", "progress": 100, "state": "done",
-         "detail": "4/4 Räume mit voll geöffnetem Ventil erkannt",
-         "hint": "Alle Raumthermostate auf Maximum/„Heizen“."},
-        {"key": "days", "title": "2 · Zeitraum (7 Tage)", "progress": 71, "state": "active",
-         "detail": "Tag 5.0 von 7",
-         "hint": "Je länger protokolliert wird, desto belastbarer τ."},
-        {"key": "cooldown", "title": "3 · Auskühlphasen sammeln", "progress": 75, "state": "active",
-         "detail": "3/4 Räume mit ≥2 freien Auskühlphasen",
-         "hint": "Nachtabsenkung aktiv – liefert saubere Auskühlphasen. 👍"},
-        {"key": "heatup", "title": "4 · Aufheizphasen sammeln", "progress": 100, "state": "done",
-         "detail": "4/4 Räume mit ≥2 klaren Aufheizphasen",
-         "hint": "Normale Aufheizvorgänge genügen."},
-        {"key": "span", "title": "5 · Temperaturspanne außen", "progress": 85, "state": "active",
-         "detail": "Außen −2…8 °C (Spanne 10.0 K, Ziel ≥8 K)",
-         "hint": "Breitere Spanne macht Kurve/Heizlast sicherer."},
+        {"key": "days", "title": "Zeitraum (Ziel 7 Tage)", "progress": 100, "state": "done",
+         "detail": "12,0 Tage protokolliert", "hint": "Läuft automatisch mit, solange die Bridge läuft."},
+        {"key": "heatup", "title": "Aufheizphasen", "progress": 100, "state": "done",
+         "detail": "5/5 Räume mit ≥2 klaren Aufheizphasen", "hint": "Kommen im normalen Betrieb von selbst."},
+        {"key": "cooldown", "title": "Heizfreie Auskühlphasen (für τ)", "progress": 60, "state": "active",
+         "detail": "3/5 Räume mit ≥2 freien Auskühlphasen",
+         "hint": "Entstehen nur, wenn ein Raum einige Stunden nicht beheizt wird. Im Dauerbetrieb "
+                 "gibt es sie kaum – die Auto-Messung kann sie für ein paar Nächte erzeugen."},
+        {"key": "span", "title": "Temperaturspanne außen", "progress": 100, "state": "done",
+         "detail": "Außen −2,0 … 8,0 °C (Spanne 10,0 K, Ziel ≥ 8 K)",
+         "hint": "Mehr Wetterwechsel macht Heizkurve und Heizlast-Schätzung sicherer."},
     ]
     return {
-        "ok": True, "demo": True, "active": True, "started_ts": now - 5 * 86400,
-        "target_days": 7, "night_setback_wanted": True, "elapsed_days": 5.0,
-        "overall": round(sum(s["progress"] for s in steps) / len(steps)), "done": False,
-        "n_rooms": 4, "rooms_ready": 3, "has_outdoor": True, "night_setback": True,
-        "out_span": 10.0, "out_min": -2.0, "out_max": 8.0, "n_windows": 6, "eta_days": 2,
+        "ok": True, "demo": True, "active": True, "started_ts": now - 12 * 86400,
+        "target_days": 7, "elapsed_days": 12.0, "span_days": 12.0,
+        "overall": round(sum(s["progress"] for s in steps) / len(steps)), "done": True,
+        "tau_complete": False, "n_rooms": 5, "rooms_ready": 3, "has_outdoor": True,
+        "night_setback": False,
+        "setback": {"nights_checked": 5, "nights_lowered": 0, "active": False, "avg_drop": 0.0,
+                    "day_sp": 25.0, "night_sp": 25.0, "nights": []},
+        "out_span": 10.0, "out_min": -2.0, "out_max": 8.0, "n_windows": 6,
+        "n_samples": 8640, "heating_phases": 41,
         "steps": steps,
-        "disturbances": ["6× Fenster geöffnet im Zeitraum – betroffene Auskühlphasen werden verworfen (kein Fehler)."],
-        "next_action": "Heute Abend die Soll-Temperatur 1–2 K absenken (Fenster zu) – liefert τ für Schlafzimmer.",
+        "disturbances": ["6× Fenster geöffnet in den letzten 14 Tagen – solche Zeiten werden bei der "
+                         "Auswertung automatisch ausgeklammert (kein Fehler)."],
+        "next_action": "Für den Abgleich reichen die Daten. Nur die Trägheit τ fehlt noch für "
+                       "Schlafzimmer, Bad – optional über die Auto-Messung nachholen.",
         "room_ready": [
-            {"room": "Wohnzimmer", "status": "bereit", "confidence": "hoch", "n_tau": 5, "n_warm": 6, "missing": []},
-            {"room": "Büro", "status": "bereit", "confidence": "hoch", "n_tau": 4, "n_warm": 3, "missing": []},
-            {"room": "Bad", "status": "bereit", "confidence": "mittel", "n_tau": 4, "n_warm": 5, "missing": []},
-            {"room": "Schlafzimmer", "status": "beobachtung", "confidence": "niedrig", "n_tau": 1, "n_warm": 1,
-             "missing": ["1–2 ungestörte Auskühlphasen (Nacht-Absenkung, Fenster zu)"]},
+            {"room": "Wohnzimmer", "status": "bereit", "confidence": "hoch", "n_tau": 5, "n_warm": 6, "n": 1728, "missing": []},
+            {"room": "Küche", "status": "bereit", "confidence": "hoch", "n_tau": 4, "n_warm": 5, "n": 1728, "missing": []},
+            {"room": "Kinderzimmer", "status": "bereit", "confidence": "hoch", "n_tau": 3, "n_warm": 4, "n": 1728, "missing": []},
+            {"room": "Schlafzimmer", "status": "beobachtung", "confidence": "mittel", "n_tau": 0, "n_warm": 3, "n": 1728,
+             "missing": ["1–2 heizfreie Auskühlphasen (Raum einige Stunden unbeheizt, Fenster zu)"]},
+            {"room": "Bad", "status": "beobachtung", "confidence": "mittel", "n_tau": 1, "n_warm": 4, "n": 1728,
+             "missing": ["1–2 heizfreie Auskühlphasen (Raum einige Stunden unbeheizt, Fenster zu)"]},
         ],
+        "gap": ("Kein Messwert pro Heizkreis: weder Durchfluss noch Vor-/Rücklauf je Raum werden erfasst. "
+                "Datenbasierte Optimierungshilfe, kein normgerechter hydraulischer Abgleich."),
     }
 
 
@@ -4150,7 +4746,8 @@ def _central_spread(store: "Store") -> dict | None:
 
 def compute_heatload(store: "Store", areas: dict | None = None,
                      design_c: float = DESIGN_OUTDOOR_C,
-                     spread_k: float = 5.0, spec_wm2: float = 40.0) -> dict:
+                     spread_k: float = 5.0, spec_wm2: float = 40.0,
+                     tm: dict | None = None, targets: dict | None = None) -> dict:
     """Per-room heat load in watts (at the design outdoor temp) with a
     confidence band, calibrated to the measured whole-house energy signature –
     plus the physically correct per-circuit target flow l/min = Q/(1.163·60·ΔT).
@@ -4176,7 +4773,8 @@ def compute_heatload(store: "Store", areas: dict | None = None,
     spec_wm2 = max(10.0, min(120.0, spec_wm2))
     areas = areas or {}
 
-    tm = compute_thermal_model(store, days=21)
+    if tm is None:
+        tm = compute_thermal_model(store, days=21, targets=targets)
     sig = _energy_signature(store)
     q_total_design = None
     ua_total = None
@@ -4197,8 +4795,19 @@ def compute_heatload(store: "Store", areas: dict | None = None,
             return None
 
     rooms = []
-    for r in tm["rooms"]:
-        rm = r["room"]; tau = r["tau_h"]; sp = r["setpoint"]
+    known = {r["room"] for r in tm["rooms"]}
+    # rooms that only exist in the manifold layout (no thermostat) still get an
+    # area-based load, so their circuits are not missing from the flow table
+    extra = [{"room": rm, "tau_h": None, "tau_cv": None, "n_tau": 0, "setpoint": None,
+              "target": _guess_target(rm), "confidence": "niedrig", "category": None,
+              "recommendation": None}
+             for rm in sorted(areas) if rm not in known and _area_of(rm)]
+    for r in list(tm["rooms"]) + extra:
+        rm = r["room"]; tau = r["tau_h"]
+        # design indoor temperature = the room's comfort TARGET, never the
+        # thermostat setpoint: that is cranked up to 25–30 °C while the valves
+        # are held open for balancing and would inflate the load by 10–20 %
+        sp = r.get("target") if r.get("target") is not None else r["setpoint"]
         area = _area_of(rm)
         dt = (sp - design_c) if sp is not None else None
         usable = bool(tau and area and dt and dt > 0 and r["n_tau"] >= 1)
@@ -4425,52 +5034,62 @@ def _opt_save(store: "Store", steps: list):
 def _room_snapshot(room: dict) -> dict:
     """The metrics we freeze when a step is logged, to measure its effect later."""
     return {"deficit": room.get("max_deficit"), "reaches": room.get("reaches"),
+            "need": room.get("need_k"), "dev": room.get("dev"), "rel": room.get("rel"),
+            "temp_24h": room.get("temp_24h"), "open": room.get("open_mode"),
             "cooldown": room.get("cooldown_kph"), "tau": room.get("tau_h"),
             "temp": room.get("temp_now"), "setpoint": room.get("setpoint")}
 
 
 def _step_effect(step: dict, cur: dict | None, now: int) -> dict:
-    """Compare a logged step's baseline against the current room state."""
+    """Compare a logged step's baseline against the current room state. The
+    yardstick is the room's shortfall in K (`need`: against the house average
+    while the thermostats are open, else against its setpoint); steps logged
+    before that metric existed fall back to the plain deficit."""
     days = round((now - step["ts"]) / 86400.0, 1)
     b = step.get("baseline") or {}
     if not cur:
         return {"days": days, "verdict": "unbekannt",
                 "line": "Raum nicht mehr in den Daten gefunden."}
-    cur_def = cur.get("max_deficit") or 0.0
-    base_def = b.get("deficit") or 0.0
-    d_def = round(cur_def - base_def, 1)          # negative = deficit shrank = better
-    reaches_now = bool(cur.get("reaches"))
-    was_reaching = bool(b.get("reaches"))
+    if cur.get("need_k") is not None and b.get("need") is not None:
+        cur_need, base_need = cur["need_k"], b["need"]
+    else:
+        cur_need, base_need = (cur.get("max_deficit") or 0.0), (b.get("deficit") or 0.0)
+    d = round(cur_need - base_need, 1)             # negative = room got warmer = less shortfall
     settling = days < 1.5
     action = step.get("action")
     if settling:
         verdict = "läuft"
-        line = f"Seit {days} Tagen in Beobachtung – Wirkung braucht meist 1–2 Tage (Fußboden ist träge)."
+        line = f"Seit {_de(days)} Tagen in Beobachtung – Wirkung braucht meist 1–2 Tage (Fußboden ist träge)."
     elif action == "open":
-        if reaches_now and not was_reaching:
-            verdict = "wirksam"; line = f"Raum erreicht jetzt sein Soll (vorher nicht). Defizit {d_def:+.1f} K."
-        elif d_def <= -0.3:
-            verdict = "wirksam"; line = f"Defizit um {abs(d_def):.1f} K kleiner geworden. 👍"
-        elif d_def >= 0.3:
-            verdict = "verschlechtert"; line = f"Defizit um {d_def:.1f} K größer – anderer Einfluss? (Wetter/Fenster)"
+        if d <= -0.3:
+            verdict = "wirksam"
+            line = (f"Der Raum hat {_de(abs(d))} K aufgeholt"
+                    + (" und liegt jetzt im Gleichlauf. 👍" if cur_need < SUPPLY_BAND_K else
+                       f" – es fehlen noch {_de(cur_need)} K, ein weiterer kleiner Schritt lohnt sich."))
+        elif d >= 0.3:
+            verdict = "verschlechtert"
+            line = f"Der Rückstand ist um {_de(d)} K größer geworden – anderer Einfluss? (Wetter, Fenster, anderer Kreis)"
         else:
-            verdict = "kaum effekt"; line = f"Kaum Änderung ({d_def:+.1f} K) – evtl. größeren Schritt oder Vorlauf prüfen."
+            verdict = "kaum effekt"
+            line = f"Kaum Änderung ({'+' if d >= 0 else '−'}{_de(abs(d))} K) – evtl. etwas größerer Schritt oder Vorlauf prüfen."
     else:  # throttle
-        if reaches_now and cur_def < 0.4:
-            verdict = "ok"; line = f"Raum hält sein Soll trotz Drosselung – Reserve korrekt abgegeben. 👍"
-        elif (not reaches_now) or d_def >= 0.4:
-            verdict = "zu weit gedrosselt"; line = f"Raum wird jetzt zu kühl (Defizit {d_def:+.1f} K) – etwas zurücknehmen."
+        if cur.get("category") == "under" or cur_need >= SUPPLY_BAND_K:
+            verdict = "zu weit gedrosselt"
+            line = f"Der Raum liegt jetzt {_de(cur_need)} K zurück – etwas zurücknehmen."
+        elif d >= 0.2:
+            verdict = "wirksam"
+            line = f"Der Raum ist {_de(d)} K näher an den Schnitt gerückt, ohne zu kühl zu werden. 👍"
         else:
-            verdict = "ok"; line = f"Stabil ({d_def:+.1f} K)."
-    return {"days": days, "d_deficit": d_def, "reaches_now": reaches_now, "verdict": verdict, "line": line}
+            verdict = "ok"
+            line = f"Stabil ({'+' if d >= 0 else '−'}{_de(abs(d))} K) – der Raum hat die Drosselung gut vertragen."
+    return {"days": days, "d_deficit": d, "need_now": cur_need,
+            "reaches_now": bool(cur.get("reaches")), "verdict": verdict, "line": line}
 
 
 def _opt_recommend(tm: dict, curve: dict | None, steps: list, now: int) -> dict:
     """The single next action for the balancing loop."""
-    rooms = tm.get("rooms", [])
-    rmap = {r["room"]: r for r in rooms}
-    n_rooms = len(rooms)
-    confident = sum(1 for r in rooms if r.get("confidence") != "niedrig")
+    rooms = [r for r in tm.get("rooms", []) if r.get("dev") is not None]
+    house = tm.get("house") or {}
 
     # 1) don't stack changes: if the last step is still settling, wait
     if steps:
@@ -4478,35 +5097,59 @@ def _opt_recommend(tm: dict, curve: dict | None, steps: list, now: int) -> dict:
         days = (now - last["ts"]) / 86400.0
         if days < 1.5:
             return {"kind": "wait", "title": "Letzten Schritt wirken lassen",
-                    "text": f"Der letzte Schritt an <b>{_esc(last['room'])}</b> läuft seit {days:.1f} Tagen. "
+                    "text": f"Der letzte Schritt an <b>{_esc(last['room'])}</b> läuft seit {_de(days)} Tagen. "
                             f"Mindestens 1–2 Tage beobachten, bevor der nächste Kreis verstellt wird – "
                             f"Fußbodenheizung reagiert träge.", "room": last["room"]}
 
-    # 2) need a trustworthy model first
-    if n_rooms == 0 or confident < max(1, round(n_rooms * 0.5)):
-        return {"kind": "observe", "title": "Erst Datenbasis schaffen",
-                "text": "Noch zu wenige Räume mit belastbarem Modell. Starte/führe die "
-                        "<b>Beobachtungsphase</b> fort, dann kommen hier konkrete Abgleich-Schritte.",
-                "room": None}
+    # 2) nothing to compare yet
+    if not rooms:
+        return {"kind": "observe", "title": "Noch keine aktuellen Raumdaten",
+                "text": "Sobald die Thermostate Werte der letzten 24 Stunden liefern, vergleiche ich "
+                        "die Räume und schlage den ersten Schritt vor.", "room": None}
 
-    under = [r for r in rooms if r.get("category") == "under"]
-    reserve = [r for r in rooms if r.get("category") == "reserve"]
+    under = sorted([r for r in rooms if r.get("category") == "under"],
+                   key=lambda r: -(r.get("need_k") or 0))
+    over = sorted([r for r in rooms if r.get("category") == "reserve"],
+                  key=lambda r: (r.get("need_k") or 0))
 
-    # 3) biggest under-supplied room → open one small step
+    # 3) the room that is furthest behind → open one small step
     if under:
-        under.sort(key=lambda r: -(r.get("max_deficit") or 0))
         w = under[0]
+        counter = over[0] if over else None
         return {"kind": "open", "title": f"{w['room']}: Durchfluss erhöhen",
                 "room": w["room"], "action": "open",
-                "text": f"<b>{_esc(w['room'])}</b> erreicht sein Soll nicht (Defizit bis "
-                        f"{(w.get('max_deficit') or 0):.1f} K). Am Verteiler den Durchfluss dieses Kreises "
-                        f"<b>einen kleinen Schritt öffnen</b> (~+0,2–0,3 l/min)"
-                        + (f"; wenn ein <b>Reserve-Raum</b> ({_esc(reserve[0]['room'])}) vorhanden ist, diesen "
-                           f"im Gegenzug etwas drosseln" if reserve else "")
-                        + ". Dann 1–2 Tage beobachten.",
-                "counter_room": reserve[0]["room"] if reserve else None}
+                "text": f"<b>{_esc(w['room'])}</b>: {w['finding']} Am Verteiler den Durchfluss dieses "
+                        f"Kreises <b>einen kleinen Schritt öffnen</b> (+0,2–0,3 l/min je Kreis)"
+                        + (f"; im Gegenzug <b>{_esc(counter['room'])}</b> etwas androsseln, der Raum hat "
+                           f"Reserve" if counter else "")
+                        + ". Dann 1–2 Tage beobachten und den Schritt unten protokollieren.",
+                "counter_room": counter["room"] if counter else None}
 
-    # 4) all rooms reach → efficiency: lower the heating curve if it is high
+    # 4) nobody too cold, but someone clearly too warm → throttle that one
+    if over and house.get("open"):
+        w = over[0]
+        return {"kind": "throttle", "title": f"{w['room']}: leicht androsseln",
+                "room": w["room"], "action": "throttle",
+                "text": f"Kein Raum ist zu kalt. <b>{_esc(w['room'])}</b>: {w['finding']} Einen kleinen "
+                        f"Schritt <b>androsseln</b> (−0,2–0,3 l/min je Kreis) – das macht den Rücklauf "
+                        f"kühler und die Wärmepumpe effizienter. Danach 1–2 Tage beobachten."}
+
+    # 5) balanced while the thermostats are open → hand control back + curve
+    if house.get("open"):
+        hd = house.get("dev")
+        txt = ("Die Räume laufen jetzt im <b>Gleichlauf</b> – der Verteiler ist eingestellt. "
+               "Stelle die Thermostate wieder auf deine <b>Wunschtemperaturen</b>.")
+        if hd is not None and hd >= 0.5:
+            txt += (f" Das Haus liegt im Schnitt <b>{_de(hd)} K über</b> den Wunschwerten: Jetzt die "
+                    f"<b>Heizkurve</b> (bzw. den Raum-Soll an der Wärmepumpe) schrittweise senken – "
+                    f"das ist der eigentliche Effizienzgewinn.")
+        elif hd is not None and hd <= -0.5:
+            txt += (f" Das Haus liegt im Schnitt <b>{_de(abs(hd))} K unter</b> den Wunschwerten: die "
+                    f"Heizkurve ist eher zu niedrig – in kleinen Schritten anheben.")
+        return {"kind": "restore", "title": "Ausgeglichen – Thermostate zurückstellen",
+                "room": None, "text": txt}
+
+    # 6) normal operation, everyone supplied → efficiency: lower the curve
     if curve and curve.get("enough"):
         over_k = curve.get("over_k") or 0
         rec = curve.get("recommendation") or {}
@@ -4514,41 +5157,30 @@ def _opt_recommend(tm: dict, curve: dict | None, steps: list, now: int) -> dict:
             sv = curve.get("saving_pct") or 0
             return {"kind": "curve", "title": "Heizkurve absenken (Effizienz)",
                     "room": None,
-                    "text": "Alle Räume erreichen ihr Soll – jetzt der eigentliche Effizienzgewinn: "
-                            f"die <b>Heizkurve ~{round(over_k)} K absenken</b> (siehe Heizkurven-Karte), "
-                            f"in 2–3-K-Schritten, bis der kälteste Raum gerade noch warm wird."
+                    "text": "Alle Räume halten ihren Sollwert – jetzt der eigentliche Effizienzgewinn: "
+                            f"die <b>Heizkurve ~{round(over_k)} K absenken</b> (siehe Heizkurven-Karte unter "
+                            f"„Einstellung“), in 2–3-K-Schritten, bis der kälteste Raum gerade noch warm wird."
                             + (f" Geschätzte Ersparnis ~{round(sv*100)} %." if sv else ""),
                     "saving_pct": sv}
-        # curve already low/efficient and everyone warm → done
-        if reserve:
-            w = max(reserve, key=lambda r: (r.get("cooldown_kph") is not None))
-            return {"kind": "throttle", "title": f"{w['room']}: leicht androsseln",
-                    "room": w["room"], "action": "throttle",
-                    "text": f"Keine unterversorgten Räume mehr. <b>{_esc(w['room'])}</b> hat Reserve "
-                            f"(erreicht Soll zügig) – einen kleinen Schritt <b>androsseln</b> macht den "
-                            f"Rücklauf kühler und die WP effizienter, ohne Komfortverlust. Danach beobachten."}
-        return {"kind": "done", "title": "Abgleich & Kurve passen ✅",
-                "room": None,
-                "text": "Alle Räume erreichen ihr Soll und die Heizkurve ist WP-freundlich. "
-                        "Nichts weiter zu tun – weiter beobachten lassen."}
-
-    # 5) balanced but no curve data yet
-    return {"kind": "observe", "title": "Kurve messen",
+    return {"kind": "done", "title": "Alle Räume sind versorgt ✅",
             "room": None,
-            "text": "Räume sind ausgeglichen. Für den Effizienz-Schritt brauche ich noch die "
-                    "<b>Heizkurve</b> (Vorlauf/Außen) – sammelt sich beim Heizen von selbst."}
+            "text": "Im Regelbetrieb hält jeder Raum seinen Sollwert. Die Thermostate gleichen dabei "
+                    "kleine Schieflagen selbst aus – willst du den Verteiler gezielt prüfen, dreh alle "
+                    "Thermostate für 2–3 Tage hoch (Einstell-Modus): dann vergleiche ich die Räume direkt."}
 
 
-def compute_optimize(store: "Store") -> dict:
+def compute_optimize(store: "Store", tm: dict | None = None, curve: dict | None = None) -> dict:
     """Step-wise hydraulic-balancing loop: current recommendation, the logged
     steps with their measured effect, and the efficiency coupling."""
     now = int(time.time())
-    tm = compute_thermal_model(store, days=21)
+    if tm is None:
+        tm = compute_thermal_model(store, days=21)
     rmap = {r["room"]: r for r in tm.get("rooms", [])}
-    try:
-        curve = compute_heating_curve(store, 30, None)
-    except Exception:
-        curve = None
+    if curve is None:
+        try:
+            curve = compute_heating_curve(store, 30, None)
+        except Exception:
+            curve = None
     steps = _opt_steps(store)
 
     # attach live effect to every logged step
@@ -4560,19 +5192,23 @@ def compute_optimize(store: "Store") -> dict:
 
     rec = _opt_recommend(tm, curve, steps, now)
 
-    # efficiency panel
+    # efficiency panel (30-day window – named, so it is not mistaken for the
+    # "today" figure of the heating-curve card)
     eff_panel = None
     if curve and curve.get("enough"):
         r = curve.get("recommendation") or {}
         eff_panel = {"over_k": curve.get("over_k"), "verdict": curve.get("verdict"),
-                     "saving_pct": curve.get("saving_pct"), "efficient": r.get("efficient", False)}
+                     "saving_pct": curve.get("saving_pct"), "efficient": r.get("efficient", False),
+                     "days": 30}
 
     # room list for the step form
     room_opts = [{"room": r["room"], "category": r.get("category"),
-                  "deficit": r.get("max_deficit"), "reaches": r.get("reaches"),
-                  "confidence": r.get("confidence")} for r in tm.get("rooms", [])]
+                  "deficit": r.get("max_deficit"), "need": r.get("need_k"),
+                  "reaches": r.get("reaches"), "confidence": r.get("confidence")}
+                 for r in tm.get("rooms", [])]
 
-    balanced = bool(tm.get("rooms")) and not any(r.get("category") == "under" for r in tm["rooms"])
+    live = [r for r in tm.get("rooms", []) if r.get("dev") is not None]
+    balanced = bool(live) and not any(r.get("category") in ("under", "reserve") for r in live)
     return {"ok": True, "recommendation": rec, "steps": hist, "n_steps": len(steps),
             "efficiency": eff_panel, "rooms": room_opts, "balanced": balanced,
             "note": ("Die App schreibt NICHT an die Wärmepumpe – sie protokolliert deine Handgriffe am "
@@ -4886,6 +5522,282 @@ def _demo_automeasure() -> dict:
             {"ts": now - 3600, "action": "absenken", "room": "Büro", "from": 21.0, "to": 17.0, "note": None},
             {"ts": now - 90000, "action": "zurückgestellt", "room": "Wohnzimmer", "from": None, "to": 22.0, "note": "Fenster beendet"},
         ],
+    }
+
+
+# ===================================================================== #
+#  Hydraulic balancing — ONE consolidated view                           #
+# ===================================================================== #
+# The balancing tab used to be ten cards, each computing its own thermal
+# model and its own per-room list (model / heat load / target flow / manifold
+# table / priority / readiness / step form) – with numbers that disagreed
+# between cards (two different ΔT settings → two different l/min for the same
+# circuit). compute_balance() runs every module ONCE on the same inputs and
+# merges the result into a single per-room table plus one next step.
+
+SETTINGS_KV = "settings"          # the synced app settings (frontend localStorage mirror)
+
+DEMO_LAYOUT = {
+    "q": 40, "dt": 6, "manifolds": ["EG", "OG"],     # q/dt = the app's own defaults
+    "rooms": {
+        "Wohnzimmer": {"manifold": "EG", "area": 32, "loops": 3},
+        "Küche": {"manifold": "EG", "area": 16, "loops": 2},
+        "Arbeitszimmer": {"manifold": "EG", "area": 12, "loops": 1},
+        "Schlafzimmer": {"manifold": "OG", "area": 16, "loops": 2},
+        "Bad": {"manifold": "OG", "area": 8, "loops": 1},
+    },
+}
+
+
+def _app_settings(store: "Store") -> dict:
+    raw = store.kv_get(SETTINGS_KV)
+    if not raw:
+        return {}
+    try:
+        d = json.loads(raw)
+        return d if isinstance(d, dict) else {}
+    except (ValueError, TypeError):
+        return {}
+
+
+def _settings_floats(st: dict | None, prefix: str, lo: float, hi: float) -> dict:
+    out = {}
+    for k, v in (st or {}).items():
+        if isinstance(k, str) and k.startswith(prefix):
+            try:
+                f = float(str(v).replace(",", "."))
+            except (TypeError, ValueError):
+                continue
+            if lo <= f <= hi:
+                out[k[len(prefix):]] = f
+    return out
+
+
+def _settings_targets(st: dict | None) -> dict:
+    """room -> comfort target °C the user entered (key ``bhe_target_<room>``)."""
+    return _settings_floats(st, "bhe_target_", 10.0, 30.0)
+
+
+def _settings_taco(st: dict | None) -> dict:
+    """room -> current flow-meter reading per circuit, l/min (``bhe_taco_<room>``)."""
+    return _settings_floats(st, "bhe_taco_", 0.0, 30.0)
+
+
+def _settings_layout(st: dict | None) -> dict:
+    """The manifold layout the user maintains in the app (rooms → manifold,
+    area, number of circuits) plus the three assumptions every flow figure
+    depends on: specific load q [W/m²], circuit spread dt [K], design outdoor
+    temperature [°C]. One place, so no two cards can use different values."""
+    try:
+        l = json.loads((st or {}).get("heatLayout") or "{}")
+    except (ValueError, TypeError):
+        l = {}
+    if not isinstance(l, dict):
+        l = {}
+
+    def f(v, dflt, lo, hi):
+        try:
+            return max(lo, min(hi, float(v)))
+        except (TypeError, ValueError):
+            return dflt
+
+    def pos(v):
+        try:
+            x = float(v)
+            return x if x > 0 else None
+        except (TypeError, ValueError):
+            return None
+
+    rooms = {}
+    for rm, c in (l.get("rooms") or {}).items():
+        if not isinstance(c, dict) or not isinstance(rm, str):
+            continue
+        loops = pos(c.get("loops"))
+        rooms[rm] = {"manifold": str(c.get("manifold") or ""), "area": pos(c.get("area")),
+                     "loops": max(1, int(round(loops))) if loops else 1,
+                     "length": pos(c.get("length"))}
+    return {"q": f(l.get("q"), 40.0, 10.0, 120.0), "dt": f(l.get("dt"), 6.0, 3.0, 10.0),
+            "design_c": f(l.get("design"), DESIGN_OUTDOOR_C, -25.0, -5.0),
+            "manifolds": [str(m) for m in (l.get("manifolds") or []) if m],
+            "rooms": rooms,
+            "hidden": [str(x) for x in (l.get("hidden") or []) if x]}
+
+
+def compute_balance(store: "Store", settings: dict | None = None, demo: bool = False) -> dict:
+    """Everything the balancing tab shows, computed once: phase, the single
+    next step, one merged row per room (supply · model · heat load · target
+    flow · the user's flow-meter reading), manifold sums, the data situation
+    and the step log."""
+    now = int(time.time())
+    st = dict(settings if settings is not None else _app_settings(store))
+    layout = _settings_layout(st)
+    layout_demo = False
+    if demo and not any(c.get("area") for c in layout["rooms"].values()):
+        # demo without a layout of its own: show example rooms so the table is
+        # not empty – but keep the assumptions the user may already have changed
+        base = dict(DEMO_LAYOUT)
+        if st.get("heatLayout"):
+            base.update({"q": layout["q"], "dt": layout["dt"], "design": layout["design_c"]})
+        layout = _settings_layout({"heatLayout": json.dumps(base)})
+        layout_demo = True
+    targets = _settings_targets(st)
+    taco = _settings_taco(st)
+    hidden = set(layout["hidden"])
+
+    tm = compute_thermal_model(store, days=21, targets=targets, exclude=hidden)
+    areas = {rm: c["area"] for rm, c in layout["rooms"].items()
+             if c.get("area") and rm not in hidden}
+    hl = compute_heatload(store, areas, layout["design_c"], layout["dt"], layout["q"], tm=tm)
+    try:
+        curve = compute_heating_curve(store, 30, None)
+    except Exception:
+        curve = None
+    opt = compute_optimize(store, tm=tm, curve=curve)
+    obs = compute_observation(store, tm=tm)
+    am = compute_automeasure(store)
+
+    tm_by = {r["room"]: r for r in tm["rooms"]}
+    hl_by = {r["room"]: r for r in hl["rooms"]}
+    names = sorted(set(tm_by) | {rm for rm in layout["rooms"] if rm not in hidden})
+    rooms = []
+    for rm in names:
+        t = tm_by.get(rm) or {}
+        h = hl_by.get(rm) or {}
+        c = layout["rooms"].get(rm) or {}
+        loops = int(c.get("loops") or 1)
+        ok = h.get("status") == "ok" and h.get("flow_lmin") is not None
+        fr = h.get("flow_lmin") if ok else None
+
+        def per(v):
+            return round(v / loops, 2) if v is not None else None
+
+        rooms.append({
+            "room": rm, "manifold": c.get("manifold") or "", "area": c.get("area"),
+            "loops": loops, "length": c.get("length"), "has_thermostat": bool(t),
+            # --- supply (measured, last 24 h) ---
+            "temp_now": t.get("temp_now"), "setpoint": t.get("setpoint"),
+            "target": t.get("target"), "target_src": t.get("target_src"),
+            "open_mode": bool(t.get("open_mode")), "temp_24h": t.get("temp_24h"),
+            "dev": t.get("dev"), "rel": t.get("rel"), "need_k": t.get("need_k"),
+            "demand_share": t.get("demand_share"),
+            "category": t.get("category") or "none",
+            "finding": t.get("finding") or ("Kein Thermostat in diesem Raum – nur Fläche und Kreise bekannt."),
+            "recommendation": t.get("recommendation") or "",
+            # --- physics model (derived) ---
+            "tau_h": t.get("tau_h"), "cooldown_kph": t.get("cooldown_kph"),
+            "heatup_kph": t.get("heatup_kph"), "n_tau": t.get("n_tau", 0),
+            "n_warm": t.get("n_warm", 0), "n": t.get("n", 0),
+            "confidence": t.get("confidence"), "model_ready": t.get("status") == "bereit",
+            "missing": t.get("missing") or [],
+            # --- heat load + target flow (estimated / calibrated) ---
+            "q_design": h.get("q_design") if ok else None,
+            "q_lo": h.get("q_lo") if ok else None, "q_hi": h.get("q_hi") if ok else None,
+            "spec": h.get("spec") if ok else None, "ua": h.get("ua") if ok else None,
+            "estimated": bool(h.get("estimated")), "plausible": h.get("plausible", True),
+            "flow_room": fr, "flow_loop": per(fr),
+            "flow_lo": per(h.get("flow_lo")) if ok else None,
+            "flow_hi": per(h.get("flow_hi")) if ok else None,
+            "flow_missing": (h.get("missing") or ["Fläche fehlt"]) if not ok else None,
+            # --- the user's own flow-meter reading, per circuit ---
+            "ist": taco.get(rm),
+        })
+
+    # manifold sums, in the user's manifold order; unassigned rooms last
+    order = list(layout["manifolds"])
+    for r in rooms:
+        if r["manifold"] and r["manifold"] not in order:
+            order.append(r["manifold"])
+    manifolds = []
+    for m in order + [""]:
+        rs = [r for r in rooms if r["manifold"] == m]
+        if not rs:
+            continue
+        manifolds.append({"name": m, "rooms": len(rs),
+                          "loops": sum(r["loops"] for r in rs if r["flow_room"] is not None),
+                          "flow": round(sum(r["flow_room"] or 0 for r in rs), 1)})
+
+    # ---- phase + headline numbers ---------------------------------------- #
+    live = [r for r in rooms if r["dev"] is not None]
+    under = sorted([r for r in live if r["category"] == "under"], key=lambda r: -(r["need_k"] or 0))
+    over = sorted([r for r in live if r["category"] == "reserve"], key=lambda r: (r["need_k"] or 0))
+    even = [r for r in live if r["category"] == "balanced"]
+    house = tm.get("house") or {}
+    have_layout = bool(areas)
+    n_th = len(tm["rooms"])
+    if not n_th:
+        phase = {"key": "nodata", "label": "Noch keine Raumdaten",
+                 "text": "Sobald Raumthermostate gekoppelt sind, protokolliert die Bridge automatisch "
+                         "Temperatur und Sollwert je Raum – daraus entsteht hier der Abgleich."}
+    elif house.get("open"):
+        if under or over:
+            phase = {"key": "adjust", "label": "Einstell-Phase",
+                     "text": f"{house.get('n_open')} von {n_th} Thermostaten sind hochgedreht – der "
+                             "Verteiler bestimmt jetzt die Wärmeverteilung, und ich vergleiche die Räume "
+                             "<b>untereinander</b> (Abweichung von ihrer Wunschtemperatur)."}
+        else:
+            phase = {"key": "finish", "label": "Ausgeglichen",
+                     "text": "Alle Räume liegen im Gleichlauf – der Verteiler passt. Jetzt die Thermostate "
+                             "zurückstellen und die Heizkurve senken."}
+    else:
+        phase = {"key": "normal", "label": "Regelbetrieb",
+                 "text": "Die Thermostate regeln selbst. Ich prüfe je Raum, ob er seinen Sollwert hält "
+                         "und wie viel der Zeit er Wärme anfordert – wer dauernd anfordert und trotzdem "
+                         "darunter bleibt, bekommt zu wenig."}
+
+    rels = [r["rel"] for r in live if r["rel"] is not None]
+    spread = round(max(rels) - min(rels), 1) if len(rels) >= 2 else None
+    eff = opt.get("efficiency")
+    kpis = []
+    if house.get("open") and spread is not None:
+        kpis.append({"v": f"{_de(spread)} K", "l": "Spanne zwischen den Räumen",
+                     "tone": "good" if spread < 1.5 else ("ok" if spread < 3.0 else "warn"),
+                     "hint": "Ziel: unter 1,5 K"})
+        if house.get("dev") is not None:
+            hd = house["dev"]
+            kpis.append({"v": f"{'+' if hd >= 0 else '−'}{_de(abs(hd))} K", "l": "Haus gegenüber Wunsch",
+                         "tone": "ok" if abs(hd) >= 0.5 else "good",
+                         "hint": "gleicht später die Heizkurve aus"})
+    elif live:
+        hold = sum(1 for r in live if r["category"] != "under")
+        kpis.append({"v": f"{hold}/{len(live)}", "l": "Räume halten ihren Sollwert",
+                     "tone": "good" if hold == len(live) else "warn"})
+    if live:
+        kpis.append({"v": f"{len(under)} · {len(over)}", "l": "zu kalt · zu warm",
+                     "tone": "good" if not (under or over) else "warn"})
+    if hl.get("total_flow_lmin"):
+        kpis.append({"v": f"{_de(hl['total_flow_lmin'])}", "l": f"Σ l/min bei ΔT {_de(layout['dt'], 0)} K",
+                     "tone": "na"})
+    if eff and eff.get("over_k") is not None:
+        ok_ = eff["over_k"]
+        kpis.append({"v": f"{'+' if ok_ >= 0 else '−'}{_de(abs(ok_))} K", "l": "Heizkurve über Ziel (30 Tage)",
+                     "tone": "good" if ok_ < 2 else ("ok" if ok_ < 4 else "warn")})
+
+    setup_hint = None
+    if n_th and not have_layout:
+        setup_hint = ("Für die <b>l/min-Werte</b> fehlen noch Flächen und Kreise je Raum – unten unter "
+                      "„Verteiler einrichten“ eintragen. Der Raumvergleich funktioniert auch ohne.")
+    elif have_layout and not any(r["ist"] is not None for r in rooms):
+        setup_hint = ("Tipp: Trage in der Raumliste deine aktuellen <b>Tacosetter-Werte</b> (Ist) ein – "
+                      "dann siehst du je Kreis die Abweichung zur Empfehlung.")
+
+    stray = sorted(str(x) for x in _stray_room_names(store.room_log_counts(now - 45 * 86400)))
+
+    return {
+        "ok": True, "ts": now, "phase": phase, "next": opt["recommendation"],
+        "setup_hint": setup_hint, "kpis": kpis,
+        "summary": {"open": [r["room"] for r in under], "throttle": [r["room"] for r in over],
+                    "even": [r["room"] for r in even]},
+        "house": house, "rooms": rooms, "manifolds": manifolds,
+        "totals": {"q_total": hl.get("q_total_design"), "flow_total": hl.get("total_flow_lmin"),
+                   "method": hl.get("method"), "spec_wm2": layout["q"], "spread_k": layout["dt"],
+                   "design_c": layout["design_c"], "central_spread": hl.get("central_spread"),
+                   "signature": hl.get("signature"), "coverage": hl.get("coverage"),
+                   "ua_total": hl.get("ua_total"), "balance_c": hl.get("balance_c")},
+        "curve": eff, "steps": opt["steps"], "n_steps": opt["n_steps"], "opt_note": opt["note"],
+        "data": obs, "automeasure": am, "stray_rooms": stray,
+        "layout_demo": layout_demo,
+        "insights": tm.get("insights") or [], "hl_insights": hl.get("insights") or [],
+        "note": hl.get("note"),
     }
 
 
@@ -5463,14 +6375,10 @@ class Poller(threading.Thread):
         the average for the heat time-series overlay."""
         climate = self.client.list_climate(self.cfg.get("contact_room_map"))
         temps, sets, per_room = [], [], []
-        for r in climate:
-            if str(r.get("roomControlMode") or "HEATING").upper() == "OFF" or r.get("summerMode"):
-                continue
-            t = r.get("temp") if isinstance(r.get("temp"), (int, float)) else None
+        for r in _loggable_climate(climate):
+            t = r.get("temp")
             sp = r.get("setpoint") if isinstance(r.get("setpoint"), (int, float)) else None
             vv = r.get("valve") if isinstance(r.get("valve"), (int, float)) else None
-            if t is None:
-                continue
             temps.append(t)
             if sp is not None:
                 sets.append(sp)
@@ -5729,6 +6637,13 @@ def _demo_climate() -> list[dict]:
     ]
 
 
+# demo rooms: (name, base °C, setpoint, responsiveness to the house swing)
+DEMO_ROOMS = [("Wohnzimmer", 21.8, 22.0, 1.0), ("Schlafzimmer", 19.2, 19.0, 0.6),
+              ("Bad", 23.0, 24.0, 1.2), ("Küche", 21.2, 21.0, 1.0),
+              ("Arbeitszimmer", 20.0, 21.0, 0.8)]
+DEMO_DHW_SET = 53.0                # demo hot-water setpoint (matches _demo_controls)
+
+
 def seed_demo(store: Store, days: int = 90):
     if store.count() > 0:
         return
@@ -5770,13 +6685,12 @@ def seed_demo(store: Store, days: int = 90):
     # heating resumes – so the "Warmwasser kostet Komfort" analysis has data.
     # finer than the device grid so short defrost cycles (~10 min) are captured
     hp_step = timedelta(minutes=5)
-    hp_rows, rt_rows, rl_rows = [], [], []
+    hp_rows, rt_rows, rl_rows, dhw_rows = [], [], [], []
+    tank = 47.0                    # hot-water tank °C: charges in DHW mode, cools otherwise
     # a few demo rooms at different levels/responsiveness, so the per-room
     # temperature overlay in the day-timeline has distinct, chronologically
     # varying curves: (name, base °C, setpoint, responsiveness to the house swing)
-    demo_rooms = [("Wohnzimmer", 21.8, 22.0, 1.0), ("Schlafzimmer", 19.2, 19.0, 0.6),
-                  ("Bad", 23.0, 24.0, 1.2), ("Küche", 21.2, 21.0, 1.0),
-                  ("Arbeitszimmer", 20.0, 21.0, 0.8)]
+    demo_rooms = DEMO_ROOMS
     e_kwh = h_kwh = 0.0
     indoor = 21.5
     t = start
@@ -5799,6 +6713,8 @@ def seed_demo(store: Store, days: int = 90):
         indoor += 0.04 * math.sin(t.timestamp() / 611.0)   # small sensor wiggle
         ts = int(t.timestamp())
         rt_rows.append((ts, round(indoor, 1), setp))
+        tank = min(DEMO_DHW_SET, tank + 0.65) if op["mode"] == "dhw" else max(40.0, tank - 0.045)
+        dhw_rows.append((ts, round(tank, 1), DEMO_DHW_SET))
         swing = indoor - 21.5                              # the house's live deviation
         for k, (nm, rbase, rsp, resp) in enumerate(demo_rooms):
             rt = rbase + swing * resp + 0.05 * math.sin(t.timestamp() / (480.0 + 37 * k))
@@ -5810,6 +6726,7 @@ def seed_demo(store: Store, days: int = 90):
     store.add_hp_samples_bulk(hp_rows)
     store.room_temp_add_bulk(rt_rows)
     store.room_log_add_bulk(rl_rows)
+    store.dhw_log_add_bulk(dhw_rows)
     print(f"[demo] inserted {len(hp_rows)} heat-pump samples + {len(rt_rows)} indoor-temp"
           f" + {len(rl_rows)} per-room rows.")
 
@@ -5858,6 +6775,9 @@ class DemoPoller(threading.Thread):
         hp_latest = self.store.hp_latest() or {}
         e_kwh = hp_latest.get("energy_kwh") or 0.0
         h_kwh = hp_latest.get("heat_kwh") or 0.0
+        last_room = 0
+        tank_rows = self.store.dhw_log_since(int(time.time()) - 6 * 3600)
+        tank = tank_rows[-1]["temp"] if tank_rows else 47.0
         while not self._stop.is_set():
             now = datetime.now()
             ts = int(now.timestamp())
@@ -5876,6 +6796,18 @@ class DemoPoller(threading.Thread):
                 "thermal_kw": op["heat_w"] / 1000.0, "modulation": op["modulation"],
                 "outdoor_c": op["outdoor_c"], "mode": op["mode"],
                 "supply_c": op["supply_c"], "return_c": op["return_c"]})
+            # per-room thermostat log + hot-water tank, every 5 min – otherwise the
+            # seeded history ends at start-up and the room analyses go stale
+            if ts - last_room >= 300:
+                last_room = ts
+                dip = -0.3 if op["mode"] == "dhw" else 0.0
+                rl = []
+                for k, (nm, rbase, rsp, resp) in enumerate(DEMO_ROOMS):
+                    rt = rbase + dip * resp + 0.05 * math.sin(ts / (480.0 + 37 * k))
+                    rl.append((ts, nm, round(rt, 1), rsp, 90.0 if rt < rsp - 0.2 else 20.0))
+                self.store.room_log_add_bulk(rl)
+                tank = min(DEMO_DHW_SET, tank + 0.65) if op["mode"] == "dhw" else max(40.0, tank - 0.045)
+                self.store.dhw_log_add(ts, round(tank, 1), DEMO_DHW_SET)
             if self.hp_state is not None:
                 cop = round(op["heat_w"] / op["elec_w"], 2) if op["elec_w"] > 0 else None
                 self.hp_state.clear()
@@ -5949,6 +6881,12 @@ class HeatPumpPoller(threading.Thread):
             "mode": data.get("mode"),
             "supply_c": data.get("supply_c"), "return_c": data.get("return_c"),
         })
+        # hot-water tank temperature + setpoint, so a DHW phase can be judged on
+        # what the tank really did (None when the device does not expose it)
+        try:
+            self.store.dhw_log_add(ts, data.get("dhw_c"), data.get("dhw_set_c"))
+        except Exception as exc:
+            print(f"[heatpump] dhw log: {exc}", file=sys.stderr)
         # live + lifetime COP
         cop_live = round(heat_w / power_w, 2) if (heat_w and power_w and power_w > 0) else None
         cop_life = round(heat / elec, 2) if (heat and elec and elec > 0) else None
@@ -6070,6 +7008,30 @@ class Runtime:
         self._calc_wanted: dict = {}    # key -> last_requested_ts
         self._warm_stop = threading.Event()
         self._warm_thread = None
+        self._opstate_hit = None        # (ts, state, error) – HomeCom operating state
+        self._opstate_lock = threading.Lock()
+
+    def hc_opstate(self, force: bool = False):
+        """(state, error): the heat pump's operating mode / setpoints as READ
+        from HomeCom. Cached for 10 min – it is ~15 sequential cloud requests –
+        and failures for 1 min so a hiccup does not block the UI for long."""
+        with self._opstate_lock:
+            now = time.time()
+            hit = self._opstate_hit
+            if hit and not force and now - hit[0] < (600 if hit[1] else 60):
+                return hit[1], hit[2]
+            client = self.homecom_client()
+            gid = self.cfg.get("homecom_gateway", "")
+            if not client or not gid:
+                return None, None
+            try:
+                st = client.read_opstate(gid)
+                st["read_ts"] = int(now)
+                err = None if st.get("readable") else "das Gerät liefert keine Betriebsart"
+            except Exception as exc:
+                st, err = None, str(exc)
+            self._opstate_hit = (time.time(), st, err)
+            return st, err
 
     def calc_get(self, key, ttl, fn):
         """Return a cached heavy-analytics result, computing it at most once per
@@ -6097,6 +7059,8 @@ class Runtime:
             self._calc_wanted = {k: t for k, t in self._calc_wanted.items() if t >= cutoff}
             wanted = list(self._calc_wanted.keys())
         for key in wanted:
+            if not isinstance(key, tuple) or len(key) != 3:
+                continue                 # not one of the warmable (kind, days, price) keys
             try:
                 kind, days, price = key
                 if kind == "overview":
@@ -6357,6 +7321,43 @@ class Handler(BaseHTTPRequestHandler):
         hp["connected"] = bool(self.cfg.get("homecom_refresh_token")) or self.ctx.mode == "demo"
         return hp
 
+    def _opstate(self, force: bool = False) -> dict:
+        """How the heating is actually operated (read from heat pump +
+        thermostats, measured from the setpoint log)."""
+        if self.ctx.mode == "demo":
+            return {"demo": True,
+                    **compute_opstate(self.store, _demo_opstate_hc(), _demo_climate())}
+        hc, err = self.ctx.hc_opstate(force)
+        climate = None
+        if self.ctx.mode == "live":
+            try:
+                client = SHCClient(self.cfg.get("shc_ip", ""), self.cfg["cert"], self.cfg["key"])
+                climate = client.list_climate(self.cfg.get("contact_room_map"))
+            except Exception:
+                climate = None
+        return {"demo": False, **compute_opstate(self.store, hc, climate, err)}
+
+    def _balance(self, force: bool = False) -> dict:
+        """The consolidated balancing view (one model run for the whole tab)."""
+        demo = self.ctx.mode == "demo"
+        if not demo:
+            try:
+                if int(time.time()) - self.store.room_log_last_ts() >= 120:
+                    self._log_rooms_now()
+            except Exception:
+                pass
+        st = self._settings_load()
+        # recompute when the layout / targets / flow readings change
+        fp = hash((st.get("heatLayout"),
+                   tuple(sorted((k, v) for k, v in st.items()
+                                if k.startswith(("bhe_target_", "bhe_taco_"))))))
+
+        def run():
+            return {"demo": demo, **compute_balance(self.store, st, demo)}
+        if force:
+            return run()
+        return self.ctx.calc_get(("abgleich", fp, demo), 45, run)
+
     def _log_rooms_now(self):
         """On-demand per-room temperature log (used by the rooms endpoint so the
         chart isn't empty until the 10-min poller runs)."""
@@ -6366,12 +7367,8 @@ class Handler(BaseHTTPRequestHandler):
         climate = client.list_climate(self.cfg.get("contact_room_map"))
         ts = int(time.time())
         per_room, temps, sets = [], [], []
-        for r in climate:
-            if str(r.get("roomControlMode") or "HEATING").upper() == "OFF" or r.get("summerMode"):
-                continue
-            t = r.get("temp") if isinstance(r.get("temp"), (int, float)) else None
-            if t is None:
-                continue
+        for r in _loggable_climate(climate):
+            t = r.get("temp")
             sp = r.get("setpoint") if isinstance(r.get("setpoint"), (int, float)) else None
             vv = r.get("valve") if isinstance(r.get("valve"), (int, float)) else None
             per_room.append((ts, r.get("room") or "—", round(t, 1),
@@ -7197,8 +8194,6 @@ class Handler(BaseHTTPRequestHandler):
     def _post_optimize(self, kind, body):
         """Log/undo/reset a balancing step. Logging captures a baseline snapshot
         so the step's effect can be measured over the following days."""
-        if self.ctx.mode == "demo":
-            return self._send_json(_demo_optimize())
         if kind == "step":
             try:
                 self._log_rooms_now()
@@ -7691,6 +8686,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json(self.ctx.calc_get(
                     ("loadpeaks", round(lpd, 2)), 60,
                     lambda: compute_load_peaks(self.store, lpd, self._hp_live())))
+            if path == "/api/abgleich":
+                return self._send_json(self._balance("force" in qs))
+            if path == "/api/heatpump/opstate":
+                return self._send_json(self._opstate("force" in qs))
             if path == "/api/heatpump/dhwimpact":
                 try:
                     dwd = max(1.0, min(60.0, float(qs.get("days", ["14"])[0])))
