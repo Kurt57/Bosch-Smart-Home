@@ -3109,7 +3109,7 @@ def compute_hp_analytics(store: Store, days: int, price: float,
         fl = compute_flow(store, days=14, rows=rows)
         flow = {"now": fl["now"], "system": fl["system"],
                 "measured": {"available": fl["measured"]["available"], "path": fl["measured"]["path"]},
-                "derived": {k: fl["derived"][k] for k in ("typical", "n", "spread_k", "sure", "behaviour")}}
+                "derived": {k: fl["derived"][k] for k in ("typical", "n", "spread_k", "sure", "behaviour", "why")}}
     except Exception as exc:
         print(f"[hp] flow: {exc}", file=sys.stderr)
         flow = None
@@ -5068,6 +5068,11 @@ WATER_WH_PER_LK = 1.163                  # Wh to heat one litre of water by 1 K
 _HEAT_MODES = ("ch", "heating", "heat")
 
 
+def _is_heat_mode(m) -> bool:
+    m = (m or "").lower()
+    return m in _HEAT_MODES or m.startswith(("heat", "ch"))
+
+
 def _flow_disc_load(store: "Store") -> dict | None:
     try:
         raw = store.kv_get(FLOW_DISC_KEY)
@@ -5106,7 +5111,7 @@ def _flow_segments(rows: list[dict], min_min: float = 15.0, max_min: float = 90.
     max_gap = max(2.5 * step, 600)
     runs, cur = [], []
     for r in rows:
-        heating = ((r.get("mode") or "").lower() in _HEAT_MODES and r.get("heat_kwh") is not None
+        heating = (_is_heat_mode(r.get("mode")) and r.get("heat_kwh") is not None
                    and (r.get("modulation") is None or r["modulation"] > 0))
         if heating and cur and r["ts"] - cur[-1]["ts"] <= max_gap:
             cur.append(r)
@@ -5132,32 +5137,49 @@ def _flow_segments(rows: list[dict], min_min: float = 15.0, max_min: float = 90.
 
 
 def _flow_from_segment(seg: list[dict], res_kwh: float | None) -> dict | None:
-    dur_h = (seg[-1]["ts"] - seg[0]["ts"]) / 3600.0
-    dq = (seg[-1].get("heat_kwh") or 0.0) - (seg[0].get("heat_kwh") or 0.0)
-    if dur_h <= 0 or dq < 0:
-        return None
+    """Flow for one piece of heating, interval by interval: heat from the
+    counter and the spread at that time. Intervals without a usable spread
+    (defrost, the compressor pausing) are left out of BOTH heat and time –
+    otherwise a defrost would count its missing heat but not its spread."""
+    num = den = hours = 0.0
     dts = []
-    for r in seg[1:]:
-        su, re_ = r.get("supply_c"), r.get("return_c")
-        if su is not None and re_ is not None and 0.3 <= su - re_ <= 20:
-            dts.append(su - re_)
-    if len(dts) < 2:
+    for a, b in zip(seg, seg[1:]):
+        qa, qb = a.get("heat_kwh"), b.get("heat_kwh")
+        if qa is None or qb is None or qb < qa:
+            continue
+        ds = []
+        for r in (a, b):
+            su, re_ = r.get("supply_c"), r.get("return_c")
+            if su is not None and re_ is not None and 0.3 <= su - re_ <= 20:
+                ds.append(su - re_)
+        if not ds or not (b.get("supply_c") is not None and b.get("return_c") is not None
+                          and 0.3 <= b["supply_c"] - b["return_c"] <= 20):
+            continue                          # interval ends in defrost / pause
+        d = sum(ds) / len(ds)
+        h = (b["ts"] - a["ts"]) / 3600.0
+        num += qb - qa
+        den += WATER_WH_PER_LK * d * h
+        hours += h
+        dts.append(d)
+    if len(dts) < 2 or hours <= 0:
         return None
     dt = sum(dts) / len(dts)
     if dt < 1.0:
         return None
-    p_w = dq * 1000.0 / dur_h
+    p_w = num * 1000.0 / hours
     # a coarse counter may not move at all in a short run: such a piece has no
     # value of its own, but it still counts when the pieces are pooled
-    flow = p_w / (WATER_WH_PER_LK * dt) / 60.0 if p_w >= 300 else None
+    flow = num * 1000.0 / den / 60.0 if (p_w >= 300 and den > 0) else None
     # uncertainty: counter resolution against the heat in this piece, plus
     # ±0.2 K on the difference of two temperature sensors
-    unc = (res_kwh / dq if (res_kwh and dq > 0) else (1.0 if res_kwh else 0.0)) + 0.2 / dt
+    unc = (res_kwh / num if (res_kwh and num > 0) else (1.0 if res_kwh else 0.0)) + 0.2 / dt
     out_c = [r["outdoor_c"] for r in seg if r.get("outdoor_c") is not None]
     sup = [r["supply_c"] for r in seg if r.get("supply_c") is not None]
     meas = [r["flow_lmin"] for r in seg if r.get("flow_lmin") is not None]
-    return {"start": seg[0]["ts"], "end": seg[-1]["ts"], "dur_min": round(dur_h * 60),
-            "heat_kwh": round(dq, 3), "p_w": round(p_w), "dt_k": round(dt, 2),
+    return {"start": seg[0]["ts"], "end": seg[-1]["ts"],
+            "dur_min": round((seg[-1]["ts"] - seg[0]["ts"]) / 60.0),
+            "heat_kwh": round(num, 3), "p_w": round(p_w), "dt_k": round(dt, 2),
+            "den": round(den, 3),
             "l_min": round(flow, 1) if flow is not None else None, "unc": round(unc, 2),
             "sure": flow is not None and unc <= 0.3,
             "plausible": flow is not None and 2.0 <= flow <= 80.0,
@@ -5184,7 +5206,7 @@ def compute_flow(store: "Store", days: int = 14, rows: list[dict] | None = None,
     # --- read from the device ---------------------------------------------- #
     meas_rows = [r for r in rows if r.get("flow_lmin") is not None]
     heat_meas = [r["flow_lmin"] for r in meas_rows
-                 if (r.get("mode") or "").lower() in _HEAT_MODES and r["flow_lmin"] > 0]
+                 if _is_heat_mode(r.get("mode")) and r["flow_lmin"] > 0]
     dhw_meas = [r["flow_lmin"] for r in meas_rows if (r.get("mode") or "").lower() == "dhw" and r["flow_lmin"] > 0]
     last_m = meas_rows[-1] if meas_rows else None
     m_beh, m_p90 = None, None
@@ -5208,7 +5230,8 @@ def compute_flow(store: "Store", days: int = 14, rows: list[dict] | None = None,
     # --- derived: heat ÷ spread -------------------------------------------- #
     res = _counter_step([r["heat_kwh"] for r in rows if r.get("heat_kwh") is not None])
     segs = []
-    for g in _flow_segments(rows):
+    raw_segs = _flow_segments(rows)
+    for g in raw_segs:
         f = _flow_from_segment(g, res)
         if f:
             segs.append(f)
@@ -5221,7 +5244,7 @@ def compute_flow(store: "Store", days: int = 14, rows: list[dict] | None = None,
     pooled = None
     if not sure and len(segs) >= 3:
         q = sum(f["heat_kwh"] for f in segs)
-        den = sum(WATER_WH_PER_LK * f["dt_k"] * f["dur_min"] / 60.0 for f in segs)
+        den = sum(f["den"] for f in segs)
         if q > 0 and den > 0:
             dts = sorted(f["dt_k"] for f in segs)
             unc = (res * (2 * len(segs)) ** 0.5 / q if res else 0.0) + 0.2 / dts[len(dts) // 2]
@@ -5247,6 +5270,31 @@ def compute_flow(store: "Store", days: int = 14, rows: list[dict] | None = None,
         else:
             behaviour = "schwankend"
     p90 = sorted(flows)[min(len(flows) - 1, int(round(0.9 * (len(flows) - 1))))] if flows else None
+    modes = {}
+    for r in rows:
+        k = r.get("mode") or "–"
+        modes[k] = modes.get(k, 0) + 1
+    why = None
+    if not (pooled or flows):
+        heat_rows = [r for r in rows if _is_heat_mode(r.get("mode"))]
+        if not rows:
+            why = f"noch keine Messwerte der Wärmepumpe in den letzten {days} Tagen"
+        elif not any(r.get("heat_kwh") is not None for r in rows):
+            why = "die Wärmepumpe liefert keinen Wärmemengenzähler – ohne Wärmemenge keine Rechnung"
+        elif not any(r.get("return_c") is not None and r.get("supply_c") is not None for r in rows):
+            why = "die Wärmepumpe meldet keinen Vor- und Rücklauf – ohne Spreizung keine Rechnung"
+        elif not heat_rows:
+            seen = ", ".join(f"„{k}“ {n}×" for k, n in sorted(modes.items(), key=lambda kv: -kv[1])[:5])
+            why = f"in den letzten {days} Tagen kein Heizbetrieb erkannt (gemeldete Betriebsarten: {seen})"
+        elif not any(r.get("modulation") is None or r["modulation"] > 0 for r in heat_rows):
+            why = "im Heizbetrieb meldet die Wärmepumpe 0 % Modulation – ein laufender Verdichter ist nicht erkennbar"
+        elif not raw_segs:
+            why = "noch kein Heizlauf von mindestens 15 min mit Vor- und Rücklauf"
+        elif not segs:
+            why = ("im Heizbetrieb liegt die Spreizung unter 1 K – zu klein für eine verlässliche Rechnung "
+                   "(die Fühler haben selbst etwa ±0,2 K Toleranz)")
+        else:
+            why = "die Heizläufe sind bisher zu kurz oder die Spreizung liegt unter 1 K – noch kein belastbarer Wert"
     derived = {
         "typical": (pooled["l_min"] if pooled else round(_median(flows), 1) if flows else None),
         "p90": round(p90, 1) if p90 is not None else None,
@@ -5259,6 +5307,8 @@ def compute_flow(store: "Store", days: int = 14, rows: list[dict] | None = None,
         "corr": round(corr, 2) if corr is not None else None,
         "last": ok[-1] if ok else None,
         "runs": ok[-8:],
+        "why": why,
+        "modes": [{"mode": k, "n": n} for k, n in sorted(modes.items(), key=lambda kv: -kv[1])[:6]],
     }
 
     # --- the one value used elsewhere -------------------------------------- #

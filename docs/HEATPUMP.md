@@ -122,7 +122,8 @@ importierten Monaten statt auf einer Hochrechnung.
   jeder Abfrage mit (**gelesen**). Grenz-/Sollwerte (z. B. `max…`) werden nicht
   als Messwert genommen. Meldet die Anlage keinen, wird er **abgeleitet**:
   l/min = Wärmeleistung ÷ (1,163 Wh/(l·K) × Spreizung × 60), je 15–90 min
-  Heizbetrieb mit laufendem Verdichter; bei einem groben Wärmezähler (z. B.
+  Heizbetrieb mit laufendem Verdichter, Abschnitt für Abschnitt (Abtauung und
+  Pausen zählen weder bei Wärme noch Zeit); bei einem groben Wärmezähler (z. B.
   1-kWh-Schritte) werden viele Läufe zusammengerechnet. Der Wert gilt für das
   Wasser durch die Wärmepumpe – mit Pufferspeicher oder hydraulischer Weiche
   fließt in den Heizkreisen eine andere Menge. Ergebnis: `/api/heatpump/flow`.
