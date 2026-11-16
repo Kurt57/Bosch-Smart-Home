@@ -1520,28 +1520,29 @@ class Store:
 
     def samples_span(self) -> dict | None:
         """Per-device first/last cumulative energy counters + observed span (s),
-        for a meter-based average when no install date is reported."""
-        with self.lock:
-            rows = self.conn.execute(
-                "SELECT device_id, MIN(ts) AS t0, MAX(ts) AS t1 FROM samples GROUP BY device_id"
-            ).fetchall()
-            if not rows:
-                return None
-            growth = 0.0
-            t0 = min(r["t0"] for r in rows)
-            t1 = max(r["t1"] for r in rows)
-            for r in rows:
-                a = self.conn.execute(
-                    "SELECT energy_wh FROM samples WHERE device_id=? ORDER BY ts ASC LIMIT 1",
-                    (r["device_id"],)).fetchone()
-                b = self.conn.execute(
-                    "SELECT energy_wh FROM samples WHERE device_id=? ORDER BY ts DESC LIMIT 1",
-                    (r["device_id"],)).fetchone()
-                if a and b and b["energy_wh"] >= a["energy_wh"]:
-                    growth += b["energy_wh"] - a["energy_wh"]
-        if t1 <= t0:
+        for a meter-based average when no install date is reported. Reads the
+        first and last row per device through the index (a GROUP BY over the
+        whole table took a quarter of a second on a grown database)."""
+        ids = self.sample_device_ids()
+        if not ids:
             return None
-        return {"t0": t0, "t1": t1, "growth_wh": growth}
+        growth, t0s, t1s = 0.0, [], []
+        with self.lock:
+            for d in ids:
+                a = self.conn.execute(
+                    "SELECT ts, energy_wh FROM samples WHERE device_id=? ORDER BY ts ASC LIMIT 1",
+                    (d,)).fetchone()
+                b = self.conn.execute(
+                    "SELECT ts, energy_wh FROM samples WHERE device_id=? ORDER BY ts DESC LIMIT 1",
+                    (d,)).fetchone()
+                if not a or not b:
+                    continue
+                t0s.append(a["ts"]); t1s.append(b["ts"])
+                if b["energy_wh"] >= a["energy_wh"]:
+                    growth += b["energy_wh"] - a["energy_wh"]
+        if not t0s or max(t1s) <= min(t0s):
+            return None
+        return {"t0": min(t0s), "t1": max(t1s), "growth_wh": growth}
 
     def upsert_device(self, dev: dict, ts: int, energy_start: int | None = None):
         with self.lock, self.conn:
@@ -1658,10 +1659,18 @@ class Store:
             return self.conn.execute("SELECT COUNT(*) c FROM dev_day").fetchone()["c"]
 
     def min_ts(self) -> int | None:
+        """Time of the very first sample – per device through the index (a
+        plain MIN(ts) scans every row, ~0.1 s on a grown database)."""
+        vals = [self.dev_first_ts(d) for d in self.sample_device_ids()]
+        vals = [v for v in vals if v is not None]
+        return min(vals) if vals else None
+
+    def count_fast(self) -> int:
+        """Number of samples, read off the highest row id (rows are never
+        deleted, so this equals COUNT(*) without walking the table)."""
         with self.lock:
-            cur = self.conn.execute("SELECT MIN(ts) AS m FROM samples")
-            row = cur.fetchone()
-            return row["m"] if row and row["m"] is not None else None
+            r = self.conn.execute("SELECT MAX(rowid) AS m FROM samples").fetchone()
+            return int(r["m"]) if r and r["m"] is not None else 0
 
     def count(self) -> int:
         with self.lock:
@@ -7371,6 +7380,61 @@ class Runtime:
             return res
         return self.calc_get(key, self.CORE_TTL, run)
 
+    BOOT_SNAP_KEY = "boot_snap"      # last core results, kept on disk
+    BOOT_BUDGET_S = 1.5              # answer with the last state if fresh takes longer
+
+    def _snap_save(self, days, price, parts: dict):
+        """Persist the last core results (at most every 5 min) so the very next
+        start – even right after a bridge restart – has something to show."""
+        now = time.time()
+        if now - getattr(self, "_snap_saved", 0) < 300:
+            return
+        self._snap_saved = now
+        try:
+            self.store.kv_set(self.BOOT_SNAP_KEY, json.dumps(
+                {"days": days, "price": price, "ts": int(now), **parts}, separators=(",", ":")))
+        except Exception as exc:
+            print(f"[boot] snapshot: {exc}", file=sys.stderr)
+
+    def _snap_load(self, days, price):
+        try:
+            d = json.loads(self.store.kv_get(self.BOOT_SNAP_KEY) or "null")
+        except (ValueError, TypeError):
+            return None
+        if not isinstance(d, dict) or d.get("days") != days or d.get("price") != price:
+            return None
+        return d if all(d.get(k) for k in ("ov", "hpA", "data")) else None
+
+    def boot_core(self, days: int, price: float, fresh: bool = False) -> dict:
+        """Everything the first screen needs, in one answer: overview, heat-pump
+        and device analytics. Normally fresh (cached ≤ 90 s). If computing takes
+        longer than BOOT_BUDGET_S – e.g. while the history is still being
+        aggregated after an update – the last persisted state is returned,
+        marked ``stale``, and the computation simply continues for the next call."""
+        box: dict = {}
+
+        def work():
+            try:
+                box["ov"] = self.core("overview", days, price, fresh)
+                box["hpA"] = self.core("hpanalytics", days, price)
+                box["data"] = self.core("analytics", days, price)
+            except Exception as exc:
+                box["error"] = str(exc)
+        th = threading.Thread(target=work, daemon=True)
+        th.start()
+        th.join(None if fresh else self.BOOT_BUDGET_S)
+        if th.is_alive():
+            snap = self._snap_load(days, price)
+            if snap:
+                return {"stale": True, "generated_at": snap.get("ts"),
+                        "ov": snap["ov"], "hpA": snap["hpA"], "data": snap["data"]}
+            th.join()                # nothing to fall back on → wait for the real thing
+        if box.get("error") or not all(k in box for k in ("ov", "hpA", "data")):
+            raise RuntimeError(box.get("error") or "Kern-Auswertung fehlgeschlagen")
+        parts = {"ov": box["ov"], "hpA": box["hpA"], "data": box["data"]}
+        self._snap_save(days, price, parts)
+        return {"stale": False, "generated_at": int(time.time()), **parts}
+
     def calc_peek(self, key, ttl):
         """A cached result if it is still fresh, else None (never computes)."""
         with self._calc_meta:
@@ -7684,6 +7748,112 @@ class Handler(BaseHTTPRequestHandler):
     def _hp_live(self) -> dict:
         """Live heat-pump snapshot + a 'connected' flag (real token or demo)."""
         return self.ctx.hp_snapshot()
+
+    def _health(self) -> dict:
+        """Bridge status for the app (mode, connections, capabilities)."""
+        cfg = self.cfg
+        have_cert = os.path.exists(cfg.get("cert", "")) and os.path.exists(cfg.get("key", ""))
+        return {
+            "ok": True,
+            "mode": self.ctx.mode,
+            "sample_count": self.store.count_fast(),
+            "device_count": len(self.store.devices()),
+            "last_poll": getattr(self.poller, "last_poll", None),
+            "last_error": getattr(self.poller, "last_error", None),
+            "since": self.store.min_ts(),
+            "server_time": int(time.time()),
+            "price_per_kwh": self.cfg.get("price_per_kwh"),
+            "poll_interval": self.cfg.get("poll_interval", 30),
+            "currency": self.cfg.get("currency", "€"),
+            "shc_ip": self.cfg.get("shc_ip", ""),
+            "has_password": bool(self.cfg.get("system_password")),
+            "has_cert": have_cert,
+            "homecom_available": homecom is not None,
+            "homecom_connected": bool(self.cfg.get("homecom_refresh_token")),
+            "homecom_gateway": self.cfg.get("homecom_gateway", ""),
+            "homecom_last_error": self.ctx.hp_state.get("last_error"),
+            "homecom_last_poll": self.ctx.hp_state.get("last_poll"),
+            "hp_import": self.store.hp_history_count(),
+            "auto_update_interval": int(self.cfg.get("auto_update_interval", 0) or 0),
+            "is_git_repo": _is_git_repo(),
+            "electrolux_available": electrolux is not None,
+            "electrolux_connected": bool(self.cfg.get("electrolux_refresh_token")),
+            "electrolux_last_error": self.ctx.ael_state.get("last_error"),
+            "electrolux_last_poll": self.ctx.ael_state.get("last_poll"),
+            "electrolux_count": len(self.store.aeg_appliances()),
+            "electrolux_kwh_per_cycle": float(self.cfg.get("electrolux_kwh_per_cycle", 0.8) or 0.8),
+            "spot_available": spot is not None,
+            "spot_enabled": bool(self.cfg.get("spot_enabled")),
+            "spot_market": self.cfg.get("spot_market", "de"),
+            "spot_surcharge_ct": float(self.cfg.get("spot_surcharge_ct", 15.0) or 0),
+            "spot_vat": float(self.cfg.get("spot_vat", 19.0) or 0),
+            "pvgis_available": pvgis is not None,
+            "weather_available": weather is not None,
+            "carbon_available": carbon is not None,
+            "tibber_available": tibber is not None,
+            "tibber_connected": bool(self.cfg.get("tibber_token")),
+            "ha_available": ha is not None,
+            "ha_connected": bool(self.cfg.get("ha_url") and self.cfg.get("ha_token")),
+            "ha_url": self.cfg.get("ha_url", ""),
+        }
+
+    def _boot(self, qs) -> dict:
+        """ONE answer for the app start: shared settings, bridge status and the
+        three core results. The app used to fetch these in three consecutive
+        round trips (settings → health → analytics) before it could draw
+        anything; the request is now sent while the script is still loading.
+        The electricity price is resolved here the same way the app does it
+        (synced setting, else the bridge's configured price)."""
+        st = self._settings_load()
+        try:
+            days = max(1, min(400, int(qs.get("days", ["90"])[0])))
+        except ValueError:
+            days = 90
+        price = None
+        for cand in (st.get("bhe_price"), qs.get("price", [None])[0], self.cfg.get("price_per_kwh", 0.35)):
+            try:
+                price = round(float(cand), 4)
+                break
+            except (TypeError, ValueError):
+                continue
+        t0 = time.time()
+        try:
+            core = self.ctx.boot_core(days, price if price is not None else 0.35, "fresh" in qs)
+        except Exception as exc:
+            core = {"error": str(exc)}
+        core.update({"days": days, "price": price, "ms": round((time.time() - t0) * 1000),
+                     "meter": {"readings": self.store.meter_list()}})
+        return {"ok": True, "ts": int(time.time()), "settings": st,
+                "health": self._health(), "core": core}
+
+    def _perf(self, qs) -> dict:
+        """Numbers behind the start-time view in the Setup tab: how long the
+        bridge needed for the core results, the state of the day aggregation
+        and the size of the database. ``?bench=1`` recomputes the three core
+        results from a cold cache and reports the timings."""
+        st = self._settings_load()
+        try:
+            price = round(float(st.get("bhe_price") or self.cfg.get("price_per_kwh", 0.35)), 4)
+        except (TypeError, ValueError):
+            price = 0.35
+        out = {"ok": True, "ts": int(time.time())}
+        if "bench" in qs:
+            t0 = time.time()
+            self.ctx.core("overview", 90, price, fresh=True)      # recomputes all three
+            out["bench_ms"] = round((time.time() - t0) * 1000)
+        names = {"analytics": "Geräte", "hpanalytics": "Wärmepumpe", "overview": "Übersicht"}
+        out["core"] = [{"key": k, "label": names[k],
+                        "ms": (self.ctx.calc_ms.get((k, 90, price)) or (None, None))[0],
+                        "at": (self.ctx.calc_ms.get((k, 90, price)) or (None, None))[1]}
+                       for k in ("analytics", "hpanalytics", "overview")]
+        try:
+            size_mb = round(os.path.getsize(self.cfg.get("db", "")) / 1e6, 1)
+        except OSError:
+            size_mb = None
+        out["db"] = {"samples": self.store.count_fast(), "size_mb": size_mb,
+                     "since": self.store.min_ts(), "day_rows": self.store.dev_day_count()}
+        out["rollup"] = dict(self.ctx.rollup)
+        return out
 
     def _opstate(self, force: bool = False) -> dict:
         """How the heating is actually operated (read from heat pump +
@@ -8680,51 +8850,11 @@ class Handler(BaseHTTPRequestHandler):
     def _api(self, path, qs):
         try:
             if path == "/api/health":
-                cfg = self.cfg
-                have_cert = os.path.exists(cfg.get("cert", "")) and os.path.exists(cfg.get("key", ""))
-                return self._send_json({
-                    "ok": True,
-                    "mode": self.ctx.mode,
-                    "sample_count": self.store.count(),
-                    "device_count": len(self.store.devices()),
-                    "last_poll": getattr(self.poller, "last_poll", None),
-                    "last_error": getattr(self.poller, "last_error", None),
-                    "since": self.store.min_ts(),
-                    "server_time": int(time.time()),
-                    "price_per_kwh": self.cfg.get("price_per_kwh"),
-                    "poll_interval": self.cfg.get("poll_interval", 30),
-                    "currency": self.cfg.get("currency", "€"),
-                    "shc_ip": self.cfg.get("shc_ip", ""),
-                    "has_password": bool(self.cfg.get("system_password")),
-                    "has_cert": have_cert,
-                    "homecom_available": homecom is not None,
-                    "homecom_connected": bool(self.cfg.get("homecom_refresh_token")),
-                    "homecom_gateway": self.cfg.get("homecom_gateway", ""),
-                    "homecom_last_error": self.ctx.hp_state.get("last_error"),
-                    "homecom_last_poll": self.ctx.hp_state.get("last_poll"),
-                    "hp_import": self.store.hp_history_count(),
-                    "auto_update_interval": int(self.cfg.get("auto_update_interval", 0) or 0),
-                    "is_git_repo": _is_git_repo(),
-                    "electrolux_available": electrolux is not None,
-                    "electrolux_connected": bool(self.cfg.get("electrolux_refresh_token")),
-                    "electrolux_last_error": self.ctx.ael_state.get("last_error"),
-                    "electrolux_last_poll": self.ctx.ael_state.get("last_poll"),
-                    "electrolux_count": len(self.store.aeg_appliances()),
-                    "electrolux_kwh_per_cycle": float(self.cfg.get("electrolux_kwh_per_cycle", 0.8) or 0.8),
-                    "spot_available": spot is not None,
-                    "spot_enabled": bool(self.cfg.get("spot_enabled")),
-                    "spot_market": self.cfg.get("spot_market", "de"),
-                    "spot_surcharge_ct": float(self.cfg.get("spot_surcharge_ct", 15.0) or 0),
-                    "spot_vat": float(self.cfg.get("spot_vat", 19.0) or 0),
-                    "pvgis_available": pvgis is not None,
-                    "weather_available": weather is not None,
-                    "carbon_available": carbon is not None,
-                    "tibber_available": tibber is not None,
-                    "tibber_connected": bool(self.cfg.get("tibber_token")),
-                    "ha_available": ha is not None,
-                    "ha_connected": bool(self.cfg.get("ha_url") and self.cfg.get("ha_token")),
-                    "ha_url": self.cfg.get("ha_url", ""),
-                })
+                return self._send_json(self._health())
+            if path == "/api/boot":
+                return self._send_json(self._boot(qs))
+            if path == "/api/perf":
+                return self._send_json(self._perf(qs))
             if path == "/api/devices":
                 return self._send_json({"devices": self.store.devices()})
             if path == "/api/switches":
