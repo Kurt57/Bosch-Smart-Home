@@ -35,6 +35,8 @@ from __future__ import annotations
 import argparse
 import base64
 import bisect
+import gzip
+import hashlib
 import http.client
 import json
 import math
@@ -7653,6 +7655,12 @@ def save_config(cfg: dict, path: str):
 # --------------------------------------------------------------------------- #
 class Handler(BaseHTTPRequestHandler):
     server_version = "BoschHomeEnergyBridge/1.0"
+    # HTTP/1.1 keeps the connection open between requests: the app start fires a
+    # dozen requests, each of which used to pay for a new TCP connection. Every
+    # response therefore carries a Content-Length (see _send_bytes). Idle
+    # connections are dropped after `timeout` seconds so they do not pin threads.
+    protocol_version = "HTTP/1.1"
+    timeout = 30
 
     ctx: Runtime = None          # injected by the server factory
     frontend_dir: str = DEFAULT_FRONTEND
@@ -7901,32 +7909,48 @@ class Handler(BaseHTTPRequestHandler):
                 "last_error": self.ctx.ael_state.get("last_error"),
                 "appliances": out}
 
-    def _send_json(self, obj, status=200):
-        body = json.dumps(obj).encode("utf-8")
+    def _gzip_ok(self) -> bool:
+        return "gzip" in (self.headers.get("Accept-Encoding") or "").lower()
+
+    def _send_bytes(self, status: int, body: bytes, ctype: str,
+                    headers: dict | None = None, gz: bytes | None = None,
+                    compress: bool = True):
+        """The one place a response body is written: always with Content-Length
+        (required for keep-alive), gzip-compressed when the client accepts it.
+        ``gz`` is an already compressed copy of ``body`` (static files cache
+        theirs); otherwise text bodies above 1 kB are compressed here."""
+        enc = None
+        if compress and self._gzip_ok():
+            if gz is None and len(body) >= 1024:
+                gz = gzip.compress(body, 5)
+            if gz is not None and len(gz) < len(body):
+                body, enc = gz, "gzip"
         try:
             self.send_response(status)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Type", ctype)
             self.send_header("Access-Control-Allow-Origin", "*")
+            if enc:
+                self.send_header("Content-Encoding", enc)
+            if compress:
+                self.send_header("Vary", "Accept-Encoding")
+            for k, v in (headers or {}).items():
+                self.send_header(k, v)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(body)
+            if self.command != "HEAD":
+                self.wfile.write(body)
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             # the phone navigated away / reloaded before we finished sending –
             # harmless, don't spam the terminal with a traceback
             self.close_connection = True
 
+    def _send_json(self, obj, status=200):
+        self._send_bytes(status, json.dumps(obj).encode("utf-8"),
+                         "application/json; charset=utf-8")
+
     def _send_csv(self, text, filename="export.csv", status=200):
-        body = text.encode("utf-8")
-        try:
-            self.send_response(status)
-            self.send_header("Content-Type", "text/csv; charset=utf-8")
-            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
-            self.close_connection = True
+        self._send_bytes(status, text.encode("utf-8"), "text/csv; charset=utf-8",
+                         {"Content-Disposition": f'attachment; filename="{filename}"'})
 
     def _export_csv(self, days, price):
         """A daily CSV joining smart-home and heat-pump energy per day."""
@@ -7954,7 +7978,7 @@ class Handler(BaseHTTPRequestHandler):
         qs = parse_qs(parsed.query)
         if path.startswith("/api/"):
             return self._api(path, qs)
-        return self._static(path)
+        return self._static(path, qs)
 
     # -- write actions (pairing / config / mode from the web UI) ----------- #
     def _read_json(self) -> dict:
@@ -9094,7 +9118,40 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json({"error": str(exc)}, 500)
 
     # -- static frontend --------------------------------------------------- #
-    def _static(self, path):
+    _STATIC_TYPES = {
+        ".html": "text/html; charset=utf-8",
+        ".js": "text/javascript; charset=utf-8",
+        ".css": "text/css; charset=utf-8",
+        ".webmanifest": "application/manifest+json",
+        ".json": "application/json",
+        ".svg": "image/svg+xml",
+        ".png": "image/png",
+    }
+    _static_cache: dict = {}        # path -> (signature, body, gzip or None, etag)
+    _static_lock = threading.Lock()
+
+    @staticmethod
+    def _file_sig(full: str) -> str:
+        st = os.stat(full)
+        return f"{st.st_mtime_ns:x}-{st.st_size:x}"
+
+    def _asset_version(self) -> str:
+        """Short tag that changes whenever app.js changes – used in its URL."""
+        try:
+            return hashlib.md5(self._file_sig(os.path.join(self.frontend_dir, "app.js")).encode()).hexdigest()[:10]
+        except OSError:
+            return "0"
+
+    def _static(self, path, qs=None):
+        """Serve the frontend so that code is ALWAYS current and yet almost
+        never re-downloaded:
+          • index.html (and anything requested without a version) must be
+            revalidated on every load – answered with a tiny 304 when unchanged;
+          • index.html points to app.js under a URL that carries the file's
+            version (app.js?v=…); that response may be cached forever, because
+            a changed app.js gets a new URL.
+        The old headers ("no-store") made the phone download all 850 kB again
+        on every single open. Text is sent gzip-compressed."""
         if path == "/" or path == "":
             path = "/index.html"
         # prevent path traversal
@@ -9103,31 +9160,41 @@ class Handler(BaseHTTPRequestHandler):
         if not full.startswith(self.frontend_dir) or not os.path.isfile(full):
             self.send_error(404, "Not found")
             return
-        ctype = {
-            ".html": "text/html; charset=utf-8",
-            ".js": "text/javascript; charset=utf-8",
-            ".css": "text/css; charset=utf-8",
-            ".webmanifest": "application/manifest+json",
-            ".json": "application/json",
-            ".svg": "image/svg+xml",
-            ".png": "image/png",
-        }.get(os.path.splitext(full)[1], "application/octet-stream")
-        with open(full, "rb") as fh:
-            data = fh.read()
-        self.send_response(200)
-        self.send_header("Content-Type", ctype)
-        self.send_header("Content-Length", str(len(data)))
-        self.send_header("Access-Control-Allow-Origin", "*")
-        # Never let the browser serve a stale app shell from its HTTP cache.
-        # Without this, Safari/Chrome keep old app.js/sw.js for a long time and
-        # the user sees "fixed" code that never actually loads. "no-cache" means
-        # the browser must revalidate with the bridge on every load, so a bridge
-        # restart with new frontend files is picked up immediately.
-        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
-        self.send_header("Pragma", "no-cache")
-        self.send_header("Expires", "0")
-        self.end_headers()
-        self.wfile.write(data)
+        ext = os.path.splitext(full)[1]
+        ctype = self._STATIC_TYPES.get(ext, "application/octet-stream")
+        is_html = ext == ".html"
+        try:
+            sig = self._file_sig(full) + ("|" + self._asset_version() if is_html else "")
+        except OSError:
+            self.send_error(404, "Not found")
+            return
+        with self._static_lock:
+            hit = self._static_cache.get(full)
+            if not hit or hit[0] != sig:
+                with open(full, "rb") as fh:
+                    data = fh.read()
+                if is_html:          # point the page at the versioned script URL
+                    data = data.replace(b'src="app.js"', b'src="app.js?v=' + self._asset_version().encode() + b'"')
+                text = ext in (".html", ".js", ".css", ".json", ".svg", ".webmanifest")
+                gz = gzip.compress(data, 6) if (text and len(data) >= 1024) else None
+                etag = '"' + hashlib.md5(sig.encode()).hexdigest()[:16] + '"'
+                hit = (sig, data, gz, etag)
+                self._static_cache[full] = hit
+        _sig, data, gz, etag = hit
+        versioned = bool(qs and qs.get("v")) and not is_html and safe != "sw.js"
+        cache = ("public, max-age=31536000, immutable" if versioned
+                 else "no-cache")            # = keep a copy, but ask before using it
+        headers = {"Cache-Control": cache, "ETag": etag}
+        if (self.headers.get("If-None-Match") or "").strip() == etag:
+            try:
+                self.send_response(304)
+                for k, v in headers.items():
+                    self.send_header(k, v)
+                self.end_headers()            # a 304 never has a body
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                self.close_connection = True
+            return
+        self._send_bytes(200, data, ctype, headers, gz=gz, compress=gz is not None)
 
 
 def make_server(host, port, ctx, frontend_dir):
