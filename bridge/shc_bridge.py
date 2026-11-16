@@ -1010,6 +1010,15 @@ class Store:
             self.conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_roomlog ON room_log(ts)"
             )
+            # Pre-aggregated statistics per device and LOCAL day (see
+            # rollup_ensure). The analytics used to re-read every raw sample of
+            # the last 90 days on each request – millions of rows; a finished
+            # day never changes, so it is aggregated once and read from here.
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS dev_day("
+                " device_id TEXT, day TEXT, ver INTEGER, n INTEGER, wh REAL,"
+                " t0 INTEGER, t1 INTEGER, data TEXT, PRIMARY KEY(device_id, day))"
+            )
             # hot-water tank temperature + the setpoint it charges to, per
             # heat-pump poll – lets a DHW phase be judged on what the tank did
             self.conn.execute(
@@ -1589,6 +1598,62 @@ class Store:
         with self.lock:
             cur = self.conn.execute(q, args)
             return [dict(r) for r in cur.fetchall()]
+
+    def samples_range(self, device_id: str, t0: int, t1: int) -> list[tuple]:
+        """(ts, power_w, energy_wh) of ONE device with t0 <= ts < t1, time-ordered.
+        Always filtered by device, so it runs on the (device_id, ts) index – a
+        plain "ts >= ?" over all devices would scan the whole table."""
+        with self.lock:
+            cur = self.conn.execute(
+                "SELECT ts,power_w,energy_wh FROM samples"
+                " WHERE device_id=? AND ts>=? AND ts<? ORDER BY ts ASC",
+                (device_id, int(t0), int(t1)))
+            return [(r[0], r[1], r[2]) for r in cur.fetchall()]
+
+    def sample_device_ids(self) -> list[str]:
+        """Every device id that has samples – via an index skip-scan (a plain
+        SELECT DISTINCT walks the whole index)."""
+        with self.lock:
+            cur = self.conn.execute(
+                "WITH RECURSIVE t(d) AS ("
+                " SELECT MIN(device_id) FROM samples"
+                " UNION ALL"
+                " SELECT (SELECT MIN(device_id) FROM samples WHERE device_id > t.d)"
+                " FROM t WHERE t.d IS NOT NULL)"
+                " SELECT d FROM t WHERE d IS NOT NULL")
+            return [r[0] for r in cur.fetchall()]
+
+    def dev_first_ts(self, device_id: str) -> int | None:
+        with self.lock:
+            r = self.conn.execute(
+                "SELECT MIN(ts) AS m FROM samples WHERE device_id=?", (device_id,)).fetchone()
+            return int(r["m"]) if r and r["m"] is not None else None
+
+    def dev_day_keys(self, first_day: str, ver: int) -> set:
+        """(device_id, day) pairs that already have a current-version row."""
+        with self.lock:
+            cur = self.conn.execute(
+                "SELECT device_id, day FROM dev_day WHERE day>=? AND ver=?", (first_day, ver))
+            return {(r[0], r[1]) for r in cur.fetchall()}
+
+    def dev_day_rows(self, first_day: str, ver: int) -> list[tuple]:
+        """(device_id, day, n, wh, t0, t1, data-json) for day >= first_day."""
+        with self.lock:
+            cur = self.conn.execute(
+                "SELECT device_id, day, n, wh, t0, t1, data FROM dev_day"
+                " WHERE day>=? AND ver=? AND n>0 ORDER BY day ASC", (first_day, ver))
+            return [tuple(r) for r in cur.fetchall()]
+
+    def dev_day_put(self, rows: list[tuple]):
+        """rows: (device_id, day, ver, n, wh, t0, t1, data-json)."""
+        with self.lock, self.conn:
+            self.conn.executemany(
+                "INSERT OR REPLACE INTO dev_day(device_id,day,ver,n,wh,t0,t1,data)"
+                " VALUES(?,?,?,?,?,?,?,?)", rows)
+
+    def dev_day_count(self) -> int:
+        with self.lock:
+            return self.conn.execute("SELECT COUNT(*) c FROM dev_day").fetchone()["c"]
 
     def min_ts(self) -> int | None:
         with self.lock:
@@ -2311,16 +2376,216 @@ def compute_load_peaks(store: "Store", days: float = 7, hp_live: dict | None = N
             "hour_dist": hour_dist, "measured_kwh": round(measured_kwh, 3)}
 
 
-def compute_analytics(store: Store, days: int, price: float) -> dict:
-    now = int(time.time())
-    since = now - days * 86400
-    all_samples = store.samples_since(since)
-    devices = {d["id"]: d for d in store.devices()}
+# ===================================================================== #
+#  Pre-aggregated day statistics ("rollup")                              #
+# ===================================================================== #
+# compute_analytics used to load EVERY raw sample of the window (90 days of
+# 30-second readings per device = millions of rows) and reduce them in Python
+# on each request – 15+ seconds once the history has grown, and it ran again
+# every time the result cache went cold. A finished local day never changes,
+# so each (device, day) is reduced ONCE to the handful of numbers the
+# analytics need and stored in `dev_day`; requests then read ~one row per
+# device and day plus the raw samples of the running day only.
+#
+# What a row holds is exactly what the old per-sample loops accumulated:
+#   n, wh        sample count and the day's energy (same rules as
+#                _energy_for_bucket: trusted counter deltas, else power integral)
+#   t0, t1       first/last sample time (for the "active above standby" energy)
+#   hs, hn       per hour of day: sum and count of the power readings
+#   hist         histogram of the power readings (for the standby/peak
+#                percentiles, which cannot be summed from per-day results)
+ROLLUP_VER = 1                      # bump when the per-day math changes → rows are redone
+_ROLLUP_LOCK = threading.Lock()
 
-    # group per device
-    by_dev: dict[str, list[dict]] = {}
-    for s in all_samples:
-        by_dev.setdefault(s["device_id"], []).append(s)
+
+def _pbin(p: float) -> int:
+    """Histogram bin of a power reading: 0.1 W steps below 50 W (where the
+    standby floor lives), 1 W steps below 500 W, 10 W above. Keys rise with
+    the power, so percentiles can be read off the sorted keys."""
+    if p < 0.0:
+        p = 0.0
+    if p < 50.0:
+        return int(p * 10.0 + 0.5)
+    if p < 500.0:
+        return 1000 + int(p + 0.5)
+    return 2000 + int(p / 10.0 + 0.5)
+
+
+def _pbin_value(k: int) -> float:
+    if k < 1000:
+        return k / 10.0
+    if k < 2000:
+        return float(k - 1000)
+    return (k - 2000) * 10.0
+
+
+def _hist_pick(hist: dict, idx: int) -> float:
+    """The idx-th smallest reading (0-based) of a histogram."""
+    c = 0
+    for k in sorted(hist):
+        c += hist[k]
+        if c > idx:
+            return _pbin_value(k)
+    return _pbin_value(max(hist)) if hist else 0.0
+
+
+def _day_bounds(day: str) -> tuple[int, int]:
+    """[local midnight, next local midnight) of a 'YYYY-MM-DD' day – 23 or 25
+    hours long on the days the clocks change."""
+    d = datetime.strptime(day, "%Y-%m-%d")
+    return int(d.timestamp()), int((d + timedelta(days=1)).timestamp())
+
+
+def _day_range(d0: str, d1: str) -> list[str]:
+    a, b = datetime.strptime(d0, "%Y-%m-%d"), datetime.strptime(d1, "%Y-%m-%d")
+    out = []
+    while a <= b:
+        out.append(a.strftime("%Y-%m-%d"))
+        a += timedelta(days=1)
+    return out
+
+
+def _last_final_day(now: float) -> str:
+    """The newest local day that is over. In the first two minutes after
+    midnight yesterday still counts as running, so a poll that was in flight
+    at the day change is never missed."""
+    cur = datetime.fromtimestamp(now - 120).replace(hour=0, minute=0, second=0, microsecond=0)
+    return (cur - timedelta(days=1)).strftime("%Y-%m-%d")
+
+
+def _day_stats(rows: list[tuple], midnight: int, next_midnight: int) -> dict | None:
+    """Reduce the time-ordered (ts, power_w, energy_wh) samples of ONE device
+    within ONE local day. None when there are no samples."""
+    n = len(rows)
+    if not n:
+        return None
+    hs, hn, hist = [0.0] * 24, [0] * 24, {}
+    plain = (next_midnight - midnight) == 86400          # not a clock-change day
+    for ts, p, _e in rows:
+        if p is None:
+            continue
+        h = (ts - midnight) // 3600 if plain else datetime.fromtimestamp(ts).hour
+        hs[h] += p
+        hn[h] += 1
+        k = _pbin(p)
+        hist[k] = hist.get(k, 0) + 1
+    # energy: identical rules to _energy_for_bucket
+    wh = 0.0
+    if n >= 2:
+        live_counter = ((rows[-1][2] or 0.0) - (rows[0][2] or 0.0)) > 0.5
+        prev = rows[0]
+        for cur in rows[1:]:
+            dt_h = (cur[0] - prev[0]) / 3600.0
+            if 0.0 < dt_h <= MAX_SAMPLE_GAP_H:
+                if live_counter:
+                    d = (cur[2] or 0.0) - (prev[2] or 0.0)
+                    if 0.0 <= d <= MAX_PLUG_W * dt_h * 1.1:
+                        wh += d
+                else:
+                    pa = min(max(prev[1] or 0.0, 0.0), MAX_PLUG_W)
+                    pb = min(max(cur[1] or 0.0, 0.0), MAX_PLUG_W)
+                    wh += (pa + pb) / 2.0 * dt_h
+            prev = cur
+    return {"n": n, "wh": wh, "t0": rows[0][0], "t1": rows[-1][0],
+            "hs": hs, "hn": hn, "hist": hist}
+
+
+def _split_days(rows: list[tuple], days: list[str]):
+    """Yield (day, midnight, next_midnight, rows-of-that-day) for each day."""
+    ts_list = [r[0] for r in rows]
+    for day in days:
+        a, b = _day_bounds(day)
+        i0, i1 = bisect.bisect_left(ts_list, a), bisect.bisect_left(ts_list, b)
+        yield day, a, b, rows[i0:i1]
+
+
+def rollup_ensure(store: "Store", first_day: str, now: float | None = None,
+                  pause: float = 0.0, state: dict | None = None) -> int:
+    """Make sure every device has its `dev_day` row for each FINISHED local day
+    from ``first_day`` on. Missing days are computed from the raw samples, a
+    month per device at a time; days already present cost one key lookup.
+    Safe to call from several threads – whoever gets a chunk first computes it.
+    Returns the number of rows written."""
+    now = time.time() if now is None else now
+    last = _last_final_day(now)
+    if first_day > last:
+        return 0
+    have = store.dev_day_keys(first_day, ROLLUP_VER)
+    made = 0
+    for dev in store.sample_device_ids():
+        first_ts = store.dev_first_ts(dev)
+        if first_ts is None:
+            continue
+        d0 = max(first_day, _local_day(first_ts))
+        if d0 > last:
+            continue
+        missing = [d for d in _day_range(d0, last) if (dev, d) not in have]
+        for i in range(0, len(missing), 31):
+            chunk = missing[i:i + 31]
+            with _ROLLUP_LOCK:
+                done = store.dev_day_keys(chunk[0], ROLLUP_VER)
+                todo = [d for d in chunk if (dev, d) not in done]
+                if not todo:
+                    continue
+                rows = store.samples_range(dev, _day_bounds(todo[0])[0], _day_bounds(todo[-1])[1])
+                out = []
+                for day, a, b, sl in _split_days(rows, todo):
+                    st = _day_stats(sl, a, b)
+                    if st is None:          # no data that day – remember it, so it is not re-read
+                        out.append((dev, day, ROLLUP_VER, 0, 0.0, None, None, None))
+                    else:
+                        data = json.dumps({"hs": [round(x, 2) for x in st["hs"]], "hn": st["hn"],
+                                           "hist": {str(k): c for k, c in st["hist"].items()}},
+                                          separators=(",", ":"))
+                        out.append((dev, day, ROLLUP_VER, st["n"], st["wh"], st["t0"], st["t1"], data))
+                store.dev_day_put(out)
+                made += len(out)
+                if state is not None:
+                    state["rows"] = state.get("rows", 0) + len(out)
+            if pause:
+                time.sleep(pause)            # background run: leave room for requests
+    return made
+
+
+def _window_stats(store: "Store", first_day: str, now: int) -> dict:
+    """device -> {day -> stats} for [first_day … now]: finished days from the
+    rollup, the running day(s) straight from the raw samples."""
+    rollup_ensure(store, first_day, now)
+    last = _last_final_day(now)
+    per: dict[str, dict[str, dict]] = {}
+    for dev, day, n, wh, t0, t1, data in store.dev_day_rows(first_day, ROLLUP_VER):
+        if day > last or not data:
+            continue
+        d = json.loads(data)
+        per.setdefault(dev, {})[day] = {
+            "n": n, "wh": wh, "t0": t0, "t1": t1, "hs": d["hs"], "hn": d["hn"],
+            "hist": {int(k): c for k, c in d["hist"].items()}}
+    live_first = (datetime.strptime(last, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+    live_days = _day_range(max(live_first, first_day), _local_day(now))
+    if live_days:
+        a = _day_bounds(live_days[0])[0]
+        for dev in store.sample_device_ids():
+            rows = store.samples_range(dev, a, now + 1)
+            if not rows:
+                continue
+            for day, da, db, sl in _split_days(rows, live_days):
+                st = _day_stats(sl, da, db)
+                if st is not None:
+                    per.setdefault(dev, {})[day] = st
+    return per
+
+
+def compute_analytics(store: Store, days: int, price: float) -> dict:
+    """Smart-home analytics over the last ``days`` days. Built from one
+    pre-aggregated row per device and finished day plus today's raw samples –
+    see the rollup notes above. The window starts at local midnight ``days``
+    days ago (the oldest day is whole instead of being cut at the time of day)."""
+    now = int(time.time())
+    first_day = _local_day(now - days * 86400)
+    per = _window_stats(store, first_day, now)
+    devices = {d["id"]: d for d in store.devices()}
+    # devices in the order their first sample of the window appears
+    dev_order = sorted(per, key=lambda dv: (min(st["t0"] for st in per[dv].values()), dv))
 
     # --- live snapshot ---------------------------------------------------- #
     per_device = []
@@ -2344,57 +2609,73 @@ def compute_analytics(store: Store, days: int, price: float) -> dict:
         })
     per_device.sort(key=lambda d: d["power_w"], reverse=True)
 
-    # --- day / hour / weekday buckets ------------------------------------- #
-    day_kwh: dict[str, float] = {}
-    day_active_kwh: dict[str, float] = {}
-    hour_power: dict[int, list[float]] = {h: [] for h in range(24)}
-    hw_power: dict[tuple[int, int], list[float]] = {}
-    weekday_kwh: dict[int, list[float]] = {i: [] for i in range(7)}
-    per_device_day: dict[str, dict[str, float]] = {}
-    dev_hour: dict[str, list[list[float]]] = {}   # id -> 24 lists of power
-
+    # --- percentiles from the merged power histograms ---------------------- #
     # baseline (standby) power = low percentile of all power readings
-    all_powers = sorted(s["power_w"] for s in all_samples) or [0.0]
-    baseline_w = all_powers[max(0, int(len(all_powers) * 0.10) - 1)]
+    all_hist: dict[int, int] = {}
+    dev_hist: dict[str, dict[int, int]] = {}
+    dev_n: dict[str, int] = {}
+    for dev_id in dev_order:
+        dh_ = dev_hist.setdefault(dev_id, {})
+        n_dev = 0
+        for st in per[dev_id].values():
+            n_dev += st["n"]
+            for k, c in st["hist"].items():
+                dh_[k] = dh_.get(k, 0) + c
+                all_hist[k] = all_hist.get(k, 0) + c
+        dev_n[dev_id] = n_dev
+    n_all = sum(all_hist.values())
+    baseline_w = _hist_pick(all_hist, max(0, int(n_all * 0.10) - 1)) if n_all else 0.0
 
     # per-device standby floor: the power a device draws nearly all the time
     # (low percentile of ITS OWN readings). A light that is often off → ~0 (no
     # standby); a router/TV that always sips a few W → that floor = its standby.
     dev_standby: dict[str, float] = {}
     dev_peak: dict[str, float] = {}
-    for dev_id, samples in by_dev.items():
-        ps = sorted(s["power_w"] for s in samples if s.get("power_w") is not None)
-        if ps:
-            dev_standby[dev_id] = round(ps[max(0, int(len(ps) * 0.10) - 1)], 2)
-            dev_peak[dev_id] = round(ps[min(len(ps) - 1, int(len(ps) * 0.97))], 2)
+    for dev_id, h in dev_hist.items():
+        m = sum(h.values())
+        if m:
+            dev_standby[dev_id] = round(_hist_pick(h, max(0, int(m * 0.10) - 1)), 2)
+            dev_peak[dev_id] = round(_hist_pick(h, min(m - 1, int(m * 0.97))), 2)
     for d in per_device:
         d["standby_w"] = dev_standby.get(d["id"], 0.0)
         d["peak_w"] = dev_peak.get(d["id"], 0.0)
         # does this device report power at all in the window? (vs. a pure
         # switch/contact/thermostat that never contributes a standby reading)
         d["measures_power"] = d["id"] in dev_standby
-        d["win_samples"] = len(by_dev.get(d["id"], []))
+        d["win_samples"] = dev_n.get(d["id"], 0)
 
-    for dev_id, samples in by_dev.items():
-        # split per local day, compute energy per day for this device
-        day_groups: dict[str, list[dict]] = {}
-        for s in samples:
-            day_groups.setdefault(_local_day(s["ts"]), []).append(s)
-        for day, rows in day_groups.items():
-            wh = _energy_for_bucket(rows)
+    # --- day / hour / weekday buckets ------------------------------------- #
+    day_kwh: dict[str, float] = {}
+    day_active_kwh: dict[str, float] = {}
+    hour_sum, hour_n = [0.0] * 24, [0] * 24
+    hw_sum: dict[tuple[int, int], float] = {}
+    hw_n: dict[tuple[int, int], int] = {}
+    weekday_kwh: dict[int, list[float]] = {i: [] for i in range(7)}
+    per_device_day: dict[str, dict[str, float]] = {}
+    per_device_hour: dict[str, list[float]] = {}
+
+    for dev_id in dev_order:
+        dsum, dn = [0.0] * 24, [0] * 24
+        for day in sorted(per[dev_id]):
+            st = per[dev_id][day]
+            wh = st["wh"]
             day_kwh[day] = day_kwh.get(day, 0.0) + wh / 1000.0
             per_device_day.setdefault(dev_id, {})[day] = round(wh / 1000.0, 4)
             # active energy = above standby baseline
-            active_wh = max(0.0, wh - baseline_w * (
-                (rows[-1]["ts"] - rows[0]["ts"]) / 3600.0))
+            active_wh = max(0.0, wh - baseline_w * ((st["t1"] - st["t0"]) / 3600.0))
             day_active_kwh[day] = day_active_kwh.get(day, 0.0) + active_wh / 1000.0
-        # hourly / weekday average power profile (overall + per device)
-        dh = dev_hour.setdefault(dev_id, [[] for _ in range(24)])
-        for s in samples:
-            dt = datetime.fromtimestamp(s["ts"])
-            hour_power[dt.hour].append(s["power_w"])
-            hw_power.setdefault((dt.weekday(), dt.hour), []).append(s["power_w"])
-            dh[dt.hour].append(s["power_w"])
+            # hourly / weekday average power profile (overall + per device)
+            wd = datetime.strptime(day, "%Y-%m-%d").weekday()
+            hs, hn = st["hs"], st["hn"]
+            for h in range(24):
+                c = hn[h]
+                if c:
+                    v = hs[h]
+                    hour_sum[h] += v; hour_n[h] += c
+                    dsum[h] += v; dn[h] += c
+                    hw_sum[(wd, h)] = hw_sum.get((wd, h), 0.0) + v
+                    hw_n[(wd, h)] = hw_n.get((wd, h), 0) + c
+        per_device_hour[dev_id] = [round(dsum[h] / dn[h], 2) if dn[h] else 0.0 for h in range(24)]
 
     for day, kwh in day_kwh.items():
         wd = datetime.strptime(day, "%Y-%m-%d").weekday()
@@ -2406,12 +2687,9 @@ def compute_analytics(store: Store, days: int, price: float) -> dict:
                     for d in days_sorted]
 
     hourly_profile = [
-        {"hour": h,
-         "avg_w": round(sum(v) / len(v), 2) if v else 0.0}
-        for h, v in hour_power.items()
+        {"hour": h, "avg_w": round(hour_sum[h] / hour_n[h], 2) if hour_n[h] else 0.0}
+        for h in range(24)
     ]
-    per_device_hour = {dev_id: [round(sum(v) / len(v), 2) if v else 0.0 for v in dh]
-                       for dev_id, dh in dev_hour.items()}
     weekday_profile = [
         {"weekday": i,
          "avg_kwh": round(sum(v) / len(v), 3) if v else 0.0}
@@ -2420,11 +2698,8 @@ def compute_analytics(store: Store, days: int, price: float) -> dict:
     # 7 x 24 grid of average power (W) for the profile heatmap
     heatmap = []
     for wd in range(7):
-        row = []
-        for h in range(24):
-            v = hw_power.get((wd, h), [])
-            row.append(round(sum(v) / len(v), 1) if v else 0.0)
-        heatmap.append(row)
+        heatmap.append([round(hw_sum[(wd, h)] / hw_n[(wd, h)], 1) if hw_n.get((wd, h)) else 0.0
+                        for h in range(24)])
 
     # --- statistics & forecast ------------------------------------------- #
     complete_days = [d for d in daily_series][1:-1] if len(daily_series) > 2 else daily_series
@@ -2544,24 +2819,42 @@ def _counter_day_kwh(samples: list[dict], field: str) -> dict:
     return out
 
 
+_DAY_CACHE = (0, 0, "")     # (midnight, next midnight, 'YYYY-MM-DD') of the last local day looked up
+
+
+def _day_of(ts: int) -> tuple:
+    """(local midnight, next local midnight, day) of the day containing ts.
+    Samples are walked in time order, so the previous answer is almost always
+    still the right one – this turns two mktime/localtime calls per sample
+    into one comparison. The tuple is replaced as a whole (thread-safe)."""
+    global _DAY_CACHE
+    c = _DAY_CACHE
+    if c[0] <= ts < c[1]:
+        return c
+    lt = time.localtime(ts)
+    day0 = int(time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 0, 0, 0, 0, -1)))
+    # next local midnight, recomputed from a point safely inside the next day
+    nlt = time.localtime(day0 + 86400 + 7200)
+    next_mid = int(time.mktime((nlt.tm_year, nlt.tm_mon, nlt.tm_mday, 0, 0, 0, 0, 0, -1)))
+    c = (day0, next_mid, time.strftime("%Y-%m-%d", lt))
+    _DAY_CACHE = c
+    return c
+
+
 def _spread_delta_over_days(out: dict, pt: int, ts: int, delta: float):
     """Add `delta` kWh to `out`, split across the local calendar days spanned by
     [pt, ts] proportional to the time in each day (DST-aware via localtime)."""
     total = ts - pt
-    if total <= 0:
-        out[_local_day(pt)] = out.get(_local_day(pt), 0.0) + delta
+    _d0, next_mid, day = _day_of(pt)
+    if total <= 0 or ts <= next_mid:          # within one local day – the usual case
+        out[day] = out.get(day, 0.0) + delta
         return
     seg_start = pt
     guard = 0
     while seg_start < ts and guard < 400:
         guard += 1
-        lt = time.localtime(seg_start)
-        day0 = int(time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 0, 0, 0, 0, -1)))
-        # next local midnight, recomputed from a point safely inside the next day
-        nlt = time.localtime(day0 + 86400 + 7200)
-        next_mid = int(time.mktime((nlt.tm_year, nlt.tm_mon, nlt.tm_mday, 0, 0, 0, 0, 0, -1)))
+        _d0, next_mid, day = _day_of(seg_start)
         seg_end = min(next_mid, ts)
-        day = _local_day(seg_start)
         out[day] = out.get(day, 0.0) + delta * (seg_end - seg_start) / total
         seg_start = seg_end
 
@@ -6168,13 +6461,18 @@ def compute_heating_diag(climate: list[dict], hp: dict | None, cycles: dict | No
 
 
 def compute_overview(store: Store, days: int, price: float,
-                     hp_live: dict | None = None) -> dict:
+                     hp_live: dict | None = None,
+                     sh: dict | None = None, hp: dict | None = None) -> dict:
     """One combined snapshot for the dashboard: Smart Home + heat pump together,
-    'heute bisher', current draw, cost and a 'wofür' breakdown."""
+    'heute bisher', current draw, cost and a 'wofür' breakdown. ``sh``/``hp``
+    take already computed analytics (the caller usually has them cached) –
+    this used to recompute both from scratch on every call."""
     now = int(time.time())
     today = _local_day(now)
-    sh = compute_analytics(store, days, price)
-    hp = compute_hp_analytics(store, days, price, hp_live)
+    if sh is None:
+        sh = compute_analytics(store, days, price)
+    if hp is None:
+        hp = compute_hp_analytics(store, days, price, hp_live)
 
     # today so far (kWh) per source
     sh_daily = {d["day"]: d for d in sh["daily"]}
@@ -6202,18 +6500,15 @@ def compute_overview(store: Store, days: int, price: float,
     mid = int(datetime.fromtimestamp(now).replace(
         hour=0, minute=0, second=0, microsecond=0).timestamp())
     sh_hour = [0.0] * 24
-    by_dev_today: dict[str, list[dict]] = {}
-    for s in store.samples_since(mid):
-        by_dev_today.setdefault(s["device_id"], []).append(s)
-    for rows in by_dev_today.values():
+    for dev_id in store.sample_device_ids():
         prev = None
-        for s in rows:
+        for s in store.samples_range(dev_id, mid, now + 1):     # (ts, power_w, energy_wh)
             if prev is not None:
-                delta = s["energy_wh"] - prev["energy_wh"]
-                dt_h = (s["ts"] - prev["ts"]) / 3600.0
+                delta = (s[2] or 0.0) - (prev[2] or 0.0)
+                dt_h = (s[0] - prev[0]) / 3600.0
                 # same guard as _energy_for_bucket: reject offline-jump artefacts
                 if _counter_delta_ok(delta, dt_h):
-                    sh_hour[datetime.fromtimestamp(prev["ts"]).hour] += delta / 1000.0
+                    sh_hour[datetime.fromtimestamp(prev[0]).hour] += delta / 1000.0
             prev = s
     hp_hour = [0.0] * 24
     prev = None
@@ -7010,6 +7305,8 @@ class Runtime:
         self._warm_thread = None
         self._opstate_hit = None        # (ts, state, error) – HomeCom operating state
         self._opstate_lock = threading.Lock()
+        self.calc_ms: dict = {}         # core key -> (compute ms, when) – for the start-time view
+        self.rollup = {"running": False, "rows": 0, "started": None, "finished": None, "error": None}
 
     def hc_opstate(self, force: bool = False):
         """(state, error): the heat pump's operating mode / setpoints as READ
@@ -7032,6 +7329,51 @@ class Runtime:
                 st, err = None, str(exc)
             self._opstate_hit = (time.time(), st, err)
             return st, err
+
+    CORE_TTL = 90                    # seconds a core result is served from cache
+
+    def hp_snapshot(self) -> dict:
+        """Live heat-pump snapshot + a 'connected' flag (real token or demo)."""
+        hp = dict(self.hp_state)
+        hp["connected"] = bool(self.cfg.get("homecom_refresh_token")) or self.mode == "demo"
+        return hp
+
+    def core(self, kind: str, days: int, price: float, fresh: bool = False,
+             touch: bool = True):
+        """One of the three results the app needs for its first screen:
+        'analytics' (smart-home devices), 'hpanalytics' (heat pump) and
+        'overview' (built FROM the other two – it used to recompute both).
+        Cached per (kind, days, price); ``fresh`` recomputes now. ``touch``
+        marks the result as recently requested (keeps it warm for 10 min) –
+        the warm loop itself passes False so it does not keep itself alive."""
+        key = (kind, days, price)
+
+        def run():
+            t0 = time.time()
+            if kind == "analytics":
+                res = compute_analytics(self.store, days, price)
+            elif kind == "hpanalytics":
+                res = compute_hp_analytics(self.store, days, price, self.hp_snapshot())
+            else:
+                res = compute_overview(self.store, days, price, self.hp_snapshot(),
+                                       sh=self.core("analytics", days, price, fresh, touch),
+                                       hp=self.core("hpanalytics", days, price, fresh, touch))
+            self.calc_ms[key] = (round((time.time() - t0) * 1000), int(time.time()))
+            return res
+        if fresh:
+            res = run()
+            with self._calc_meta:
+                self._calc_cache[key] = (time.time(), res)
+                if touch:
+                    self._calc_wanted[key] = time.time()
+            return res
+        return self.calc_get(key, self.CORE_TTL, run)
+
+    def calc_peek(self, key, ttl):
+        """A cached result if it is still fresh, else None (never computes)."""
+        with self._calc_meta:
+            hit = self._calc_cache.get(key)
+            return hit[1] if hit and time.time() - hit[0] < ttl else None
 
     def calc_get(self, key, ttl, fn):
         """Return a cached heavy-analytics result, computing it at most once per
@@ -7063,23 +7405,39 @@ class Runtime:
                 continue                 # not one of the warmable (kind, days, price) keys
             try:
                 kind, days, price = key
-                if kind == "overview":
-                    res = compute_overview(self.store, days, price, self._warm_hp())
-                elif kind == "analytics":
-                    res = compute_analytics(self.store, days, price)
-                elif kind == "hpanalytics":
-                    res = compute_hp_analytics(self.store, days, price, self._warm_hp())
-                else:
+                if kind not in ("overview", "analytics", "hpanalytics"):
                     continue
-                with self._calc_meta:
-                    self._calc_cache[key] = (time.time(), res)
+                if kind == "overview":          # renews its two parts as well
+                    self.core("overview", days, price, fresh=True, touch=False)
+                elif ("overview", days, price) not in wanted:
+                    self.core(kind, days, price, fresh=True, touch=False)
             except Exception as exc:
                 print(f"[warm] {key}: {exc}", file=sys.stderr)
 
     def _warm_hp(self):
-        hp = dict(self.hp_state)
-        hp["connected"] = bool(self.cfg.get("homecom_refresh_token")) or self.mode == "demo"
-        return hp
+        return self.hp_snapshot()
+
+    def start_rollup(self):
+        """Background: aggregate every finished day that has no `dev_day` row
+        yet (first start after the update: the whole history, once; later: just
+        yesterday). Requests do not wait for this – they compute what they need
+        themselves – it only makes sure the work is usually done beforehand."""
+        if self.rollup.get("running"):
+            return
+
+        def run():
+            st = self.rollup
+            st.update({"running": True, "started": int(time.time()), "finished": None, "error": None})
+            try:
+                first = self.store.min_ts()
+                if first is not None:
+                    rollup_ensure(self.store, _local_day(first), pause=0.02, state=st)
+            except Exception as exc:
+                st["error"] = str(exc)
+                print(f"[rollup] {exc}", file=sys.stderr)
+            finally:
+                st.update({"running": False, "finished": int(time.time())})
+        threading.Thread(target=run, daemon=True).start()
 
     def start_warmer(self):
         if self._warm_thread and self._warm_thread.is_alive():
@@ -7317,9 +7675,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _hp_live(self) -> dict:
         """Live heat-pump snapshot + a 'connected' flag (real token or demo)."""
-        hp = dict(self.ctx.hp_state)
-        hp["connected"] = bool(self.cfg.get("homecom_refresh_token")) or self.ctx.mode == "demo"
-        return hp
+        return self.ctx.hp_snapshot()
 
     def _opstate(self, force: bool = False) -> dict:
         """How the heating is actually operated (read from heat pump +
@@ -8662,17 +9018,11 @@ class Handler(BaseHTTPRequestHandler):
             days = int(qs.get("days", ["60"])[0])
             price = round(float(qs.get("price", [self.cfg.get("price_per_kwh", 0.35)])[0]), 4)
             if path == "/api/analytics" or path == "/api/summary":
-                return self._send_json(self.ctx.calc_get(
-                    ("analytics", days, price), 90,
-                    lambda: compute_analytics(self.store, days, price)))
+                return self._send_json(self.ctx.core("analytics", days, price))
             if path == "/api/overview":
-                return self._send_json(self.ctx.calc_get(
-                    ("overview", days, price), 90,
-                    lambda: compute_overview(self.store, days, price, self._hp_live())))
+                return self._send_json(self.ctx.core("overview", days, price))
             if path == "/api/heatpump/analytics":
-                return self._send_json(self.ctx.calc_get(
-                    ("hpanalytics", days, price), 90,
-                    lambda: compute_hp_analytics(self.store, days, price, self._hp_live())))
+                return self._send_json(self.ctx.core("hpanalytics", days, price))
             if path == "/api/series":
                 device = qs.get("device", ["all"])[0]
                 since = int(time.time()) - days * 86400
@@ -8918,7 +9268,8 @@ def cmd_serve(args, cfg):
         # not configured yet – stay idle so the web UI can pair the controller
         ctx.mode = "idle"
 
-    # keep the heavy analytics results warm in the background (instant UI)
+    # aggregate finished days in the background, then keep the core results warm
+    ctx.start_rollup()
     ctx.start_warmer()
 
     # optional: start the heat-pump (HomeCom) poller if already connected
