@@ -8758,6 +8758,7 @@ class Handler(BaseHTTPRequestHandler):
         return self._send_json({"ok": False, "error": "unknown"}, 400)
 
     SETTINGS_KEY = "settings"
+    _SETTINGS_LOCK = threading.Lock()     # read-modify-write of the settings blob
 
     def _settings_load(self) -> dict:
         raw = self.store.kv_get(self.SETTINGS_KEY)
@@ -8773,6 +8774,10 @@ class Handler(BaseHTTPRequestHandler):
         """Merge app settings into the shared store. Accepts {key, value} or a
         bulk {settings: {...}}; a null value deletes the key. Values are strings
         (the frontend mirrors its localStorage here), capped for safety."""
+        with self._SETTINGS_LOCK:          # a reload can send two updates at once
+            return self._post_settings_locked(body)
+
+    def _post_settings_locked(self, body):
         cur = self._settings_load()
         updates = {}
         if isinstance(body.get("settings"), dict):

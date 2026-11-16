@@ -93,8 +93,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v188';   // short tag shown always-on in the header
-const APP_VERSION = 'v188 · 2026-11-15 · Abgleich-Tab neu aufgebaut: aus zehn Karten wurden fünf. Eine Statuskarte mit dem EINEN nächsten Schritt, EINE Raumliste (Versorgung gemessen · Ziel-Durchfluss je Kreis · dein Ist-Wert · Details zum Aufklappen), Schritt-Protokoll, Datenlage und Verteiler-Einrichtung (eingeklappt). Datenfehler behoben: Phantom-Räume „hz_1 …“ verschwinden (Ursache behoben), nur noch ein ΔT und damit EIN l/min-Wert je Kreis, Räume werden gegen ihre Wunschtemperatur bzw. den Hausschnitt beurteilt statt gegen den hochgedrehten Thermostat. Neu „Betrieb – gelesen & gemessen“: Betriebsart der Wärmepumpe (HomeCom), Modus der Thermostate und ob nachts wirklich abgesenkt wurde – ohne Annahmen. Warmwasser-Karte erkennt Ladeketten (gleich lange Ladungen, die sofort neu starten) und protokolliert ab jetzt die Speichertemperatur. ' +
+const APP_BUILD = 'v189';   // short tag shown always-on in the header
+const APP_VERSION = 'v189 · 2026-11-16 · App startet schneller: Die Bridge rechnet abgeschlossene Tage nur noch einmal (vorberechnete Tageswerte statt Rohdaten), alles Nötige für den Start kommt in EINER Anfrage, die schon beim Laden der Seite losgeht. Beim Wiederaufruf steht sofort der letzte bekannte Stand da („Stand hh:mm · wird aktualisiert …“) und wird ersetzt, sobald die frischen Zahlen da sind; ist die Bridge nicht erreichbar, bleibt der letzte echte Stand stehen statt Demo-Zahlen. Gerendert wird nur der sichtbare Tab, die anderen beim Öffnen. Übertragung komprimiert, App-Code wird im Browser zwischengespeichert. Neu im Setup: „Startzeit“ – was der Start gekostet hat, im Browser und auf der Bridge, mit Knopf zum kalten Nachrechnen. Einstellungen, die direkt vor dem Neuladen geändert wurden, gehen nicht mehr verloren. ' +
+  'v188 · 2026-11-15 · Abgleich-Tab neu aufgebaut: aus zehn Karten wurden fünf. Eine Statuskarte mit dem EINEN nächsten Schritt, EINE Raumliste (Versorgung gemessen · Ziel-Durchfluss je Kreis · dein Ist-Wert · Details zum Aufklappen), Schritt-Protokoll, Datenlage und Verteiler-Einrichtung (eingeklappt). Datenfehler behoben: Phantom-Räume „hz_1 …“ verschwinden (Ursache behoben), nur noch ein ΔT und damit EIN l/min-Wert je Kreis, Räume werden gegen ihre Wunschtemperatur bzw. den Hausschnitt beurteilt statt gegen den hochgedrehten Thermostat. Neu „Betrieb – gelesen & gemessen“: Betriebsart der Wärmepumpe (HomeCom), Modus der Thermostate und ob nachts wirklich abgesenkt wurde – ohne Annahmen. Warmwasser-Karte erkennt Ladeketten (gleich lange Ladungen, die sofort neu starten) und protokolliert ab jetzt die Speichertemperatur. ' +
   'v187 · 2026-11-09 · „Warmwasser kostet Komfort" korrigiert: KEINE Annahme mehr über eine Nachtabsenkung (die war falsch). Der echte Grund für „nicht erreicht" ist jetzt gemessen – die WW-Phasen sitzen dicht hintereinander: nach einer Phase bleibt oft nur wenig Heizzeit, bevor die nächste kommt. Phasen heißen jetzt kaum Abkühlung / wieder warm / danach nur X min Heizen / noch nicht zurück, plus Median-Heizzeit zwischen den Phasen. ' +
   'v186 · „Warmwasser kostet Komfort" ehrlicher: ein −0,0 °C-Dip wird nicht mehr als „nicht erreicht" gewertet; jede WW-Phase wird eingeordnet. ' +
   'v185 · Tagesverlauf lesbarer: Zeitachse zoombar (Auto / 1h / 2h / 4h / 8h / 16h / Tag; Auto passt sich an die vorhandenen Daten an, damit ein kurzer Betrieb nicht in 24 h zerquetscht wird). Raumtemperatur-Linien werden jetzt verbunden (die Thermostate messen punktuell/selten – kleine Lücken werden interpoliert, große bleiben offen). Achse re-bucketet beim Zoomen für volle Auflösung. ' +
@@ -136,6 +137,16 @@ function isAppSettingKey(k) {
 let _settingsReady = false;
 let _lastSynced = {};                 // last snapshot we successfully pushed to the bridge
 let _sweepTimer = null;
+// Changes this browser sent but the bridge has not confirmed yet (a page closed
+// right after a change only gets a fire-and-forget beacon, and the next start
+// asks the bridge for its settings at once – that answer can still be the old
+// value). On the next start these win over the bridge's copy and are sent again.
+// Not a 'bhe_' key, so it is never synced itself.
+const UNSENT_KEY = 'settings_unsent';
+function _unsentGet() { try { return JSON.parse(localStorage.getItem(UNSENT_KEY) || '{}') || {}; } catch (e) { return {}; } }
+function _unsentPut(o) {
+  try { if (Object.keys(o).length) localStorage.setItem(UNSENT_KEY, JSON.stringify(o)); else localStorage.removeItem(UNSENT_KEY); } catch (e) {}
+}
 function _settingsUrl() { return ((typeof STATE !== 'undefined' && STATE.base) || '') + '/api/settings'; }
 // Read every app-setting key currently in localStorage.
 function _collectAppSettings() {
@@ -163,6 +174,8 @@ function _syncSweep(useBeacon) {
   if (!keys.length) return;
   const prev = Object.assign({}, _lastSynced);
   keys.forEach(k => { if (changed[k] === null) delete _lastSynced[k]; else _lastSynced[k] = changed[k]; });
+  _unsentPut(Object.assign(_unsentGet(), changed));
+  const confirmed = () => { const u = _unsentGet(); keys.forEach(k => { if (u[k] === changed[k]) delete u[k]; }); _unsentPut(u); };
   const body = JSON.stringify({ settings: changed });
   if (useBeacon) {
     try {
@@ -171,7 +184,9 @@ function _syncSweep(useBeacon) {
     try { fetch(_settingsUrl(), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: true }).catch(() => {}); return; } catch (e) {}
   }
   if (typeof postJSON === 'function') {
-    postJSON('/api/settings', { settings: changed }).catch(() => { _lastSynced = prev; });  // retry next sweep on failure
+    postJSON('/api/settings', { settings: changed })
+      .then(r => { if (r && r.ok !== false) confirmed(); })
+      .catch(() => { _lastSynced = prev; });  // retry next sweep on failure
   } else {
     _lastSynced = prev;
   }
@@ -212,20 +227,42 @@ try {
 async function syncSettings() {
   try {
     const r = await (typeof api === 'function' ? api('/api/settings') : Promise.resolve(null));
-    const srv = (r && r.settings) || {};
-    if (Object.keys(srv).length) {
-      Object.keys(srv).forEach(k => { if (isAppSettingKey(k)) { try { localStorage.setItem(k, srv[k]); } catch (e) {} } });
-    } else {
-      // migrate: push this device's existing app settings up to the bridge
-      const up = _collectAppSettings();
-      if (Object.keys(up).length && typeof postJSON === 'function') {
-        try { await postJSON('/api/settings', { settings: up }); } catch (e) {}
-      }
-    }
+    await applyServerSettings((r && r.settings) || {});
+    return;
   } catch (e) { /* offline / demo file:// – fall back to local values */ }
   // Baseline so the first sweep doesn't re-push everything we just pulled/seeded.
   _lastSynced = _collectAppSettings();
   _settingsReady = true;
+}
+// Take over the bridge's settings (they arrive with the start request, see
+// bootApp – no separate round trip). Must run BEFORE init() builds the UI.
+async function applyServerSettings(srv) {
+  srv = srv || {};
+  const unsent = _unsentGet();
+  // a local change the bridge already has is confirmed; the others stay local
+  for (const k in unsent) {
+    const have = Object.prototype.hasOwnProperty.call(srv, k) ? srv[k] : null;
+    if (have === unsent[k]) delete unsent[k];
+  }
+  _unsentPut(unsent);
+  if (Object.keys(srv).length) {
+    Object.keys(srv).forEach(k => { if (isAppSettingKey(k) && !(k in unsent)) { try { localStorage.setItem(k, srv[k]); } catch (e) {} } });
+  } else {
+    // migrate: push this device's existing app settings up to the bridge
+    const up = _collectAppSettings();
+    if (Object.keys(up).length && typeof postJSON === 'function') {
+      try { await postJSON('/api/settings', { settings: up }); } catch (e) {}
+    }
+  }
+  // Baseline so the first sweep doesn't re-push everything we just pulled/seeded –
+  // except the unconfirmed local changes, which go out again right away.
+  _lastSynced = _collectAppSettings();
+  for (const k in unsent) {
+    if (unsent[k] === null) { if (Object.prototype.hasOwnProperty.call(srv, k)) _lastSynced[k] = srv[k]; }
+    else delete _lastSynced[k];
+  }
+  _settingsReady = true;
+  if (Object.keys(unsent).length) setTimeout(() => _syncSweep(false), 0);
 }
 
 let STATE = {
@@ -1185,12 +1222,68 @@ async function postJSON(path, body) {
   return r.json();
 }
 
+/* Put a set of core results on screen. origin: 'fresh' (just computed by the
+ * bridge), 'stale' (the bridge's last saved state while it is still computing)
+ * or 'snap' (what this browser showed last time). */
+function applyCoreState(c, health, origin) {
+  if (health) {
+    STATE.health = health;
+    STATE.cur = health.currency || STATE.cur || '€';
+    if (health.price_per_kwh && !localStorage.getItem(LS.price)) {
+      STATE.price = health.price_per_kwh; $('price').value = STATE.price;
+    }
+  }
+  STATE.ov = c.ov; STATE.hpA = c.hpA; STATE.data = c.data;
+  STATE.meter = Array.isArray(c.meter) ? c.meter : ((c.meter && c.meter.readings) || []);
+  // safe defaults so the first render never trips over missing optional data
+  STATE.appliances = STATE.appliances || null;
+  STATE.spot = STATE.spot || null;
+  STATE.tibberCons = STATE.tibberCons || null;
+  STATE.ha = STATE.ha || null;
+  STATE.carbon = STATE.carbon || demoCarbon();
+  STATE.cur = (c.data && c.data.currency) || STATE.cur || '€';
+  $('cur').textContent = STATE.cur;
+  setMode((health && health.mode) || 'live');
+  if (health) $('diag').textContent = JSON.stringify(health, null, 1);
+  STATE.coreOrigin = origin;
+  STATE.coreTs = origin === 'fresh' ? Date.now() : (c.ts || (c.generated_at ? c.generated_at * 1000 : null));
+  renderAll();                         // ← first paint happens here (visible tab only)
+  showStand(origin === 'fresh' ? null : STATE.coreTs);
+  if (origin === 'fresh') snapSave();
+}
+// small header line while an older state is on screen
+function showStand(ms) {
+  const el = $('data-stand'); if (!el) return;
+  if (!ms) { el.hidden = true; return; }
+  const d = new Date(ms), today = new Date().toDateString() === d.toDateString();
+  el.hidden = false;
+  el.textContent = 'Stand ' + (today ? '' : d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }) + ' ') +
+    d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) + ' · wird aktualisiert …';
+}
+// The last core state this browser showed – painted at once on the next start
+// when the bridge has not answered yet. Not a 'bhe_' key on purpose: it must
+// never be synced to the bridge as an app setting.
+const SNAP_KEY = 'core_snap_v1';
+function snapSave() {
+  if (STATE.demo || !STATE.ov || !STATE.hpA || !STATE.data) return;
+  try {
+    localStorage.setItem(SNAP_KEY, JSON.stringify({ ts: Date.now(), base: STATE.base || '',
+      ov: STATE.ov, hpA: STATE.hpA, data: STATE.data, meter: STATE.meter || [], health: STATE.health || null }));
+  } catch (e) { try { localStorage.removeItem(SNAP_KEY); } catch (e2) {} }      // quota: rather none than half
+}
+function snapLoad() {
+  try {
+    const sn = JSON.parse(localStorage.getItem(SNAP_KEY) || 'null');
+    if (sn && sn.ov && sn.hpA && sn.data && (sn.base || '') === (STATE.base || '')) return sn;
+  } catch (e) {}
+  return null;
+}
+
 async function loadAll() {
   if (STATE.demo) return applyDemo('demo');
   try {
     const health = await api('/api/health');
     STATE.health = health;
-    STATE.cur = health.currency || '€';
     if (health.price_per_kwh && !localStorage.getItem(LS.price)) {
       STATE.price = health.price_per_kwh; $('price').value = STATE.price;
     }
@@ -1203,23 +1296,22 @@ async function loadAll() {
       api('/api/analytics?days=90&price=' + p),
       api('/api/meter').catch(() => null),
     ]);
-    STATE.ov = ov; STATE.hpA = hpA; STATE.data = data;
-    STATE.meter = (meter && meter.readings) || [];
-    // safe defaults so the first render never trips over missing optional data
-    STATE.appliances = STATE.appliances || null;
-    STATE.spot = STATE.spot || null;
-    STATE.tibberCons = STATE.tibberCons || null;
-    STATE.ha = STATE.ha || null;
-    STATE.carbon = STATE.carbon || demoCarbon();
-    STATE.cur = data.currency || STATE.cur;
-    $('cur').textContent = STATE.cur;
-    setMode(health.mode || 'live');
-    $('diag').textContent = JSON.stringify(health, null, 1);
-    renderAll();                         // ← first paint happens here, fast
+    applyCoreState({ ov, hpA, data, meter }, health, 'fresh');
     checkUpdate();                       // show the "update available" banner if behind
     loadOptional(health, p);             // external integrations fill in afterwards
   } catch (e) {
     STATE.health = null;
+    const snap = STATE.coreOrigin ? null : snapLoad();
+    if (STATE.coreOrigin || snap) {
+      // the bridge is unreachable, but we know the last real state: keep showing
+      // that (clearly marked) instead of switching to made-up demo numbers
+      if (snap) applyCoreState(snap, snap.health, 'snap');
+      setMode('err');
+      const when = STATE.coreTs ? new Date(STATE.coreTs).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+      const el = $('data-stand'); if (el) { el.hidden = false; el.textContent = 'Bridge nicht erreichbar · letzter Stand' + (when ? ' ' + when : ''); }
+      $('conn-note').innerHTML = 'Keine Bridge erreichbar (' + esc(e.message) + '). Angezeigt wird der <b>zuletzt geladene Stand</b>.';
+      return;
+    }
     $('conn-note').innerHTML =
       'Keine Bridge erreichbar (' + esc(e.message) + '). Es werden <b>Demo-Daten</b> gezeigt. ' +
       'Trage im Setup die Adresse deiner Bridge ein oder öffne diese Seite direkt von der Bridge.';
@@ -1233,14 +1325,15 @@ async function loadAll() {
 function loadOptional(health, p) {
   const wantTib = health.tibber_connected || health.mode === 'demo';
   const wantHa = health.ha_connected || health.mode === 'demo';
-  const upd = (fn) => { try { fn(); } catch (e) {} };
-  api('/api/appliances').then(a => { STATE.appliances = a; upd(renderAppliances); }).catch(() => {});
-  api('/api/spot').then(sp => { STATE.spot = sp; upd(renderBorse); upd(renderSmart); }).catch(() => {});
-  api('/api/carbon').then(co2 => { STATE.carbon = (co2 && co2.ok) ? co2 : demoCarbon(); upd(renderCarbon); }).catch(() => {});
+  // each result redraws its own cards – right away if their tab is visible,
+  // otherwise when that tab is opened (see paintViews)
+  api('/api/appliances').then(a => { STATE.appliances = a; paintViews(['renderAppliances']); }).catch(() => {});
+  api('/api/spot').then(sp => { STATE.spot = sp; paintViews(['renderBorse', 'renderSmart', 'renderKonzept']); }).catch(() => {});
+  api('/api/carbon').then(co2 => { STATE.carbon = (co2 && co2.ok) ? co2 : demoCarbon(); paintViews(['renderCarbon']); }).catch(() => {});
   if (wantTib) api('/api/tibber/consumption?resolution=DAILY&last=30')
-    .then(t => { STATE.tibberCons = (t && t.ok) ? t : null; upd(renderBorse); }).catch(() => {});
+    .then(t => { STATE.tibberCons = (t && t.ok) ? t : null; paintViews(['renderBorse', 'renderHistory', 'renderKonzept']); }).catch(() => {});
   if (wantHa) api('/api/ha')
-    .then(h => { STATE.ha = h || null; upd(renderHa); upd(renderOverview); }).catch(() => {});
+    .then(h => { STATE.ha = h || null; paintViews(['renderHa', 'renderOverview']); }).catch(() => {});
 }
 
 function applyDemo(mode) {
@@ -2534,8 +2627,51 @@ function devRow(title, sub, valTop, valBot, pct, col) {
 }
 
 /* --------------------------------------------------------------- rendering */
-function renderAll() {
-  renderOverview(); renderToday(); renderHistory(); renderHeatpump(); renderProfile(); renderPv(); renderSettings(); renderAppliances(); renderMeter(); renderBorse(); renderCarbon(); renderSmart(); renderKonzept(); renderHa(); renderDarkLoad(); renderSwitches();
+/* Rendering only what is on screen. renderAll() used to redraw every tab – all
+ * nine views, hidden ones included – on the first paint and on every refresh:
+ * about 1.2 s of work on a phone before the first number appeared, although
+ * the overview alone takes ~20 ms. Each top-level render now belongs to the
+ * view(s) it draws into; a view that is not visible is only marked stale and
+ * catches up the moment its tab is opened (flushView in switchView). */
+const VIEW_RENDERS = {
+  overview: ['renderOverview', 'renderAppliances', 'renderHa', 'renderDarkLoad', 'renderSwitches'],
+  today: ['renderToday'],
+  history: ['renderHistory'],
+  heatpump: ['renderHeatpump', 'renderHeatExtras'],
+  profile: ['renderProfile'],
+  pv: ['renderPv', 'renderCarbon', 'renderSmart'],          // the last two also fill PV fields
+  borse: ['renderBorse', 'renderCarbon', 'renderSmart'],
+  konzept: ['renderKonzept'],
+  settings: ['renderSettings', 'renderMeter'],
+};
+// the order renderAll() always used (some renders build on earlier ones)
+const RENDER_ORDER = ['renderOverview', 'renderToday', 'renderHistory', 'renderHeatpump', 'renderProfile', 'renderPv',
+  'renderSettings', 'renderAppliances', 'renderMeter', 'renderBorse', 'renderCarbon', 'renderSmart', 'renderKonzept',
+  'renderHa', 'renderDarkLoad', 'renderSwitches', 'renderHeatExtras'];
+const _viewStale = {};                 // view -> Set of render names waiting for that view
+function activeView() { const el = document.querySelector('.view.on'); return el ? el.id.replace(/^v-/, '') : 'overview'; }
+function _runRender(name) {
+  const fn = window[name];
+  if (typeof fn === 'function') { try { fn(); } catch (e) { console.error(name, e); } }
+  Object.keys(_viewStale).forEach(v => _viewStale[v].delete(name));      // it is fresh everywhere now
+}
+// Run the given renders (default: all) for the visible view; mark the rest stale.
+function paintViews(names) {
+  const act = activeView(), eager = !!window.__eagerRender;
+  RENDER_ORDER.forEach(name => {
+    if (names && names.indexOf(name) < 0) return;
+    const views = Object.keys(VIEW_RENDERS).filter(v => VIEW_RENDERS[v].indexOf(name) >= 0);
+    if (eager || views.indexOf(act) >= 0) _runRender(name);
+    else views.forEach(v => { (_viewStale[v] = _viewStale[v] || new Set()).add(name); });
+  });
+}
+function flushView(v) {
+  const st = _viewStale[v];
+  if (!st || !st.size) return;
+  RENDER_ORDER.filter(n => st.has(n)).forEach(_runRender);
+}
+// heat-pump tab extras that depend on the core data having arrived
+function renderHeatExtras() {
   // re-paint cached heating-check once the WP annual model & price are loaded
   // (so €-savings fill in even if the tab was opened before data arrived)
   if (typeof _hdData !== 'undefined' && _hdData) paintHeatingDiag(_hdData);
@@ -2543,6 +2679,7 @@ function renderAll() {
   if (typeof initHpControls === 'function') initHpControls();
   if (typeof renderAutomeasure === 'function') renderAutomeasure();   // re-check availability after health
 }
+function renderAll() { paintViews(); }
 
 // Device control: switch Bosch Smart Plug+ (and other PowerSwitch devices) on/off.
 // Lazy-loaded (one fetch, then cached) so the 30 s overview poll stays cheap;
@@ -9733,6 +9870,8 @@ function switchView(v) {
   document.querySelectorAll('.view').forEach(s => s.classList.toggle('on', s.id === 'v-' + v));
   document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
   window.scrollTo({ top: 0, behavior: 'instant' in window ? 'instant' : 'auto' });
+  flushView(v);                         // draw what arrived while this tab was hidden
+  if (v === 'settings' && typeof renderPerf === 'function') renderPerf();
   // lazily load ONLY the active Wärme sub-tab when the tab is opened
   if (v === 'heatpump') {
     let sub = 'heizung'; try { sub = localStorage.getItem('bhe_heat_sub') || 'heizung'; } catch (e) {}
@@ -10635,7 +10774,8 @@ function init() {
     renderHeatDemand();
   });
 
-  loadAll();
+  const pfb = $('perf-bench'); if (pfb) pfb.addEventListener('click', () => renderPerf(true));
+  if (!_bootDriven) loadAll();
   setInterval(refreshLive, 30000);
   // Service worker: register, then actively check for a newer version and take
   // it over automatically. Without the controllerchange auto-reload the browser
@@ -10681,7 +10821,9 @@ async function refreshLive() {
       api('/api/heatpump/analytics?days=90&price=' + p),
     ]);
     STATE.ov = ov; STATE.hpA = hpA;
-    renderOverview(); renderToday(); renderHistory(); renderHeatpump(); renderPv();
+    paintViews(['renderOverview', 'renderToday', 'renderHistory', 'renderHeatpump', 'renderPv']);
+    if (STATE.coreOrigin !== 'fresh') { STATE.coreOrigin = 'fresh'; showStand(null); setMode((STATE.health && STATE.health.mode) || 'live'); }
+    snapSave();
   } catch (e) { /* keep last */ }
 }
 
@@ -10903,14 +11045,132 @@ function demoOverview(sh, hp) {
   };
 }
 
-// Pull shared settings from the bridge BEFORE the first render, then refresh
-// STATE from the (now server-seeded) cache, so every device shows the same.
-document.addEventListener('DOMContentLoaded', async () => {
+/* ------------------------------------------------------------- app start --
+ * Goal: numbers on screen as early as possible.
+ *  • index.html starts fetching /api/boot – settings, bridge status and the
+ *    three core results in ONE answer – before this script has even been
+ *    downloaded. The app used to make three round trips in a row instead
+ *    (settings → health → analytics), each waiting for the one before.
+ *  • The settings must be in localStorage BEFORE init() builds the UI (it
+ *    restores dozens of inputs from them); they come with that same answer.
+ *  • If the bridge has not answered yet but this browser has shown the app
+ *    before, the last known state is painted at once, marked with its time,
+ *    and replaced as soon as the fresh data arrives.
+ *  • Only the visible tab is rendered (see paintViews).                       */
+let _bootDriven = false;               // true → init() must not start its own loadAll()
+const PERF = { t: {}, mark(k) { if (!(k in this.t)) this.t[k] = Math.round(performance.now()); } };
+
+/* ---- Setup → "Startzeit": what this start cost, measured ------------------ */
+let _perfSrv = null, _perfBusy = false;
+async function renderPerf(bench) {
+  const body = $('perf-body'), head = $('perf-head'), note = $('perf-note');
+  if (!body) return;
+  const t = PERF.t, ms = v => (v == null ? '–' : fmt(v, 0) + ' ms');
+  const row = (l, v, sub) => `<div class="devrow"><div class="nm"><b>${l}</b>${sub ? `<small>${sub}</small>` : ''}</div>` +
+    `<div class="val"><b>${v}</b></div></div>`;
+  const first = Math.min(t.paint_old != null ? t.paint_old : Infinity, t.paint_fresh != null ? t.paint_fresh : Infinity);
+  let h = '';
+  if (isFinite(first)) {
+    h += row('Erste Zahlen sichtbar', ms(first), t.paint_old != null && t.paint_old <= first
+      ? 'zuerst der letzte bekannte Stand' : 'direkt mit frischen Daten');
+    if (t.paint_old != null) h += row('Frische Daten sichtbar', ms(t.paint_fresh), 'ersetzen den letzten Stand');
+  } else {
+    h += row('Erste Zahlen sichtbar', '–', STATE.demo ? 'Demo-Modus – keine Bridge-Messung' : 'klassischer Start (ohne Start-Anfrage)');
+  }
+  if (window.__bootT0 != null) {
+    h += row('Start-Anfrage an die Bridge', window.__bootT1 != null ? ms(window.__bootT1 - window.__bootT0) : 'keine Antwort',
+      `abgeschickt nach ${ms(window.__bootT0)}` + (PERF.bootMs == null ? ''
+        : PERF.bootMs < 5 ? ' · Bridge hatte die Auswertung schon fertig' : ` · davon Rechenzeit der Bridge ${ms(PERF.bootMs)}`) +
+      (PERF.bootStale ? ' · Bridge rechnete noch, lieferte den gespeicherten Stand' : ''));
+  }
+  h += row('App-Skript startklar', ms(t.script), 'geladen, eingelesen und ausgeführt');
+  // how the app code travelled (same-origin resource timing)
+  try {
+    const e = performance.getEntriesByType('resource').find(r => /\/app\.js(\?|$)/.test(r.name));
+    if (e) {
+      const kb = v => fmt(v / 1024, 0) + ' kB';
+      const cached = e.transferSize === 0 && e.decodedBodySize > 0;
+      const how = e.transferSize == null ? '' : (cached ? 'aus dem Browser-Cache – nichts übertragen'
+        : `${kb(e.transferSize)} übertragen` + (e.decodedBodySize ? ` (entpackt ${kb(e.decodedBodySize)})` : ''));
+      h += row('App-Code (app.js)', ms(e.duration), how);
+    }
+  } catch (e) {}
+  body.innerHTML = h + '<div class="note" style="margin-top:8px">Bridge wird abgefragt …</div>';
+  if (STATE.demo || _perfBusy) { if (STATE.demo) body.innerHTML = h; return; }
+  _perfBusy = true;
+  if (bench && note) note.textContent = 'Bridge rechnet die drei Kern-Auswertungen ohne Cache neu …';
+  try { _perfSrv = await api('/api/perf' + (bench ? '?bench=1' : '')); } catch (e) { _perfSrv = null; }
+  _perfBusy = false;
+  const p = _perfSrv;
+  if (!p || !p.ok) { body.innerHTML = h + '<div class="note" style="margin-top:8px">Bridge-Werte nicht verfügbar (ältere Bridge?).</div>'; if (note) note.textContent = ''; return; }
+  const core = (p.core || []).filter(c => c.ms != null);
+  h += `<div style="font-weight:700;margin:12px 0 2px">Bridge</div>`;
+  if (core.length) h += row('Rechenzeit Kern-Auswertungen', ms(Math.max.apply(null, core.map(c => c.ms))),
+    core.map(c => `${esc(c.label)} ${ms(c.ms)}`).join(' · ') + ' (Übersicht enthält die beiden anderen)');
+  const db = p.db || {}, ru = p.rollup || {};
+  h += row('Datenbank', (db.size_mb != null ? fmt(db.size_mb, 0) + ' MB' : '–'),
+    `${fmt(db.samples || 0, 0)} Messwerte · ${fmt(db.day_rows || 0, 0)} vorberechnete Tageswerte`);
+  h += row('Tageswerte', ru.running ? 'wird umgerechnet …' : (ru.error ? 'Fehler' : 'aktuell'),
+    ru.running ? `bisher ${fmt(ru.rows || 0, 0)} Tageswerte – läuft einmalig im Hintergrund`
+      : (ru.error ? esc(ru.error) : 'abgeschlossene Tage werden nur einmal aus den Rohdaten berechnet'));
+  body.innerHTML = h;
+  if (head) head.innerHTML = isFinite(first) ? `<span style="color:var(--muted)">${ms(first)}</span>` : '';
+  if (note) note.innerHTML = p.bench_ms != null
+    ? `Kalt nachgerechnet in <b>${ms(p.bench_ms)}</b> (alle drei Kern-Auswertungen ohne Cache).` : '';
+}
+
+async function useBoot(boot) {
+  const c = (boot && boot.core) || {};
+  if (c.error || !c.ov || !c.hpA || !c.data) { loadAll(); return; }     // let the classic loader report it
+  PERF.bootMs = c.ms; PERF.bootStale = !!c.stale;
+  applyCoreState(c, boot.health, c.stale ? 'stale' : 'fresh');
+  PERF.mark(c.stale ? 'paint_old' : 'paint_fresh');
+  checkUpdate();                       // show the "update available" banner if behind
+  loadOptional(boot.health, STATE.price);
+  if (c.stale) {                       // the bridge was still computing → fetch the real thing
+    try {
+      const b2 = await api('/api/boot?days=90&fresh=1');
+      if (b2 && b2.core && b2.core.ov) { applyCoreState(b2.core, b2.health, 'fresh'); PERF.mark('paint_fresh'); }
+    } catch (e) { /* the 30 s refresh will catch up */ }
+  }
+}
+
+async function bootApp() {
+  PERF.mark('script');
   // Always-visible build stamp in the header, so you can tell at a glance on ANY
   // tab whether the browser loaded the current code (end of the cache confusion).
   try { const av = $('app-ver'); if (av) av.textContent = 'App-Stand: ' + APP_BUILD; } catch (e) {}
-  await syncSettings();
-  STATE.price = parseFloat(localStorage.getItem(LS.price) || '0.35');
   STATE.demo = localStorage.getItem(LS.demo) === '1';
+  const bootP = (!STATE.demo && window.__boot) ? window.__boot : null;
+  if (!bootP) {
+    // demo mode, or a page that did not send the early request: classic start
+    await syncSettings();
+    STATE.price = parseFloat(localStorage.getItem(LS.price) || '0.35');
+    STATE.demo = localStorage.getItem(LS.demo) === '1';
+    init();
+    return;
+  }
+  const snap = snapLoad();
+  let boot = null, failed = false;
+  const settled = bootP.then(b => { boot = b; }, () => { failed = true; });
+  // With a last state to show, do not keep the user waiting for a slow bridge;
+  // without one there is nothing to draw yet anyway.
+  await (snap ? Promise.race([settled, new Promise(r => setTimeout(r, 250))]) : settled);
+  _bootDriven = true;
+  if (boot) await applyServerSettings(boot.settings);
+  STATE.price = parseFloat(localStorage.getItem(LS.price) || '0.35');
   init();
-});
+  if (boot) { await useBoot(boot); return; }
+  if (snap) { applyCoreState(snap, snap.health, 'snap'); PERF.mark('paint_old'); }
+  if (!failed) await settled;          // slow bridge: wait for it now that something is on screen
+  if (boot) {
+    await applyServerSettings(boot.settings);
+    STATE.price = parseFloat(localStorage.getItem(LS.price) || '0.35');
+    await useBoot(boot);
+  } else {
+    // no usable answer (bridge down, or an older bridge without /api/boot)
+    if (!_settingsReady) await syncSettings();
+    loadAll();
+  }
+}
+document.addEventListener('DOMContentLoaded', bootApp);

@@ -12,6 +12,22 @@
 <link rel="apple-touch-icon" href="icon.svg">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <title>Bosch Energie</title>
+<script>
+/* Ask the bridge for the first screen's data NOW – before the (large) app
+   script below has been downloaded and parsed. app.js picks the answer up from
+   window.__boot (see bootApp). Skipped in demo mode. */
+(function () {
+  try {
+    if (localStorage.getItem('bhe_demo') === '1') return;
+    var base = localStorage.getItem('bhe_base') || '';
+    window.__bootT0 = performance.now();
+    window.__boot = fetch(base + '/api/boot?days=90', { cache: 'no-store' })
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function (j) { window.__bootT1 = performance.now(); return j; });
+    window.__boot.catch(function () {});   /* failure is handled in bootApp */
+  } catch (e) {}
+})();
+</script>
 <style>
   :root{
     --bg:#0b1220; --bg2:#111a2e; --card:#16213c; --card2:#1c2a49;
@@ -286,6 +302,7 @@
       <h1 id="title">Energie · Bosch Smart Home</h1>
       <div class="sub" id="subtitle">Smart Home + Wärmepumpe</div>
       <div class="sub" id="app-ver" style="font-size:11px;opacity:.6;margin-top:2px">App lädt…</div>
+      <div class="sub" id="data-stand" hidden style="font-size:11px;color:var(--warn);margin-top:2px"></div>
     </div>
     <div class="pill" id="mode">…</div>
   </div>
@@ -1703,6 +1720,15 @@
       <button class="btn sec" id="save-base">Adresse speichern &amp; neu laden</button>
       <button class="btn sec" id="use-demo">Demo-Daten anzeigen</button>
       <div class="note" id="conn-note" style="margin-top:10px"></div>
+    </div>
+
+    <div class="card" id="perf-card">
+      <h2>⏱ Startzeit <span class="r" id="perf-head"></span></h2>
+      <div class="note" style="margin-bottom:10px">Wie lange dieser Start gedauert hat – im Browser und auf der Bridge.
+        Zum Vergleichen vor/nach einer Änderung.</div>
+      <div id="perf-body"><div class="note">Wird beim Öffnen dieses Tabs gemessen …</div></div>
+      <button class="btn sec" id="perf-bench" style="width:auto;padding:7px 14px">Bridge kalt nachrechnen</button>
+      <div class="note" id="perf-note" style="margin-top:8px"></div>
     </div>
 
     <div class="card" id="rename-card">
