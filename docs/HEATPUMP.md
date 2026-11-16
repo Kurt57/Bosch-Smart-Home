@@ -115,6 +115,17 @@ importierten Monaten statt auf einer Hochrechnung.
   `numberOfStarts`, `workingTime/totalSystem`, `system/sensors/temperatures/outdoor_t1`.
   (Ältere Anlagen nutzen ggf. `hs1/actualPower` o. ä. – der `/api/homecom/probe`-
   Endpunkt zeigt, was deine Anlage kennt.)
+* **Volumenstrom:** Bosch dokumentiert für die CS6800i keinen festen Pfad. Die
+  Bridge durchsucht deshalb nach der ersten Abfrage (danach wöchentlich, oder per
+  Knopf im Abgleich unter „Datenlage") die Bäume `heatSources`, `system` und
+  `heatingCircuits` nach einem Wert in l/min, l/h oder m³/h und schreibt ihn bei
+  jeder Abfrage mit (**gelesen**). Grenz-/Sollwerte (z. B. `max…`) werden nicht
+  als Messwert genommen. Meldet die Anlage keinen, wird er **abgeleitet**:
+  l/min = Wärmeleistung ÷ (1,163 Wh/(l·K) × Spreizung × 60), je 15–90 min
+  Heizbetrieb mit laufendem Verdichter; bei einem groben Wärmezähler (z. B.
+  1-kWh-Schritte) werden viele Läufe zusammengerechnet. Der Wert gilt für das
+  Wasser durch die Wärmepumpe – mit Pufferspeicher oder hydraulischer Weiche
+  fließt in den Heizkreisen eine andere Menge. Ergebnis: `/api/heatpump/flow`.
 * Umgesetzt in `bridge/homecom.py` – **ohne Zusatzpakete** (nur Standardbibliothek).
   Grundlage der Endpunkte: das Community-Projekt
   [`serbanb11/homecom_alt`](https://github.com/serbanb11/homecom_alt).

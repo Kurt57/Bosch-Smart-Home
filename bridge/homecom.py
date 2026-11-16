@@ -514,6 +514,99 @@ class HomeComClient:
                 out[d["path"]] = d
         return list(out.values())
 
+    # -- volume flow (discovery: the API documents no fixed path) ---------- #
+    # unit → factor to l/min. Matched case-insensitively, without blanks.
+    FLOW_UNITS = {"l/min": 1.0, "lpm": 1.0, "l/h": 1.0 / 60.0, "lph": 1.0 / 60.0,
+                  "m3/h": 1000.0 / 60.0, "m³/h": 1000.0 / 60.0, "l/s": 60.0}
+    _FLOW_NAME = ("flowrate", "flow_rate", "volumeflow", "volumetricflow", "volumenstrom",
+                  "durchfluss", "waterflow")
+    _FLOW_LIMIT = ("max", "min", "setpoint", "nominal", "limit", "target")
+
+    @classmethod
+    def _flow_unit(cls, unit) -> float | None:
+        if not isinstance(unit, str):
+            return None
+        return cls.FLOW_UNITS.get(unit.strip().lower().replace(" ", ""))
+
+    @classmethod
+    def _flow_leaf(cls, res: dict, path: str) -> dict | None:
+        """A resource that holds a volume flow: by its unit, or – when the unit
+        is missing – by a flow-like name that is clearly no temperature."""
+        val = res.get("value")
+        if not isinstance(val, (int, float)) or isinstance(val, bool):
+            return None
+        unit = res.get("unitOfMeasure")
+        fac = cls._flow_unit(unit)
+        low = path.lower()
+        if fac is None:
+            if not any(k in low.replace("/", "") for k in cls._FLOW_NAME):
+                return None
+            if isinstance(unit, str) and unit.strip().upper() in ("C", "°C", "K", "%", "BAR", "KW", "W"):
+                return None
+            fac = 1.0                      # flow-like name without unit: assume l/min
+            unit = unit or "?"
+        last = low.rsplit("/", 1)[-1]
+        return {"path": path, "value": float(val), "unit": unit,
+                "l_min": round(float(val) * fac, 2),
+                "setting": bool(res.get("writeable")) or any(k in last for k in cls._FLOW_LIMIT)}
+
+    def discover_flow(self, gateway_id: str, max_nodes: int = 160) -> dict:
+        """Look through what the heat pump offers (heatSources, system, heating
+        circuits; bounded) for a volume-flow value. Bosch does not document one
+        for the CS6800i, so this only reports what the device really exposes.
+        Read-only. Also counts the units seen, so 'nothing found' is checkable."""
+        prefix = f"{API_BASE}{gateway_id}"
+
+        def norm(pid):
+            if not isinstance(pid, str) or not pid.startswith("/"):
+                return None
+            return pid if pid.startswith("/resource/") else "/resource" + pid
+
+        seen, found, units, leaves, budget = set(), [], {}, 0, max_nodes
+        queue = ["/resource/heatSources", "/resource/system", "/resource/heatingCircuits"]
+        while queue and budget > 0:
+            p = queue.pop(0)
+            if p in seen:
+                continue
+            seen.add(p)
+            budget -= 1
+            try:
+                res = self._api_get(prefix + p)
+            except HomeComError:
+                res = None
+            if not isinstance(res, dict):
+                continue
+            refs = res.get("references")
+            if isinstance(refs, list):
+                for r in refs:
+                    rid = norm(r.get("id") if isinstance(r, dict) else None)
+                    if rid and rid not in seen:
+                        queue.append(rid)
+                continue
+            leaves += 1
+            u = res.get("unitOfMeasure")
+            if isinstance(u, str) and u:
+                units[u] = units.get(u, 0) + 1
+            f = self._flow_leaf(res, norm(res.get("id")) or p)
+            if f:
+                found.append(f)
+        # the value to log: an actual reading (not a limit/setting), heat source first
+        def rank(f):
+            pth = f["path"]
+            return (f["setting"], 0 if "/heatSources" in pth else 1 if "/system" in pth else 2, pth)
+        found.sort(key=rank)
+        primary = next((f["path"] for f in found if not f["setting"]), None)
+        return {"ts": int(time.time()), "checked": len(seen), "leaves": leaves,
+                "complete": not queue, "found": found, "primary": primary, "units": units}
+
+    def read_flow(self, gateway_id: str, path: str) -> dict | None:
+        """Read the discovered flow resource once (→ {l_min, value, unit})."""
+        try:
+            res = self._api_get(f"{API_BASE}{gateway_id}{path}")
+        except HomeComError:
+            return None
+        return self._flow_leaf(res, path) if isinstance(res, dict) else None
+
     def read_resource(self, gateway_id: str, resource_path: str) -> dict | None:
         """GET one resource as a control descriptor (for write validation)."""
         res = self._api_get(f"{API_BASE}{gateway_id}{resource_path}")

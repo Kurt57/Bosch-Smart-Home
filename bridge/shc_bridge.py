@@ -959,7 +959,7 @@ class Store:
             )
             hpcols = [r[1] for r in self.conn.execute("PRAGMA table_info(hp_samples)")]
             # supply_c/return_c let the heating-curve analysis build up over time
-            for col in ("heat_kwh", "heat_w", "supply_c", "return_c"):
+            for col in ("heat_kwh", "heat_w", "supply_c", "return_c", "flow_lmin"):
                 if col not in hpcols:
                     self.conn.execute(f"ALTER TABLE hp_samples ADD COLUMN {col} REAL")
             if "mode" not in hpcols:
@@ -1075,12 +1075,12 @@ class Store:
         with self.lock, self.conn:
             self.conn.execute(
                 "INSERT INTO hp_samples(gateway,ts,energy_kwh,power_w,thermal_kw,"
-                "modulation,outdoor_c,heat_kwh,heat_w,mode,supply_c,return_c)"
-                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                "modulation,outdoor_c,heat_kwh,heat_w,mode,supply_c,return_c,flow_lmin)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (row.get("gateway"), row["ts"], row.get("energy_kwh"), row.get("power_w"),
                  row.get("thermal_kw"), row.get("modulation"), row.get("outdoor_c"),
                  row.get("heat_kwh"), row.get("heat_w"), row.get("mode"),
-                 row.get("supply_c"), row.get("return_c")),
+                 row.get("supply_c"), row.get("return_c"), row.get("flow_lmin")),
             )
 
     def hp_prev(self, field: str):
@@ -3105,10 +3105,19 @@ def compute_hp_analytics(store: Store, days: int, price: float,
                     "year_elec_kwh": None, "year_heat_kwh": None, "seasonal_cop": None,
                     "latest": imp_days[-1]["date"], "monthly": []}
 
+    try:
+        fl = compute_flow(store, days=14, rows=rows)
+        flow = {"now": fl["now"], "system": fl["system"],
+                "measured": {"available": fl["measured"]["available"], "path": fl["measured"]["path"]},
+                "derived": {k: fl["derived"][k] for k in ("typical", "n", "spread_k", "sure", "behaviour")}}
+    except Exception as exc:
+        print(f"[hp] flow: {exc}", file=sys.stderr)
+        flow = None
     return {
         "generated_at": now,
         "window_days": days,
         "connected": bool(live.get("connected") or rows),
+        "flow": flow,
         "live": {
             "power_w": live.get("power_w"),
             "heat_w": live.get("heat_w"),
@@ -3119,6 +3128,7 @@ def compute_hp_analytics(store: Store, days: int, price: float,
             "outdoor_c": live.get("outdoor_c"),
             "supply_c": live.get("supply_c"),
             "return_c": live.get("return_c"),
+            "flow_lmin": live.get("flow_lmin"),
             "energy_kwh": live.get("energy_kwh"),
             "heat_kwh": live.get("heat_kwh"),
             "compressor_kwh": live.get("compressor_kwh"),
@@ -5048,6 +5058,306 @@ def _central_spread(store: "Store") -> dict | None:
     return {"spread_k": round(diffs[len(diffs) // 2], 1), "n": len(diffs)}
 
 
+# --------------------------------------------------------------------------- #
+# Volume flow through the heat pump – read where the device offers it,
+# otherwise derived from heat output ÷ spread. Always says which of the two.
+# --------------------------------------------------------------------------- #
+FLOW_DISC_KEY = "hc_flow_disc"
+FLOW_REDISCOVER_S = 7 * 86400
+WATER_WH_PER_LK = 1.163                  # Wh to heat one litre of water by 1 K
+_HEAT_MODES = ("ch", "heating", "heat")
+
+
+def _flow_disc_load(store: "Store") -> dict | None:
+    try:
+        raw = store.kv_get(FLOW_DISC_KEY)
+        return json.loads(raw) if raw else None
+    except Exception:
+        return None
+
+
+def _median(vals):
+    v = sorted(vals)
+    if not v:
+        return None
+    n = len(v)
+    return v[n // 2] if n % 2 else (v[n // 2 - 1] + v[n // 2]) / 2.0
+
+
+def _counter_step(vals) -> float | None:
+    """Resolution of a cumulative counter (1 kWh on some devices, 0.1 or finer
+    on others): the smallest step, if every step is a whole multiple of it.
+    A finely resolved counter moves by arbitrary amounts → None (negligible)."""
+    steps = sorted({round(b - a, 4) for a, b in zip(vals, vals[1:]) if b - a > 1e-6})
+    if not steps:
+        return None
+    m = steps[0]
+    if all(abs(x / m - round(x / m)) <= 0.03 for x in steps):
+        return m
+    return None
+
+
+def _flow_segments(rows: list[dict], min_min: float = 15.0, max_min: float = 90.0) -> list[list[dict]]:
+    """Continuous space-heating stretches with the compressor running, cut into
+    pieces of 15–90 minutes – long enough for the heat counter to move, short
+    enough to follow the load."""
+    gaps = sorted(b["ts"] - a["ts"] for a, b in zip(rows, rows[1:]) if b["ts"] > a["ts"])
+    step = gaps[len(gaps) // 2] if gaps else 300
+    max_gap = max(2.5 * step, 600)
+    runs, cur = [], []
+    for r in rows:
+        heating = ((r.get("mode") or "").lower() in _HEAT_MODES and r.get("heat_kwh") is not None
+                   and (r.get("modulation") is None or r["modulation"] > 0))
+        if heating and cur and r["ts"] - cur[-1]["ts"] <= max_gap:
+            cur.append(r)
+            continue
+        if len(cur) >= 3:
+            runs.append(cur)
+        cur = [r] if heating else []
+    if len(cur) >= 3:
+        runs.append(cur)
+    segs = []
+    for run in runs:
+        piece = [run[0]]
+        for r in run[1:]:
+            piece.append(r)
+            if (piece[-1]["ts"] - piece[0]["ts"]) / 60.0 >= max_min:
+                segs.append(piece)
+                piece = [r]                  # next piece starts where this one ended
+        if len(piece) >= 3 and (piece[-1]["ts"] - piece[0]["ts"]) / 60.0 >= min_min:
+            segs.append(piece)
+        elif segs and segs[-1][-1] is piece[0] and len(piece) > 1:
+            segs[-1] = segs[-1] + piece[1:]  # short tail: add to the piece before
+    return [g for g in segs if (g[-1]["ts"] - g[0]["ts"]) / 60.0 >= min_min]
+
+
+def _flow_from_segment(seg: list[dict], res_kwh: float | None) -> dict | None:
+    dur_h = (seg[-1]["ts"] - seg[0]["ts"]) / 3600.0
+    dq = (seg[-1].get("heat_kwh") or 0.0) - (seg[0].get("heat_kwh") or 0.0)
+    if dur_h <= 0 or dq < 0:
+        return None
+    dts = []
+    for r in seg[1:]:
+        su, re_ = r.get("supply_c"), r.get("return_c")
+        if su is not None and re_ is not None and 0.3 <= su - re_ <= 20:
+            dts.append(su - re_)
+    if len(dts) < 2:
+        return None
+    dt = sum(dts) / len(dts)
+    if dt < 1.0:
+        return None
+    p_w = dq * 1000.0 / dur_h
+    # a coarse counter may not move at all in a short run: such a piece has no
+    # value of its own, but it still counts when the pieces are pooled
+    flow = p_w / (WATER_WH_PER_LK * dt) / 60.0 if p_w >= 300 else None
+    # uncertainty: counter resolution against the heat in this piece, plus
+    # ±0.2 K on the difference of two temperature sensors
+    unc = (res_kwh / dq if (res_kwh and dq > 0) else (1.0 if res_kwh else 0.0)) + 0.2 / dt
+    out_c = [r["outdoor_c"] for r in seg if r.get("outdoor_c") is not None]
+    sup = [r["supply_c"] for r in seg if r.get("supply_c") is not None]
+    meas = [r["flow_lmin"] for r in seg if r.get("flow_lmin") is not None]
+    return {"start": seg[0]["ts"], "end": seg[-1]["ts"], "dur_min": round(dur_h * 60),
+            "heat_kwh": round(dq, 3), "p_w": round(p_w), "dt_k": round(dt, 2),
+            "l_min": round(flow, 1) if flow is not None else None, "unc": round(unc, 2),
+            "sure": flow is not None and unc <= 0.3,
+            "plausible": flow is not None and 2.0 <= flow <= 80.0,
+            "outdoor_c": round(sum(out_c) / len(out_c), 1) if out_c else None,
+            "supply_c": round(sum(sup) / len(sup), 1) if sup else None,
+            "measured": round(sum(meas) / len(meas), 1) if meas else None}
+
+
+def compute_flow(store: "Store", days: int = 14, rows: list[dict] | None = None,
+                 demo: bool = False) -> dict:
+    """Volume flow through the heat pump during space heating.
+
+    gelesen    – the device reports a flow value (found by the discovery crawl)
+    abgeleitet – heat from the energy counter ÷ (1.163 × spread × time),
+                 per 30–90-min piece of continuous heating
+    """
+    now = int(time.time())
+    if rows is None:
+        rows = store.hp_samples_since(now - days * 86400)
+    else:
+        rows = [r for r in rows if r["ts"] >= now - days * 86400]
+    disc = None if demo else _flow_disc_load(store)
+
+    # --- read from the device ---------------------------------------------- #
+    meas_rows = [r for r in rows if r.get("flow_lmin") is not None]
+    heat_meas = [r["flow_lmin"] for r in meas_rows
+                 if (r.get("mode") or "").lower() in _HEAT_MODES and r["flow_lmin"] > 0]
+    dhw_meas = [r["flow_lmin"] for r in meas_rows if (r.get("mode") or "").lower() == "dhw" and r["flow_lmin"] > 0]
+    last_m = meas_rows[-1] if meas_rows else None
+    m_beh, m_p90 = None, None
+    if len(heat_meas) >= 10:
+        mm = sum(heat_meas) / len(heat_meas)
+        msd = (sum((x - mm) ** 2 for x in heat_meas) / (len(heat_meas) - 1)) ** 0.5
+        m_beh = "konstant" if mm and msd / mm < 0.15 else "lastabhängig"
+        hs = sorted(heat_meas)
+        m_p90 = round(hs[min(len(hs) - 1, int(round(0.9 * (len(hs) - 1))))], 1)
+    measured = {
+        "available": bool(meas_rows) or bool(disc and disc.get("primary")),
+        "path": (disc or {}).get("primary"),
+        "latest": round(last_m["flow_lmin"], 1) if last_m else None,
+        "latest_ts": last_m["ts"] if last_m else None,
+        "latest_mode": (last_m.get("mode") if last_m else None),
+        "heat_median": round(_median(heat_meas), 1) if heat_meas else None,
+        "dhw_median": round(_median(dhw_meas), 1) if dhw_meas else None,
+        "n": len(heat_meas), "behaviour": m_beh, "p90": m_p90,
+    }
+
+    # --- derived: heat ÷ spread -------------------------------------------- #
+    res = _counter_step([r["heat_kwh"] for r in rows if r.get("heat_kwh") is not None])
+    segs = []
+    for g in _flow_segments(rows):
+        f = _flow_from_segment(g, res)
+        if f:
+            segs.append(f)
+    ok = [f for f in segs if f["plausible"]]
+    sure = [f for f in ok if f["sure"]]
+    good = sure or ok
+    flows = [f["l_min"] for f in good]
+    # pieces too coarse on their own (short runs, a 1-kWh counter): pool them –
+    # the counter's rounding errors largely cancel over many runs
+    pooled = None
+    if not sure and len(segs) >= 3:
+        q = sum(f["heat_kwh"] for f in segs)
+        den = sum(WATER_WH_PER_LK * f["dt_k"] * f["dur_min"] / 60.0 for f in segs)
+        if q > 0 and den > 0:
+            dts = sorted(f["dt_k"] for f in segs)
+            unc = (res * (2 * len(segs)) ** 0.5 / q if res else 0.0) + 0.2 / dts[len(dts) // 2]
+            pl = q * 1000.0 / den / 60.0
+            if 2.0 <= pl <= 80.0:
+                pooled = {"l_min": round(pl, 1), "n": len(segs),
+                          "heat_kwh": round(q, 1), "unc": round(unc, 2), "sure": unc <= 0.3}
+    behaviour, cv, corr = None, None, None
+    if len(good) >= 4:
+        m = sum(flows) / len(flows)
+        sd = (sum((x - m) ** 2 for x in flows) / (len(flows) - 1)) ** 0.5
+        cv = sd / m if m else None
+        ps = [f["p_w"] for f in good]
+        mp = sum(ps) / len(ps)
+        cov = sum((a - mp) * (b - m) for a, b in zip(ps, flows))
+        va = sum((a - mp) ** 2 for a in ps) ** 0.5
+        vb = sum((b - m) ** 2 for b in flows) ** 0.5
+        corr = cov / (va * vb) if va and vb else None
+        if cv is not None and cv < 0.15:
+            behaviour = "konstant"
+        elif corr is not None and corr >= 0.5:
+            behaviour = "lastabhängig"
+        else:
+            behaviour = "schwankend"
+    p90 = sorted(flows)[min(len(flows) - 1, int(round(0.9 * (len(flows) - 1))))] if flows else None
+    derived = {
+        "typical": (pooled["l_min"] if pooled else round(_median(flows), 1) if flows else None),
+        "p90": round(p90, 1) if p90 is not None else None,
+        "n": pooled["n"] if pooled else len(good), "n_all": len(segs),
+        "sure": pooled["sure"] if pooled else bool(sure),
+        "pooled": pooled,
+        "spread_k": round(_median([f["dt_k"] for f in (good or segs)]), 1) if (good or segs) else None,
+        "resolution_kwh": res,
+        "behaviour": behaviour, "cv": round(cv, 2) if cv is not None else None,
+        "corr": round(corr, 2) if corr is not None else None,
+        "last": ok[-1] if ok else None,
+        "runs": ok[-8:],
+    }
+
+    # --- the one value used elsewhere -------------------------------------- #
+    if measured["heat_median"] is not None and measured["n"] >= 3:
+        system = {"l_min": measured["heat_median"], "src": "gelesen",
+                  "basis": f"Median von {measured['n']} gelesenen Werten im Heizbetrieb"}
+    elif derived["typical"] is not None and derived["n"] >= 2:
+        system = {"l_min": derived["typical"], "src": "abgeleitet",
+                  "basis": (f"aus {derived['n']} Heizläufen zusammen: Wärmemenge ÷ (1,163 × Spreizung)" if pooled else
+                            f"Median aus {derived['n']} Heizläufen: Wärmemenge ÷ (1,163 × Spreizung)"),
+                  "sure": derived["sure"]}
+    else:
+        system = {"l_min": None, "src": None, "basis": None}
+
+    # live value for the heat-pump card
+    nowv = None
+    if last_m and now - last_m["ts"] <= 1800:
+        nowv = {"l_min": round(last_m["flow_lmin"], 1), "src": "gelesen", "ts": last_m["ts"],
+                "mode": last_m.get("mode")}
+    elif segs and now - segs[-1]["end"] <= 1800:     # heating right now / just now
+        last = segs[-1]
+        if last["sure"] and last["plausible"]:
+            nowv = {"l_min": last["l_min"], "src": "abgeleitet", "ts": last["end"],
+                    "start": last["start"], "dt_k": last["dt_k"], "sure": True}
+        elif derived["typical"] is not None:          # this run alone is too coarse
+            nowv = {"l_min": derived["typical"], "src": "abgeleitet", "ts": last["end"],
+                    "dt_k": last["dt_k"], "sure": derived["sure"], "typical": True}
+
+    check = None
+    if measured["heat_median"] and derived["typical"]:
+        ratio = derived["typical"] / measured["heat_median"]
+        check = {"ratio": round(ratio, 2),
+                 "text": ("Gelesener und abgeleiteter Wert passen zusammen." if abs(ratio - 1) <= 0.2 else
+                          f"Abgeleitet {_de(derived['typical'])} l/min, gelesen {_de(measured['heat_median'])} l/min – "
+                          "Wärmemengenzähler oder Temperaturfühler weichen voneinander ab; der gelesene Wert zählt.")}
+
+    discovery = None
+    if disc:
+        units = sorted((disc.get("units") or {}).items(), key=lambda kv: -kv[1])
+        discovery = {"ts": disc.get("ts"), "checked": disc.get("checked"), "leaves": disc.get("leaves"),
+                     "complete": disc.get("complete"), "error": disc.get("error"),
+                     "found": disc.get("found") or [], "primary": disc.get("primary"),
+                     "units": [{"unit": u, "n": n} for u, n in units[:10]]}
+    return {"ok": True, "ts": now, "days": days, "demo": demo, "measured": measured,
+            "derived": derived, "system": system, "now": nowv, "check": check,
+            "discovery": discovery}
+
+
+def _flow_compare(fl: dict, rooms: list[dict], flow_total: float | None) -> dict | None:
+    """System flow vs. what all circuits together should get (Σ target flows),
+    and – when the pump cannot deliver that – what each circuit can really get."""
+    sysf = (fl.get("system") or {}).get("l_min")
+    if not sysf or not flow_total:
+        return None
+    src = fl["system"]["src"]
+    part = (fl.get("measured") if src == "gelesen" else fl.get("derived")) or {}
+    behaviour = part.get("behaviour")
+    ratio = sysf / flow_total
+    best = part.get("p90") if behaviour == "lastabhängig" else None
+    out = {"l_min": sysf, "src": src, "target_sum": round(flow_total, 1), "ratio": round(ratio, 2),
+           "scale": None, "tone": "good", "text": ""}
+    if best and best / flow_total >= 0.85 > ratio:
+        out["text"] = (f"Der Durchfluss steigt mit der Heizleistung: im Mittel {_de(sysf)} l/min, bei den bisher stärksten Heizläufen "
+                       f"{_de(best)} l/min – das reicht für Σ {_de(flow_total)} l/min aller Kreise.")
+    elif ratio < 0.85:
+        if behaviour == "lastabhängig":
+            out["tone"] = "ok"
+            out["text"] = (f"Der Durchfluss steigt mit der Heizleistung (die Pumpe regelt offenbar nach Last), bisher "
+                           f"höchstens {_de(best or sysf)} l/min – "
+                           f"alle Kreise zusammen sollen bei Auslegung Σ {_de(flow_total)} l/min bekommen. "
+                           "Ob das bei Frost reicht, zeigen erst kalte Tage.")
+        else:
+            out["tone"] = "warn"
+            out["scale"] = round(ratio, 3)
+            out["text"] = (f"Durch die Wärmepumpe fließen ~{_de(sysf)} l/min, alle Kreise zusammen sollen "
+                           f"Σ {_de(flow_total)} l/min bekommen. Mehr als ankommt kann der Verteiler nicht verteilen – "
+                           f"stell die Kreise <b>anteilig</b> ein (je Kreis „erreichbar“ = Ziel × {_de(ratio * 100, 0)} %). "
+                           "Die Verhältnisse zwischen den Räumen bleiben so richtig.")
+    elif ratio > 1.3:
+        out["text"] = (f"Durch die Wärmepumpe fließen ~{_de(sysf)} l/min, mehr als alle Kreise zusammen brauchen "
+                       f"(Σ {_de(flow_total)} l/min) – für die Verteilung unkritisch.")
+    else:
+        out["text"] = (f"Durch die Wärmepumpe fließen ~{_de(sysf)} l/min – passt zu Σ {_de(flow_total)} l/min "
+                       "aller Kreise. Die Ziel-Werte sind erreichbar.")
+    # cross-check with the user's own flow-meter readings
+    tg = [r for r in rooms if r.get("flow_loop") is not None]
+    ist = [r for r in tg if r.get("ist") is not None]
+    if tg and len(ist) >= max(2, 0.7 * len(tg)):
+        s_ist = sum(r["ist"] * (r.get("loops") or 1) for r in ist)
+        out["ist_sum"] = round(s_ist, 1)
+        out["ist_n"], out["ist_of"] = len(ist), len(tg)
+        if abs(s_ist / sysf - 1) > 0.2:
+            out["ist_text"] = (f"Σ deiner Tacosetter-Ablesungen {_de(s_ist)} l/min ({len(ist)} von {len(tg)} Räumen), "
+                               f"durch die Wärmepumpe {_de(sysf)} l/min ({src}). Abweichung über 20 %: Ablesungen zu "
+                               "verschiedenen Zeiten, ein Tacosetter mit Luft/Schmutz – oder ein Puffer bzw. eine "
+                               "Weiche trennt Wärmepumpe und Verteiler.")
+    return out
+
+
 def compute_heatload(store: "Store", areas: dict | None = None,
                      design_c: float = DESIGN_OUTDOOR_C,
                      spread_k: float = 5.0, spec_wm2: float = 40.0,
@@ -5959,6 +6269,11 @@ def compute_balance(store: "Store", settings: dict | None = None, demo: bool = F
     opt = compute_optimize(store, tm=tm, curve=curve)
     obs = compute_observation(store, tm=tm)
     am = compute_automeasure(store)
+    try:
+        fl = compute_flow(store, days=14, demo=demo)
+    except Exception as exc:
+        print(f"[abgleich] flow: {exc}", file=sys.stderr)
+        fl = None
 
     tm_by = {r["room"]: r for r in tm["rooms"]}
     hl_by = {r["room"]: r for r in hl["rooms"]}
@@ -6005,6 +6320,12 @@ def compute_balance(store: "Store", settings: dict | None = None, demo: bool = F
             # --- the user's own flow-meter reading, per circuit ---
             "ist": taco.get(rm),
         })
+
+    # what the heat pump really pushes through vs. what all circuits should get
+    fcmp = _flow_compare(fl, rooms, hl.get("total_flow_lmin")) if fl else None
+    for r in rooms:
+        r["flow_reach"] = (round(r["flow_loop"] * fcmp["scale"], 2)
+                           if fcmp and fcmp.get("scale") and r["flow_loop"] is not None else None)
 
     # manifold sums, in the user's manifold order; unassigned rooms last
     order = list(layout["manifolds"])
@@ -6069,8 +6390,14 @@ def compute_balance(store: "Store", settings: dict | None = None, demo: bool = F
         kpis.append({"v": f"{len(under)} · {len(over)}", "l": "zu kalt · zu warm",
                      "tone": "good" if not (under or over) else "warn"})
     if hl.get("total_flow_lmin"):
-        kpis.append({"v": f"{_de(hl['total_flow_lmin'])}", "l": f"Σ l/min bei ΔT {_de(layout['dt'], 0)} K",
+        kpis.append({"v": f"{_de(hl['total_flow_lmin'])}", "l": f"Σ Ziel l/min bei ΔT {_de(layout['dt'], 0)} K",
                      "tone": "na"})
+    fsys = (fl or {}).get("system") or {}
+    if fsys.get("l_min"):
+        kpis.append({"v": ("≈ " if fsys["src"] == "abgeleitet" else "") + _de(fsys["l_min"]),
+                     "l": "l/min durch die Wärmepumpe",
+                     "tone": {"warn": "warn", "ok": "ok", "good": "good"}.get((fcmp or {}).get("tone"), "na"),
+                     "hint": "gelesen" if fsys["src"] == "gelesen" else "abgeleitet: Wärme ÷ Spreizung"})
     if eff and eff.get("over_k") is not None:
         ok_ = eff["over_k"]
         kpis.append({"v": f"{'+' if ok_ >= 0 else '−'}{_de(abs(ok_))} K", "l": "Heizkurve über Ziel (30 Tage)",
@@ -6097,6 +6424,7 @@ def compute_balance(store: "Store", settings: dict | None = None, demo: bool = F
                    "design_c": layout["design_c"], "central_spread": hl.get("central_spread"),
                    "signature": hl.get("signature"), "coverage": hl.get("coverage"),
                    "ua_total": hl.get("ua_total"), "balance_c": hl.get("balance_c")},
+        "flow": fl, "flow_cmp": fcmp,
         "curve": eff, "steps": opt["steps"], "n_steps": opt["n_steps"], "opt_note": opt["note"],
         "data": obs, "automeasure": am, "stray_rooms": stray,
         "layout_demo": layout_demo,
@@ -7148,6 +7476,8 @@ class HeatPumpPoller(threading.Thread):
         self._stop = threading.Event()
         self.last_error = None
         self.last_poll = None
+        self._disc_lock = threading.Lock()
+        self.discovering = False
 
     def run(self):
         while not self._stop.is_set():
@@ -7159,7 +7489,33 @@ class HeatPumpPoller(threading.Thread):
                 self.last_error = str(exc)
                 self.state["last_error"] = str(exc)
                 print(f"[heatpump] error: {exc}", file=sys.stderr)
+            # look for a volume-flow value once, then weekly (about 100+ cloud
+            # requests, so never on every poll)
+            if self.last_poll and not self._stop.is_set():
+                d = _flow_disc_load(self.store)
+                if not d or time.time() - (d.get("ts") or 0) >= FLOW_REDISCOVER_S:
+                    self.discover_flow()
             self._stop.wait(self.interval)
+
+    def discover_flow(self) -> dict | None:
+        """Search the device's resources for a volume flow; result kept in kv."""
+        if not hasattr(self.client, "discover_flow"):
+            return None
+        if not self._disc_lock.acquire(blocking=False):
+            return None                      # already running
+        self.discovering = True
+        try:
+            try:
+                d = self.client.discover_flow(self.gateway)
+            except Exception as exc:
+                d = {"ts": int(time.time()), "error": str(exc), "found": [], "primary": None}
+            self.store.kv_set(FLOW_DISC_KEY, json.dumps(d))
+            print(f"[heatpump] flow discovery: {d.get('checked')} resources checked, "
+                  f"found {[f.get('path') for f in d.get('found') or []]}", file=sys.stderr)
+            return d
+        finally:
+            self.discovering = False
+            self._disc_lock.release()
 
     def _derive_power(self, field, current, ts):
         """Average power (W) from a cumulative kWh counter delta."""
@@ -7179,6 +7535,16 @@ class HeatPumpPoller(threading.Thread):
         heat = data.get("heat_kwh")             # thermal produced total (kWh)
         power_w = self._derive_power("energy_kwh", elec, ts)
         heat_w = self._derive_power("heat_kwh", heat, ts)
+        # volume flow, if the device exposes one (found by discover_flow)
+        flow = None
+        disc = _flow_disc_load(self.store)
+        if disc and disc.get("primary") and hasattr(self.client, "read_flow"):
+            try:
+                f = self.client.read_flow(self.gateway, disc["primary"])
+                flow = f.get("l_min") if f else None
+            except Exception:
+                flow = None
+        data["flow_lmin"] = flow
         self.store.add_hp_sample({
             "gateway": self.gateway, "ts": ts, "energy_kwh": elec, "power_w": power_w,
             "heat_kwh": heat, "heat_w": heat_w,
@@ -7186,6 +7552,7 @@ class HeatPumpPoller(threading.Thread):
             "modulation": data.get("modulation"), "outdoor_c": data.get("outdoor_c"),
             "mode": data.get("mode"),
             "supply_c": data.get("supply_c"), "return_c": data.get("return_c"),
+            "flow_lmin": flow,
         })
         # hot-water tank temperature + setpoint, so a DHW phase can be judged on
         # what the tank really did (None when the device does not expose it)
@@ -7888,9 +8255,12 @@ class Handler(BaseHTTPRequestHandler):
 
         def run():
             return {"demo": demo, **compute_balance(self.store, st, demo)}
-        if force:
-            return run()
-        return self.ctx.calc_get(("abgleich", fp, demo), 45, run)
+        res = run() if force else self.ctx.calc_get(("abgleich", fp, demo), 45, run)
+        poller = self.ctx.hp
+        if res.get("flow") and poller and getattr(poller, "discovering", False):
+            res = dict(res)                       # never touch the cached copy
+            res["flow"] = dict(res["flow"], discovering=True)
+        return res
 
     def _log_rooms_now(self):
         """On-demand per-room temperature log (used by the rooms endpoint so the
@@ -8217,6 +8587,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._post_optimize("step", body)
             if parsed.path == "/api/optimize/undo":
                 return self._post_optimize("undo", body)
+            if parsed.path == "/api/heatpump/flow/discover":
+                return self._flow_discover()
             if parsed.path == "/api/optimize/reset":
                 return self._post_optimize("reset", body)
             if parsed.path == "/api/update":
@@ -8770,6 +9142,26 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, TypeError):
             return {}
 
+    def _flow_payload(self) -> dict:
+        demo = self.ctx.mode == "demo"
+        fl = compute_flow(self.store, days=14, demo=demo)
+        poller = self.ctx.hp
+        fl["discovering"] = bool(poller and getattr(poller, "discovering", False))
+        fl["can_discover"] = bool(poller) and not demo
+        return fl
+
+    def _flow_discover(self):
+        """Search the heat pump's resources for a volume flow now (background)."""
+        if self.ctx.mode == "demo":
+            return self._send_json({"ok": False, "error": "Im Demo-Modus gibt es keine echte Wärmepumpe zum Durchsuchen."})
+        poller = self.ctx.hp
+        if not poller:
+            return self._send_json({"ok": False, "error": "Wärmepumpe (HomeCom) ist nicht verbunden."})
+        if getattr(poller, "discovering", False):
+            return self._send_json({"ok": True, "started": False, "running": True})
+        threading.Thread(target=poller.discover_flow, daemon=True).start()
+        return self._send_json({"ok": True, "started": True})
+
     def _post_settings(self, body):
         """Merge app settings into the shared store. Accepts {key, value} or a
         bulk {settings: {...}}; a null value deletes the key. Values are strings
@@ -9199,6 +9591,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json(self._balance("force" in qs))
             if path == "/api/heatpump/opstate":
                 return self._send_json(self._opstate("force" in qs))
+            if path == "/api/heatpump/flow":
+                return self._send_json(self._flow_payload())
             if path == "/api/heatpump/dhwimpact":
                 try:
                     dwd = max(1.0, min(60.0, float(qs.get("days", ["14"])[0])))

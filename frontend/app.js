@@ -93,8 +93,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v189';   // short tag shown always-on in the header
-const APP_VERSION = 'v189 · 2026-11-16 · App startet schneller: Die Bridge rechnet abgeschlossene Tage nur noch einmal (vorberechnete Tageswerte statt Rohdaten), alles Nötige für den Start kommt in EINER Anfrage, die schon beim Laden der Seite losgeht. Beim Wiederaufruf steht sofort der letzte bekannte Stand da („Stand hh:mm · wird aktualisiert …“) und wird ersetzt, sobald die frischen Zahlen da sind; ist die Bridge nicht erreichbar, bleibt der letzte echte Stand stehen statt Demo-Zahlen. Gerendert wird nur der sichtbare Tab, die anderen beim Öffnen. Übertragung komprimiert, App-Code wird im Browser zwischengespeichert. Neu im Setup: „Startzeit“ – was der Start gekostet hat, im Browser und auf der Bridge, mit Knopf zum kalten Nachrechnen. Einstellungen, die direkt vor dem Neuladen geändert wurden, gehen nicht mehr verloren. ' +
+const APP_BUILD = 'v190';   // short tag shown always-on in the header
+const APP_VERSION = 'v190 · 2026-11-16 · Volumenstrom der Wärmepumpe: Die Bridge durchsucht einmal (dann wöchentlich) alle Werte, die die Wärmepumpe über HomeCom meldet, nach einem Volumenstrom und schreibt ihn mit („gelesen“). Meldet sie keinen, wird er aus Wärmemenge ÷ Spreizung je Heizlauf berechnet („abgeleitet“) – auch mit grobem 1-kWh-Wärmezähler über viele Läufe genau. Anzeige in der Live-Karte und im Abgleich: Volumenstrom gegen die Summe der Ziel-Durchflüsse aller Kreise; liefert die Pumpe weniger, steht je Kreis der erreichbare Wert, und dein Tacosetter-Wert wird damit verglichen. Unter „Datenlage“: Quelle, Suchergebnis, die letzten Heizläufe und ein Knopf für eine neue Suche. ' +
+  'v189 · 2026-11-16 · App startet schneller: Die Bridge rechnet abgeschlossene Tage nur noch einmal (vorberechnete Tageswerte statt Rohdaten), alles Nötige für den Start kommt in EINER Anfrage, die schon beim Laden der Seite losgeht. Beim Wiederaufruf steht sofort der letzte bekannte Stand da („Stand hh:mm · wird aktualisiert …“) und wird ersetzt, sobald die frischen Zahlen da sind; ist die Bridge nicht erreichbar, bleibt der letzte echte Stand stehen statt Demo-Zahlen. Gerendert wird nur der sichtbare Tab, die anderen beim Öffnen. Übertragung komprimiert, App-Code wird im Browser zwischengespeichert. Neu im Setup: „Startzeit“ – was der Start gekostet hat, im Browser und auf der Bridge, mit Knopf zum kalten Nachrechnen. Einstellungen, die direkt vor dem Neuladen geändert wurden, gehen nicht mehr verloren. ' +
   'v188 · 2026-11-15 · Abgleich-Tab neu aufgebaut: aus zehn Karten wurden fünf. Eine Statuskarte mit dem EINEN nächsten Schritt, EINE Raumliste (Versorgung gemessen · Ziel-Durchfluss je Kreis · dein Ist-Wert · Details zum Aufklappen), Schritt-Protokoll, Datenlage und Verteiler-Einrichtung (eingeklappt). Datenfehler behoben: Phantom-Räume „hz_1 …“ verschwinden (Ursache behoben), nur noch ein ΔT und damit EIN l/min-Wert je Kreis, Räume werden gegen ihre Wunschtemperatur bzw. den Hausschnitt beurteilt statt gegen den hochgedrehten Thermostat. Neu „Betrieb – gelesen & gemessen“: Betriebsart der Wärmepumpe (HomeCom), Modus der Thermostate und ob nachts wirklich abgesenkt wurde – ohne Annahmen. Warmwasser-Karte erkennt Ladeketten (gleich lange Ladungen, die sofort neu starten) und protokolliert ab jetzt die Speichertemperatur. ' +
   'v187 · 2026-11-09 · „Warmwasser kostet Komfort" korrigiert: KEINE Annahme mehr über eine Nachtabsenkung (die war falsch). Der echte Grund für „nicht erreicht" ist jetzt gemessen – die WW-Phasen sitzen dicht hintereinander: nach einer Phase bleibt oft nur wenig Heizzeit, bevor die nächste kommt. Phasen heißen jetzt kaum Abkühlung / wieder warm / danach nur X min Heizen / noch nicht zurück, plus Median-Heizzeit zwischen den Phasen. ' +
   'v186 · „Warmwasser kostet Komfort" ehrlicher: ein −0,0 °C-Dip wird nicht mehr als „nicht erreicht" gewertet; jede WW-Phase wird eingeordnet. ' +
@@ -4127,15 +4128,20 @@ function abRoomRow(x, idx, fmax) {
   // flow line: target per circuit + the user's reading
   let flow;
   if (x.flow_loop != null) {
-    const ist = tacoGet(x.room), d = tacoDelta(ist, x.flow_loop, x.category);
+    // when the heat pump delivers less than all circuits together need, the
+    // reading is judged against what this circuit can really get
+    const soll = x.flow_reach != null ? x.flow_reach : x.flow_loop;
+    const ist = tacoGet(x.room), d = tacoDelta(ist, soll, x.category);
     const low = x.flow_loop < 0.3 || x.plausible === false;
     flow = `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12.5px;margin-top:2px">` +
       `<span>Ziel <b style="color:${low ? '#ffb64d' : '#3ba9ff'}">${fmt(x.flow_loop, 2)} l/min</b>${low ? ' ⚠︎' : ''}` +
       `<span style="color:var(--muted)"> je Kreis${x.loops > 1 ? ` (${x.loops}×)` : ''}</span></span>` +
       `<span style="color:var(--muted)">· Ist</span>` +
-      `<input class="taco-in" data-room="${esc(x.room)}" data-idx="${idx}" data-soll="${x.flow_loop}" data-cat="${esc(x.category || '')}" type="text" inputmode="decimal" ` +
+      `<input class="taco-in" data-room="${esc(x.room)}" data-idx="${idx}" data-soll="${soll}" data-cat="${esc(x.category || '')}" type="text" inputmode="decimal" ` +
         `placeholder="l/min" value="${ist != null ? fmt(ist, 1) : ''}" style="width:64px;padding:4px 6px;margin:0;border-radius:8px;border:1px solid var(--line);background:var(--card2);color:var(--ink);font-size:13px">` +
-      `<span id="taco-d-${idx}" style="color:${d.col};font-weight:600;flex:1;min-width:120px">${d.txt}</span></div>`;
+      `<span id="taco-d-${idx}" style="color:${d.col};font-weight:600;flex:1;min-width:120px">${d.txt}</span></div>` +
+      (x.flow_reach != null ? `<div style="font-size:12px;color:#ffb64d;margin-top:2px">erreichbar ~<b>${fmt(x.flow_reach, 2)} l/min</b> je Kreis ` +
+        `<span style="color:var(--muted)">– so viel bekommt der Kreis, wenn alle anteilig eingestellt sind (siehe oben); dein Ist-Wert wird damit verglichen</span></div>` : '');
   } else {
     flow = `<div class="note" style="margin-top:2px">Ziel-Durchfluss: ${(x.flow_missing || ['Fläche fehlt']).map(esc).join(' · ')} ` +
       `<a href="#" data-ab-setup="1" style="color:var(--accent)">eintragen</a></div>`;
@@ -4177,7 +4183,9 @@ function abRoomRow(x, idx, fmax) {
 function paintAbRooms(r) {
   const head = $('abr-head'), body = $('abr-body'), note = $('abr-note');
   const rooms = r.rooms || [], t = r.totals || {};
-  if (head) head.innerHTML = `<span style="color:var(--muted)">${rooms.length} Räume${t.flow_total != null ? ` · Σ ${fmt(t.flow_total, 1)} l/min` : ''}</span>`;
+  const fc = r.flow_cmp;
+  if (head) head.innerHTML = `<span style="color:var(--muted)">${rooms.length} Räume${t.flow_total != null ? ` · Σ ${fmt(t.flow_total, 1)} l/min` : ''}` +
+    (fc ? ` · WP ${fc.src === 'abgeleitet' ? '≈ ' : ''}${fmt(fc.l_min, 1)}` : '') + `</span>`;
   if (!body) return;
   if (!rooms.length) { body.innerHTML = '<div class="note">Noch keine Räume – koppele die Raumthermostate oder trage unten unter „Verteiler einrichten" Räume ein.</div>'; if (note) note.innerHTML = ''; return; }
   let h = '', idx = 0;
@@ -4189,7 +4197,7 @@ function paintAbRooms(r) {
       `<span style="color:var(--muted);font-size:12px">${m.loops ? `${m.loops} Kreise · Σ ${fmt(m.flow, 1)} l/min` : `${rs.length} Räume`}</span></div>`;
     rs.forEach(x => { h += abRoomRow(x, idx++); });
   });
-  body.innerHTML = h;
+  body.innerHTML = abFlowCmpBox(fc) + h;
   if (note) {
     const method = t.method === 'calibrated'
       ? `Heizlast aus der <b>gemessenen Gebäude-Kennlinie</b> (${t.q_total != null ? fmt(t.q_total, 0) + ' W' : '–'} bei ${fmt(t.design_c, 0)} °C), über Fläche und Trägheit auf die Räume verteilt.`
@@ -4201,6 +4209,17 @@ function paintAbRooms(r) {
       `Entscheidend ist am Ende die <b>gemessene</b> Raumtemperatur, nicht der Rechenwert. ` +
       `<a href="#" data-ab-setup="1" style="color:var(--accent)">Annahmen &amp; Flächen ändern</a> · kein normgerechter Abgleich.`;
   }
+}
+
+// What the heat pump really pushes through vs. what all circuits should get.
+function abFlowCmpBox(fc) {
+  if (!fc) return '';
+  const col = { warn: '#ffb64d', ok: 'var(--accent)', good: '#4be0b0' }[fc.tone] || 'var(--line)';
+  const src = fc.src === 'gelesen' ? 'gelesen aus der Wärmepumpe' : 'abgeleitet aus Wärmemenge ÷ Spreizung';
+  return `<div style="border-left:3px solid ${col};padding:6px 0 6px 10px;margin:4px 0 6px;font-size:13px;line-height:1.55">` +
+    `💧 <b>Volumenstrom ${fc.src === 'abgeleitet' ? '≈ ' : ''}${fmt(fc.l_min, 1)} l/min</b> <span style="color:var(--muted)">(${src})</span> · ` +
+    `Σ Ziel aller Kreise ${fmt(fc.target_sum, 1)} l/min<br>${fc.text}` +
+    (fc.ist_text ? `<div class="note" style="margin-top:4px">${esc(fc.ist_text)}</div>` : '') + `</div>`;
 }
 
 /* ---- 3 · step log ------------------------------------------------------------ */
@@ -4284,7 +4303,82 @@ function paintAbData(r) {
         `<div style="font-size:12px;color:var(--muted);line-height:1.5">${esc(s.detail)}${s.hint ? ' · ' + esc(s.hint) : ''}</div></div>`;
     }).join('') +
     ((d.disturbances || []).length ? (d.disturbances || []).map(x => `<div class="note" style="margin-bottom:4px">• ${esc(x)}</div>`).join('') : '') +
-    (d.gap ? `<div class="note" style="margin-top:8px;border-left:3px solid var(--warn);padding-left:10px">⚠︎ <b>Messlücke:</b> ${esc(d.gap)}</div>` : '');
+    (d.gap ? `<div class="note" style="margin-top:8px;border-left:3px solid var(--warn);padding-left:10px">⚠︎ <b>Messlücke:</b> ${esc(d.gap)}</div>` : '') +
+    abFlowDataBox(r.flow, r.demo || (r.flow && r.flow.demo));
+}
+// Datenlage → Volumenstrom: where the number comes from, how it was found,
+// the last heating runs it is based on.
+function abFlowDataBox(F, demo) {
+  if (!F) return '';
+  const M = F.measured || {}, D = F.derived || {}, X = F.discovery;
+  const when = ts => new Date(ts * 1000).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  let h = `<div style="margin-top:14px;padding-top:12px;border-top:1px dashed var(--line)">` +
+    `<div style="font-weight:700;font-size:14px;margin-bottom:6px">💧 Volumenstrom durch die Wärmepumpe</div>`;
+  // 1 · read from the device?
+  let rd;
+  if (M.latest != null) {
+    rd = `<b style="color:#4be0b0">Gelesen</b> aus HomeCom (<code style="font-size:11px">${esc((M.path || '').replace('/resource', ''))}</code>): ` +
+      `zuletzt <b>${fmt(M.latest, 1)} l/min</b> (${when(M.latest_ts)})` +
+      (M.heat_median != null ? ` · im Heizbetrieb Median <b>${fmt(M.heat_median, 1)} l/min</b> aus ${M.n} Werten` : '') +
+      (M.dhw_median != null ? ` · Warmwasser ${fmt(M.dhw_median, 1)} l/min` : '') + '.';
+  } else if (demo) {
+    rd = 'Demo: keine echte Wärmepumpe zum Durchsuchen – gezeigt wird nur der abgeleitete Wert.';
+  } else if (F.discovering) {
+    rd = '🔄 Die Bridge durchsucht gerade die Werte der Wärmepumpe nach einem Volumenstrom …';
+  } else if (X && X.primary) {
+    rd = `Gefunden: <code style="font-size:11px">${esc(X.primary.replace('/resource', ''))}</code> – wird ab der nächsten Abfrage mitgeschrieben.`;
+  } else if (X && X.error) {
+    rd = `Suche nach einem Volumenstrom fehlgeschlagen (${esc(X.error)}) – nächster Versuch automatisch.`;
+  } else if (X) {
+    const units = (X.units || []).map(u => `${esc(u.unit)} ${u.n}×`).join(', ');
+    const lim = (X.found || []).filter(f => f.setting);
+    rd = `Die Wärmepumpe meldet über HomeCom <b>keinen Volumenstrom</b>. Durchsucht am ${when(X.ts)}: ` +
+      `${X.checked} Ressourcen, ${X.leaves} Messwerte${X.complete === false ? ' (Suche begrenzt)' : ''}` +
+      (units ? ` – Einheiten: ${units}` : '') + '.' +
+      (lim.length ? ` Nur Grenz-/Sollwerte gefunden: ${lim.map(f => `${esc(f.path.replace('/resource', ''))} = ${fmt(f.l_min, 1)} l/min`).join(', ')}.` : '') +
+      ' Deshalb wird der Wert unten abgeleitet.';
+  } else {
+    rd = 'Die Bridge sucht nach der ersten Abfrage der Wärmepumpe einmal nach einem Volumenstrom-Wert (danach wöchentlich).';
+  }
+  h += `<div style="font-size:13px;line-height:1.55;margin-bottom:8px">${rd}</div>`;
+  // 2 · derived
+  if (D.typical != null) {
+    const cvp = (D.cv || 0) * 100;
+    const beh = { konstant: `nahezu <b>konstant</b> (${cvp < 1 ? 'Streuung unter 1 %' : `±${fmt(cvp, 0)} %`}) – die Pumpe läuft offenbar mit fester Fördermenge`,
+      'lastabhängig': '<b>steigt mit der Heizleistung</b> – die Pumpe regelt offenbar nach Last (z. B. auf feste Spreizung)',
+      schwankend: '<b>schwankt</b> ohne klaren Zusammenhang mit der Leistung' }[D.behaviour];
+    h += `<div style="font-size:13px;line-height:1.55;margin-bottom:6px"><b style="color:#ffb64d">Abgeleitet</b>: ≈ <b>${fmt(D.typical, 1)} l/min</b> – ` +
+      `${D.pooled ? `aus ${D.pooled.n} Heizläufen zusammengerechnet (${fmt(D.pooled.heat_kwh, 0)} kWh Wärme)` : `Median aus ${D.n} Heizläufen`} der letzten 14 Tage, ` +
+      `Spreizung typisch ${fmt(D.spread_k, 1)} K${D.sure ? '' : ' · <span style="color:#ffb64d">noch unsicher</span>'}.` +
+      (beh ? ` Verlauf: ${beh}.` : '') +
+      `<br><span style="color:var(--muted);font-size:12px">Rechnung: l/min = Wärmeleistung ÷ (1,163 Wh/(l·K) × Spreizung × 60), je 15–90 min Heizbetrieb mit laufendem Verdichter. ` +
+      (D.resolution_kwh ? `Der Wärmezähler zählt in Schritten von ${fmt(D.resolution_kwh, D.resolution_kwh < 1 ? 1 : 0)} kWh – deshalb erst über längere Läufe genau. ` : '') +
+      `Fühler-Toleranz ±0,2 K ist eingerechnet.</span></div>`;
+    const runs = (D.runs || []).slice(-5).reverse();
+    if (runs.length) {
+      h += `<table style="width:100%;font-size:12px;border-collapse:collapse;margin-bottom:6px"><tr style="color:var(--muted);text-align:right">` +
+        `<td style="text-align:left">Heizlauf</td><td>Dauer</td><td>Wärme</td><td>ΔT</td><td>l/min</td>${runs.some(x => x.measured != null) ? '<td>gelesen</td>' : ''}</tr>` +
+        runs.map(x => `<tr style="text-align:right;${x.sure ? '' : 'opacity:.6'}"><td style="text-align:left">${when(x.start)}</td><td>${x.dur_min} min</td>` +
+          `<td>${fmt(x.heat_kwh, 1)} kWh</td><td>${fmt(x.dt_k, 1)} K</td><td><b>${fmt(x.l_min, 1)}</b></td>` +
+          (runs.some(y => y.measured != null) ? `<td>${x.measured != null ? fmt(x.measured, 1) : '–'}</td>` : '') + `</tr>`).join('') + `</table>`;
+    }
+  } else if (D.n_all === 0) {
+    h += `<div class="note" style="margin-bottom:6px">Abgeleitet: noch kein Heizlauf von mindestens 15 min mit Vor-/Rücklauf und Wärmezähler in den letzten 14 Tagen.</div>`;
+  }
+  if (F.check) h += `<div class="note" style="margin-bottom:6px">${esc(F.check.text)}</div>`;
+  h += `<div class="note">Gilt für das Wasser durch die Wärmepumpe. Liegt ein Pufferspeicher oder eine hydraulische Weiche zwischen Wärmepumpe und Verteiler, fließt in den Heizkreisen eine andere Menge.</div>`;
+  if (!demo) h += `<button class="btn sec" id="flow-disc" style="margin-top:10px">🔍 Wärmepumpe erneut nach Volumenstrom durchsuchen</button><div id="flow-disc-msg" class="note" style="margin-top:4px"></div>`;
+  return h + `</div>`;
+}
+async function flowDiscover() {
+  const msg = $('flow-disc-msg'), b = $('flow-disc');
+  if (b) b.disabled = true;
+  try {
+    const r = await postJSON('/api/heatpump/flow/discover', {});
+    if (msg) msg.textContent = r && r.ok ? 'Suche läuft (dauert etwa 1 Minute) …' : ((r && r.error) || 'Nicht möglich.');
+    if (r && r.ok) setTimeout(() => renderAbgleich(true), 75000);
+  } catch (e) { if (msg) msg.textContent = 'Nur möglich, wenn die Seite von der Bridge geöffnet ist.'; }
+  finally { if (b) setTimeout(() => { b.disabled = false; }, 5000); }
 }
 
 /* ---- Verteiler & Heizkreise: layout + per-circuit flow (l/min) distribution */
@@ -6358,6 +6452,32 @@ function renderHeatDemand() {
     'Bauausführung und Förderung ab. Reihenfolge zeigt den <b>größten Hebel zuerst</b>.';
 }
 
+// Volume flow through the heat pump for the live card: read from the device
+// when it offers one, otherwise derived (heat ÷ spread) – always labelled.
+function hpFlowLine(F, l) {
+  if (!F) return '';
+  const tag = (t, c) => ` <span style="font-size:11px;color:${c};border:1px solid ${c};border-radius:6px;padding:0 5px;white-space:nowrap">${t}</span>`;
+  const n = F.now, sys = F.system || {};
+  const sub = txt => `<br><small style="color:var(--muted)">${txt}</small>`;
+  if (n && n.src === 'gelesen') {
+    return `${fmt(n.l_min, 1)} l/min` + tag('gelesen', '#4be0b0') +
+      (n.mode === 'dhw' ? sub('gerade Warmwasser-Ladung') : '');
+  }
+  if (n && n.src === 'abgeleitet') {
+    return `≈ ${fmt(n.l_min, 1)} l/min` + tag('abgeleitet', '#ffb64d') +
+      sub(n.typical ? `Mittel der letzten Heizläufe (dieser Lauf allein ist zu kurz für den Wärmezähler)`
+        : `aus Wärmemenge ÷ Spreizung (${fmt(n.dt_k, 1)} K) im aktuellen Heizlauf`) +
+      (n.sure === false ? sub('noch unsicher – zu wenige oder zu kurze Läufe') : '');
+  }
+  if (sys.l_min != null) {
+    return `${sys.src === 'abgeleitet' ? '≈ ' : ''}${fmt(sys.l_min, 1)} l/min` +
+      tag(sys.src, sys.src === 'gelesen' ? '#4be0b0' : '#ffb64d') +
+      sub(`typisch im Heizbetrieb (14 Tage) – die Wärmepumpe heizt gerade nicht`);
+  }
+  if (l && l.mode && /^(ch|heat)/.test(l.mode)) return '<span style="color:var(--muted)">wird nach dem ersten längeren Heizlauf berechnet</span>';
+  return '';
+}
+
 function renderHeatpump() {
   const A = STATE.hpA; if (!A) return;
   const l = A.live || {};
@@ -6381,6 +6501,8 @@ function renderHeatpump() {
     if (l.cop_lifetime != null) rows.push(['Jahresarbeitszahl (∅ COP)', fmt(l.cop_lifetime, 2)]);
     if (l.outdoor_c != null) rows.push(['Außentemperatur', fmt(l.outdoor_c, 1) + ' °C']);
     if (l.supply_c != null && l.return_c != null) rows.push(['Vor-/Rücklauf', fmt(l.supply_c, 1) + ' / ' + fmt(l.return_c, 1) + ' °C']);
+    const fv = hpFlowLine(A.flow, l);
+    if (fv) rows.push(['Volumenstrom', fv]);
     let taktNote = '';
     if (l.starts != null) {
       let extra = '';
@@ -10240,6 +10362,9 @@ function init() {
       if (tg) { const rm = tg.dataset.room; _abOpen.has(rm) ? _abOpen.delete(rm) : _abOpen.add(rm); if (_abData) paintAbRooms(_abData); }
     });
   }
+  // ---- Abgleich: Datenlage → search the heat pump for a volume-flow value
+  const abdCard = $('abd-card');
+  if (abdCard) abdCard.addEventListener('click', e => { if (e.target.closest('#flow-disc')) { e.preventDefault(); flowDiscover(); } });
   // ---- Abgleich: step log
   const optLog = $('opt-log');
   if (optLog) optLog.addEventListener('click', () => {
