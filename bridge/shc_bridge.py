@@ -88,6 +88,10 @@ try:
     import ha_client as ha  # optional Home Assistant REST client (power/energy sensors)
 except Exception:  # pragma: no cover - keeps the bridge running without it
     ha = None
+try:
+    import fronius  # optional Fronius inverter (local Solar API: PV, battery, smart meter)
+except Exception:  # pragma: no cover - keeps the bridge running without it
+    fronius = None
 
 DEFAULT_FRONTEND = os.path.normpath(os.path.join(HERE, "..", "frontend"))
 DEFAULT_DB = os.path.join(HERE, "energy.db")
@@ -143,6 +147,10 @@ def load_config(path: str) -> dict:
         "ha_url": "",
         "ha_token": "",
         "ha_entities": "",             # comma-separated entity_ids ("" = auto power/energy)
+        # Optional Fronius inverter (PV / battery / smart meter) via its local
+        # Solar API – address filled in via the web UI ("" = not connected).
+        "fronius_host": "",
+        "fronius_interval": 15,        # seconds between live readings (stored as 1-min means)
         # Auto-update: when > 0, the bridge periodically checks the git remote
         # and, if new commits are available, pulls and restarts itself. 0 = off.
         "auto_update_interval": 0,     # minutes between update checks (0 = off)
@@ -1061,6 +1069,14 @@ class Store:
             self.conn.execute(
                 "CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY, value TEXT)"
             )
+            # PV system (Fronius): one row per minute – the mean of the live
+            # readings in that minute, plus the counters at its end
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS pv_samples("
+                " ts INTEGER PRIMARY KEY, n INTEGER,"
+                " pv_w REAL, grid_w REAL, load_w REAL, batt_w REAL, soc REAL, inv_w REAL,"
+                " e_total_wh REAL, imp_wh REAL, exp_wh REAL, mpp1_w REAL, mpp2_w REAL)"
+            )
             # hardware product catalog (PV inverters / batteries / all-in-one),
             # seeded from curated datasheets, extensible by the user. `data` holds
             # the full spec document as JSON so the schema stays flexible.
@@ -1069,6 +1085,70 @@ class Store:
                 " id TEXT PRIMARY KEY, brand TEXT, category TEXT, name TEXT,"
                 " data TEXT, updated INTEGER)"
             )
+
+    # -- PV system (Fronius) --------------------------------------------- #
+    PV_COLS = ("ts", "n", "pv_w", "grid_w", "load_w", "batt_w", "soc", "inv_w",
+               "e_total_wh", "imp_wh", "exp_wh", "mpp1_w", "mpp2_w")
+
+    def pv_add(self, row: dict):
+        with self.lock, self.conn:
+            self.conn.execute(
+                f"INSERT OR REPLACE INTO pv_samples({','.join(self.PV_COLS)})"
+                f" VALUES({','.join('?' * len(self.PV_COLS))})",
+                tuple(row.get(c) for c in self.PV_COLS))
+
+    def pv_add_bulk(self, rows: list[tuple]):
+        """rows in PV_COLS order – demo seeding."""
+        with self.lock, self.conn:
+            self.conn.executemany(
+                f"INSERT OR REPLACE INTO pv_samples({','.join(self.PV_COLS)})"
+                f" VALUES({','.join('?' * len(self.PV_COLS))})", rows)
+
+    def pv_rows(self, since_ts: int, until_ts: int | None = None) -> list[tuple]:
+        """Rows (PV_COLS order) with since ≤ ts < until, oldest first."""
+        with self.lock:
+            if until_ts is None:
+                cur = self.conn.execute(
+                    f"SELECT {','.join(self.PV_COLS)} FROM pv_samples WHERE ts>=? ORDER BY ts", (since_ts,))
+            else:
+                cur = self.conn.execute(
+                    f"SELECT {','.join(self.PV_COLS)} FROM pv_samples WHERE ts>=? AND ts<? ORDER BY ts",
+                    (since_ts, until_ts))
+            return [tuple(r) for r in cur.fetchall()]
+
+    def pv_rows_bucketed(self, since_ts: int, until_ts: int, bucket: int = 900) -> list[tuple]:
+        """Like pv_rows, but averaged over ``bucket`` seconds by SQLite (for long
+        ranges). Columns: PV_COLS order (ts = last row of the bucket, n = rows in
+        it) + the separate means of import, export, charge and discharge – so the
+        energies stay exact even when the grid flips direction inside a bucket."""
+        with self.lock:
+            cur = self.conn.execute(
+                "SELECT MAX(ts), COUNT(*), AVG(pv_w), AVG(grid_w), AVG(load_w), AVG(batt_w), AVG(soc),"
+                " AVG(inv_w), MAX(e_total_wh), MAX(imp_wh), MAX(exp_wh), AVG(mpp1_w), AVG(mpp2_w),"
+                " AVG(MAX(grid_w, 0)), AVG(MAX(-grid_w, 0)), AVG(MAX(-batt_w, 0)), AVG(MAX(batt_w, 0))"
+                " FROM pv_samples WHERE ts>=? AND ts<? GROUP BY (ts - 1) / ? ORDER BY 1",
+                (since_ts, until_ts, bucket))
+            return [tuple(r) for r in cur.fetchall()]
+
+    def pv_before(self, ts: int) -> tuple | None:
+        """The last row before ts (baseline for counters across a window start)."""
+        with self.lock:
+            r = self.conn.execute(
+                f"SELECT {','.join(self.PV_COLS)} FROM pv_samples WHERE ts<? ORDER BY ts DESC LIMIT 1",
+                (ts,)).fetchone()
+            return tuple(r) if r else None
+
+    def pv_last(self) -> dict | None:
+        with self.lock:
+            r = self.conn.execute(
+                f"SELECT {','.join(self.PV_COLS)} FROM pv_samples ORDER BY ts DESC LIMIT 1").fetchone()
+            return dict(zip(self.PV_COLS, tuple(r))) if r else None
+
+    def pv_span(self) -> tuple[int, int, int]:
+        """(first ts, last ts, rows) – 0s when empty."""
+        with self.lock:
+            r = self.conn.execute("SELECT MIN(ts) a, MAX(ts) b, COUNT(*) c FROM pv_samples").fetchone()
+            return (int(r["a"] or 0), int(r["b"] or 0), int(r["c"] or 0))
 
     # -- heat pump ------------------------------------------------------- #
     def add_hp_sample(self, row: dict):
@@ -7626,6 +7706,546 @@ class HeatPumpPoller(threading.Thread):
 
 
 # --------------------------------------------------------------------------- #
+# PV system (Fronius inverter): poller, demo installation, evaluation
+# --------------------------------------------------------------------------- #
+PV_STORE_EVERY = 60            # s – one stored row = mean of the live readings
+PV_DETAILS_EVERY = 60          # s – inverter strings, meter counters, battery
+PV_IDENT_EVERY = 6 * 3600      # s – model / installed power (rarely changes)
+PV_FEEDIN_DEFAULT_CT = 8.0     # same default as the PV planner's input
+
+
+class FroniusPoller(threading.Thread):
+    """Reads the inverter's power flow every few seconds (live view) and keeps
+    one averaged row per minute; once a minute also the inverter strings, the
+    smart-meter counters and the battery. Read-only – nothing is ever written
+    to the inverter."""
+
+    def __init__(self, client, store: "Store", state: dict, interval: int = 15, demo: bool = False):
+        super().__init__(daemon=True)
+        self.client, self.store, self.state = client, store, state
+        self.interval = max(5, int(interval or 15))
+        self.demo = demo
+        self._stop = threading.Event()
+        self._acc: dict = {}
+        self._n = 0
+        self._last_store = time.time()
+        self._last_details = 0.0
+        self._last_ident = 0.0
+        self.fails = 0
+
+    def _accumulate(self, flow: dict):
+        self._n += 1
+        for k in ("pv_w", "grid_w", "load_w", "batt_w"):
+            v = flow.get(k)
+            if v is not None:
+                a = self._acc.setdefault(k, [0.0, 0])
+                a[0] += v
+                a[1] += 1
+        ps = [i["p_w"] for i in (flow.get("inverters") or []) if i.get("p_w") is not None]
+        if ps:
+            a = self._acc.setdefault("inv_w", [0.0, 0])
+            a[0] += sum(ps)
+            a[1] += 1
+        for k in ("soc", "e_total_wh"):              # last value wins
+            if flow.get(k) is not None:
+                self._acc[k] = [flow[k], 1]
+
+    def _store_row(self, now: float):
+        if not self._n:
+            return
+        row = {"ts": int(now), "n": self._n}
+        for k in ("pv_w", "grid_w", "load_w", "batt_w", "inv_w"):
+            a = self._acc.get(k)
+            row[k] = round(a[0] / a[1], 1) if a and a[1] else None
+        for k in ("soc", "e_total_wh"):
+            a = self._acc.get(k)
+            row[k] = a[0] if a else None
+        det = self.state.get("details") or {}
+        if det and now - (det.get("ts") or 0) <= 2 * PV_DETAILS_EVERY:
+            gm = next((m for m in det.get("meters") or [] if m.get("location") == "grid"), None)
+            if gm:
+                row["imp_wh"], row["exp_wh"] = gm.get("import_wh"), gm.get("export_wh")
+            st = ((det.get("inverters") or {}).get("1") or {}).get("strings") or []
+            row["mpp1_w"] = st[0].get("p_w") if len(st) > 0 else None
+            row["mpp2_w"] = st[1].get("p_w") if len(st) > 1 else None
+        self.store.pv_add(row)
+        self._acc, self._n = {}, 0
+        self._last_store = now
+        self.state["last_store"] = int(now)
+
+    def run(self):
+        while not self._stop.is_set():
+            t0 = time.time()
+            try:
+                flow = self.client.power_flow()
+                self._accumulate(flow)
+                self.state.update({"ok": True, "error": None, "live": flow, "last_poll": int(t0)})
+                self.fails = 0
+            except Exception as exc:
+                self.fails += 1
+                self.state.update({"ok": False, "error": str(exc), "last_error_ts": int(t0)})
+                if self.fails in (1, 10) or self.fails % 100 == 0:
+                    print(f"[fronius] {exc}", file=sys.stderr)
+            now = time.time()
+            if not self.fails and now - self._last_details >= PV_DETAILS_EVERY:
+                try:
+                    self.state["details"] = self.client.details()
+                    self.state["details_error"] = None
+                except Exception as exc:
+                    self.state["details_error"] = str(exc)
+                self._last_details = now
+            if not self.fails and now - self._last_ident >= PV_IDENT_EVERY:
+                try:
+                    ident = self.client.identify()
+                    ident.pop("flow", None)
+                    self.state["identity"] = ident
+                except Exception as exc:
+                    self.state["identity_error"] = str(exc)
+                self._last_ident = now
+            if now - self._last_store >= PV_STORE_EVERY:
+                try:
+                    self._store_row(now)
+                except Exception as exc:
+                    print(f"[fronius] store: {exc}", file=sys.stderr)
+            wait = self.interval if not self.fails else min(120, self.interval * 2 ** min(3, self.fails))
+            self._stop.wait(max(1.0, wait - (time.time() - t0)))
+
+    def stop(self):
+        self._stop.set()
+
+
+# --- demo installation: 9.9 kWp south roof, 9.45 kWh battery, smart meter ----- #
+DEMO_PV_KWP = 9.9
+DEMO_BATT_WH = 9450.0
+
+
+def _demo_cloud(ts: float, lt) -> float:
+    """Deterministic 'weather' per day: overcast / mixed / sunny, more grey in winter."""
+    key = lt.tm_year * 1000 + lt.tm_yday
+    r = (math.sin(key * 12.9898) * 43758.5453) % 1.0
+    winter, shoulder = lt.tm_mon in (11, 12, 1, 2), lt.tm_mon in (3, 10)
+    p_over = 0.5 if winter else (0.3 if shoulder else 0.2)
+    p_sun = 0.2 if winter else (0.3 if shoulder else 0.4)
+    if r < p_over:
+        return 0.12 + 0.08 * ((r * 17.0) % 1.0)
+    if r > 1.0 - p_sun:
+        return 0.92 + 0.04 * math.sin(ts / 900.0)
+    return 0.25 + 0.6 * (0.5 + 0.5 * math.sin(ts / 1300.0 + r * 20.0)) * (0.55 + 0.45 * math.sin(ts / 410.0 + r * 7.0))
+
+
+def _demo_pv_w(ts: float) -> float:
+    """DC power of the demo array: clear-sky sun position model (51° N, 10° E,
+    35° south roof) × the day's weather."""
+    lat, tilt = math.radians(51.0), math.radians(35.0)
+    lt = time.localtime(ts)
+    decl = math.radians(23.44) * math.sin(2 * math.pi * (284 + lt.tm_yday) / 365.0)
+    solar_h = (ts % 86400) / 3600.0 + 10.0 / 15.0
+    ha = math.radians(15.0 * (solar_h - 12.0))
+    sin_el = math.sin(lat) * math.sin(decl) + math.cos(lat) * math.cos(decl) * math.cos(ha)
+    if sin_el <= 0.02:
+        return 0.0
+    am = min(38.0, 1.0 / sin_el)
+    dni = 1353.0 * 0.7 ** (am ** 0.678)
+    cos_inc = math.sin(decl) * math.sin(lat - tilt) + math.cos(decl) * math.cos(lat - tilt) * math.cos(ha)
+    poa = dni * max(0.0, cos_inc) + 110.0 * sin_el
+    return round(DEMO_PV_KWP * poa * 0.86 * _demo_cloud(ts, lt), 1)
+
+
+def _demo_house_w(dt: datetime) -> float:
+    """Whole-house demand of the demo home: Bosch devices + heat pump + the
+    rest of the house (cooking, washing, standby …) that no plug measures."""
+    devs = sum(_demo_power(d["id"], dt, False) for d in DEMO_DEVICES)
+    h = dt.hour + dt.minute / 60.0
+    rest = (210.0 + 420.0 * math.exp(-((h - 12.4) ** 2) / 0.9) + 780.0 * math.exp(-((h - 18.6) ** 2) / 1.6)
+            + 160.0 * math.exp(-((h - 7.1) ** 2) / 0.5))
+    return round(devs + _demo_hp(dt)["elec_w"] + rest, 1)
+
+
+def _demo_pv_step(st: dict, ts: float, dt_s: float) -> dict:
+    """Advance the demo system by dt_s seconds to ts: the battery takes PV
+    surplus and covers the deficit (5 kW max, 7 % reserve), the grid the rest."""
+    pv, load = _demo_pv_w(ts), _demo_house_w(datetime.fromtimestamp(ts))
+    eff, cap, h = 0.97, DEMO_BATT_WH, max(0.0, dt_s) / 3600.0
+    need = load / eff
+    soc = st["soc"]
+    if pv >= need:
+        room = (100.0 - soc) / 100.0 * cap / 0.96 / h if h > 0 else 0.0
+        batt = -min(pv - need, 5000.0, max(0.0, room))
+    else:
+        avail = (soc - 7.0) / 100.0 * cap * 0.96 / h if h > 0 else 0.0
+        batt = min(need - pv, 5000.0, max(0.0, avail))
+    inv_ac = (pv + batt) * eff
+    grid = load - inv_ac
+    if h > 0:
+        soc += ((-batt) * 0.96 if batt < 0 else -batt / 0.96) * h / cap * 100.0
+        st["soc"] = max(5.0, min(100.0, soc))
+        st["imp"] += max(0.0, grid) * h
+        st["exp"] += max(0.0, -grid) * h
+        st["etot"] += max(0.0, inv_ac) * h
+    st["t"] = ts
+    return {"pv_w": pv, "load_w": load, "batt_w": round(batt, 1), "grid_w": round(grid, 1),
+            "inv_w": round(inv_ac, 1), "soc": round(st["soc"], 1)}
+
+
+def seed_demo_pv(store: "Store", days: int = 90):
+    """Demo history for the PV views (5-min rows), once."""
+    if store.pv_span()[2] > 0:
+        return
+    now = int(time.time())
+    t = now - days * 86400
+    t -= t % 300
+    st = {"soc": 35.0, "imp": 0.0, "exp": 0.0, "etot": 0.0, "t": t}
+    rows = []
+    while t <= now:
+        v = _demo_pv_step(st, t, 300)
+        rows.append((t, 1, v["pv_w"], v["grid_w"], v["load_w"], v["batt_w"], v["soc"], v["inv_w"],
+                     round(st["etot"], 1), round(st["imp"], 1), round(st["exp"], 1),
+                     round(v["pv_w"] * 0.62, 1), round(v["pv_w"] * 0.38, 1)))
+        t += 300
+    store.pv_add_bulk(rows)
+    print(f"[demo] inserted {len(rows)} PV rows (Fronius demo installation).")
+
+
+class DemoFronius:
+    """Stands in for FroniusClient in demo mode – same method names and
+    result shapes, values from the demo model, continuing the seeded history."""
+    host = "demo"
+
+    def __init__(self, store: "Store"):
+        last = store.pv_last() or {}
+        self.st = {"soc": last.get("soc") or 40.0, "imp": last.get("imp_wh") or 0.0,
+                   "exp": last.get("exp_wh") or 0.0, "etot": last.get("e_total_wh") or 0.0,
+                   "t": last.get("ts") or time.time()}
+        self.v = None
+        self._lock = threading.Lock()
+
+    def _advance(self) -> dict:
+        with self._lock:
+            now = time.time()
+            t = self.st["t"]
+            if now - t > 600:                       # bridge was off: catch up in 5-min steps
+                while now - t > 300:
+                    t += 300
+                    _demo_pv_step(self.st, t, 300)
+            self.v = _demo_pv_step(self.st, now, now - self.st["t"])
+            return self.v
+
+    def power_flow(self) -> dict:
+        v = self._advance()
+        load, grid = v["load_w"], v["grid_w"]
+        return {"pv_w": v["pv_w"], "grid_w": grid, "load_w": load, "batt_w": v["batt_w"], "soc": v["soc"],
+                "has_meter": True, "has_battery": True, "meter_location": "grid",
+                "mode": "bidirectional", "mode_de": "mit Batterie", "battery_mode": "normal",
+                "battery_mode_de": "normal", "backup_mode": False, "battery_standby": False,
+                "e_day_wh": None, "e_year_wh": None, "e_total_wh": round(self.st["etot"], 1),
+                "autonomy_pct": round(100.0 * max(0.0, 1.0 - max(0.0, grid) / load), 1) if load > 0 else None,
+                "self_consumption_pct": None,
+                "inverters": [{"id": "1", "dt": 1, "p_w": v["inv_w"], "soc": v["soc"], "battery_mode": "normal",
+                               "e_day_wh": None, "e_total_wh": round(self.st["etot"], 1)}],
+                "ohmpilots": [], "version": "demo", "ts": int(time.time())}
+
+    def inverter_info(self) -> list:
+        return [{"id": "1", "dt": 1, "type": "Fronius GEN24", "name": "Symo GEN24 10.0 Plus (Demo)",
+                 "pv_power_w": DEMO_PV_KWP * 1000, "status_code": 7, "state": "Running",
+                 "state_de": "in Betrieb", "error_code": 0, "unique_id": "demo"}]
+
+    def details(self) -> dict:
+        v = self.v or self._advance()
+        pv, grid = v["pv_w"], v["grid_w"]
+        s1, s2 = pv * 0.62, pv * 0.38
+        u1, u2 = (412.0, 368.0) if pv > 20 else (31.0, 28.0)
+        ph = [{"n": i + 1, "p_w": round(grid * f, 1), "u_v": u, "i_a": round(abs(grid * f) / 230.0, 2)}
+              for i, (f, u) in enumerate(((0.34, 230.4), (0.38, 231.2), (0.28, 229.8)))]
+        return {"inverters": {"1": {"pac_w": v["inv_w"], "sac_va": round(v["inv_w"] + 35, 1),
+                                    "iac_a": round(v["inv_w"] / 690.0, 2), "uac_v": 230.8, "fac_hz": 50.0,
+                                    "day_wh": None, "year_wh": None, "total_wh": round(self.st["etot"], 1),
+                                    "status_code": 7, "state": "Running", "state_de": "in Betrieb",
+                                    "error_code": 0,
+                                    "strings": [{"n": 1, "u_v": u1, "i_a": round(s1 / u1, 2), "p_w": round(s1, 1)},
+                                                {"n": 2, "u_v": u2, "i_a": round(s2 / u2, 2), "p_w": round(s2, 1)}]}},
+                "meters": [{"id": "0", "location": "grid", "location_code": 0, "location_de": "Einspeisepunkt (Netz)",
+                            "manufacturer": "Fronius", "model": "Smart Meter TS 65A-3 (Demo)", "serial": "demo",
+                            "p_w": grid, "import_wh": round(self.st["imp"], 1), "export_wh": round(self.st["exp"], 1),
+                            "freq_hz": 50.0, "phases": ph, "enabled": 1}],
+                "storage": {"id": "0", "soc": v["soc"], "capacity_wh": DEMO_BATT_WH, "max_capacity_wh": DEMO_BATT_WH,
+                            "temp_c": 19.5, "u_v": 405.0, "i_a": round(-v["batt_w"] / 405.0, 2),
+                            "manufacturer": "Fronius", "model": "Reserva 9.5 (Demo)", "serial": "demo",
+                            "enabled": 1, "status": 3, "modules": 3},
+                "ohmpilots": [], "errors": {}, "ts": int(time.time())}
+
+    def identify(self) -> dict:
+        info = self.inverter_info()
+        return {"host": "demo", "api": {"api": 1, "base": "/solar_api/v1/", "compat": "demo"},
+                "inverters": info, "devices": {}, "name": info[0]["name"], "type": info[0]["type"],
+                "pv_power_w": info[0]["pv_power_w"], "has_meter": True, "has_battery": True,
+                "meter_location": "grid", "mode": "bidirectional", "mode_de": "mit Batterie",
+                "ts": int(time.time())}
+
+    def probe(self) -> dict:
+        return {"host": "demo", "ts": int(time.time()), "endpoints": [],
+                "note": "Demo-Modus – es gibt keinen echten Wechselrichter, also keine Rohdaten."}
+
+
+# --- evaluation ------------------------------------------------------------- #
+_PV_I = {c: i for i, c in enumerate(Store.PV_COLS)}
+
+
+def _pv_day_acc(day: str) -> dict:
+    return {"day": day, "pv": 0.0, "load": 0.0, "imp_i": 0.0, "exp_i": 0.0, "ch": 0.0, "dis": 0.0,
+            "mpp1": 0.0, "mpp2": 0.0, "cov": 0.0, "gap": 0.0, "has_load": False, "has_batt": False,
+            "imp_c": 0.0, "exp_c": 0.0, "cnt_rows": 0, "rows": 0, "cnt_bad": False,
+            "soc_min": None, "soc_max": None, "peak": 0.0, "hp": 0.0, "hp_sun": 0.0, "hp_cov": 0.0}
+
+
+def _pv_day_result(a: dict, price: float, feedin: float) -> dict:
+    """Energies of one day (kWh) + rates and money. Import/export come from the
+    smart meter's counters when the day has no data gap (exact), otherwise from
+    the integrated readings (consistent with the PV/consumption sums)."""
+    imp, exp, src = a["imp_i"], a["exp_i"], "gemessen"
+    # the meter's counters are exact – used when the day has no data gap, the
+    # counters came with (nearly) every row and never jumped (meter swapped,
+    # inverter reset …)
+    if a["gap"] < 1800 and not a["cnt_bad"] and a["rows"] and a["cnt_rows"] >= 0.9 * a["rows"]:
+        imp, exp, src = a["imp_c"], a["exp_c"], "Zähler"
+    k = lambda wh: round(wh / 1000.0, 3)
+    out = {"day": a["day"], "pv_kwh": k(a["pv"]), "peak_pv_w": round(a["peak"]),
+           "cov_h": round(a["cov"] / 3600.0, 2), "gap_h": round(a["gap"] / 3600.0, 2),
+           "soc_min": a["soc_min"], "soc_max": a["soc_max"],
+           "ch_kwh": k(a["ch"]) if a["has_batt"] else None, "dis_kwh": k(a["dis"]) if a["has_batt"] else None,
+           "mpp1_kwh": k(a["mpp1"]), "mpp2_kwh": k(a["mpp2"])}
+    if a["has_load"]:
+        load = a["load"]
+        self_wh = max(0.0, a["pv"] - exp)
+        avoided = max(0.0, load - imp)
+        out.update({"load_kwh": k(load), "imp_kwh": k(imp), "exp_kwh": k(exp), "grid_src": src,
+                    "self_kwh": k(self_wh), "direct_kwh": k(max(0.0, a["pv"] - exp - a["ch"])),
+                    "self_rate": round(self_wh / a["pv"], 3) if a["pv"] > 50 else None,
+                    "autarky": round(avoided / load, 3) if load > 50 else None,
+                    "saved_eur": round(avoided / 1000.0 * price + exp / 1000.0 * feedin, 2)})
+    else:
+        out.update({"load_kwh": None, "imp_kwh": None, "exp_kwh": None, "grid_src": None, "self_kwh": None,
+                    "direct_kwh": None, "self_rate": None, "autarky": None, "saved_eur": None})
+    out["hp_kwh"] = k(a["hp"]) if a["hp_cov"] > 0 else None
+    out["hp_sun_kwh"] = k(a["hp_sun"]) if a["hp_cov"] > 0 else None
+    out["hp_sun_share"] = round(a["hp_sun"] / a["hp"], 3) if a["hp"] > 50 else None
+    return out
+
+
+def compute_pv(store: "Store", days: int = 30, price: float = 0.35, feedin: float = 0.08,
+               now: int | None = None) -> dict:
+    """Everything the PV views show, from the stored minute rows:
+    per day / month energies (PV, consumption, import, export, battery),
+    self-consumption and autarky, money saved, the heat pump's solar share,
+    today's 15-min curve, the typical day (hourly means) and the MPP strings."""
+    now = int(now or time.time())
+    days = max(1, min(400, int(days)))
+    today0, _t1, today = _day_of(now)
+    start = int((datetime.fromtimestamp(today0) - timedelta(days=days - 1)).timestamp())
+    first_ts, last_ts, n_rows = store.pv_span()
+    base = {"ok": True, "ts": now, "days": days, "price": price, "feedin": feedin,
+            "since": first_ts or None, "last": last_ts or None, "rows": n_rows}
+    # the stored step (1 min live, 5 min in the demo history)
+    probe = store.pv_rows(max(start, first_ts), max(start, first_ts) + 6 * 3600)
+    diffs = sorted(b[0] - a[0] for a, b in zip(probe, probe[1:]) if b[0] > a[0])
+    step = diffs[len(diffs) // 2] if diffs else PV_STORE_EVERY
+    # long ranges: let SQLite average 15-min buckets (≈ 15× fewer rows here)
+    bucketed = days > 31 and step < 600
+    rows = store.pv_rows_bucketed(start, now + 1, 900) if bucketed else store.pv_rows(start, now + 1)
+    if not rows:
+        return {**base, "empty": True}
+    I = _PV_I
+    prev = store.pv_before(start)
+    cap = max(90.0, 2.5 * (900 if bucketed else step))
+    D: dict = {}
+    hours = [[0.0, 0.0, 0.0, 0.0, 0.0] for _ in range(24)]       # pv, load, imp, exp (Wh) + seconds
+    ser: dict = {}                                               # today: 15-min buckets
+    T, LC, MC, CV = [], [0.0], [0.0], [0.0]                      # for the heat-pump matching
+    last = prev
+    imp_seen = prev[I["imp_wh"]] if prev else None
+    exp_seen = prev[I["exp_wh"]] if prev else None
+    has_load = has_batt = has_mpp2 = False
+    for r in rows:
+        ts = r[0]
+        dt = ts - last[0] if last else step
+        if dt <= 0:
+            continue
+        if bucketed:                               # n rows of `step` seconds each
+            eff = min(dt, r[1] * step)
+        else:
+            eff = dt if dt <= cap else min(step, PV_STORE_EVERY)
+        d0, _d1, day = _day_of(ts)
+        a = D.get(day)
+        if a is None:
+            a = D[day] = _pv_day_acc(day)
+        a["rows"] += 1
+        h = eff / 3600.0
+        pv, load, grid, batt, soc = r[I["pv_w"]], r[I["load_w"]], r[I["grid_w"]], r[I["batt_w"]], r[I["soc"]]
+        pv = max(0.0, pv or 0.0)
+        a["pv"] += pv * h
+        a["cov"] += eff
+        if dt > cap or (bucketed and dt - eff > 120):
+            a["gap"] += dt - eff
+        if pv > a["peak"]:
+            a["peak"] = pv
+        imp_w = exp_w = 0.0
+        if load is not None:
+            has_load = a["has_load"] = True
+            a["load"] += load * h
+        if grid is not None:
+            if bucketed:
+                imp_w, exp_w = r[13] or 0.0, r[14] or 0.0
+            else:
+                imp_w, exp_w = max(0.0, grid), max(0.0, -grid)
+            a["imp_i"] += imp_w * h
+            a["exp_i"] += exp_w * h
+        if batt is not None:
+            has_batt = a["has_batt"] = True
+            if bucketed:
+                a["ch"] += (r[15] or 0.0) * h
+                a["dis"] += (r[16] or 0.0) * h
+            else:
+                a["ch"] += max(0.0, -batt) * h
+                a["dis"] += max(0.0, batt) * h
+        if soc is not None:
+            a["soc_min"] = soc if a["soc_min"] is None else min(a["soc_min"], soc)
+            a["soc_max"] = soc if a["soc_max"] is None else max(a["soc_max"], soc)
+        m1, m2 = r[I["mpp1_w"]], r[I["mpp2_w"]]
+        if m1 is not None:
+            a["mpp1"] += m1 * h
+        if m2 is not None:
+            a["mpp2"] += m2 * h
+            has_mpp2 = has_mpp2 or m2 > 0
+        ci, ce = r[I["imp_wh"]], r[I["exp_wh"]]
+        if ci is not None and ce is not None:
+            if imp_seen is not None and exp_seen is not None:
+                lim = max(dt, 60.0) * 60000.0 / 3600.0          # 60 kW: more is a jump
+                di, de = ci - imp_seen, ce - exp_seen
+                if 0.0 <= di <= lim and 0.0 <= de <= lim:
+                    a["imp_c"] += di
+                    a["exp_c"] += de
+                    a["cnt_rows"] += 1
+                else:
+                    a["cnt_bad"] = True
+            imp_seen, exp_seen = ci, ce
+        hb = hours[min(23, max(0, int((ts - d0 - 1) // 3600)))]
+        hb[0] += pv * h
+        hb[1] += (load or 0.0) * h
+        hb[2] += imp_w * h
+        hb[3] += exp_w * h
+        hb[4] += eff
+        if ts > today0:
+            b = int((ts - today0 - 1) // 900)
+            s_ = ser.setdefault(b, [0.0, 0.0, 0.0, 0.0, 0.0, None, 0])
+            s_[0] += pv * eff
+            s_[1] += (load or 0.0) * eff
+            s_[2] += (grid or 0.0) * eff
+            s_[3] += (batt or 0.0) * eff
+            s_[4] += eff
+            if soc is not None:
+                s_[5] = soc
+            s_[6] += 1
+        T.append(ts)
+        LC.append(LC[-1] + (load or 0.0) * h)
+        MC.append(MC[-1] + imp_w * h)
+        CV.append(CV[-1] + (eff if load is not None else 0.0))
+        last = r
+
+    # --- the heat pump's solar share: its energy per interval × the share of
+    # the house consumption that was NOT drawn from the grid in that interval
+    hp_ok = False
+    if has_load:
+        try:
+            hrows = store.hp_samples_since(start)
+        except Exception:
+            hrows = []
+        hp_prev = None
+        for hr in hrows:
+            if hp_prev is None:
+                hp_prev = hr
+                continue
+            a_ts, b_ts = hp_prev["ts"], hr["ts"]
+            span = b_ts - a_ts
+            e_wh = None
+            ea, eb = hp_prev.get("energy_kwh"), hr.get("energy_kwh")
+            if ea is not None and eb is not None and 0 <= eb - ea and span <= 1800:
+                e_wh = (eb - ea) * 1000.0
+            elif hr.get("power_w") is not None and span <= 1800:
+                e_wh = hr["power_w"] * span / 3600.0
+            hp_prev = hr
+            if e_wh is None or span <= 0:
+                continue
+            i0, i1 = bisect.bisect_right(T, a_ts), bisect.bisect_right(T, b_ts)
+            cov = CV[i1] - CV[i0]
+            ld = LC[i1] - LC[i0]
+            if cov < 0.6 * span or ld <= 0:
+                continue                           # no PV data for this interval
+            share = min(1.0, max(0.0, 1.0 - (MC[i1] - MC[i0]) / ld))
+            day = _day_of(b_ts)[2]
+            a = D.get(day)
+            if a is None:
+                continue
+            a["hp"] += e_wh
+            a["hp_sun"] += e_wh * share
+            a["hp_cov"] += span
+            hp_ok = True
+
+    daily = [_pv_day_result(D[d], price, feedin) for d in sorted(D)]
+
+    def total(items):
+        t = {"pv_kwh": 0.0, "load_kwh": 0.0, "imp_kwh": 0.0, "exp_kwh": 0.0, "self_kwh": 0.0,
+             "direct_kwh": 0.0, "ch_kwh": 0.0, "dis_kwh": 0.0, "saved_eur": 0.0, "hp_kwh": 0.0,
+             "hp_sun_kwh": 0.0, "mpp1_kwh": 0.0, "mpp2_kwh": 0.0, "gap_h": 0.0, "days": len(items)}
+        for x in items:
+            for kk in t:
+                if kk != "days" and x.get(kk) is not None:
+                    t[kk] += x[kk]
+        for kk in list(t):
+            if kk != "days":
+                t[kk] = round(t[kk], 2)
+        t["self_rate"] = round(t["self_kwh"] / t["pv_kwh"], 3) if (has_load and t["pv_kwh"] > 0.05) else None
+        t["autarky"] = (round(max(0.0, t["load_kwh"] - t["imp_kwh"]) / t["load_kwh"], 3)
+                        if (has_load and t["load_kwh"] > 0.05) else None)
+        t["hp_sun_share"] = round(t["hp_sun_kwh"] / t["hp_kwh"], 3) if t["hp_kwh"] > 0.05 else None
+        if not has_load:
+            for kk in ("load_kwh", "imp_kwh", "exp_kwh", "self_kwh", "direct_kwh", "saved_eur"):
+                t[kk] = None
+        if not has_batt:
+            t["ch_kwh"] = t["dis_kwh"] = None
+        return t
+
+    monthly = []
+    for mon in sorted({d["day"][:7] for d in daily}):
+        items = [d for d in daily if d["day"].startswith(mon)]
+        monthly.append({"month": mon, **total(items)})
+    tot = total(daily)
+    td = next((d for d in daily if d["day"] == today), None)
+    hourly = []
+    for hh, (pvw, ldw, imw, exw, secs) in enumerate(hours):
+        f = 3600.0 / secs if secs > 0 else 0.0     # Wh per covered hour → mean W
+        hourly.append({"h": hh, "pv_w": round(pvw * f), "load_w": round(ldw * f) if has_load else None,
+                       "imp_w": round(imw * f) if has_load else None, "exp_w": round(exw * f) if has_load else None})
+    series = []
+    for b in sorted(ser):
+        s_ = ser[b]
+        if s_[4] <= 0:
+            continue
+        series.append({"t": today0 + b * 900, "pv_w": round(s_[0] / s_[4]),
+                       "load_w": round(s_[1] / s_[4]) if has_load else None,
+                       "grid_w": round(s_[2] / s_[4]) if has_load else None,
+                       "batt_w": round(s_[3] / s_[4]) if has_batt else None, "soc": s_[5]})
+    strings = None
+    if has_mpp2 or tot["mpp1_kwh"]:
+        strings = {"mpp1_kwh": tot["mpp1_kwh"], "mpp2_kwh": tot["mpp2_kwh"] if has_mpp2 else None,
+                   "today_mpp1_kwh": td["mpp1_kwh"] if td else None,
+                   "today_mpp2_kwh": td["mpp2_kwh"] if (td and has_mpp2) else None,
+                   "ratio": round(tot["mpp2_kwh"] / tot["mpp1_kwh"], 3) if (has_mpp2 and tot["mpp1_kwh"] > 0.5) else None}
+    return {**base, "empty": False, "step_s": step, "bucketed": bucketed,
+            "has_meter": has_load, "has_battery": has_batt,
+            "has_hp": hp_ok, "today": td, "daily": daily, "monthly": monthly, "totals": tot,
+            "hourly": hourly, "series": series, "strings": strings}
+
+
+# --------------------------------------------------------------------------- #
 # AEG / Electrolux appliance poller (washer, dryer, … via the developer API)
 # --------------------------------------------------------------------------- #
 class ElectroluxPoller(threading.Thread):
@@ -7721,6 +8341,8 @@ class Runtime:
         self.tibber_last_error = None
         self.ha_cache = None            # {"data":..., "ts":...}
         self.ha_last_error = None
+        self.fr = None                  # FroniusPoller
+        self.fr_state = {}              # latest PV snapshot (live flow, details, identity)
         # heavy-analytics result cache: these process every raw sample in
         # Python, so recomputing them on every request/refresh is slow. Cache
         # results with a TTL + per-key dedup, and a background thread keeps the
@@ -7878,6 +8500,12 @@ class Runtime:
                 self._calc_cache[key] = (time.time(), result)
             return result
 
+    def calc_clear(self, kind: str):
+        """Forget cached results of one kind (e.g. 'pv' after connecting an inverter)."""
+        with self._calc_meta:
+            for k in [k for k in self._calc_cache if isinstance(k, tuple) and k and k[0] == kind]:
+                self._calc_cache.pop(k, None)
+
     def _warm_once(self):
         cutoff = time.time() - 600       # forget ranges not requested in 10 min
         with self._calc_meta:
@@ -8028,11 +8656,13 @@ class Runtime:
     def start_demo(self, days: int = 90):
         self.stop()
         seed_demo(self.store, days)
+        seed_demo_pv(self.store, days)
         self.cfg["_demo"] = True
         self.mode = "demo"
         self.poller = DemoPoller(self.store, int(self.cfg.get("poll_interval", 30)),
                                  hp_state=self.hp_state)
         self.poller.start()
+        self.start_fronius()
 
     def start_live(self):
         self.stop()
@@ -8041,6 +8671,34 @@ class Runtime:
         client = SHCClient(self.cfg.get("shc_ip", ""), self.cfg["cert"], self.cfg["key"])
         self.poller = Poller(client, self.store, self.cfg)
         self.poller.start()
+        self.start_fronius()
+
+    # -- PV system (Fronius) --------------------------------------------- #
+    def fronius_connected(self) -> bool:
+        return self.mode == "demo" or bool((self.cfg.get("fronius_host") or "").strip())
+
+    def start_fronius(self) -> bool:
+        """(Re)start the PV poller: the demo installation in demo mode, else the
+        configured inverter. Independent of the Smart Home controller."""
+        self.stop_fronius()
+        if self.mode == "demo":
+            client, demo = DemoFronius(self.store), True
+        else:
+            host = (self.cfg.get("fronius_host") or "").strip()
+            if not fronius or not host:
+                return False
+            client, demo = fronius.FroniusClient(host), False
+        self.fr_state.clear()
+        self.fr_state.update({"host": client.host, "demo": demo, "started": int(time.time())})
+        self.fr = FroniusPoller(client, self.store, self.fr_state,
+                                int(self.cfg.get("fronius_interval", 15) or 15), demo)
+        self.fr.start()
+        return True
+
+    def stop_fronius(self):
+        if self.fr:
+            self.fr.stop()
+            self.fr = None
 
     # -- heat pump ------------------------------------------------------- #
     def save_homecom_token(self, refresh_token: str):
@@ -8122,7 +8780,11 @@ def save_config(cfg: dict, path: str):
             "homecom_refresh_token", "homecom_gateway", "homecom_interval",
             "electrolux_api_key", "electrolux_refresh_token", "electrolux_interval",
             "electrolux_kwh_per_cycle", "electrolux_enabled", "auto_update_interval",
-            "spot_enabled", "spot_market", "spot_surcharge_ct", "spot_vat")
+            "spot_enabled", "spot_market", "spot_surcharge_ct", "spot_vat",
+            # set in the app as well – were missing here, so they were lost
+            # whenever the bridge restarted
+            "tibber_token", "ha_url", "ha_token", "ha_entities", "contact_room_map",
+            "fronius_host", "fronius_interval")
     data = {k: cfg[k] for k in keep if k in cfg and not str(k).startswith("_")}
     try:
         with open(path, "w", encoding="utf-8") as fh:
@@ -8212,6 +8874,11 @@ class Handler(BaseHTTPRequestHandler):
             "ha_available": ha is not None,
             "ha_connected": bool(self.cfg.get("ha_url") and self.cfg.get("ha_token")),
             "ha_url": self.cfg.get("ha_url", ""),
+            "fronius_available": fronius is not None,
+            "fronius_connected": self.ctx.fronius_connected(),
+            "fronius_host": self.cfg.get("fronius_host", ""),
+            "fronius_ok": self.ctx.fr_state.get("ok"),
+            "fronius_error": self.ctx.fr_state.get("error"),
         }
 
     def _boot(self, qs) -> dict:
@@ -8617,6 +9284,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._post_tibber_connect(body)
             if parsed.path == "/api/ha/connect":
                 return self._post_ha_connect(body)
+            if parsed.path == "/api/fronius/connect":
+                return self._post_fronius_connect(body)
+            if parsed.path == "/api/fronius/disconnect":
+                return self._post_fronius_disconnect(body)
             if parsed.path == "/api/meter":
                 return self._post_meter(body)
             if parsed.path == "/api/meter/delete":
@@ -9049,6 +9720,108 @@ class Handler(BaseHTTPRequestHandler):
         self.ctx.tibber_cache = None            # force a fresh pull on next read
         return self._send_json({"ok": True, "connected": True, "home": info.get("home"),
                                 "message": f"Verbunden mit Tibber ({info.get('home')})."})
+
+    # -- PV system (Fronius) --------------------------------------------- #
+    def _pv_prices(self, qs=None) -> tuple[float, float]:
+        """(electricity price €/kWh, feed-in tariff €/kWh) – the app's synced
+        settings first (same rule as the start request), else the bridge config."""
+        st = self._settings_load()
+        price = None
+        for cand in (st.get("bhe_price"), (qs or {}).get("price", [None])[0], self.cfg.get("price_per_kwh", 0.35)):
+            try:
+                price = round(float(cand), 4)
+                break
+            except (TypeError, ValueError):
+                continue
+        try:
+            feed = round(float(st.get("bhe_pv_feedin")) / 100.0, 5)
+        except (TypeError, ValueError):
+            feed = PV_FEEDIN_DEFAULT_CT / 100.0
+        return (price if price is not None else 0.35), max(0.0, feed)
+
+    def _fronius_payload(self) -> dict:
+        st = dict(self.ctx.fr_state)
+        connected = self.ctx.fronius_connected()
+        out = {"available": fronius is not None or self.ctx.mode == "demo", "connected": connected,
+               "demo": self.ctx.mode == "demo", "host": st.get("host") or self.cfg.get("fronius_host", ""),
+               "running": bool(self.ctx.fr), "ok": st.get("ok"), "error": st.get("error"),
+               "last_poll": st.get("last_poll"), "last_store": st.get("last_store"),
+               "live": st.get("live"), "details": st.get("details"), "identity": st.get("identity"),
+               "details_error": st.get("details_error"), "interval": int(self.cfg.get("fronius_interval", 15) or 15),
+               "server_time": int(time.time())}
+        if connected:
+            price, feedin = self._pv_prices()
+            try:
+                out["today"] = self.ctx.calc_get(("pv", 1, price, feedin), 30,
+                                                 lambda: compute_pv(self.store, 1, price, feedin))
+            except Exception as exc:
+                out["today_error"] = str(exc)
+        return out
+
+    def _fronius_discover(self, qs) -> dict:
+        if not fronius:
+            return {"ok": False, "error": "Fronius-Modul fehlt (bridge/fronius.py)."}
+        t0 = time.time()
+        one = (qs.get("host", [""])[0] or "").strip()
+        if one:
+            r = fronius.check_host(one)
+            return {"ok": True, "found": [r] if r else [], "scanned": 1, "ms": round((time.time() - t0) * 1000)}
+        ip = local_ip()
+        hosts = fronius.subnet_hosts(ip)
+        if not hosts:
+            return {"ok": False, "error": "Keine Netzwerkadresse der Bridge gefunden – bitte die IP des "
+                                          "Wechselrichters von Hand eintragen.", "found": []}
+        found = fronius.discover(hosts)
+        return {"ok": True, "found": found, "scanned": len(hosts), "subnet": ip.rsplit(".", 1)[0] + ".1–254",
+                "ms": round((time.time() - t0) * 1000)}
+
+    def _fronius_probe(self, qs) -> dict:
+        if self.ctx.mode == "demo" and not qs.get("host"):
+            return DemoFronius(self.store).probe()
+        if not fronius:
+            return {"ok": False, "error": "Fronius-Modul fehlt (bridge/fronius.py)."}
+        host = (qs.get("host", [""])[0] or self.cfg.get("fronius_host") or "").strip()
+        if not host:
+            return {"ok": False, "error": "Noch keine Wechselrichter-Adresse eingetragen."}
+        try:
+            return {"ok": True, **fronius.FroniusClient(host).probe()}
+        except fronius.FroniusError as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def _post_fronius_connect(self, body):
+        """Check the address, then save it and start reading the inverter."""
+        if not fronius:
+            return self._send_json({"ok": False, "error": "Fronius-Modul fehlt (bridge/fronius.py)."}, 500)
+        host = fronius.normalize_host(str(body.get("host") or ""))
+        if not host:
+            return self._send_json({"ok": False, "error": "Bitte die IP-Adresse des Wechselrichters eintragen."}, 400)
+        try:
+            ident = fronius.FroniusClient(host).identify()
+        except fronius.FroniusError as exc:
+            hint = None
+            try:
+                found = fronius.check_host(host)
+                if found and not found.get("solar_api"):
+                    hint = found.get("note")
+            except Exception:
+                pass
+            return self._send_json({"ok": False, "error": str(exc), "hint": hint})
+        self.cfg["fronius_host"] = ident["host"]
+        save_config(self.cfg, self.cfg.get("_config_path", DEFAULT_CONFIG))
+        if self.ctx.mode != "demo":
+            self.ctx.start_fronius()
+            self.ctx.fr_state["identity"] = {k: v for k, v in ident.items() if k != "flow"}
+            self.ctx.fr_state["live"] = ident.get("flow")
+        self.ctx.calc_clear("pv")
+        return self._send_json({"ok": True, "identity": ident, "demo": self.ctx.mode == "demo"})
+
+    def _post_fronius_disconnect(self, body):
+        self.cfg["fronius_host"] = ""
+        save_config(self.cfg, self.cfg.get("_config_path", DEFAULT_CONFIG))
+        if self.ctx.mode != "demo":
+            self.ctx.stop_fronius()
+            self.ctx.fr_state.clear()
+        return self._send_json({"ok": True})
 
     def _post_ha_connect(self, body):
         """Save + verify Home Assistant URL and token, return discovered
@@ -9539,6 +10312,21 @@ class Handler(BaseHTTPRequestHandler):
                     "home": (data or {}).get("home"),
                     "count": len((data or {}).get("prices") or []),
                     "last_error": self.ctx.tibber_last_error})
+            if path == "/api/fronius":
+                return self._send_json(self._fronius_payload())
+            if path == "/api/pv":
+                try:
+                    pdays = max(1, min(400, int(qs.get("days", ["30"])[0])))
+                except ValueError:
+                    pdays = 30
+                price, feedin = self._pv_prices(qs)
+                return self._send_json(self.ctx.calc_get(
+                    ("pv", pdays, price, feedin), 60,
+                    lambda: compute_pv(self.store, pdays, price, feedin)))
+            if path == "/api/fronius/discover":
+                return self._send_json(self._fronius_discover(qs))
+            if path == "/api/fronius/probe":
+                return self._send_json(self._fronius_probe(qs))
             if path == "/api/ha":
                 data = self.ctx.ha_values()
                 connected = bool(self.cfg.get("ha_token") and self.cfg.get("ha_url")) or self.ctx.mode == "demo"
@@ -9926,6 +10714,12 @@ def cmd_serve(args, cfg):
     if ctx.start_electrolux():
         print("  Appliances:  AEG/Electrolux connected")
 
+    # optional: PV inverter (Fronius) – demo/live already started it
+    if not ctx.fr and ctx.start_fronius():
+        pass
+    if ctx.fr:
+        print(f"  PV:          Fronius {'(Demo)' if ctx.mode == 'demo' else cfg.get('fronius_host')}")
+
     # optional: automatic self-update (git pull + restart when new commits land)
     if _ensure_auto_update(cfg):
         print(f"  Auto-update: on (alle {int(cfg.get('auto_update_interval', 0))} min)")
@@ -9946,6 +10740,7 @@ def cmd_serve(args, cfg):
         print("\nStopping …")
     finally:
         ctx.stop()
+        ctx.stop_fronius()
         httpd.server_close()
 
 

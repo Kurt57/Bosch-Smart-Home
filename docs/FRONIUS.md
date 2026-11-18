@@ -1,0 +1,101 @@
+# PV-Anlage anbinden (Fronius-Wechselrichter)
+
+Die App liest deinen **Fronius-Wechselrichter** (Symo/Primo **GEN24 Plus**, Tauro oder ältere
+Symo/Primo mit Datamanager) **direkt im Heimnetz** über die **Fronius Solar API** – ohne Konto,
+ohne Cloud und **nur lesend**: Die Bridge stellt am Wechselrichter nichts um.
+
+Was du danach siehst:
+
+* **Übersicht → Energiefluss jetzt:** Sonne, Haus, Batterie, Netz und Wärmepumpe mit
+  laufenden Pfeilen, dazu die Zahlen von heute (PV, Autarkie, Eigenverbrauch, Einspeisung,
+  Netzbezug, gespart, Anteil Sonnenstrom an der Wärmepumpe, Batterie).
+* **Tab PV → Deine PV-Anlage:** dasselbe plus der **Tagesverlauf** (PV, Verbrauch,
+  Batterie-Ladestand), **Verlauf** über 7/30/90 Tage oder ein Jahr („Wohin ging der
+  Sonnenstrom?", „Woher kam dein Strom?", typischer Tag), **Monatswerte** mit Vergleich
+  zur **Erwartung** aus dem PV-Planer/PVGIS sowie **Wechselrichter, Strings, Batterie und
+  Smart Meter** im Detail. Der PV-Planer bleibt darunter für Erweiterungen.
+* **Wärmepumpe → Live:** wie viel des Stroms gerade von der Sonne kommt.
+
+## Voraussetzungen
+
+* Der Wechselrichter ist im **selben Heimnetz** wie die Bridge (LAN-Kabel oder WLAN –
+  richtet meist der Installateur ein). Gast-WLAN oder ein eigenes VLAN trennen ihn ab.
+* **GEN24/Tauro: Solar API einschalten** (ab Werk aus), siehe unten.
+* Für Verbrauch, Einspeisung, Autarkie und „gespart" braucht es einen **Fronius Smart Meter**
+  (gehört bei GEN24 mit Batterie praktisch immer dazu). Ohne ihn sieht der Wechselrichter nur
+  die Erzeugung – die App zeigt dann nur die PV-Werte.
+
+## Schritt für Schritt
+
+1. **IP-Adresse des Wechselrichters herausfinden:** in der Geräteliste deines Routers
+   (z. B. FRITZ!Box: Heimnetz → Netzwerk) oder in der Fronius-App. Tipp: dort gleich
+   **„immer dieselbe IP vergeben"** einstellen, damit sich die Adresse nie ändert.
+2. **Solar API einschalten (GEN24/Tauro):** die IP im Browser öffnen, als **Kunde**
+   anmelden (das Passwort wird bei der Inbetriebnahme vergeben) → **Kommunikation →
+   Solar API** → „Kommunikation über Solar API aktivieren" einschalten und speichern.
+   (Die genaue Bezeichnung kann je nach Firmware leicht abweichen.) Ältere Geräte mit
+   Datamanager haben die Solar API immer an.
+3. In der App: **Setup → ☀️ PV-Anlage (Fronius) verbinden** → **„Im Netz suchen"** antippen
+   (die Bridge durchsucht ihr eigenes Netz, bis zu 30 s) oder die IP eintragen →
+   **Verbinden**. Die App zeigt danach Gerät, installierte kWp, ob ein Smart Meter und eine
+   Batterie erkannt wurden.
+
+Ab jetzt holt die Bridge **alle 15 Sekunden** den Energiefluss und **einmal pro Minute**
+Strings, Smart-Meter-Zählerstände und Batterie. Gespeichert wird **je Minute ein Mittelwert**
+(Tabelle `pv_samples` in `bridge/energy.db`). Die Adresse steht in `bridge/config.json`;
+nach einem Neustart verbindet sich die Bridge von selbst wieder.
+
+> **Historie:** Der GEN24 bietet über die Solar API keine abrufbare Vergangenheit. Die
+> Auswertungen beginnen deshalb mit dem Moment der Verbindung – je länger die Bridge läuft,
+> desto aussagekräftiger werden Verlauf und Monatswerte.
+
+## Wie gerechnet wird
+
+* **Eigenverbrauch** = Anteil der PV-Erzeugung, der nicht eingespeist wurde (inkl. Batterieladung).
+* **Autarkie** = Anteil deines Verbrauchs, der nicht aus dem Netz kam.
+* **Gespart** = (Verbrauch − Netzbezug) × Strompreis + Einspeisung × Einspeisevergütung.
+  Strompreis aus dem Setup, Vergütung aus dem PV-Planer (Feld „Einspeisung ct/kWh") –
+  dort deinen Satz laut Netzbetreiber eintragen.
+* **Netzbezug und Einspeisung** kommen aus den **Zählerständen des Smart Meters** (exakt).
+  An Tagen mit Datenlücke (Bridge oder Wechselrichter nicht erreichbar) oder wenn ein
+  Zählerstand springt (z. B. Zähler getauscht), nimmt die App die gemessenen Leistungswerte
+  und markiert den Tag.
+* **Sonnenstrom der Wärmepumpe:** Die Wärmepumpe bekommt je 5 Minuten denselben Anteil
+  Sonnen-/Batteriestrom zugeordnet wie das ganze Haus (anteilige Rechnung – ein eigener
+  Zähler nur für die Wärmepumpe wäre genauer).
+* **Erwartung** (Monatstabelle) = Jahresertrag je kWp aus dem PV-Planer bzw. PVGIS ×
+  installierte kWp × Monatsanteil, auf die Tage mit Daten gerechnet. Das Wetter schwankt von
+  Jahr zu Jahr um etwa ±15 %.
+
+## Häufige Meldungen
+
+| Meldung | Bedeutung / Abhilfe |
+|---|---|
+| „… gibt es nicht (HTTP 404) – ist die Solar API eingeschaltet?" | Der Wechselrichter antwortet, aber die Solar API ist aus → Schritt 2. |
+| „verweigert den Zugriff (HTTP 403)" | ebenfalls Solar API aus (je nach Firmware) → Schritt 2. |
+| „… nicht erreichbar" / „Zeitüberschreitung" | IP falsch, Wechselrichter aus (nachts schlafen manche ohne Batterie ein) oder in einem anderen Netz. |
+| „Kein Fronius im Netz gefunden" | Die Suche prüft nur das Netz der Bridge (x.x.x.1–254). IP aus dem Router eintragen. |
+| „Smart Meter: nein" | Nur Erzeugung sichtbar. Ist ein Smart Meter verbaut, im Wechselrichter-Setup prüfen, ob er eingerichtet ist. |
+
+**Fehlersuche:** Setup → PV-Anlage → **„🩺 Rohdaten des Wechselrichters"** zeigt die
+unveränderten Antworten aller Abfragen (mit „Kopieren"). Weicht dein Gerät vom bekannten
+Format ab, lässt es sich damit schnell anpassen. Dasselbe liefert `/api/fronius/probe`.
+
+## Technischer Hintergrund
+
+* Umgesetzt in `bridge/fronius.py` – **ohne Zusatzpakete** (nur Standardbibliothek).
+* Abfragen (HTTP GET, Port 80, keine Anmeldung):
+  `/solar_api/GetAPIVersion.cgi`, `/solar_api/v1/GetPowerFlowRealtimeData.fcgi`,
+  `GetInverterInfo.cgi`, `GetInverterRealtimeData.cgi?…CommonInverterData` (Strings),
+  `GetMeterRealtimeData.cgi?Scope=System` (Zählerstände, Phasen),
+  `GetStorageRealtimeData.cgi?Scope=System` (Batterie), `GetOhmPilotRealtimeData.cgi`,
+  `GetActiveDeviceInfo.cgi`.
+* GEN24-Besonderheiten werden berücksichtigt (keine Tages-/Jahreswerte, Smart-Meter-Werte
+  teils als `SMARTMETER_*`-Felder, Name ohne HTML-Kodierung).
+* Endpunkte der Bridge: `/api/fronius` (live + heute), `/api/pv?days=N` (Auswertung),
+  `/api/fronius/discover`, `/api/fronius/probe`, `POST /api/fronius/connect`
+  (`{"host": "192.168.x.y"}`), `POST /api/fronius/disconnect`.
+* Die Solar API ist im Heimnetz ohne Passwort lesbar – das ist bei Fronius so vorgesehen;
+  sie kann nur lesen, nichts verstellen.
+* Im **Demo-Modus** (`serve --demo`) zeigt die App eine simulierte Anlage (9,9 kWp,
+  9,5-kWh-Batterie, Smart Meter).

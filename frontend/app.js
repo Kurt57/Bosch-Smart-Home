@@ -93,8 +93,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v191';   // short tag shown always-on in the header
-const APP_VERSION = 'v191 · 2026-11-16 · Volumenstrom in der Live-Karte immer sichtbar: mit Wert (gelesen/abgeleitet) oder mit dem Grund, warum es noch keinen gibt (z. B. kein Rücklauf gemeldet, kein Heizbetrieb erkannt, Läufe zu kurz, Spreizung zu klein). Neben Vor-/Rücklauf steht jetzt die Spreizung. Abgeleiteter Volumenstrom genauer: Abtau-Abschnitte zählen weder bei der Wärme noch bei der Zeit (vorher zu niedrig, z. B. 15,9 statt 17,2 l/min). ' +
+const APP_BUILD = 'v192';   // short tag shown always-on in the header
+const APP_VERSION = 'v192 · 2026-11-18 · PV-Anlage (Fronius): Die Bridge liest den Wechselrichter direkt im Heimnetz über die Solar API (nur lesend, ohne Cloud) – Setup mit Suche im Netz, Verbinden und Rohdaten-Diagnose. Neu: Energiefluss jetzt (Sonne, Haus, Batterie, Netz, Wärmepumpe) in der Übersicht; im Tab PV „Deine PV-Anlage“ mit Tageswerten, Tagesverlauf, Verlauf über 7/30/90 Tage oder ein Jahr, Monatswerten mit Erwartung aus Planer/PVGIS sowie Wechselrichter, Strings, Batterie und Smart Meter; in der Wärmepumpen-Karte der Sonnenstrom-Anteil. Netzbezug und Einspeisung kommen aus den Zählerständen des Smart Meters, mit Prüfung auf Lücken und Zählersprünge. Im Demo-Modus eine simulierte Anlage. Außerdem behoben: Tibber-Token, Home-Assistant-Zugang und die Zuordnung Fensterkontakt → Raum gingen bei jedem Neustart der Bridge verloren. ' +
+  'v191 · 2026-11-16 · Volumenstrom in der Live-Karte immer sichtbar: mit Wert (gelesen/abgeleitet) oder mit dem Grund, warum es noch keinen gibt (z. B. kein Rücklauf gemeldet, kein Heizbetrieb erkannt, Läufe zu kurz, Spreizung zu klein). Neben Vor-/Rücklauf steht jetzt die Spreizung. Abgeleiteter Volumenstrom genauer: Abtau-Abschnitte zählen weder bei der Wärme noch bei der Zeit (vorher zu niedrig, z. B. 15,9 statt 17,2 l/min). ' +
   'v190 · 2026-11-16 · Volumenstrom der Wärmepumpe: Die Bridge durchsucht einmal (dann wöchentlich) alle Werte, die die Wärmepumpe über HomeCom meldet, nach einem Volumenstrom und schreibt ihn mit („gelesen“). Meldet sie keinen, wird er aus Wärmemenge ÷ Spreizung je Heizlauf berechnet („abgeleitet“) – auch mit grobem 1-kWh-Wärmezähler über viele Läufe genau. Anzeige in der Live-Karte und im Abgleich: Volumenstrom gegen die Summe der Ziel-Durchflüsse aller Kreise; liefert die Pumpe weniger, steht je Kreis der erreichbare Wert, und dein Tacosetter-Wert wird damit verglichen. Unter „Datenlage“: Quelle, Suchergebnis, die letzten Heizläufe und ein Knopf für eine neue Suche. ' +
   'v189 · 2026-11-16 · App startet schneller: Die Bridge rechnet abgeschlossene Tage nur noch einmal (vorberechnete Tageswerte statt Rohdaten), alles Nötige für den Start kommt in EINER Anfrage, die schon beim Laden der Seite losgeht. Beim Wiederaufruf steht sofort der letzte bekannte Stand da („Stand hh:mm · wird aktualisiert …“) und wird ersetzt, sobald die frischen Zahlen da sind; ist die Bridge nicht erreichbar, bleibt der letzte echte Stand stehen statt Demo-Zahlen. Gerendert wird nur der sichtbare Tab, die anderen beim Öffnen. Übertragung komprimiert, App-Code wird im Browser zwischengespeichert. Neu im Setup: „Startzeit“ – was der Start gekostet hat, im Browser und auf der Bridge, mit Knopf zum kalten Nachrechnen. Einstellungen, die direkt vor dem Neuladen geändert wurden, gehen nicht mehr verloren. ' +
   'v188 · 2026-11-15 · Abgleich-Tab neu aufgebaut: aus zehn Karten wurden fünf. Eine Statuskarte mit dem EINEN nächsten Schritt, EINE Raumliste (Versorgung gemessen · Ziel-Durchfluss je Kreis · dein Ist-Wert · Details zum Aufklappen), Schritt-Protokoll, Datenlage und Verteiler-Einrichtung (eingeklappt). Datenfehler behoben: Phantom-Räume „hz_1 …“ verschwinden (Ursache behoben), nur noch ein ΔT und damit EIN l/min-Wert je Kreis, Räume werden gegen ihre Wunschtemperatur bzw. den Hausschnitt beurteilt statt gegen den hochgedrehten Thermostat. Neu „Betrieb – gelesen & gemessen“: Betriebsart der Wärmepumpe (HomeCom), Modus der Thermostate und ob nachts wirklich abgesenkt wurde – ohne Annahmen. Warmwasser-Karte erkennt Ladeketten (gleich lange Ladungen, die sofort neu starten) und protokolliert ab jetzt die Speichertemperatur. ' +
@@ -290,6 +291,24 @@ function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<':
 
 /* ---------------------------------------------------------- info tooltips */
 const INFO = {
+  fronius: () => 'Die Bridge liest den <b>Fronius-Wechselrichter</b> direkt im Heimnetz über dessen <b>Solar API</b> ' +
+    '(HTTP/JSON, ohne Konto, ohne Cloud) – <b>nur lesend</b>, es wird nichts verstellt. Alle 15 s holt sie den Energiefluss ' +
+    '(PV, Haus, Netz, Batterie), einmal pro Minute dazu Strings, Smart-Meter-Zählerstände und Batterie, und speichert je ' +
+    'Minute einen Mittelwert. <b>GEN24:</b> die Solar API ist ab Werk aus – in der Weboberfläche des Wechselrichters unter ' +
+    '<b>Kommunikation → Solar API</b> einschalten. Ohne <b>Smart Meter</b> sieht der Wechselrichter nur die Erzeugung.',
+  'pv-flow': () => 'Wer liefert gerade an wen (alle 10 s aktualisiert, solange die Seite offen ist). Die Sonne versorgt zuerst ' +
+    'das <b>Haus</b>, mit dem Überschuss lädt die <b>Batterie</b>, der Rest geht ins <b>Netz</b>; was fehlt, kommt aus Batterie ' +
+    'oder Netz. Die Wärmepumpe zeigt ihren Strom laut HomeCom (5-Minuten-Mittel). Die Zahlen darunter gelten für <b>heute</b>.',
+  'pv-real': () => '<b>Eigenverbrauch</b> = Anteil der PV-Erzeugung, der nicht eingespeist wurde (inkl. Batterieladung). ' +
+    '<b>Autarkie</b> = Anteil deines Verbrauchs, der nicht aus dem Netz kam. <b>Gespart</b> = (Verbrauch − Netzbezug) × ' +
+    'Strompreis + Einspeisung × Vergütung. <b>WP-Strom von der Sonne</b>: der Wärmepumpe wird je 5 Minuten derselbe ' +
+    'Sonnen-/Batterieanteil zugeordnet wie dem ganzen Haus.',
+  'pv-hist': () => 'Tageswerte aus den gespeicherten Minutenwerten der Bridge. <b>Bezug und Einspeisung</b> kommen aus den ' +
+    'Zählerständen des Smart Meters (exakt), an Tagen mit Datenlücke aus den Messwerten. Die Spalte <b>Erwartung</b> rechnet ' +
+    'mit dem Jahresertrag aus dem PV-Planer (bzw. PVGIS) – ein Durchschnittsjahr, das Wetter schwankt um ±15 %.',
+  'pv-dev': () => 'Was der Wechselrichter über sich meldet: Zustand, installierte PV-Leistung, je <b>String</b> (MPP-Tracker) ' +
+    'Spannung, Strom und Leistung, die <b>Batterie</b> und den <b>Smart Meter</b> mit Zählerständen und Phasen. Einmal pro ' +
+    'Minute aktualisiert.',
   wofuer: () => 'Aufteilung des heutigen Stroms nach Quelle. Die Wärmepumpe wird nach ' +
     '<b>Heizung</b> und <b>Warmwasser</b> getrennt (aus ihrem Betriebsmodus), dazu jedes Smart-Home-Gerät.',
   roomtemp: () => 'Alle Räume als <b>Balken nebeneinander</b>: Höhe = aktuelle Temperatur, der gestrichelte ' +
@@ -1336,6 +1355,7 @@ function loadOptional(health, p) {
     .then(t => { STATE.tibberCons = (t && t.ok) ? t : null; paintViews(['renderBorse', 'renderHistory', 'renderKonzept']); }).catch(() => {});
   if (wantHa) api('/api/ha')
     .then(h => { STATE.ha = h || null; paintViews(['renderHa', 'renderOverview']); }).catch(() => {});
+  if (health.fronius_connected) loadFronius(true);
 }
 
 function applyDemo(mode) {
@@ -2636,20 +2656,20 @@ function devRow(title, sub, valTop, valBot, pct, col) {
  * view(s) it draws into; a view that is not visible is only marked stale and
  * catches up the moment its tab is opened (flushView in switchView). */
 const VIEW_RENDERS = {
-  overview: ['renderOverview', 'renderAppliances', 'renderHa', 'renderDarkLoad', 'renderSwitches'],
+  overview: ['renderOverview', 'renderFlow', 'renderAppliances', 'renderHa', 'renderDarkLoad', 'renderSwitches'],
   today: ['renderToday'],
   history: ['renderHistory'],
   heatpump: ['renderHeatpump', 'renderHeatExtras'],
   profile: ['renderProfile'],
-  pv: ['renderPv', 'renderCarbon', 'renderSmart'],          // the last two also fill PV fields
+  pv: ['renderPvReal', 'renderPv', 'renderCarbon', 'renderSmart'],          // the last two also fill PV fields
   borse: ['renderBorse', 'renderCarbon', 'renderSmart'],
   konzept: ['renderKonzept'],
-  settings: ['renderSettings', 'renderMeter'],
+  settings: ['renderSettings', 'renderMeter', 'renderFroniusSetup'],
 };
 // the order renderAll() always used (some renders build on earlier ones)
 const RENDER_ORDER = ['renderOverview', 'renderToday', 'renderHistory', 'renderHeatpump', 'renderProfile', 'renderPv',
   'renderSettings', 'renderAppliances', 'renderMeter', 'renderBorse', 'renderCarbon', 'renderSmart', 'renderKonzept',
-  'renderHa', 'renderDarkLoad', 'renderSwitches', 'renderHeatExtras'];
+  'renderHa', 'renderDarkLoad', 'renderSwitches', 'renderHeatExtras', 'renderFlow', 'renderPvReal', 'renderFroniusSetup'];
 const _viewStale = {};                 // view -> Set of render names waiting for that view
 function activeView() { const el = document.querySelector('.view.on'); return el ? el.id.replace(/^v-/, '') : 'overview'; }
 function _runRender(name) {
@@ -6513,6 +6533,8 @@ function renderHeatpump() {
         `<br><small style="color:var(--muted)">Spreizung ${fmt(dt, 1)} K</small>`]);
     }
     if (connected) rows.push(['Volumenstrom', hpFlowLine(A.flow, l)]);
+    const sun = hpSunLine();
+    if (sun) rows.push(['Sonnenstrom', sun]);
     let taktNote = '';
     if (l.starts != null) {
       let extra = '';
@@ -8010,9 +8032,10 @@ function renderPvEcon(p) {
     `Ab ~${fmt(knee.kwp, 0)} kWp fließt fast nur noch Einspeisung.`;
 }
 
-function pvDayChart(pv, load) {
+function pvDayChart(pv, load, opts) {
   const h = 190, pad = 26, top = 12, base = h - 22, n = 24;
-  const max = Math.max(0.0001, ...pv, ...load);
+  const sc = opts && opts.nice ? niceScale(Math.max(0.0001, ...pv, ...load)) : null;
+  const max = sc ? sc.max : Math.max(0.0001, ...pv, ...load);
   const X = i => pad + (CW - pad - 6) * (i / (n - 1));
   const Y = v => top + (base - top) * (1 - v / max);
   let selfA = `M${X(0).toFixed(1)} ${base} `, pvL = '', loadL = '';
@@ -8024,7 +8047,7 @@ function pvDayChart(pv, load) {
   selfA += `L${X(n - 1).toFixed(1)} ${base} Z`;
   let labels = '';
   for (let hh = 0; hh < 24; hh += 6) labels += `<text class="axis" x="${X(hh).toFixed(1)}" y="${h - 8}" text-anchor="middle">${hh}</text>`;
-  return svg(h, gridLines(h, top, base, pad, max) +
+  return svg(h, gridLines(h, top, base, pad, max, sc ? { step: sc.step, unit: opts.unit || '' } : undefined) +
     `<path d="${selfA}" fill="#4be0b0" opacity="0.28"/>` +
     `<path d="${pvL}" fill="none" stroke="${COL.heat}" stroke-width="2.5" stroke-linejoin="round"/>` +
     `<path d="${loadL}" fill="none" stroke="${COL.sh}" stroke-width="2.5" stroke-linejoin="round"/>` + labels);
@@ -10910,6 +10933,7 @@ function init() {
   });
 
   const pfb = $('perf-bench'); if (pfb) pfb.addEventListener('click', () => renderPerf(true));
+  initPvReal();
   if (!_bootDriven) loadAll();
   setInterval(refreshLive, 30000);
   // Service worker: register, then actively check for a newer version and take
@@ -11194,6 +11218,571 @@ function demoOverview(sh, hp) {
  *  • Only the visible tab is rendered (see paintViews).                       */
 let _bootDriven = false;               // true → init() must not start its own loadAll()
 const PERF = { t: {}, mark(k) { if (!(k in this.t)) this.t[k] = Math.round(performance.now()); } };
+
+/* ==========================================================================
+ * PV system (Fronius inverter): live energy flow, today, history, devices,
+ * setup. Data comes from the bridge (/api/fronius live every 10 s while the
+ * Übersicht or PV tab is open, /api/pv for the history).
+ * ========================================================================== */
+const PVR_DAYS_KEY = 'pvr_days_v1';              // UI preference, not synced
+let _frBusy = false, _pvBusy = false, _pvAgain = false;
+
+function kwOrW(w) {
+  if (w == null) return '–';
+  const a = Math.abs(w);
+  return a >= 1000 ? fmt(w / 1000, a >= 10000 ? 0 : 1) + ' kW' : fmt(w, 0) + ' W';
+}
+function pctOf(x, d = 0) { return x == null ? '–' : fmt(x * 100, d) + ' %'; }
+function dayLabel(s) { return s ? s.slice(8, 10) + '.' + s.slice(5, 7) + '.' : ''; }
+
+function pvStatusTag(F) {
+  if (!F) return '';
+  if (F.demo) return '<span style="color:var(--warn)">◆ Demo</span>';
+  if (F.ok && F.last_poll) {
+    const age = Math.max(0, (F.server_time || F.last_poll) - F.last_poll);
+    return `<span style="color:#4be0b0">● live</span> <span style="color:var(--muted)">· ${age < 90 ? age + ' s' : Math.round(age / 60) + ' min'}</span>`;
+  }
+  if (F.error) return '<span style="color:#ff6b8a">● keine Verbindung</span>';
+  return '<span style="color:var(--muted)">◦ verbinde …</span>';
+}
+
+// Who supplies whom right now. PV covers the house first, then charges the
+// battery, the rest goes into the grid; the grid covers what is left.
+function pvFlowParts(f) {
+  const pv = Math.max(0, (f && f.pv_w) || 0);
+  const load = f ? f.load_w : null, grid = f ? f.grid_w : null, batt = f ? f.batt_w : null;
+  const ch = batt != null ? Math.max(0, -batt) : 0, dis = batt != null ? Math.max(0, batt) : 0;
+  const imp = grid != null ? Math.max(0, grid) : 0, exp = grid != null ? Math.max(0, -grid) : 0;
+  const pvBatt = Math.min(pv, ch);
+  const pvGrid = Math.min(pv - pvBatt, exp);
+  const pvHouse = Math.max(0, pv - pvBatt - pvGrid);
+  const gridBatt = Math.max(0, ch - pvBatt);
+  return { pv, load, ch, dis, imp, exp, pvBatt, pvGrid, pvHouse, gridBatt,
+           gridHouse: Math.max(0, imp - gridBatt), battHouse: dis,
+           hasBatt: batt != null || (f && f.soc != null), hasMeter: !!(f && f.has_meter) };
+}
+
+function pvFlowSvg(f, hpW) {
+  const P = pvFlowParts(f);
+  const showHp = hpW != null && P.hasMeter;
+  const H = showHp ? 262 : 204;
+  const node = (x, y, col, icon, l1, l2, anchor) => {
+    const tx = anchor === 'start' ? x + 32 : anchor === 'end' ? x - 32 : x;
+    const ty = anchor ? y - 3 : y + 42;
+    return `<circle cx="${x}" cy="${y}" r="25" fill="var(--card2)" stroke="${col}" stroke-width="2.2"/>` +
+      `<text x="${x}" y="${y + 7}" text-anchor="middle" font-size="19">${icon}</text>` +
+      `<text x="${tx}" y="${ty}" text-anchor="${anchor || 'middle'}" font-size="13.5" font-weight="700" style="fill:var(--ink)">${l1}</text>` +
+      (l2 ? `<text x="${tx}" y="${ty + 15}" text-anchor="${anchor || 'middle'}" font-size="11" style="fill:var(--muted)">${l2}</text>` : '');
+  };
+  const line = (d, w, col) => {
+    const on = w > 25;
+    const dur = on ? Math.max(0.45, Math.min(2.6, 2.9 - Math.log10(w) * 0.62)).toFixed(2) : 0;
+    return `<path d="${d}" fill="none" stroke="var(--line)" stroke-width="3" stroke-linecap="round"/>` +
+      (on ? `<path class="flowln" d="${d}" stroke="${col}" stroke-width="${Math.min(6, 2.6 + w / 2500).toFixed(1)}" style="animation-duration:${dur}s"/>` : '');
+  };
+  const gridCol = P.imp > 25 ? '#ff6b8a' : (P.exp > 25 ? '#4be0b0' : 'var(--muted)');
+  let g = line('M180 66 L180 102', P.pvHouse, COL.heat);
+  if (P.hasMeter) g += line('M202 52 Q278 60 294 102', P.pvGrid, COL.heat) + line('M274 128 L206 128', P.gridHouse, '#ff6b8a');
+  if (P.hasBatt) g += line('M158 52 Q82 60 66 102', P.pvBatt, COL.heat) + line('M86 128 L154 128', P.battHouse, COL.batt);
+  if (showHp) g += line('M199 146 Q236 196 276 214', hpW, COL.hp);
+  g += node(180, 40, COL.heat, '☀️', kwOrW(P.pv), 'Sonne', 'start');
+  g += node(180, 128, COL.sh, '🏠', P.load != null ? kwOrW(P.load) : '–', 'Haus');
+  if (P.hasMeter) g += node(300, 128, gridCol, '🔌', P.imp > 25 ? kwOrW(P.imp) : (P.exp > 25 ? kwOrW(P.exp) : '0 W'),
+    P.imp > 25 ? 'Bezug' : (P.exp > 25 ? 'Einspeisung' : 'Netz'));
+  if (P.hasBatt) g += node(60, 128, COL.batt, '🔋', f.soc != null ? fmt(f.soc, 0) + ' %' : '–',
+    P.ch > 25 ? 'lädt ' + kwOrW(P.ch) : (P.dis > 25 ? 'liefert ' + kwOrW(P.dis) : 'Ruhe'));
+  if (showHp) g += node(300, 226, COL.hp, '♨️', kwOrW(hpW), 'Wärmepumpe', 'end');
+  return `<svg viewBox="0 0 360 ${H}" style="width:100%;height:auto;max-width:460px;display:block;margin:0 auto" role="img" aria-label="Energiefluss">${g}</svg>`;
+}
+// heat-pump electrical power right now (HomeCom), for the flow picture
+function hpLiveW() {
+  const l = STATE.hpA && STATE.hpA.live;
+  if (l && l.power_w != null) return l.power_w;
+  return (STATE.ov && STATE.ov.now && STATE.ov.now.heatpump_w != null) ? STATE.ov.now.heatpump_w : null;
+}
+
+function pvTodayKpis(T, L) {
+  const d = T && T.today;
+  if (!d) return '<div class="note">Heute noch keine gespeicherten Werte – die Bridge speichert ab der Verbindung jede Minute einen Wert.</div>';
+  const tile = (v, l) => `<div><b>${v}</b><small>${l}</small></div>`;
+  let h = tile(kwh(d.pv_kwh, d.pv_kwh < 10 ? 2 : 1), 'PV heute');
+  if (d.load_kwh != null) {
+    h += tile(pctOf(d.autarky), 'Autarkie') + tile(pctOf(d.self_rate), 'Eigenverbrauch') +
+      tile(kwh(d.exp_kwh, 1), 'eingespeist') + tile(kwh(d.imp_kwh, 1), 'Netzbezug') + tile(money(d.saved_eur), 'gespart heute');
+  }
+  if (d.hp_sun_share != null) h += tile(pctOf(d.hp_sun_share), 'WP-Strom von der Sonne');
+  if (L && L.soc != null) h += tile(fmt(L.soc, 0) + ' %', 'Batterie' + (d.soc_min != null ? ` · heute ${fmt(d.soc_min, 0)}–${fmt(Math.max(d.soc_max, L.soc), 0)} %` : ''));
+  return `<div class="pvk">${h}</div>`;
+}
+
+function pvHint(L, F) {
+  if (!L) return F && F.error ? `⚠︎ ${esc(F.error)}` : '';
+  if (!L.has_meter) return 'Ohne <b>Smart Meter</b> sieht der Wechselrichter nur die <b>Erzeugung</b> – Verbrauch, Einspeisung und Autarkie lassen sich dann nicht zeigen.';
+  const P = pvFlowParts(L);
+  if (P.exp > 1500) return `☀️ Gerade gehen <b>${kwOrW(P.exp)}</b> ins Netz – guter Moment für Waschmaschine, Spülmaschine oder das E-Auto.`;
+  if (P.ch > 800 && (L.soc == null || L.soc < 97)) return `🔋 Der Überschuss lädt gerade die Batterie (${kwOrW(P.ch)}).`;
+  if (P.pv < 30 && P.dis > 100) return '🌙 Die Batterie versorgt gerade das Haus.';
+  if (P.imp > 1000 && L.soc != null && L.soc <= 10) return `🔌 Batterie leer – ${kwOrW(P.imp)} kommen gerade aus dem Netz.`;
+  return '';
+}
+
+// today in 15-min steps: PV (amber), house (blue), directly covered (green
+// area), battery charge level (violet, right axis 0–100 %)
+function pvRealDayChart(series) {
+  const h = 200, pad = 30, padR = 30, top = 12, base = h - 22, n = 96;
+  const mid = new Date(); mid.setHours(0, 0, 0, 0);
+  const t0 = mid.getTime() / 1000;
+  const pts = new Array(n).fill(null);
+  (series || []).forEach(p => { const i = Math.round((p.t - t0) / 900); if (i >= 0 && i < n) pts[i] = p; });
+  const sc = niceScale(Math.max(0.1, ...(series || []).map(p => Math.max(p.pv_w || 0, p.load_w || 0) / 1000)));
+  const max = sc.max;
+  const X = i => pad + (CW - pad - padR) * (i / (n - 1));
+  const Y = w => top + (base - top) * (1 - Math.max(0, w / 1000) / max);     // w in W, axis in kW
+  const Ys = s => top + (base - top) * (1 - s / 100);
+  const path = (key, yf) => {
+    let d = '', open = false;
+    pts.forEach((p, i) => {
+      const v = p ? p[key] : null;
+      if (v == null) { open = false; return; }
+      d += `${open ? 'L' : 'M'}${X(i).toFixed(1)} ${yf(v).toFixed(1)} `; open = true;
+    });
+    return d;
+  };
+  let area = '';
+  let run = [];
+  const flush = () => {
+    if (run.length > 1) area += `M${X(run[0][0]).toFixed(1)} ${base} ` + run.map(([i, v]) => `L${X(i).toFixed(1)} ${Y(v).toFixed(1)}`).join(' ') +
+      ` L${X(run[run.length - 1][0]).toFixed(1)} ${base} Z `;
+    run = [];
+  };
+  pts.forEach((p, i) => { if (p && p.load_w != null) run.push([i, Math.min(p.pv_w || 0, p.load_w)]); else flush(); });
+  flush();
+  let labels = '';
+  for (let hh = 0; hh <= 24; hh += 3) labels += `<text class="axis" x="${X(Math.min(n - 1, hh * 4)).toFixed(1)}" y="${h - 8}" text-anchor="middle">${hh}</text>`;
+  let socAx = '';
+  if (pts.some(p => p && p.soc != null)) {
+    [0, 50, 100].forEach(sv => { socAx += `<text class="axis" x="${CW - padR + 4}" y="${(Ys(sv) + 3).toFixed(1)}" style="fill:${COL.batt}">${sv}%</text>`; });
+  }
+  const now = Math.min(n - 1, Math.max(0, Math.round((Date.now() / 1000 - t0) / 900)));
+  const tips = pts.map((p, i) => {
+    const hh = String(Math.floor(i / 4)).padStart(2, '0') + ':' + String((i % 4) * 15).padStart(2, '0');
+    if (!p) return `<b>${hh}</b> – ${i > now ? 'kommt noch' : 'keine Daten'}`;
+    const gridTxt = p.grid_w == null ? '' : ` · 🔌 ${p.grid_w >= 0 ? 'Bezug ' + kwOrW(p.grid_w) : 'Einspeisung ' + kwOrW(-p.grid_w)}`;
+    return `<b>${hh}</b> · ☀️ ${kwOrW(p.pv_w)}${p.load_w != null ? ' · 🏠 ' + kwOrW(p.load_w) : ''}${gridTxt}` +
+      (p.batt_w != null ? ` · 🔋 ${p.batt_w < 0 ? 'lädt ' + kwOrW(-p.batt_w) : (p.batt_w > 0 ? 'liefert ' + kwOrW(p.batt_w) : 'Ruhe')}` : '') +
+      (p.soc != null ? ` (${fmt(p.soc, 0)} %)` : '');
+  });
+  return svg(h, gridLines(h, top, base, pad, max, { step: sc.step, unit: 'kW' }) +
+    (area ? `<path d="${area}" fill="${COL.pv}" opacity="0.28"/>` : '') +
+    `<path d="${path('pv_w', Y)}" fill="none" stroke="${COL.heat}" stroke-width="2.4" stroke-linejoin="round"/>` +
+    `<path d="${path('load_w', Y)}" fill="none" stroke="${COL.sh}" stroke-width="2" stroke-linejoin="round"/>` +
+    `<path d="${path('soc', Ys)}" fill="none" stroke="${COL.batt}" stroke-width="1.6" stroke-dasharray="4 3"/>` +
+    `<line x1="${X(now).toFixed(1)}" y1="${top}" x2="${X(now).toFixed(1)}" y2="${base}" stroke="var(--muted)" stroke-width="1" stroke-dasharray="2 3" opacity=".6"/>` +
+    labels + socAx, { kind: 'area', pad, padR, n, h, tips });
+}
+
+/* ---- Übersicht: energy-flow card ------------------------------------------ */
+function renderFlow() {
+  const card = $('ov-flow-card'); if (!card) return;
+  const F = STATE.fr;
+  if (!F || !F.connected) { card.hidden = true; return; }
+  card.hidden = false;
+  $('ov-flow-head').innerHTML = pvStatusTag(F);
+  $('ov-flow').innerHTML = F.live ? pvFlowSvg(F.live, hpLiveW())
+    : `<div class="note">${F.error ? '⚠︎ ' + esc(F.error) : 'Warte auf die erste Messung des Wechselrichters …'}</div>`;
+  $('ov-flow-kpi').innerHTML = pvTodayKpis(F.today, F.live);
+  $('ov-flow-note').innerHTML = pvHint(F.live, F);
+}
+
+/* ---- PV tab: the real installation ---------------------------------------- */
+function renderPvReal() {
+  const F = STATE.fr, card = $('pvr-card'); if (!card) return;
+  const on = !!(F && F.connected);
+  ['pvr-card', 'pvr-hist-card', 'pvr-dev-card'].forEach(id => { const c = $(id); if (c) c.hidden = !on; });
+  if (!on) { const pr = $('pv-plan-real'); if (pr) pr.hidden = true; return; }
+  $('pvr-head').innerHTML = pvStatusTag(F);
+  $('pvr-flow').innerHTML = F.live ? pvFlowSvg(F.live, hpLiveW())
+    : `<div class="note">${F.error ? '⚠︎ ' + esc(F.error) : 'Warte auf die erste Messung des Wechselrichters …'}</div>`;
+  $('pvr-today').innerHTML = pvTodayKpis(F.today, F.live);
+  const ser = (F.today && F.today.series) || [];
+  $('pvr-day').innerHTML = ser.length ? pvRealDayChart(ser) : '<div class="note">Der Tagesverlauf füllt sich ab der ersten gespeicherten Minute.</div>';
+  $('pvr-day-legend').innerHTML = ser.length ? legendHtml([
+    { label: 'PV-Erzeugung', color: COL.heat }, { label: 'Verbrauch Haus', color: COL.sh },
+    { label: 'direkt mit Sonne gedeckt', color: COL.pv }].concat(ser.some(p => p.soc != null) ? [{ label: 'Batterie-Ladestand', color: COL.batt }] : [])) : '';
+  const pr = $('pv-plan-real'); if (pr) pr.hidden = false;
+  const since = F.today && F.today.since;
+  $('pvr-note').innerHTML = [pvHint(F.live, F),
+    since ? `Gespeichert seit ${new Date(since * 1000).toLocaleDateString('de-DE')} (Minutenwerte; ${F.demo ? 'Demo-Daten' : 'der Wechselrichter selbst liefert keine abrufbare Historie'}).` : ''].filter(Boolean).join('<br>');
+  renderPvDevices();
+  if (!STATE.pv || STATE.pv.days !== STATE.pvDays || Date.now() - (STATE.pvAt || 0) > 120000) loadPvHist();
+  else paintPvHist();
+}
+
+async function loadPvHist(force) {
+  if (_pvBusy) { _pvAgain = true; return; }
+  _pvBusy = true;
+  const days = STATE.pvDays || 30;
+  try {
+    const r = await api('/api/pv?days=' + days);
+    if (r && r.ok) { STATE.pv = r; STATE.pvAt = Date.now(); }
+  } catch (e) { /* keep the last result */ }
+  finally { _pvBusy = false; }
+  if (_pvAgain) { _pvAgain = false; return loadPvHist(true); }
+  paintPvHist();
+}
+
+function paintPvHist() {
+  const R = STATE.pv, F = STATE.fr || {}, kp = $('pvr-kpi'); if (!kp || !R) return;
+  const ids = ['pvr-daily', 'pvr-daily-legend', 'pvr-src', 'pvr-src-legend', 'pvr-typ', 'pvr-typ-legend', 'pvr-months', 'pvr-hist-note'];
+  if (R.empty) {
+    kp.innerHTML = '<div class="note">Im Zeitraum gibt es noch keine gespeicherten Werte – die Bridge speichert ab der Verbindung jede Minute einen Wert.</div>';
+    ids.forEach(id => { const e = $(id); if (e) e.innerHTML = ''; });
+    $('pvr-hist-head').textContent = '';
+    return;
+  }
+  const T = R.totals, meter = R.has_meter;
+  const cap = F.details && F.details.storage && F.details.storage.capacity_wh;
+  const tile = (v, l) => `<div><b>${v}</b><small>${l}</small></div>`;
+  let k = tile(kwh(T.pv_kwh, T.pv_kwh < 100 ? 1 : 0), 'PV-Erzeugung');
+  if (meter) k += tile(pctOf(T.self_rate), 'Eigenverbrauch') + tile(pctOf(T.autarky), 'Autarkie') + tile(money(T.saved_eur), 'gespart') +
+    tile(kwh(T.exp_kwh, 0), 'eingespeist') + tile(kwh(T.imp_kwh, 0), 'Netzbezug');
+  if (T.hp_sun_share != null) k += tile(pctOf(T.hp_sun_share), 'WP-Strom von der Sonne');
+  if (T.dis_kwh != null && cap) k += tile(fmt(T.dis_kwh / (cap / 1000), 0), 'Batterie-Vollzyklen');
+  kp.innerHTML = `<div class="pvk">${k}</div>`;
+  const first = R.daily.length ? R.daily[0].day : null, last = R.daily.length ? R.daily[R.daily.length - 1].day : null;
+  $('pvr-hist-head').innerHTML = first ? `<span style="color:var(--muted)">${dayLabel(first)}–${dayLabel(last)}</span>` : '';
+  // daily bars (monthly for the year view)
+  const useMonths = R.days > 120;
+  const items = useMonths ? R.monthly.map(m => Object.assign({}, m, { label: MON[+m.month.slice(5, 7) - 1], full: MON[+m.month.slice(5, 7) - 1] + ' ' + m.month.slice(0, 4) }))
+    : R.daily.map(d => Object.assign({}, d, { label: dayLabel(d.day).slice(0, 3), full: longDay(d.day) + (d.gap_h > 0.5 ? ` · ⚠︎ ${fmt(d.gap_h, 1)} h Datenlücke` : '') }));
+  const unit = 'kWh';
+  if (meter) {
+    const sDst = [{ key: 'direct', color: COL.pv, label: 'direkt verbraucht' }]
+      .concat(R.has_battery ? [{ key: 'batt', color: COL.batt, label: 'in die Batterie' }] : [])
+      .concat([{ key: 'feed', color: COL.heat, label: 'eingespeist' }]);
+    $('pvr-daily').innerHTML = stackedBar(items.map(d => ({ label: d.label, full: d.full,
+      values: { direct: d.direct_kwh || 0, batt: d.ch_kwh || 0, feed: d.exp_kwh || 0 } })), sDst, { h: 190, unit });
+    $('pvr-daily-legend').innerHTML = legendHtml(sDst.map(s => ({ label: s.label, color: s.color })));
+    const sSrc = [{ key: 'sun', color: COL.pv, label: 'eigener Strom (Sonne + Batterie)' }, { key: 'grid', color: '#ff6b8a', label: 'aus dem Netz' }];
+    $('pvr-src').innerHTML = stackedBar(items.map(d => ({ label: d.label, full: d.full,
+      values: { sun: Math.max(0, (d.load_kwh || 0) - (d.imp_kwh || 0)), grid: d.imp_kwh || 0 } })), sSrc, { h: 190, unit });
+    $('pvr-src-legend').innerHTML = legendHtml(sSrc.map(s => ({ label: s.label, color: s.color })));
+  } else {
+    const sPv = [{ key: 'pv', color: COL.heat, label: 'PV-Erzeugung' }];
+    $('pvr-daily').innerHTML = stackedBar(items.map(d => ({ label: d.label, full: d.full, values: { pv: d.pv_kwh || 0 } })), sPv, { h: 190, unit });
+    $('pvr-daily-legend').innerHTML = legendHtml(sPv);
+    $('pvr-src').innerHTML = '<div class="note">Ohne Smart Meter keine Aufteilung nach Netz und eigenem Strom.</div>';
+    $('pvr-src-legend').innerHTML = '';
+  }
+  const hr = R.hourly || [];
+  $('pvr-typ').innerHTML = hr.length === 24 ? pvDayChart(hr.map(x => (x.pv_w || 0) / 1000), hr.map(x => (x.load_w || 0) / 1000), { nice: true, unit: 'kW' }) : '';
+  $('pvr-typ-legend').innerHTML = legendHtml([{ label: 'PV (kW, Ø je Stunde)', color: COL.heat }]
+    .concat(meter ? [{ label: 'Verbrauch (kW)', color: COL.sh }, { label: 'direkt gedeckt', color: COL.pv }] : []));
+  // months, with the expected yield from the planner / PVGIS where known
+  const spec = parseFloat(($('pv-orient') || {}).value) || 0;
+  const kwpReal = F.identity && F.identity.pv_power_w ? F.identity.pv_power_w / 1000 : (parseFloat(($('pv-kwp') || {}).value) || 0);
+  const shape = pvMonth();
+  const exp = m => {
+    if (!spec || !kwpReal) return null;
+    const y = +m.month.slice(0, 4), mo = +m.month.slice(5, 7);
+    const dim = new Date(y, mo, 0).getDate();
+    const cov = R.daily.filter(d => d.day.startsWith(m.month)).length;
+    return spec * kwpReal * shape[mo - 1] * cov / dim;
+  };
+  const showExp = spec && kwpReal;
+  $('pvr-months').innerHTML = R.monthly.length ? `<table class="pvt"><tr><th>Monat</th><th>PV kWh</th>${showExp ? '<th>Erwartung</th>' : ''}` +
+    (meter ? '<th>Eigen&shy;verbr.</th><th>Autarkie</th><th>gespart</th>' : '') + '</tr>' +
+    R.monthly.map(m => {
+      const e = exp(m);
+      const dev = e ? (m.pv_kwh / e - 1) : null;
+      const part = m.days < new Date(+m.month.slice(0, 4), +m.month.slice(5, 7), 0).getDate();
+      return `<tr><td>${MON[+m.month.slice(5, 7) - 1]} ${m.month.slice(2, 4)}${part ? `<br><small style="color:var(--muted)">${m.days} Tage</small>` : ''}</td>` +
+        `<td>${fmt(m.pv_kwh, 0)}</td>` +
+        (showExp ? `<td>${e ? fmt(e, 0) : '–'}${dev != null ? `<br><small style="color:${dev >= -0.15 ? '#4be0b0' : '#ffb64d'}">${dev >= 0 ? '+' : '−'}${fmt(Math.abs(dev) * 100, 0)} %</small>` : ''}</td>` : '') +
+        (meter ? `<td>${pctOf(m.self_rate)}</td><td>${pctOf(m.autarky)}</td><td>${m.saved_eur != null ? fmt(m.saved_eur, 0) + ' ' + STATE.cur : '–'}</td>` : '') + '</tr>';
+    }).join('') + '</table>' : '';
+  const gaps = R.daily.filter(d => d.gap_h > 0.5).length;
+  const feed = (R.feedin || 0) * 100;
+  $('pvr-hist-note').innerHTML = [
+    meter ? `<b>Gespart</b> = (Verbrauch − Netzbezug) × ${fmt((R.price || 0) * 100, 1)} ct + Einspeisung × ${fmt(feed, 2)} ct ` +
+      `(Strompreis aus dem Setup, Vergütung aus dem PV-Planer – <a href="#" data-pvr-feed="1" style="color:var(--accent)">ändern</a>).` : '',
+    meter ? 'Bezug und Einspeisung stammen aus den <b>Zählerständen des Smart Meters</b> (exakt); Tage mit Datenlücke aus den Messwerten.' : '',
+    gaps ? `⚠︎ ${gaps} Tag(e) mit Datenlücke (Bridge oder Wechselrichter nicht erreichbar) – deren Werte sind unvollständig.` : '',
+    showExp ? `<b>Erwartung</b> = ${fmt(spec, 0)} kWh/kWp (Planer${$('pv-orient') && $('pv-orient').selectedOptions[0] && $('pv-orient').selectedOptions[0].dataset.pvgis ? ', PVGIS' : ''}) × ${fmt(kwpReal, 2)} kWp × Monatsanteil, auf die Tage mit Daten gerechnet – das Wetter schwankt von Jahr zu Jahr um ±15 %.` : '',
+    T.hp_sun_share != null ? '<b>WP-Strom von der Sonne</b>: der Wärmepumpe wird je 5 Minuten derselbe Anteil Sonnen- bzw. Batteriestrom zugeordnet wie dem ganzen Haus (anteilige Rechnung).' : '',
+  ].filter(Boolean).join('<br>');
+}
+
+function renderPvDevices() {
+  const F = STATE.fr, body = $('pvr-dev'); if (!body || !F) return;
+  const I = F.identity || {}, D = F.details || {}, L = F.live || {};
+  const inv = (D.inverters || {})['1'] || {};
+  const sub = t => `<small style="color:var(--muted)">${t}</small>`;
+  const H = t => `<h2 style="font-size:14px;margin:14px 0 6px">${t}</h2>`;
+  const stTxt = inv.state_de || ((I.inverters || [])[0] || {}).state_de;
+  $('pvr-dev-head').innerHTML = stTxt ? `<span style="color:${/Betrieb/.test(stTxt) ? '#4be0b0' : 'var(--muted)'}">${esc(stTxt)}</span>` : '';
+  let h = H('🔌 Wechselrichter') + [
+    statusRow('Gerät', esc(I.name || 'Fronius') + (I.type && I.type !== I.name ? ' ' + sub(esc(I.type)) : '')),
+    statusRow('Zustand', esc(inv.state_de || ((I.inverters || [])[0] || {}).state_de || '–')),
+    I.pv_power_w ? statusRow('PV-Leistung installiert', fmt(I.pv_power_w / 1000, 2) + ' kWp') : '',
+    statusRow('AC-Leistung jetzt', kwOrW(inv.pac_w != null ? inv.pac_w : null)),
+    inv.uac_v != null ? statusRow('Netzspannung · Frequenz', fmt(inv.uac_v, 1) + ' V · ' + fmt(inv.fac_hz, 2) + ' Hz') : '',
+    inv.total_wh != null ? statusRow('erzeugt seit Inbetriebnahme (AC)', kwh(inv.total_wh / 1000, 0)) : '',
+    L.mode_de ? statusRow('Betriebsart', esc(L.mode_de)) : '',
+    F.host ? statusRow('Adresse', esc(F.host)) : '',
+  ].join('');
+  const st = inv.strings || [];
+  if (st.length) {
+    const td = F.today && F.today.strings;
+    const kwhToday = [td && td.today_mpp1_kwh, td && td.today_mpp2_kwh];
+    h += H('🧵 Strings (MPP-Tracker)') + `<table class="pvt"><tr><th>String</th><th>Spannung</th><th>Strom</th><th>Leistung</th><th>heute</th></tr>` +
+      st.map((s, i) => `<tr><td>${s.n}</td><td>${s.u_v != null ? fmt(s.u_v, 0) + ' V' : '–'}</td><td>${s.i_a != null ? fmt(s.i_a, 2) + ' A' : '–'}</td>` +
+        `<td>${kwOrW(s.p_w)}</td><td>${kwhToday[i] != null ? kwh(kwhToday[i], 1) : '–'}</td></tr>`).join('') + '</table>' +
+      (st.length > 1 ? `<div class="note" style="margin-top:6px">Gleich große, gleich ausgerichtete Strings sollten ähnlich viel liefern. Sind sie unterschiedlich belegt oder ausgerichtet (z. B. Ost/West), ist ein Unterschied normal${STATE.pv && STATE.pv.strings && STATE.pv.strings.ratio != null ? ` – im Zeitraum lieferte String 2 ${fmt(STATE.pv.strings.ratio * 100, 0)} % von String 1` : ''}.</div>` : '');
+  }
+  const B = D.storage;
+  if (B || L.soc != null) {
+    const P = pvFlowParts(L);
+    h += H('🔋 Batterie') + [
+      B && (B.manufacturer || B.model) ? statusRow('Modell', esc([B.manufacturer, B.model].filter(Boolean).join(' '))) : '',
+      B && B.capacity_wh ? statusRow('Kapazität', kwh(B.capacity_wh / 1000, 1)) : '',
+      statusRow('Ladestand', L.soc != null ? fmt(L.soc, 0) + ' %' : (B && B.soc != null ? fmt(B.soc, 0) + ' %' : '–')),
+      statusRow('gerade', P.ch > 25 ? 'lädt mit ' + kwOrW(P.ch) : (P.dis > 25 ? 'liefert ' + kwOrW(P.dis) : 'Ruhe')),
+      B && B.temp_c != null ? statusRow('Zelltemperatur', fmt(B.temp_c, 1) + ' °C') : '',
+      L.battery_mode_de ? statusRow('Zustand', esc(L.battery_mode_de)) : '',
+    ].join('');
+  }
+  (D.meters || []).forEach(m => {
+    const pw = m.p_w;
+    h += H('📟 Smart Meter' + (m.location !== 'grid' ? ' · ' + esc(m.location_de) : '')) + [
+      statusRow('Modell', esc([m.manufacturer, m.model].filter(Boolean).join(' ') || '–')),
+      statusRow('Einbauort', esc(m.location_de || '–')),
+      pw != null ? statusRow('jetzt', m.location === 'grid' ? (pw >= 0 ? 'Bezug ' + kwOrW(pw) : 'Einspeisung ' + kwOrW(-pw)) : kwOrW(pw)) : '',
+      m.location === 'grid' && m.import_wh != null ? statusRow('Zählerstand Bezug', kwh(m.import_wh / 1000, 1)) : '',
+      m.location === 'grid' && m.export_wh != null ? statusRow('Zählerstand Einspeisung', kwh(m.export_wh / 1000, 1)) : '',
+      (m.phases || []).length ? statusRow('Phasen', m.phases.map(p => `L${p.n}: ${kwOrW(p.p_w)}${p.u_v != null ? ' · ' + fmt(p.u_v, 0) + ' V' : ''}`).join('<br>')) : '',
+    ].join('');
+  });
+  (D.ohmpilots || []).forEach(o => {
+    h += H('♨️ Ohmpilot') + statusRow('Leistung', kwOrW(o.p_w)) + (o.temp_c != null ? statusRow('Temperatur', fmt(o.temp_c, 1) + ' °C') : '');
+  });
+  const errs = Object.entries(D.errors || {});
+  if (errs.length) h += `<div class="note" style="margin-top:8px">Nicht lesbar: ${errs.map(([k, v]) => esc(k) + ' – ' + esc(v)).join('; ')}</div>`;
+  if (I.pv_power_w) {
+    const plan = parseFloat(($('pv-kwp') || {}).value) || 0;
+    const real = Math.round(I.pv_power_w / 100) / 10;
+    if (Math.abs(plan - real) >= 0.05)
+      h += `<button class="btn sec" data-pvr-kwp="${real}" style="margin-top:10px">☀️ ${fmt(real, 1)} kWp in den PV-Planer übernehmen</button>`;
+  }
+  if (F.demo) h += '<div class="note" style="margin-top:8px">Demo-Anlage: alle Werte sind simuliert.</div>';
+  body.innerHTML = h;
+}
+
+/* ---- heat pump card: share of solar power right now ------------------------ */
+function hpSunLine() {
+  const F = STATE.fr;
+  if (!F || !F.connected || !F.live || F.live.load_w == null) return '';
+  const P = pvFlowParts(F.live);
+  if (!(P.load > 0)) return '';
+  const share = Math.max(0, Math.min(1, 1 - P.imp / P.load));
+  const td = F.today && F.today.today && F.today.today.hp_sun_share;
+  return `${fmt(share * 100, 0)} % gerade` +
+    `<br><small style="color:var(--muted)">Anteil aus PV/Batterie am Hausverbrauch` +
+    (td != null ? ` · heute ${fmt(td * 100, 0)} % des WP-Stroms` : '') + '</small>';
+}
+
+/* ---- Setup: find & connect the inverter ----------------------------------- */
+function renderFroniusSetup() {
+  const st = $('fr-status'); if (!st) return;
+  const h = STATE.health || {}, F = STATE.fr;
+  const inp = $('fr-host');
+  if (inp && !inp.value && h.fronius_host) inp.value = h.fronius_host;
+  let msg;
+  if (h.mode === 'demo') {
+    msg = '◆ <b>Demo-Modus</b>: gezeigt wird eine Beispiel-Anlage (9,9 kWp, 9,5-kWh-Batterie, Smart Meter). ' +
+      (h.fronius_host ? `Eingetragen für den Normalbetrieb: <b>${esc(h.fronius_host)}</b>.` : 'Eine hier eingetragene Adresse gilt im Normalbetrieb.');
+  } else if (h.fronius_available === false) {
+    msg = 'Das Fronius-Modul fehlt in der Bridge (<code>bridge/fronius.py</code>) – bitte die Bridge aktualisieren.';
+  } else if (h.fronius_connected) {
+    const I = (F && F.identity) || {};
+    msg = F && F.ok ? `✅ Verbunden mit <b>${esc(I.name || 'Fronius')}</b> (${esc(h.fronius_host)}) · ${pvStatusTag(F)}`
+      : `⚠︎ Eingetragen: <b>${esc(h.fronius_host)}</b> – ${esc((F && F.error) || h.fronius_error || 'noch keine Antwort')}`;
+  } else {
+    msg = 'Noch kein Wechselrichter verbunden.';
+  }
+  st.innerHTML = msg;
+  const dis = $('fr-disconnect'); if (dis) dis.hidden = !(h.fronius_connected && h.mode !== 'demo');
+  const info = $('fr-info');
+  if (info) {
+    const I = F && F.identity;
+    info.innerHTML = I ? [
+      statusRow('Gerät', esc(I.name || '–') + (I.type && I.type !== I.name ? ` <small style="color:var(--muted)">${esc(I.type)}</small>` : '')),
+      I.pv_power_w ? statusRow('PV-Leistung', fmt(I.pv_power_w / 1000, 2) + ' kWp') : '',
+      statusRow('Smart Meter', I.has_meter ? 'ja' + (I.meter_location === 'grid' ? ' (Einspeisepunkt)' : I.meter_location === 'load' ? ' (Verbrauchszweig)' : '') : '<b>nein</b> – nur Erzeugung sichtbar'),
+      statusRow('Batterie', I.has_battery ? 'ja' : 'nein'),
+    ].join('') : '';
+  }
+}
+
+async function loadFronius(force) {
+  if (_frBusy && !force) return;
+  _frBusy = true;
+  try { const r = await api('/api/fronius'); if (r) STATE.fr = r; } catch (e) { /* keep the last values */ }
+  finally { _frBusy = false; }
+  // the heat-pump card shows the solar share too (redrawn when its tab is open)
+  paintViews(['renderFlow', 'renderPvReal', 'renderFroniusSetup', 'renderHeatpump']);
+}
+
+async function frRefreshHealth() {
+  try { const h = await api('/api/health'); if (h && h.ok) STATE.health = h; } catch (e) {}
+}
+
+async function frFind() {
+  const b = $('fr-find'), out = $('fr-found'), note = $('fr-note');
+  if (b) b.disabled = true;
+  if (out) out.innerHTML = '';
+  if (note) note.textContent = 'Suche im Heimnetz … (dauert bis zu 30 Sekunden)';
+  try {
+    const r = await api('/api/fronius/discover');
+    if (!r || !r.ok) { if (note) note.textContent = (r && r.error) || 'Suche nicht möglich.'; return; }
+    if (!r.found.length) {
+      if (note) note.innerHTML = `Kein Fronius im Netz ${esc(r.subnet || '')} gefunden. Ist der Wechselrichter eingeschaltet und im selben Netz wie die Bridge? ` +
+        'Sonst seine IP im Router nachsehen (Liste der verbundenen Geräte) und oben eintragen.';
+      return;
+    }
+    if (note) note.textContent = r.found.length === 1 ? 'Gefunden – antippen zum Verbinden:' : `${r.found.length} Geräte gefunden – antippen zum Verbinden:`;
+    if (out) out.innerHTML = r.found.map(f => `<button class="btn sec" data-fr-host="${esc(f.host)}" style="text-align:left; margin-top:6px">` +
+      `${f.solar_api ? '☀️' : '⚠︎'} <b>${esc(f.host)}</b> · ${esc(f.name || f.type || 'Fronius')}` +
+      (f.pv_power_w ? ` · ${fmt(f.pv_power_w / 1000, 1)} kWp` : '') +
+      (f.note ? `<br><small style="color:var(--muted)">${esc(f.note)}</small>` : '') + '</button>').join('');
+  } catch (e) {
+    if (note) note.textContent = 'Suche nur möglich, wenn die Seite von der Bridge geöffnet ist.';
+  } finally { if (b) b.disabled = false; }
+}
+
+async function frConnect(host) {
+  const inp = $('fr-host'), note = $('fr-note'), b = $('fr-connect');
+  host = String(host || (inp && inp.value) || '').trim();
+  if (!host) { if (note) note.textContent = 'Bitte die IP-Adresse eintragen oder „Im Netz suchen" tippen.'; return; }
+  if (inp) inp.value = host;
+  if (b) b.disabled = true;
+  if (note) note.textContent = 'Verbinde …';
+  try {
+    const r = await postJSON('/api/fronius/connect', { host });
+    if (r && r.ok) {
+      const I = r.identity || {};
+      await frRefreshHealth();                    // status + live values first, then the message
+      STATE.pv = null;
+      await loadFronius(true);
+      if (note) note.innerHTML = `✅ Verbunden: <b>${esc(I.name || 'Fronius')}</b>` +
+        (I.pv_power_w ? ` · ${fmt(I.pv_power_w / 1000, 2)} kWp` : '') +
+        ` · Smart Meter: ${I.has_meter ? 'ja' : '<b>nein</b>'} · Batterie: ${I.has_battery ? 'ja' : 'nein'}<br>` +
+        (r.demo ? 'Im Demo-Modus laufen weiter die Beispielwerte – die Adresse gilt im Normalbetrieb.'
+          : 'Live-Werte erscheinen in der <b>Übersicht</b> und im Tab <b>PV</b>; die Bridge speichert ab jetzt jede Minute einen Wert.');
+      const fo = $('fr-found'); if (fo) fo.innerHTML = '';
+    } else if (note) {
+      note.innerHTML = `❌ ${esc((r && r.error) || 'Verbindung fehlgeschlagen.')}` + (r && r.hint ? `<br>💡 ${esc(r.hint)}` : '');
+    }
+  } catch (e) {
+    if (note) note.textContent = 'Verbinden nur möglich, wenn die Seite von der Bridge geöffnet ist.';
+  } finally { if (b) b.disabled = false; }
+}
+
+async function frDisconnect() {
+  if (!confirm('Verbindung zum Wechselrichter trennen? Die gespeicherten Werte bleiben erhalten.')) return;
+  try { await postJSON('/api/fronius/disconnect', {}); } catch (e) {}
+  await frRefreshHealth();
+  STATE.fr = null; STATE.pv = null;
+  const note = $('fr-note'); if (note) note.textContent = 'Getrennt.';
+  paintViews(['renderFlow', 'renderPvReal', 'renderFroniusSetup']);
+}
+
+let _frProbeText = '';
+async function frProbe() {
+  const out = $('fr-probe-out'), b = $('fr-probe'), cp = $('fr-probe-copy');
+  if (b) b.disabled = true;
+  if (out) { out.hidden = false; out.textContent = 'Lade Rohdaten …'; }
+  try {
+    const host = (($('fr-host') || {}).value || '').trim();
+    const r = await api('/api/fronius/probe' + (host && !(STATE.health && STATE.health.mode === 'demo') ? '?host=' + encodeURIComponent(host) : ''));
+    let txt;
+    if (!r || r.ok === false) txt = 'Fehler: ' + ((r && r.error) || 'keine Antwort');
+    else if (r.note) txt = r.note;
+    else {
+      txt = `Fronius ${r.host} · ${new Date((r.ts || 0) * 1000).toLocaleString('de-DE')}\n`;
+      (r.endpoints || []).forEach(e => {
+        txt += `\n### ${e.path}\n` + (e.error ? 'Fehler: ' + e.error : `HTTP ${e.status} · ${e.ms} ms\n`);
+        if (e.body != null) { try { txt += JSON.stringify(JSON.parse(e.body), null, 1); } catch (err) { txt += e.body; } }
+        txt += '\n';
+      });
+    }
+    _frProbeText = txt;
+    if (out) out.textContent = txt;
+    if (cp) cp.hidden = false;
+  } catch (e) {
+    if (out) out.textContent = 'Nur möglich, wenn die Seite von der Bridge geöffnet ist.';
+  } finally { if (b) b.disabled = false; }
+}
+function copyText(txt) {
+  if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(txt).then(() => true, () => false);
+  // plain HTTP in the home network (iPhone Safari): the old way still works
+  const ta = document.createElement('textarea');
+  ta.value = txt; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.top = '0'; ta.style.opacity = '0';
+  document.body.appendChild(ta); ta.focus(); ta.select(); ta.setSelectionRange(0, txt.length);
+  let ok = false; try { ok = document.execCommand('copy'); } catch (e) {}
+  ta.remove();
+  return Promise.resolve(ok);
+}
+
+function initPvReal() {
+  try { const d = parseInt(localStorage.getItem(PVR_DAYS_KEY), 10); STATE.pvDays = [7, 30, 90, 365].includes(d) ? d : 30; } catch (e) { STATE.pvDays = 30; }
+  const pr = $('pvr-range');
+  if (pr) {
+    [...pr.querySelectorAll('button[data-d]')].forEach(x => x.classList.toggle('on', +x.dataset.d === STATE.pvDays));
+    pr.addEventListener('click', e => {
+      const btn = e.target.closest('button[data-d]'); if (!btn) return;
+      STATE.pvDays = +btn.dataset.d;
+      try { localStorage.setItem(PVR_DAYS_KEY, String(STATE.pvDays)); } catch (err) {}
+      [...pr.querySelectorAll('button[data-d]')].forEach(x => x.classList.toggle('on', x === btn));
+      loadPvHist(true);
+    });
+  }
+  const dev = $('pvr-dev-card');
+  if (dev) dev.addEventListener('click', e => {
+    const b = e.target.closest('[data-pvr-kwp]'); if (!b) return;
+    const inp = $('pv-kwp'); if (!inp) return;
+    inp.value = b.dataset.pvrKwp;
+    try { localStorage.setItem(PV_LS.kwp, inp.value); } catch (err) {}
+    inp.dispatchEvent(new Event('input', { bubbles: true }));
+    renderPv(); renderPvDevices();
+  });
+  const hc = $('pvr-hist-card');
+  if (hc) hc.addEventListener('click', e => {
+    if (!e.target.closest('[data-pvr-feed]')) return;
+    e.preventDefault();
+    const f = $('pv-feedin'); if (f) { f.scrollIntoView({ behavior: 'smooth', block: 'center' }); setTimeout(() => f.focus(), 400); }
+  });
+  const ff = $('pv-feedin');
+  if (ff) ff.addEventListener('change', () => { STATE.pvAt = 0; setTimeout(() => { if (activeView() === 'pv') loadPvHist(true); }, 1500); });
+  const fb = $('fr-find'); if (fb) fb.addEventListener('click', frFind);
+  const fc = $('fr-connect'); if (fc) fc.addEventListener('click', () => frConnect());
+  const fo = $('fr-found'); if (fo) fo.addEventListener('click', e => { const b = e.target.closest('[data-fr-host]'); if (b) frConnect(b.dataset.frHost); });
+  const fh = $('fr-host'); if (fh) fh.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); frConnect(); } });
+  const fd = $('fr-disconnect'); if (fd) fd.addEventListener('click', frDisconnect);
+  const fp = $('fr-probe'); if (fp) fp.addEventListener('click', frProbe);
+  const fcp = $('fr-probe-copy');
+  if (fcp) fcp.addEventListener('click', async () => {
+    const ok = await copyText(_frProbeText || '');
+    fcp.textContent = ok ? '✅ Kopiert' : 'Bitte Text markieren und kopieren';
+    setTimeout(() => { fcp.textContent = '📋 Kopieren'; }, 2500);
+  });
+  // live values every 10 s while the Übersicht or the PV tab is on screen
+  setInterval(() => {
+    const h = STATE.health;
+    if (!h || !h.fronius_connected || document.visibilityState !== 'visible') return;
+    if (['overview', 'pv'].includes(activeView())) loadFronius();
+  }, 10000);
+}
 
 /* ---- Setup → "Startzeit": what this start cost, measured ------------------ */
 let _perfSrv = null, _perfBusy = false;
