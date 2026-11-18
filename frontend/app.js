@@ -94,8 +94,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v195';   // short tag shown always-on in the header
-const APP_VERSION = 'v195 · 2026-11-18 · PV-Anlage mit echten Daten (Fronius GEN24, Reserva, Smart Meter TS 65A-3) abgeglichen: Lädt die Batterie aus dem Netz (z. B. „charge boost“ bei sehr niedrigem Ladestand), zeigt der Energiefluss einen Bogen Netz → Batterie, ein Hinweis erklärt es, und die Tageswerte zählen „Batterie aus dem Netz geladen“ extra – dieser Strom zählt nicht mehr als Sonnenstrom. Gibt die Batterie ins Netz ab, wird das ebenfalls gezeigt (und nicht als Sonnen-Überschuss empfohlen). Details: leere String-Plätze ausgeblendet, Smart Meter je Phase mit Leistung, Strom, Spannung und cos φ, Batterie mit Spannung/Strom und Modus. Wohn-Dashboard (#dash): Energiefluss, Empfehlung und Verbraucherliste mit den gemessenen Werten des Wechselrichters (alle 10 s) statt der Schätzung; antwortet er nicht, steht das dabei. Behoben: Bei Zeiträumen über 31 Tage zählte die allererste Viertelstunde nach dem Verbinden nur eine Minute. ' +
+const APP_BUILD = 'v196';   // short tag shown always-on in the header
+const APP_VERSION = 'v196 · 2026-11-18 · Übersicht mit dem Smart Meter: „Gerade jetzt“ zeigt den gemessenen Hausverbrauch statt der Summe der einzeln gemessenen Geräte. „Noch nicht gemessen“ rechnet live Haus − Wärmepumpe − Geräte (alle 10 s neu) und die Tagesbilanz aus vollständig gemessenen Smart-Meter-Tagen statt aus den Zählerablesungen (die bleiben, bis es einen solchen Tag gibt). Ist der Tag lückenlos gemessen, zeigt „Heute bisher verbraucht“ den Smart-Meter-Wert und „Wofür heute“ den Rest als „Nicht einzeln gemessen“. ' +
+  'v195 · 2026-11-18 · PV-Anlage mit echten Daten (Fronius GEN24, Reserva, Smart Meter TS 65A-3) abgeglichen: Lädt die Batterie aus dem Netz (z. B. „charge boost“ bei sehr niedrigem Ladestand), zeigt der Energiefluss einen Bogen Netz → Batterie, ein Hinweis erklärt es, und die Tageswerte zählen „Batterie aus dem Netz geladen“ extra – dieser Strom zählt nicht mehr als Sonnenstrom. Gibt die Batterie ins Netz ab, wird das ebenfalls gezeigt (und nicht als Sonnen-Überschuss empfohlen). Details: leere String-Plätze ausgeblendet, Smart Meter je Phase mit Leistung, Strom, Spannung und cos φ, Batterie mit Spannung/Strom und Modus. Wohn-Dashboard (#dash): Energiefluss, Empfehlung und Verbraucherliste mit den gemessenen Werten des Wechselrichters (alle 10 s) statt der Schätzung; antwortet er nicht, steht das dabei. Behoben: Bei Zeiträumen über 31 Tage zählte die allererste Viertelstunde nach dem Verbinden nur eine Minute. ' +
   'v194 · 2026-11-18 · Wärmepumpe: Strom aus einer Datenlücke (Bridge oder Bosch-Cloud länger als 30 Minuten nicht erreichbar) wird nicht mehr der Betriebsart am Rand der Lücke zugeschlagen – vorher landete z. B. nach einer abgelaufenen Anmeldung der ganze Verbrauch der Lücke im Warmwasser. Er zählt weiter zum Tagesverbrauch, steht in „Wofür heute“ und im Betriebsarten-Ring aber als „Betriebsart unbekannt (Datenlücke)“. Stundenreihe und Tagesablauf lassen die Lücke leer statt sie als Pause oder als eine einzige Riesen-Stunde zu zeigen. PV-Anlage: Ist die Solar API am Wechselrichter noch aus, zeigt die App die Schritte zum Einschalten mit Link zur Weboberfläche, Anmeldung als „Customer“ und was bei vergessenem Passwort hilft. ' +
   'v193 · 2026-11-18 · Wärmepumpe: Ist die HomeCom-Anmeldung abgelaufen oder die Bosch-Cloud nicht erreichbar, speichert die Bridge keine leeren Messungen mehr, sondern meldet den Grund – die Wärmepumpen-Karte zeigt ihn mit Link zum neuen Verbindungstest (Setup → Wärmepumpe → „Verbindung zur Bosch-Cloud testen“: DNS, Verbindung, Verschlüsselung, Anmeldung, Datenabruf; Ergebnis kopierbar; im Terminal: python3 shc_bridge.py diag). Nach einem Fehler versucht die Bridge es nach 1, 2, 4 Minuten erneut. Die Volumenstrom-Suche fragt schonender ab und bricht bei Verbindungsproblemen sofort ab. Keine Tracebacks mehr im Terminal, wenn ein Browser eine Verbindung schließt. Startskripte nutzen ein aktuelles Python (python.org/Homebrew, TLS 1.3), falls installiert. ' +
   'v192 · 2026-11-18 · PV-Anlage (Fronius): Die Bridge liest den Wechselrichter direkt im Heimnetz über die Solar API (nur lesend, ohne Cloud) – Setup mit Suche im Netz, Verbinden und Rohdaten-Diagnose. Neu: Energiefluss jetzt (Sonne, Haus, Batterie, Netz, Wärmepumpe) in der Übersicht; im Tab PV „Deine PV-Anlage“ mit Tageswerten, Tagesverlauf, Verlauf über 7/30/90 Tage oder ein Jahr, Monatswerten mit Erwartung aus Planer/PVGIS sowie Wechselrichter, Strings, Batterie und Smart Meter; in der Wärmepumpen-Karte der Sonnenstrom-Anteil. Netzbezug und Einspeisung kommen aus den Zählerständen des Smart Meters, mit Prüfung auf Lücken und Zählersprünge. Im Demo-Modus eine simulierte Anlage. Außerdem behoben: Tibber-Token, Home-Assistant-Zugang und die Zuordnung Fensterkontakt → Raum gingen bei jedem Neustart der Bridge verloren. ' +
@@ -620,10 +621,12 @@ const INFO = {
   'tibber-cons': () => 'Dein <b>tatsächlicher Gesamtverbrauch</b> pro Tag, direkt aus dem Tibber-Zähler (also dem ' +
     'Netzzähler des ganzen Hauses). Das erfasst <b>alles</b> – auch Geräte, die die Bosch-Module nicht messen ' +
     '(Kühlschrank, Herd, Licht …). Gut als Gegenprobe zur gemessenen Smart-Home-Summe und zur Zählerkalibrierung.',
-  dark: () => 'Vergleicht deinen <b>Gesamt-Haushaltsstrom</b> (aus Zählerablesung bzw. eingetragenem Jahreswert, ' +
-    'ohne Wärmepumpe) mit dem, was <b>explizit gemessen</b> wird (Bosch-Module + Smart Plugs). Die Differenz ist ' +
-    'der noch <b>nicht einzeln gemessene</b> Anteil („Dunkelverbrauch"). So siehst du, ob sich weitere ' +
-    '<b>Mess-Steckdosen</b> lohnen und wie viel da noch im Verborgenen läuft. Wird kleiner, sobald du Plugs ergänzt.',
+  dark: () => 'Vergleicht deinen <b>Gesamt-Haushaltsstrom</b> (ohne Wärmepumpe) mit dem, was <b>explizit gemessen</b> ' +
+    'wird (Bosch-Module + Smart Plugs). Die Differenz ist der noch <b>nicht einzeln gemessene</b> Anteil („Dunkelverbrauch"). ' +
+    'Mit dem <b>Smart Meter</b> des Wechselrichters: oben <b>jetzt</b> (Haus − Wärmepumpe − Geräte, alle 10 s neu) und die ' +
+    'Tagesbilanz aus den letzten vollständig gemessenen Tagen. Ohne Smart Meter wird der Haushalt aus deinen ' +
+    '<b>Zählerablesungen</b> bzw. dem eingetragenen Jahreswert geschätzt. So siehst du, ob sich weitere ' +
+    '<b>Mess-Steckdosen</b> lohnen. Wird kleiner, sobald du Plugs ergänzt.',
   ha: () => 'Optionaler Zusatz: liest beliebige Leistungs- und Energiesensoren aus deinem <b>Home Assistant</b> ' +
     '(lokal, über dessen REST-API mit einem Zugangs-Token) – z. B. einen Lesekopf am Hauptzähler, eine PV-/Batterie-' +
     'Integration oder andere Nicht-Bosch-Geräte. Für messende <b>Steckdosen</b> ist der <b>Bosch Smart Plug+</b> der ' +
@@ -2676,7 +2679,7 @@ function devRow(title, sub, valTop, valBot, pct, col) {
  * view(s) it draws into; a view that is not visible is only marked stale and
  * catches up the moment its tab is opened (flushView in switchView). */
 const VIEW_RENDERS = {
-  overview: ['renderOverview', 'renderFlow', 'renderAppliances', 'renderHa', 'renderDarkLoad', 'renderSwitches'],
+  overview: ['renderOverview', 'paintNowLine', 'renderFlow', 'renderAppliances', 'renderHa', 'renderDarkLoad', 'renderSwitches'],
   today: ['renderToday'],
   history: ['renderHistory'],
   heatpump: ['renderHeatpump', 'renderHeatExtras'],
@@ -2687,7 +2690,7 @@ const VIEW_RENDERS = {
   settings: ['renderSettings', 'renderMeter', 'renderFroniusSetup'],
 };
 // the order renderAll() always used (some renders build on earlier ones)
-const RENDER_ORDER = ['renderOverview', 'renderToday', 'renderHistory', 'renderHeatpump', 'renderProfile', 'renderPv',
+const RENDER_ORDER = ['renderOverview', 'paintNowLine', 'renderToday', 'renderHistory', 'renderHeatpump', 'renderProfile', 'renderPv',
   'renderSettings', 'renderAppliances', 'renderMeter', 'renderBorse', 'renderCarbon', 'renderSmart', 'renderKonzept',
   'renderHa', 'renderDarkLoad', 'renderSwitches', 'renderHeatExtras', 'renderFlow', 'renderPvReal', 'renderFroniusSetup'];
 const _viewStale = {};                 // view -> Set of render names waiting for that view
@@ -5500,18 +5503,110 @@ async function doHpWrite(i) {
   } catch (e) { if (note) note.textContent = 'Fehler: ' + e.message; }
 }
 
-// "Noch nicht gemessen": whole-house household load (meter/manual, minus heat
-// pump) vs. what the Bosch modules + smart plugs actually measure. The gap is
-// the not-yet-individually-metered ("dark") load – shrinks as plugs are added.
+function ymdLocal(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
+// The last days of the inverter's smart meter (for the "not measured" balance);
+// loaded lazily, refreshed every 10 min. Separate from the PV tab's own range.
+let _pvDarkBusy = false;
+async function loadPvDark() {
+  const h = STATE.health;
+  if (_pvDarkBusy || !h || !h.fronius_connected) return;
+  if (STATE.pvDark && Date.now() - (STATE.pvDarkAt || 0) < 10 * 60000) return;
+  _pvDarkBusy = true;
+  try { const r = await api('/api/pv?days=8'); if (r && r.ok) { STATE.pvDark = r; STATE.pvDarkAt = Date.now(); } }
+  catch (e) { /* keep the last */ } finally { _pvDarkBusy = false; }
+  paintViews(['renderDarkLoad', 'renderOverview']);
+}
+// Whole days the smart meter recorded completely (bridge + inverter ran all
+// day): house consumption − heat pump − individually measured devices = what
+// no plug/module measures. null until there is such a day.
+function smartMeterDays() {
+  const P = STATE.pvDark, data = STATE.data, A = STATE.hpA;
+  if (!P || !P.daily || !data || !A) return null;
+  const today = ymdLocal(new Date());
+  const hpBy = {}; (A.daily || []).forEach(d => { hpBy[d.day] = d.elec_kwh; });
+  const pdd = data.per_device_day || {};
+  const days = P.daily.filter(d => d.day < today && d.load_kwh != null && d.cov_h >= 22.5 &&
+    (d.gap_h || 0) <= 0.5 && hpBy[d.day] != null).slice(-7);
+  if (!days.length) return null;
+  const dev = day => Object.keys(pdd).reduce((a, id) => a + ((pdd[id] || {})[day] || 0), 0);
+  const per = days.map(d => ({ day: d.day, house: Math.max(0, d.load_kwh - hpBy[d.day]), hp: hpBy[d.day], dev: dev(d.day) }));
+  const avg = k => per.reduce((a, x) => a + x[k], 0) / per.length;
+  const house = avg('house'), devices = avg('dev');
+  return { n: per.length, days: per.map(x => x.day), house, hp: avg('hp'), devices,
+           dark: per.reduce((a, x) => a + Math.max(0, x.house - x.dev), 0) / per.length };
+}
+// Today's whole-house consumption when the smart meter recorded the WHOLE day
+// so far (else null – e.g. on the day the inverter was connected).
+function meterToday() {
+  const F = STATE.fr, T = F && F.connected && F.today && F.today.today;
+  if (!T || T.load_kwh == null) return null;
+  const mid = new Date(); mid.setHours(0, 0, 0, 0);
+  const sinceMid = (Date.now() - mid.getTime()) / 3600000;
+  return (T.cov_h >= sinceMid - 0.25 && (T.gap_h || 0) <= 0.5) ? T.load_kwh : null;
+}
+let _mtShown = null;          // the smart-meter day total the overview last showed
+// "Gerade jetzt": the smart meter's whole-house load when the inverter reports
+// it (exact) – else the sum of the individually measured devices + heat pump.
+function paintNowLine() {
+  const ov = STATE.ov, el = $('ov-now'); if (!el) return;
+  const M = frLiveNow();
+  if (M && M.load_w != null) {
+    el.innerHTML = fmt(Math.max(0, M.load_w), 0) + ' W' +
+      `<small style="display:block;font-size:10.5px;font-weight:500;color:var(--muted)">${STATE.fr.demo ? 'Demo-Anlage' : 'Smart Meter'}</small>`;
+  } else if (ov) {
+    el.innerHTML = fmt(ov.now.total_w, 0) + ' W' +
+      (STATE.fr && STATE.fr.connected ? '<small style="display:block;font-size:10.5px;font-weight:500;color:var(--muted)">einzeln gemessen</small>' : '');
+  }
+  const hp = $('ov-now-hp'), hpW = ov && ov.now.heatpump_w != null ? ov.now.heatpump_w : hpLiveW();
+  if (hp) hp.textContent = hpW != null ? fmt(hpW, 0) + ' W' : '–';
+}
+
+// "Noch nicht gemessen": whole-house household load minus heat pump vs. what
+// the Bosch modules + smart plugs actually measure. The gap is the not-yet-
+// individually-metered ("dark") load – shrinks as plugs are added. Basis: the
+// inverter's smart meter (live + complete days) when connected, else the
+// user's meter readings / yearly figure.
 function renderDarkLoad() {
   const card = $('ov-dark-card'); if (!card) return;
   const data = STATE.data;
+  loadPvDark();
+  const M = frLiveNow(), ov = STATE.ov;
+  const liveOk = !!(M && M.load_w != null && ov && ov.now);
+  const smd = smartMeterDays();
   // need a whole-house household reference beyond the modules themselves
   const md = meterHouseholdDaily();
-  const houseDaily = (md != null && md > 0) ? md : (houseManual() > 0 ? houseManual() / 365 : null);
-  if (!data || houseDaily == null) { card.hidden = true; return; }
+  const houseDaily = smd ? smd.house : (md != null && md > 0) ? md : (houseManual() > 0 ? houseManual() / 365 : null);
+  if (!data || (houseDaily == null && !liveOk)) { card.hidden = true; return; }
   card.hidden = false;
   const price = STATE.price;
+  const GREY0 = '#8b93a7';
+  // right now: house (smart meter) = heat pump + individually measured + the rest
+  const live = $('ov-dark-live');
+  if (live) {
+    if (liveOk) {
+      const houseW = Math.max(0, M.load_w), hpW = Math.max(0, (ov.now.heatpump_w != null ? ov.now.heatpump_w : hpLiveW()) || 0);
+      const devW = Math.max(0, ov.now.smarthome_w != null ? ov.now.smarthome_w : (ov.now.total_w - hpW));
+      const darkW = Math.max(0, houseW - hpW - devW), over = hpW + devW > houseW + 50;
+      const tot = Math.max(houseW, hpW + devW) || 1;
+      const seg = (w, col, t) => w > 0 ? `<div title="${t}" style="width:${(w / tot * 100).toFixed(1)}%;background:${col}"></div>` : '';
+      live.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">` +
+        `<b>Jetzt</b><span style="color:var(--muted);font-size:12px">Haus <b style="color:var(--ink)">${fmt(houseW, 0)} W</b> · ${STATE.fr.demo ? 'Demo-Anlage' : 'Smart Meter'}</span></div>` +
+        `<div style="display:flex;height:22px;border-radius:6px;overflow:hidden;background:var(--card-bd,#2a2f3a)">` +
+        seg(hpW, COL.hp, 'Wärmepumpe') + seg(devW, COL.sh, 'einzeln gemessen') + seg(darkW, GREY0, 'nicht einzeln gemessen') + `</div>` +
+        `<div class="legend" style="margin-top:6px">` +
+        `<div class="it"><span class="sw" style="background:${COL.hp}"></span>Wärmepumpe ${fmt(hpW, 0)} W</div>` +
+        `<div class="it"><span class="sw" style="background:${COL.sh}"></span>einzeln gemessen ${fmt(devW, 0)} W</div>` +
+        `<div class="it"><span class="sw" style="background:${GREY0}"></span><b>nicht einzeln gemessen ${fmt(darkW, 0)} W</b></div></div>` +
+        (over ? `<div class="note" style="margin-top:4px">Die Einzelwerte liegen gerade über dem Hauswert – sie werden zu leicht anderen Zeitpunkten gemessen (Wärmepumpe als 5-Minuten-Mittel).</div>` : '') +
+        `<div style="height:12px"></div>`;
+    } else live.innerHTML = '';
+  }
+  if (houseDaily == null) {                 // only the live view so far
+    ['ov-dark-bar', 'ov-dark-kpi', 'ov-dark-list'].forEach(id => { const e = $(id); if (e) e.innerHTML = ''; });
+    $('ov-dark-sum').textContent = '';
+    $('ov-dark-note').innerHTML = 'Die Tagesbilanz erscheint nach dem ersten vollständig gemessenen Tag des Smart Meters.';
+    return;
+  }
   // "Individually measured" = the SUM of the per-device daily averages (Bosch
   // modules + smart plugs), NOT the household counter estimate. The counter
   // estimate is ~the whole household, which would make the ungemessene Rest look
@@ -5521,23 +5616,26 @@ function renderDarkLoad() {
   const names = {}; ((data.live && data.live.devices) || []).forEach(d => names[d.id] = devLabel(d).title);
   const rows = [];
   Object.keys(pdd).forEach(id => {
-    const ds = Object.keys(pdd[id]); if (!ds.length) return;
-    let s = 0; ds.forEach(d => s += pdd[id][d]); const avg = s / ds.length;
+    // with the smart meter: the same complete days as the house figure
+    const ds = smd ? smd.days : Object.keys(pdd[id]); if (!ds.length) return;
+    let s = 0; ds.forEach(d => s += (pdd[id][d] || 0)); const avg = s / ds.length;
     if (avg > 0.01) rows.push({ label: names[id] || id, kwh: avg });
   });
   rows.sort((a, b) => b.kwh - a.kwh);
   const measuredSum = rows.reduce((a, r) => a + r.kwh, 0);
   const measured = Math.min(measuredSum, houseDaily);   // individually metered (capped)
-  const dark = Math.max(0, houseDaily - measured);
+  const dark = smd ? smd.dark : Math.max(0, houseDaily - measured);
   const darkPct = houseDaily > 0 ? dark / houseDaily * 100 : 0;
-  const src = (md != null && md > 0) ? 'Zählerablesung' : 'eingetragener Jahreswert';
+  const src = smd ? `${STATE.fr && STATE.fr.demo ? 'Demo-Anlage' : 'Smart Meter'}, ${smd.n} ${smd.n === 1 ? 'Tag' : 'Tage'} gemessen`
+    : (md != null && md > 0) ? 'Zählerablesung' : 'eingetragener Jahreswert';
 
   $('ov-dark-sum').textContent = `${fmt(darkPct, 0)} % offen`;
 
   // proportion bar: measured (blue) vs dark (grey)
   const GREY = '#8b93a7';
   const wMeas = houseDaily > 0 ? measured / houseDaily * 100 : 0;
-  $('ov-dark-bar').innerHTML =
+  $('ov-dark-bar').innerHTML = (liveOk ? `<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">` +
+      `<b>Pro Tag</b><span style="color:var(--muted);font-size:12px">${src}</span></div>` : '') +
     `<div style="display:flex;height:22px;border-radius:6px;overflow:hidden;background:var(--card-bd,#2a2f3a)">` +
     `<div title="gemessen" style="width:${wMeas.toFixed(1)}%;background:${COL.sh}"></div>` +
     `<div title="nicht gemessen" style="width:${(100 - wMeas).toFixed(1)}%;background:${GREY}"></div></div>` +
@@ -5553,7 +5651,7 @@ function renderDarkLoad() {
   const scaleMax = Math.max(dark, rows.length ? rows[0].kwh : 0) || 1;
   let html = rows.slice(0, 6).map(r =>
     devRow(r.label, 'gemessen', kwh(r.kwh, 2) + '/Tag', '', r.kwh / scaleMax * 100, COL.sh)).join('');
-  if (dark > 0.05) html += devRow('Noch nicht gemessen', 'geschätzt (Zähler − Module)',
+  if (dark > 0.05) html += devRow('Noch nicht gemessen', smd ? 'gemessen (Smart Meter − Wärmepumpe − Geräte)' : 'geschätzt (Zähler − Module)',
     kwh(dark, 2) + '/Tag', money(dark * 365 * price) + '/Jahr', dark / scaleMax * 100, GREY);
   $('ov-dark-list').innerHTML = html || '<div class="note">Noch keine Einzelgeräte gemessen.</div>';
 
@@ -5570,23 +5668,32 @@ function renderDarkLoad() {
   else advice = `<b>Schon gut abgedeckt</b> – der ungemessene Rest ist klein (Kühlschrank, Router, Ladegeräte, ` +
     `Standby). Weitere Steckdosen bringen hier wenig Neues.`;
   $('ov-dark-note').innerHTML = `Basis: Haushalt <b>${kwh(houseDaily, 1)}/Tag</b> (${src}, ohne Wärmepumpe) ` +
-    `minus gemessene <b>${kwh(measured, 1)}/Tag</b>. ` + advice;
+    `minus gemessene <b>${kwh(measured, 1)}/Tag</b>. ` + advice +
+    (!smd && liveOk ? ' <br><small style="color:var(--muted)">Die Tagesbilanz rechnet noch mit deinen Zählerablesungen (geschätzt); ' +
+      'ab dem ersten vollständig gemessenen Tag nimmt sie automatisch den Smart Meter.</small>' : '');
 }
 
 function renderOverview() {
   const ov = STATE.ov; if (!ov) return;
-  $('ov-today').innerHTML = fmt(ov.today.total_kwh, 1) + '<span> kWh</span>';
-  $('ov-today-cost').textContent = eur(ov.today.cost) + ' · Stand ' + new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
-  $('ov-now').textContent = fmt(ov.now.total_w, 0) + ' W';
-  $('ov-now-hp').textContent = ov.now.heatpump_w != null ? fmt(ov.now.heatpump_w, 0) + ' W' : '–';
+  // whole-house figure from the smart meter once it covers the whole day so far;
+  // the rest beyond the individually measured devices + heat pump becomes its own slice
+  const mT = meterToday();
+  _mtShown = mT;
+  const restT = mT != null ? Math.max(0, mT - ov.today.total_kwh) : 0;
+  const totalT = mT != null && mT >= ov.today.total_kwh ? mT : ov.today.total_kwh;
+  $('ov-today').innerHTML = fmt(totalT, 1) + '<span> kWh</span>';
+  $('ov-today-cost').textContent = eur(ov.today.total_kwh > 0 ? ov.today.cost * totalT / ov.today.total_kwh : totalT * STATE.price) +
+    (mT != null ? ' · Smart Meter' : '') + ' · Stand ' + new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+  paintNowLine();
   const fc = annualForecast();
   $('ov-month').innerHTML = kwh(fc.monthNow, 0);
   $('ov-month-cost').textContent = money(fc.monthNowCost);
 
   const segs = ov.breakdown.filter(b => b.kwh > 0).map(b => ({ label: b.label, value: b.kwh, color: b.color }));
-  $('ov-break-sum').textContent = kwh(ov.today.total_kwh, 1);
+  if (restT > 0.05) { segs.push({ label: 'Nicht einzeln gemessen', value: restT, color: '#8b93a7' }); segs.sort((a, b) => b.value - a.value); }
+  $('ov-break-sum').textContent = kwh(totalT, 1);
   $('ov-donut').innerHTML = segs.length
-    ? donutChart(segs, { big: fmt(ov.today.total_kwh, 1), center: 'kWh heute' })
+    ? donutChart(segs, { big: fmt(totalT, 1), center: 'kWh heute' })
     : '<div class="note">Noch keine Verbrauchsdaten für heute.</div>';
   $('ov-legend').innerHTML = legendHtml(segs.slice(0, 8).map(s => ({ label: s.label, color: s.color, sub: kwh(s.value, 2) })));
   const gapB = ov.breakdown.find(b => b.key === 'hp_gap' && b.kwh > 0.01), bn = $('ov-break-note');
@@ -11763,7 +11870,10 @@ async function loadFronius(force) {
   try { const r = await api('/api/fronius'); if (r) STATE.fr = r; } catch (e) { /* keep the last values */ }
   finally { _frBusy = false; }
   // the heat-pump card shows the solar share too (redrawn when its tab is open)
-  paintViews(['renderFlow', 'renderPvReal', 'renderFroniusSetup', 'renderHeatpump']);
+  const mT = meterToday();               // today's smart-meter total moved → the hero + 'Wofür heute' follow
+  const reOv = STATE.ov && ((mT == null) !== (_mtShown == null) || (mT != null && Math.abs(mT - _mtShown) >= 0.05));
+  paintViews(['renderFlow', 'renderPvReal', 'renderFroniusSetup', 'renderHeatpump', 'paintNowLine', 'renderDarkLoad']
+    .concat(reOv ? ['renderOverview'] : []));
   if (kioskOpen()) { try { paintKiosk(); } catch (e) {} }
 }
 
