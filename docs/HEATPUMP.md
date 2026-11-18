@@ -100,6 +100,35 @@ importierten Monaten statt auf einer Hochrechnung.
 | „Fehler" im Setup-Status | Letzter Abruf schlug fehl (z. B. Token abgelaufen/Netz). Die Bridge erneuert den Token automatisch; bei dauerhaftem Fehler neu verbinden. |
 | „HomeCom-Anmeldung abgelaufen" / `invalid_grant` | Der Refresh-Token ist verbraucht/ungültig – im Setup einfach **neu verbinden** (neuer Login-Code). Wird ab Werk automatisch rotiert und gespeichert. |
 | „HomeCom-Modul nicht installiert" | Datei `bridge/homecom.py` fehlt – aus dem Repo nachziehen. |
+| „Zeitüberschreitung beim Verschlüsseln (TLS-Handshake) mit …" | Die Bridge erreicht den Bosch-Server, die verschlüsselte Verbindung kommt aber nicht zustande. Erst den **Verbindungstest** (unten) machen. Zeigt er „kein TLS 1.3" und klappt `curl` im Terminal, liegt es am Python der Bridge → siehe „Python der Bridge". |
+| „Name … nicht auflösbar (DNS)" / „antwortet nicht" | Internet, Router/DNS, VPN oder Filter am Rechner der Bridge prüfen. |
+| „HTTP 429 – Bosch drosselt gerade" | Zu viele Anfragen; legt sich meist nach einiger Zeit. Die Bridge versucht es danach von selbst. |
+| „HomeCom antwortet, liefert aber keine Werte" | Anmeldung ok, aber das Gateway meldet nichts – in der HomeCom-App prüfen, ob die Wärmepumpe online ist. |
+
+### Verbindungstest
+
+**Setup → Wärmepumpe (HomeCom) → „🩺 Verbindung zur Bosch-Cloud testen"** prüft Schritt für
+Schritt, wo es hängt: Name (DNS) → Verbindung → Verschlüsselung (TLS) für die Anmeldung
+(`singlekey-id.com`) und die Daten (`pointt-api.bosch-thermotechnology.com`), dann die
+Anmeldung selbst und einen Datenabruf. Dazu: wann zuletzt echte Werte kamen und welches Python
+die Bridge nutzt. Das Ergebnis lässt sich kopieren. Auf der Wärmepumpen-Karte erscheint ein
+Hinweis mit Link zum Test, sobald keine neuen Werte mehr kommen.
+
+Im Terminal geht dasselbe ohne Anmeldung (verändert den Login der laufenden Bridge nicht):
+
+```bash
+cd bridge
+python3 shc_bridge.py diag
+```
+
+### Python der Bridge
+
+macOS bringt mit den Entwicklerwerkzeugen ein älteres `python3` (3.9, SSL-Bibliothek
+LibreSSL 2.8.3, **ohne TLS 1.3**). Das reicht normalerweise. Lehnt ein Server ältere
+Verschlüsselung ab, hilft ein aktuelles Python von **python.org**: installieren und danach im
+Ordner *Programme → Python 3.x* einmal **„Install Certificates.command"** doppelklicken. Die
+Startskripte (`start-macos.command`, `update-macos.command`, …) nehmen ein solches Python
+(oder eines von Homebrew) automatisch und zeigen beim Start an, welches sie verwenden.
 
 ---
 

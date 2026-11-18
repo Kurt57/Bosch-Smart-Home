@@ -27,6 +27,7 @@ import base64
 import hashlib
 import http.client
 import json
+import socket
 import ssl
 import threading
 import time
@@ -114,6 +115,49 @@ class AuthExpiredError(HomeComError):
     """The refresh token is no longer valid – a fresh login is required."""
 
 
+class HomeComNetworkError(HomeComError):
+    """The Bosch cloud is not reachable or not answering properly (DNS, TCP,
+    TLS, timeout, HTTP 429/5xx). Aborts the whole read – it must never turn
+    into a sample full of empty values."""
+
+
+class HomeComAuthError(HomeComError):
+    """The access token was rejected (HTTP 401)."""
+
+
+_ABORT = (HomeComNetworkError, HomeComAuthError, AuthExpiredError)
+_HOST_ROLE = {OAUTH_HOST: "Anmeldung bei SingleKey ID", API_HOST: "Datenabruf HomeCom"}
+
+
+def _net_error(host: str, exc: BaseException) -> HomeComNetworkError:
+    """A low-level connection error as a readable German message, naming the
+    host and what the bridge was doing (login vs. reading data)."""
+    role = _HOST_ROLE.get(host, host)
+    msg = str(exc) or exc.__class__.__name__
+    if isinstance(exc, socket.gaierror):
+        txt = f"Name {host} nicht auflösbar (DNS) – Internetverbindung des Rechners prüfen"
+    elif isinstance(exc, ssl.SSLCertVerificationError):
+        txt = (f"Zertifikat von {host} nicht prüfbar ({getattr(exc, 'verify_message', '') or msg}) – "
+               "stimmen Datum und Uhrzeit des Rechners?")
+    elif isinstance(exc, (socket.timeout, TimeoutError)):
+        txt = (f"Zeitüberschreitung beim Verschlüsseln (TLS-Handshake) mit {host}" if "handshake" in msg.lower()
+               else f"Zeitüberschreitung – {host} antwortet nicht")
+    elif isinstance(exc, ConnectionRefusedError):
+        txt = f"{host} lehnt die Verbindung ab"
+    elif isinstance(exc, ssl.SSLError):
+        txt = f"TLS-Fehler mit {host} ({getattr(exc, 'reason', None) or msg})"
+    else:
+        txt = f"Netzwerkfehler mit {host} ({getattr(exc, 'strerror', None) or msg})"
+    return HomeComNetworkError(f"{role}: {txt}")
+
+
+def _http_error(host: str, status: int) -> HomeComNetworkError:
+    role = _HOST_ROLE.get(host, host)
+    if status == 429:
+        return HomeComNetworkError(f"{role}: HTTP 429 – Bosch drosselt gerade (zu viele Anfragen)")
+    return HomeComNetworkError(f"{role}: HTTP {status} – Störung bei Bosch")
+
+
 class HomeComClient:
     """Talks to SingleKey ID (OAuth) and the HomeCom gateway API.
 
@@ -137,16 +181,21 @@ class HomeComClient:
         body = urlencode(form).encode("ascii")
         conn = http.client.HTTPSConnection(host, 443, timeout=self.timeout, context=self._ctx)
         try:
-            conn.request("POST", path, body=body, headers={
-                "Content-Type": "application/x-www-form-urlencoded",
-                "Accept": "application/json",
-            })
-            resp = conn.getresponse()
-            data = resp.read()
+            try:
+                conn.request("POST", path, body=body, headers={
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "Accept": "application/json",
+                })
+                resp = conn.getresponse()
+                data = resp.read()
+            except (OSError, http.client.HTTPException) as exc:
+                raise _net_error(host, exc) from exc
             if resp.status != 200:
                 if b"invalid_grant" in data:
                     raise AuthExpiredError(
                         "HomeCom-Anmeldung abgelaufen – bitte im Setup neu verbinden.")
+                if resp.status == 429 or resp.status >= 500:
+                    raise _http_error(host, resp.status)
                 raise HomeComError(f"token endpoint HTTP {resp.status}: {data[:200]!r}")
             return json.loads(data)
         finally:
@@ -156,16 +205,21 @@ class HomeComClient:
         token = self._valid_token()
         conn = http.client.HTTPSConnection(API_HOST, 443, timeout=self.timeout, context=self._ctx)
         try:
-            conn.request("GET", path, headers={
-                "Authorization": f"Bearer {token}",
-                "Accept": "application/json",
-            })
-            resp = conn.getresponse()
-            data = resp.read()
+            try:
+                conn.request("GET", path, headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/json",
+                })
+                resp = conn.getresponse()
+                data = resp.read()
+            except (OSError, http.client.HTTPException) as exc:
+                raise _net_error(API_HOST, exc) from exc
             if resp.status in (403, 404):
                 return None  # resource not available on this device
             if resp.status == 401:
-                raise HomeComError("unauthorized (token rejected)")
+                raise HomeComAuthError("Datenabruf HomeCom: Bosch lehnt das Token ab (HTTP 401)")
+            if resp.status == 429 or resp.status >= 500:
+                raise _http_error(API_HOST, resp.status)
             if resp.status != 200:
                 raise HomeComError(f"GET {path} -> HTTP {resp.status}: {data[:160]!r}")
             return json.loads(data) if data else None
@@ -270,10 +324,15 @@ class HomeComClient:
         (electrical) and outputProduced (thermal). No native history resource,
         so day/hour history is built by the bridge from these counters.
         """
+        errors = []
+
         def get(p):
             try:
                 return self._api_get(f"{API_BASE}{gateway_id}{p}")
-            except HomeComError:
+            except _ABORT:
+                raise                      # no connection / no login: abort, never store empties
+            except HomeComError as exc:
+                errors.append(str(exc))
                 return None
 
         out = {"gateway": gateway_id}
@@ -321,6 +380,11 @@ class HomeComClient:
         # what the tank really did (reached its target or not) instead of a guess.
         out["dhw_c"] = self._num(get("/resource/dhwCircuits/dhw1/actualTemp"))
         out["dhw_set_c"] = self._num(get("/resource/dhwCircuits/dhw1/currentSetpoint"))
+        keys = ("energy_kwh", "heat_kwh", "modulation", "supply_c", "return_c", "outdoor_c", "starts", "dhw_c")
+        if all(out.get(k) is None for k in keys):
+            raise HomeComError("HomeCom antwortet, liefert aber keine Werte"
+                               + (f" ({errors[0]})" if errors else
+                                  " – ist die Wärmepumpe online? (in der HomeCom-App prüfen)"))
         return out
 
     # -- operating state (read-only ground truth) ------------------------- #
@@ -368,7 +432,7 @@ class HomeComClient:
             nonlocal failed
             try:
                 return self._api_get(prefix + path)
-            except AuthExpiredError:
+            except _ABORT:
                 raise
             except HomeComError:
                 failed += 1
@@ -434,10 +498,13 @@ class HomeComClient:
         full = f"{API_BASE}{gateway_id}{resource_path}"
         conn = http.client.HTTPSConnection(API_HOST, 443, timeout=self.timeout, context=self._ctx)
         try:
-            conn.request("GET", full, headers={
-                "Authorization": f"Bearer {token}", "Accept": "application/json"})
-            r = conn.getresponse()
-            data = r.read()
+            try:
+                conn.request("GET", full, headers={
+                    "Authorization": f"Bearer {token}", "Accept": "application/json"})
+                r = conn.getresponse()
+                data = r.read()
+            except (OSError, http.client.HTTPException) as exc:
+                raise _net_error(API_HOST, exc) from exc
             return r.status, data.decode("utf-8", "replace")
         finally:
             conn.close()
@@ -497,6 +564,8 @@ class HomeComClient:
             budget -= 1
             try:
                 res = self._api_get(prefix + p)
+            except _ABORT:
+                raise                      # cloud unreachable / login gone: stop the crawl
             except HomeComError:
                 res = None
             if not isinstance(res, dict):
@@ -550,7 +619,7 @@ class HomeComClient:
                 "l_min": round(float(val) * fac, 2),
                 "setting": bool(res.get("writeable")) or any(k in last for k in cls._FLOW_LIMIT)}
 
-    def discover_flow(self, gateway_id: str, max_nodes: int = 160) -> dict:
+    def discover_flow(self, gateway_id: str, max_nodes: int = 120, spacing: float = 0.5) -> dict:
         """Look through what the heat pump offers (heatSources, system, heating
         circuits; bounded) for a volume-flow value. Bosch does not document one
         for the CS6800i, so this only reports what the device really exposes.
@@ -568,10 +637,14 @@ class HomeComClient:
             p = queue.pop(0)
             if p in seen:
                 continue
+            if seen and spacing > 0:
+                time.sleep(spacing)            # one request at a time, spaced out
             seen.add(p)
             budget -= 1
             try:
                 res = self._api_get(prefix + p)
+            except _ABORT:
+                raise                      # cloud unreachable / login gone: stop the crawl
             except HomeComError:
                 res = None
             if not isinstance(res, dict):
@@ -681,6 +754,8 @@ class HomeComClient:
             budget -= 1
             try:
                 res = self._api_get(prefix + p)
+            except _ABORT:
+                raise                      # cloud unreachable / login gone: stop the crawl
             except HomeComError:
                 res = None
             if not isinstance(res, dict):

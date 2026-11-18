@@ -1163,6 +1163,14 @@ class Store:
                  row.get("supply_c"), row.get("return_c"), row.get("flow_lmin")),
             )
 
+    def hp_last_good_ts(self) -> int | None:
+        """Time of the last heat-pump sample that carried real values."""
+        with self.lock:
+            r = self.conn.execute(
+                "SELECT MAX(ts) m FROM hp_samples WHERE energy_kwh IS NOT NULL OR heat_kwh IS NOT NULL"
+                " OR supply_c IS NOT NULL OR outdoor_c IS NOT NULL").fetchone()
+            return int(r["m"]) if r and r["m"] else None
+
     def hp_prev(self, field: str):
         """Most recent (ts, <field>) with a non-null value, for power calc."""
         if field not in ("energy_kwh", "heat_kwh"):
@@ -3216,6 +3224,8 @@ def compute_hp_analytics(store: Store, days: int, price: float,
             "starts": live.get("starts"),
             "working_h": live.get("working_h"),
             "last_poll": live.get("last_poll"),
+            "last_error": live.get("last_error"),
+            "last_error_ts": live.get("last_error_ts"),
         },
         "today": {"elec_kwh": today_e, "heat_kwh": today_h,
                   "cost": round(today_e * price, 2),
@@ -7608,6 +7618,8 @@ class HeatPumpPoller(threading.Thread):
         self.last_poll = None
         self._disc_lock = threading.Lock()
         self.discovering = False
+        self.fails = 0          # failed polls in a row
+        self.ok_streak = 0      # successful polls in a row
 
     def run(self):
         while not self._stop.is_set():
@@ -7615,17 +7627,26 @@ class HeatPumpPoller(threading.Thread):
                 self._poll()
                 self.last_error = None
                 self.state["last_error"] = None
+                self.fails = 0
+                self.ok_streak += 1
             except Exception as exc:
                 self.last_error = str(exc)
-                self.state["last_error"] = str(exc)
+                self.fails += 1
+                self.ok_streak = 0
+                self.state.update({"last_error": str(exc), "last_error_ts": int(time.time()),
+                                   "fails": self.fails})
                 print(f"[heatpump] error: {exc}", file=sys.stderr)
-            # look for a volume-flow value once, then weekly (about 100+ cloud
-            # requests, so never on every poll)
-            if self.last_poll and not self._stop.is_set():
+            # look for a volume-flow value once the cloud answers reliably (two
+            # good polls in a row), then weekly; after a failed search next day.
+            # It is ~100 spaced-out requests, so never on every poll.
+            if self.ok_streak >= 2 and not self._stop.is_set():
                 d = _flow_disc_load(self.store)
-                if not d or time.time() - (d.get("ts") or 0) >= FLOW_REDISCOVER_S:
+                age = time.time() - ((d or {}).get("ts") or 0)
+                if not d or age >= (86400 if d.get("error") else FLOW_REDISCOVER_S):
                     self.discover_flow()
-            self._stop.wait(self.interval)
+            # after a failure try again sooner: 1, 2, 4 min, then the normal interval
+            wait = self.interval if not self.fails else min(self.interval, 60 * 2 ** (self.fails - 1))
+            self._stop.wait(wait)
 
     def discover_flow(self) -> dict | None:
         """Search the device's resources for a volume flow; result kept in kv."""
@@ -10357,6 +10378,8 @@ class Handler(BaseHTTPRequestHandler):
                 if not homecom:
                     return self._send_json({"error": "homecom modul fehlt"}, 500)
                 return self._send_json({"url": homecom.authorize_url()})
+            if path == "/api/homecom/diag":
+                return self._send_json(homecom_diag(self.ctx))
             if path == "/api/homecom/probe":
                 client = self.ctx.homecom_client()
                 if not client:
@@ -10564,12 +10587,214 @@ class Handler(BaseHTTPRequestHandler):
         self._send_bytes(200, data, ctype, headers, gz=gz, compress=gz is not None)
 
 
+class _QuietServer(ThreadingHTTPServer):
+    """Browsers close kept-alive connections at will (HTTP/1.1) – that is
+    normal and not worth a traceback in the console."""
+
+    def handle_error(self, request, client_address):
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ConnectionResetError, BrokenPipeError, ConnectionAbortedError,
+                            socket.timeout, TimeoutError)):
+            return
+        super().handle_error(request, client_address)
+
+
 def make_server(host, port, ctx, frontend_dir):
     handler = type("BoundHandler", (Handler,), {
         "ctx": ctx, "frontend_dir": frontend_dir,
     })
-    httpd = ThreadingHTTPServer((host, port), handler)
+    httpd = _QuietServer((host, port), handler)
     return httpd
+
+
+# --------------------------------------------------------------------------- #
+# Heat pump: connection test (Setup → Wärmepumpe → "Verbindung testen", and
+# `python3 shc_bridge.py diag` in a terminal)
+# --------------------------------------------------------------------------- #
+def _net_probe(host: str, port: int = 443, timeout: float = 8.0) -> dict:
+    """DNS → TCP → TLS to one host, each step timed; stops at the first failure."""
+    out = {"host": host}
+    ms = lambda t: round((time.time() - t) * 1000)
+    t0 = time.time()
+    try:
+        ips = []
+        for info in socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM):
+            if info[4][0] not in ips:
+                ips.append(info[4][0])
+        out["dns"] = {"ok": True, "ms": ms(t0), "ips": ips[:4]}
+    except OSError as exc:
+        out["dns"] = {"ok": False, "ms": ms(t0), "error": str(exc) or exc.__class__.__name__}
+        return out
+    t1 = time.time()
+    try:
+        sock = socket.create_connection((host, port), timeout=timeout)
+    except OSError as exc:
+        out["tcp"] = {"ok": False, "ms": ms(t1), "error": str(exc) or exc.__class__.__name__}
+        return out
+    out["tcp"] = {"ok": True, "ms": ms(t1), "ip": sock.getpeername()[0]}
+    t2 = time.time()
+    try:
+        with ssl.create_default_context().wrap_socket(sock, server_hostname=host) as tls:
+            out["tls"] = {"ok": True, "ms": ms(t2), "version": tls.version(),
+                          "cipher": (tls.cipher() or [None])[0]}
+    except (OSError, ssl.SSLError) as exc:
+        out["tls"] = {"ok": False, "ms": ms(t2), "error": str(exc) or exc.__class__.__name__}
+        try:
+            sock.close()
+        except OSError:
+            pass
+    return out
+
+
+def _homecom_hosts() -> list:
+    if homecom:
+        return [(homecom.OAUTH_HOST, "Anmeldung (SingleKey ID)"), (homecom.API_HOST, "Daten (HomeCom)")]
+    return [("singlekey-id.com", "Anmeldung (SingleKey ID)"),
+            ("pointt-api.bosch-thermotechnology.com", "Daten (HomeCom)")]
+
+
+def _homecom_verdict(d: dict) -> tuple:
+    """(level ok/warn/error, one German sentence, tips) for the test result."""
+    tls13 = d.get("tls13")
+    for n in d.get("net") or []:
+        h = n["host"]
+        if not (n.get("dns") or {}).get("ok"):
+            return ("error", f"Der Rechner kann {h} nicht auflösen (DNS).",
+                    ["Internet am Rechner der Bridge prüfen (z. B. im Browser eine Seite öffnen).",
+                     "Router/DNS neu starten; ein VPN oder Werbefilter kann Namen blockieren."])
+        if not (n.get("tcp") or {}).get("ok"):
+            return ("error", f"{h} ist über Port 443 nicht erreichbar.",
+                    ["Internet des Rechners prüfen.",
+                     "Firewall/Filter (Little Snitch, Router-Sicherheitsfunktion, VPN) prüfen.",
+                     "Falls alles andere geht: Störung bei Bosch – später erneut testen."])
+        if not (n.get("tls") or {}).get("ok"):
+            tips = [f"Gegenprobe im Terminal: curl -sS -o /dev/null -w '%{{http_code}}\\n' https://{h}/"]
+            if not tls13:
+                tips.insert(0, f"Dein Python ({d.get('python')}, {d.get('ssl')}) kann kein TLS 1.3. Klappt die "
+                               "curl-Gegenprobe, liegt es am Python: ein aktuelles Python von python.org "
+                               "installieren, danach im Ordner Programme → Python 3.x einmal „Install "
+                               "Certificates.command“ doppelklicken. Die Startskripte nehmen es dann automatisch.")
+            else:
+                tips.append("Meist eine Störung bei Bosch oder ein Filter im Netz (VPN, Jugendschutz, Router).")
+            return ("error", f"Die Verbindung zu {h} scheitert beim Verschlüsseln (TLS).", tips)
+    if not d.get("configured"):
+        return ("warn", "Das Netz zur Bosch-Cloud ist in Ordnung – HomeCom ist aber noch nicht verbunden.",
+                ["Im Setup unter „Wärmepumpe (HomeCom)“ verbinden."])
+    tok = d.get("token") or {}
+    if tok and not tok.get("ok"):
+        if tok.get("expired"):
+            return ("error", "Die HomeCom-Anmeldung ist abgelaufen.",
+                    ["Im Setup unter „Wärmepumpe (HomeCom)“ neu verbinden (Login-Link → Code einfügen)."])
+        return ("error", f"Die Anmeldung bei Bosch klappt gerade nicht: {tok.get('error')}",
+                ["Später erneut testen; bleibt es, im Setup neu verbinden."])
+    api = d.get("api") or {}
+    st = api.get("status")
+    if api and not api.get("ok"):
+        if st == 429:
+            return ("warn", "Bosch drosselt gerade die Abfragen (zu viele Anfragen).",
+                    ["Das legt sich meist nach einiger Zeit – die Bridge fragt danach wieder alle 5 Minuten."])
+        if st == 401:
+            return ("error", "Bosch lehnt die Anmeldung ab (HTTP 401).", ["Im Setup neu verbinden."])
+        if st in (403, 404):
+            return ("warn", f"Die Bosch-Cloud kennt die Werte des Gateways gerade nicht (HTTP {st}).",
+                    ["In der HomeCom-App prüfen, ob die Wärmepumpe online ist (Internet-Modul/WLAN der Wärmepumpe)."])
+        if st and st >= 500:
+            return ("warn", f"Störung bei Bosch (HTTP {st}).", ["Später erneut testen."])
+        return ("error", f"Datenabruf fehlgeschlagen: {api.get('error') or ('HTTP ' + str(st))}", [])
+    p = d.get("poller") or {}
+    if api.get("ok"):
+        if p.get("last_error"):
+            return ("ok", "Verbindung und Anmeldung funktionieren jetzt. Der letzte Abruf war fehlgeschlagen – "
+                          "die Bridge versucht es automatisch erneut.",
+                    [f"Letzter Fehler: {p.get('last_error')}"])
+        return ("ok", "Verbindung, Anmeldung und Datenabruf funktionieren.", [])
+    return ("warn", "Kein vollständiger Test möglich.", [])
+
+
+def homecom_diag(ctx: "Runtime", live: bool = True) -> dict:
+    """Where does the heat-pump data get stuck? Network per host (DNS, TCP,
+    TLS), then – with the bridge's own login – one token check and one data
+    request. ``live=False`` (terminal) leaves the login alone, so a running
+    bridge's single-use refresh token is never rotated from a second process."""
+    cfg, store = ctx.cfg, ctx.store
+    now = int(time.time())
+    out = {"ok": True, "ts": now, "python": sys.version.split()[0], "executable": sys.executable,
+           "ssl": ssl.OPENSSL_VERSION, "tls13": bool(getattr(ssl, "HAS_TLSv1_3", False)),
+           "module": homecom is not None, "configured": bool(cfg.get("homecom_refresh_token")),
+           "gateway": cfg.get("homecom_gateway") or None}
+    hp = ctx.hp
+    out["poller"] = {"running": bool(hp and hp.is_alive()), "interval": getattr(hp, "interval", None),
+                     "last_poll": getattr(hp, "last_poll", None), "last_error": getattr(hp, "last_error", None),
+                     "fails": getattr(hp, "fails", 0)}
+    try:
+        rows = store.hp_samples_since(now - 86400)
+    except Exception:
+        rows = []
+    keys = ("energy_kwh", "heat_kwh", "supply_c", "outdoor_c")
+    good = [r for r in rows if any(r.get(k) is not None for k in keys)]
+    out["samples"] = {"n_24h": len(rows), "n_good_24h": len(good),
+                      "last_ts": rows[-1]["ts"] if rows else None, "last_good_ts": store.hp_last_good_ts()}
+    hosts = _homecom_hosts()
+    res = [None] * len(hosts)
+
+    def probe(i, h):
+        res[i] = {**_net_probe(h[0]), "role": h[1]}
+    ths = [threading.Thread(target=probe, args=(i, h), daemon=True) for i, h in enumerate(hosts)]
+    for t in ths:
+        t.start()
+    for t in ths:
+        t.join(30)
+    out["net"] = [r for r in res if r]
+    net_ok = all((n.get("tls") or {}).get("ok") for n in out["net"]) and len(out["net"]) == len(hosts)
+    if live and net_ok and out["configured"] and homecom:
+        client = ctx.homecom_client()
+        if client:
+            t0 = time.time()
+            try:
+                client._valid_token()
+                out["token"] = {"ok": True, "ms": round((time.time() - t0) * 1000)}
+            except Exception as exc:
+                out["token"] = {"ok": False, "ms": round((time.time() - t0) * 1000), "error": str(exc),
+                                "expired": isinstance(exc, getattr(homecom, "AuthExpiredError", ()))}
+            if out["token"]["ok"] and out["gateway"]:
+                t0 = time.time()
+                try:
+                    status, body = client.raw(out["gateway"], "/resource/heatSources/emon/totalConsumption")
+                    out["api"] = {"ok": status == 200, "status": status, "ms": round((time.time() - t0) * 1000),
+                                  "body": body[:240]}
+                except Exception as exc:
+                    out["api"] = {"ok": False, "ms": round((time.time() - t0) * 1000), "error": str(exc)}
+    level, text, tips = _homecom_verdict(out)
+    out.update({"level": level, "verdict": text, "tips": tips})
+    return out
+
+
+def cmd_diag(args, cfg):
+    """Terminal version of the connection test (no login – see homecom_diag)."""
+    store = Store(cfg["db"])
+    ctx = Runtime(store, cfg)
+    d = homecom_diag(ctx, live=False)
+    fmt_ts = lambda t: datetime.fromtimestamp(t).strftime("%d.%m. %H:%M") if t else "–"
+    print(f"\nPython {d['python']} ({d['executable']})")
+    print(f"SSL    {d['ssl']} · TLS 1.3: {'ja' if d['tls13'] else 'NEIN'}")
+    print(f"HomeCom verbunden: {'ja' if d['configured'] else 'nein'} · Gateway {d['gateway'] or '–'}")
+    sm = d["samples"]
+    print(f"Wärmepumpen-Werte: letzte echte Messung {fmt_ts(sm['last_good_ts'])} · "
+          f"letzte 24 h: {sm['n_good_24h']} von {sm['n_24h']} Abfragen mit Werten\n")
+    for n in d["net"]:
+        parts = []
+        for step in ("dns", "tcp", "tls"):
+            x = n.get(step)
+            if not x:
+                continue
+            extra = f" {x.get('version')}" if step == "tls" and x.get("ok") else ""
+            parts.append(f"{step.upper()} {'ok' if x['ok'] else 'FEHLER'} {x['ms']} ms{extra}"
+                         + ("" if x["ok"] else f" ({x.get('error')})"))
+        print(f"{n['host']:40s} {' · '.join(parts)}")
+    print(f"\n=> {d['verdict']}")
+    for t in d.get("tips") or []:
+        print(f"   - {t}")
+    print()
 
 
 def local_ip() -> str:
@@ -10762,6 +10987,8 @@ def main():
     p_serve.add_argument("--price", type=float, help="price per kWh (e.g. 0.35)")
     p_serve.add_argument("--frontend", help="path to the frontend directory")
 
+    sub.add_parser("diag", help="test the connection to the Bosch cloud (heat pump)")
+
     args = parser.parse_args()
     cfg = load_config(args.config)
 
@@ -10769,6 +10996,8 @@ def main():
         cmd_pair(args, cfg)
     elif args.cmd == "serve":
         cmd_serve(args, cfg)
+    elif args.cmd == "diag":
+        cmd_diag(args, cfg)
 
 
 if __name__ == "__main__":

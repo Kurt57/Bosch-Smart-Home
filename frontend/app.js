@@ -93,8 +93,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v192';   // short tag shown always-on in the header
-const APP_VERSION = 'v192 · 2026-11-18 · PV-Anlage (Fronius): Die Bridge liest den Wechselrichter direkt im Heimnetz über die Solar API (nur lesend, ohne Cloud) – Setup mit Suche im Netz, Verbinden und Rohdaten-Diagnose. Neu: Energiefluss jetzt (Sonne, Haus, Batterie, Netz, Wärmepumpe) in der Übersicht; im Tab PV „Deine PV-Anlage“ mit Tageswerten, Tagesverlauf, Verlauf über 7/30/90 Tage oder ein Jahr, Monatswerten mit Erwartung aus Planer/PVGIS sowie Wechselrichter, Strings, Batterie und Smart Meter; in der Wärmepumpen-Karte der Sonnenstrom-Anteil. Netzbezug und Einspeisung kommen aus den Zählerständen des Smart Meters, mit Prüfung auf Lücken und Zählersprünge. Im Demo-Modus eine simulierte Anlage. Außerdem behoben: Tibber-Token, Home-Assistant-Zugang und die Zuordnung Fensterkontakt → Raum gingen bei jedem Neustart der Bridge verloren. ' +
+const APP_BUILD = 'v193';   // short tag shown always-on in the header
+const APP_VERSION = 'v193 · 2026-11-18 · Wärmepumpe: Ist die HomeCom-Anmeldung abgelaufen oder die Bosch-Cloud nicht erreichbar, speichert die Bridge keine leeren Messungen mehr, sondern meldet den Grund – die Wärmepumpen-Karte zeigt ihn mit Link zum neuen Verbindungstest (Setup → Wärmepumpe → „Verbindung zur Bosch-Cloud testen“: DNS, Verbindung, Verschlüsselung, Anmeldung, Datenabruf; Ergebnis kopierbar; im Terminal: python3 shc_bridge.py diag). Nach einem Fehler versucht die Bridge es nach 1, 2, 4 Minuten erneut. Die Volumenstrom-Suche fragt schonender ab und bricht bei Verbindungsproblemen sofort ab. Keine Tracebacks mehr im Terminal, wenn ein Browser eine Verbindung schließt. Startskripte nutzen ein aktuelles Python (python.org/Homebrew, TLS 1.3), falls installiert. ' +
+  'v192 · 2026-11-18 · PV-Anlage (Fronius): Die Bridge liest den Wechselrichter direkt im Heimnetz über die Solar API (nur lesend, ohne Cloud) – Setup mit Suche im Netz, Verbinden und Rohdaten-Diagnose. Neu: Energiefluss jetzt (Sonne, Haus, Batterie, Netz, Wärmepumpe) in der Übersicht; im Tab PV „Deine PV-Anlage“ mit Tageswerten, Tagesverlauf, Verlauf über 7/30/90 Tage oder ein Jahr, Monatswerten mit Erwartung aus Planer/PVGIS sowie Wechselrichter, Strings, Batterie und Smart Meter; in der Wärmepumpen-Karte der Sonnenstrom-Anteil. Netzbezug und Einspeisung kommen aus den Zählerständen des Smart Meters, mit Prüfung auf Lücken und Zählersprünge. Im Demo-Modus eine simulierte Anlage. Außerdem behoben: Tibber-Token, Home-Assistant-Zugang und die Zuordnung Fensterkontakt → Raum gingen bei jedem Neustart der Bridge verloren. ' +
   'v191 · 2026-11-16 · Volumenstrom in der Live-Karte immer sichtbar: mit Wert (gelesen/abgeleitet) oder mit dem Grund, warum es noch keinen gibt (z. B. kein Rücklauf gemeldet, kein Heizbetrieb erkannt, Läufe zu kurz, Spreizung zu klein). Neben Vor-/Rücklauf steht jetzt die Spreizung. Abgeleiteter Volumenstrom genauer: Abtau-Abschnitte zählen weder bei der Wärme noch bei der Zeit (vorher zu niedrig, z. B. 15,9 statt 17,2 l/min). ' +
   'v190 · 2026-11-16 · Volumenstrom der Wärmepumpe: Die Bridge durchsucht einmal (dann wöchentlich) alle Werte, die die Wärmepumpe über HomeCom meldet, nach einem Volumenstrom und schreibt ihn mit („gelesen“). Meldet sie keinen, wird er aus Wärmemenge ÷ Spreizung je Heizlauf berechnet („abgeleitet“) – auch mit grobem 1-kWh-Wärmezähler über viele Läufe genau. Anzeige in der Live-Karte und im Abgleich: Volumenstrom gegen die Summe der Ziel-Durchflüsse aller Kreise; liefert die Pumpe weniger, steht je Kreis der erreichbare Wert, und dein Tacosetter-Wert wird damit verglichen. Unter „Datenlage“: Quelle, Suchergebnis, die letzten Heizläufe und ein Knopf für eine neue Suche. ' +
   'v189 · 2026-11-16 · App startet schneller: Die Bridge rechnet abgeschlossene Tage nur noch einmal (vorberechnete Tageswerte statt Rohdaten), alles Nötige für den Start kommt in EINER Anfrage, die schon beim Laden der Seite losgeht. Beim Wiederaufruf steht sofort der letzte bekannte Stand da („Stand hh:mm · wird aktualisiert …“) und wird ersetzt, sobald die frischen Zahlen da sind; ist die Bridge nicht erreichbar, bleibt der letzte echte Stand stehen statt Demo-Zahlen. Gerendert wird nur der sichtbare Tab, die anderen beim Öffnen. Übertragung komprimiert, App-Code wird im Browser zwischengespeichert. Neu im Setup: „Startzeit“ – was der Start gekostet hat, im Browser und auf der Bridge, mit Knopf zum kalten Nachrechnen. Einstellungen, die direkt vor dem Neuladen geändert wurden, gehen nicht mehr verloren. ' +
@@ -6551,7 +6552,15 @@ function renderHeatpump() {
       }
       rows.push(['Starts / Betriebsstunden', fmt(l.starts, 0) + (l.working_h != null ? ' / ' + fmt(l.working_h, 0) + ' h' : '') + extra]);
     }
-    body.innerHTML = `<div class="note" style="margin:-2px 0 10px">${hpStatusPill(l)}</div>` +
+    const lpAge = l.last_poll ? Date.now() / 1000 - l.last_poll : null;
+    const since = l.last_poll ? new Date(l.last_poll * 1000).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : null;
+    const hpWarn = l.last_error
+      ? `<div class="note" style="margin:0 0 10px;border-left:3px solid #ff6b8a;padding-left:10px">⚠︎ <b>Keine neuen Werte von der Wärmepumpe</b>` +
+        `${since ? ' (letzte von ' + since + ')' : ''}: ${esc(l.last_error)}<br><a href="#" data-hp-diag="1" style="color:var(--accent)">Verbindung zur Bosch-Cloud testen</a></div>`
+      : (lpAge != null && lpAge > 1500
+        ? `<div class="note" style="margin:0 0 10px;border-left:3px solid #ffb64d;padding-left:10px">⚠︎ Die Werte sind von ${since} – seitdem kam nichts Neues. ` +
+          '<a href="#" data-hp-diag="1" style="color:var(--accent)">Verbindung testen</a></div>' : '');
+    body.innerHTML = hpWarn + `<div class="note" style="margin:-2px 0 10px">${hpStatusPill(l)}</div>` +
       (rows.length ? rows.map(([k, v]) => statusRow(k, v)).join('')
         : '<div class="note">Verbunden – warte auf die erste Messung.</div>') +
       taktNote +
@@ -10934,6 +10943,7 @@ function init() {
 
   const pfb = $('perf-bench'); if (pfb) pfb.addEventListener('click', () => renderPerf(true));
   initPvReal();
+  initHpDiag();
   if (!_bootDriven) loadAll();
   setInterval(refreshLive, 30000);
   // Service worker: register, then actively check for a newer version and take
@@ -11783,6 +11793,78 @@ function initPvReal() {
     if (!h || !h.fronius_connected || document.visibilityState !== 'visible') return;
     if (['overview', 'pv'].includes(activeView())) loadFronius();
   }, 10000);
+}
+
+/* ---- Setup → Wärmepumpe: where does the data get stuck? ------------------- */
+let _hpDiagText = '';
+function hpDiagHtml(d) {
+  const col = { ok: '#4be0b0', warn: '#ffb64d', error: '#ff6b8a' }[d.level] || 'var(--muted)';
+  const when = t => t ? new Date(t * 1000).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '–';
+  const step = (x, label) => !x ? '' : `${x.ok ? '✅' : '❌'} ${label} <small style="color:var(--muted)">${fmt(x.ms, 0)} ms</small>` +
+    (x.ok && x.version ? ` <small style="color:var(--muted)">${esc(x.version)}</small>` : '') +
+    (!x.ok ? `<br><small style="color:#ff6b8a">${esc(x.error || '')}</small>` : '');
+  let h = `<div style="border-left:3px solid ${col};padding:6px 0 6px 10px;margin-bottom:8px;font-size:13.5px;line-height:1.5">` +
+    `<b style="color:${col}">${esc(d.verdict || '')}</b>` +
+    ((d.tips || []).length ? '<ul style="margin:6px 0 0 18px;padding:0">' + d.tips.map(t => `<li>${esc(t)}</li>`).join('') + '</ul>' : '') + '</div>';
+  (d.net || []).forEach(n => {
+    h += statusRow(`${esc(n.host)}<br><small style="color:var(--muted)">${esc(n.role || '')}</small>`,
+      [step(n.dns, 'Name (DNS)'), step(n.tcp, 'Verbindung'), step(n.tls, 'Verschlüsselung')].filter(Boolean).join('<br>'));
+  });
+  if (d.token) h += statusRow('Anmeldung (Token)', d.token.ok ? `✅ <small style="color:var(--muted)">${fmt(d.token.ms, 0)} ms</small>` : `❌ <small style="color:#ff6b8a">${esc(d.token.error || '')}</small>`);
+  if (d.api) h += statusRow('Datenabruf (Zähler)', d.api.ok ? `✅ HTTP 200 <small style="color:var(--muted)">${fmt(d.api.ms, 0)} ms</small>`
+    : `❌ ${d.api.status ? 'HTTP ' + d.api.status : ''} <small style="color:#ff6b8a">${esc(d.api.error || '')}</small>`);
+  const sm = d.samples || {}, p = d.poller || {};
+  h += statusRow('Letzte echte Messung', when(sm.last_good_ts)) +
+    statusRow('Letzte 24 h', `${fmt(sm.n_good_24h || 0, 0)} von ${fmt(sm.n_24h || 0, 0)} Abfragen mit Werten`) +
+    (p.last_error ? statusRow('Letzter Fehler', `<small>${esc(p.last_error)}</small>`) : '') +
+    statusRow('Python der Bridge', `${esc(d.python || '')} · ${esc(d.ssl || '')}` + (d.tls13 ? '' : ' · <b style="color:#ffb64d">kein TLS 1.3</b>'));
+  return h;
+}
+function hpDiagText(d) {
+  const L = [`Verbindungstest Bosch-Cloud · ${new Date((d.ts || 0) * 1000).toLocaleString('de-DE')}`,
+    `Ergebnis: ${d.verdict || ''}`].concat((d.tips || []).map(t => '- ' + t));
+  L.push(`Python ${d.python} (${d.executable || ''}) · ${d.ssl} · TLS 1.3: ${d.tls13 ? 'ja' : 'nein'}`);
+  L.push(`HomeCom verbunden: ${d.configured ? 'ja' : 'nein'} · Gateway ${d.gateway || '–'}`);
+  (d.net || []).forEach(n => {
+    const part = k => n[k] ? `${k.toUpperCase()} ${n[k].ok ? 'ok' : 'FEHLER'} ${n[k].ms} ms${n[k].version ? ' ' + n[k].version : ''}${n[k].ok ? '' : ' (' + n[k].error + ')'}` : '';
+    L.push(`${n.host}: ${['dns', 'tcp', 'tls'].map(part).filter(Boolean).join(' · ')}`);
+  });
+  if (d.token) L.push(`Anmeldung: ${d.token.ok ? 'ok' : 'FEHLER ' + (d.token.error || '')}`);
+  if (d.api) L.push(`Datenabruf: ${d.api.status ? 'HTTP ' + d.api.status : ''} ${d.api.ok ? 'ok' : (d.api.error || '')}`);
+  const sm = d.samples || {}, p = d.poller || {};
+  L.push(`Letzte echte Messung: ${sm.last_good_ts ? new Date(sm.last_good_ts * 1000).toLocaleString('de-DE') : '–'} · 24 h: ${sm.n_good_24h} von ${sm.n_24h} mit Werten`);
+  if (p.last_error) L.push(`Letzter Fehler: ${p.last_error} (${p.fails || 0}× in Folge)`);
+  return L.join('\n');
+}
+async function hpDiag() {
+  const out = $('hp-diag-out'), b = $('hp-diag'), cp = $('hp-diag-copy');
+  if (!out) return;
+  if (b) b.disabled = true;
+  out.innerHTML = '<div class="note">Teste die Verbindung zur Bosch-Cloud … (dauert bis zu 30 Sekunden)</div>';
+  try {
+    const d = await api('/api/homecom/diag');
+    out.innerHTML = hpDiagHtml(d);
+    _hpDiagText = hpDiagText(d);
+    if (cp) cp.hidden = false;
+  } catch (e) {
+    out.innerHTML = '<div class="note">Der Test geht nur, wenn die Seite von der Bridge geöffnet ist (und die Bridge läuft).</div>';
+  } finally { if (b) b.disabled = false; }
+}
+function initHpDiag() {
+  const b = $('hp-diag'); if (b) b.addEventListener('click', hpDiag);
+  const cp = $('hp-diag-copy');
+  if (cp) cp.addEventListener('click', async () => {
+    const ok = await copyText(_hpDiagText || '');
+    cp.textContent = ok ? '✅ Kopiert' : 'Bitte Text markieren und kopieren';
+    setTimeout(() => { cp.textContent = '📋 Ergebnis kopieren'; }, 2500);
+  });
+  // "Verbindung testen" link on the heat-pump card → Setup, run the test
+  document.addEventListener('click', e => {
+    const a = e.target.closest && e.target.closest('[data-hp-diag]'); if (!a) return;
+    e.preventDefault();
+    switchView('settings');
+    setTimeout(() => { const c = $('homecom-card'); if (c) c.scrollIntoView({ behavior: 'smooth', block: 'start' }); hpDiag(); }, 250);
+  });
 }
 
 /* ---- Setup → "Startzeit": what this start cost, measured ------------------ */
