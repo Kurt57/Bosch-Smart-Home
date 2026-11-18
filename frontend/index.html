@@ -267,7 +267,7 @@
   #kiosk-flow:not(:empty){margin:16px 0; background:var(--k-card); border:.5px solid var(--k-sep);
     border-radius:22px; padding:14px 10px 6px; box-shadow:var(--k-shadow);
     -webkit-backdrop-filter:var(--k-blur); backdrop-filter:var(--k-blur)}
-  #kiosk-flow svg{width:100%; height:auto; display:block; max-width:520px; margin:0 auto}
+  #kiosk-flow svg{width:100%; height:auto; display:block; max-width:640px; margin:0 auto}
   .kf-node-bg{fill:var(--k-card2)}
   .kf-line{stroke:var(--k-sep); stroke-width:2.5; fill:none; stroke-linecap:round}
   .kf-icon{font-size:22px}
@@ -289,6 +289,41 @@
   .kl-bar{height:6px; border-radius:3px; background:var(--k-card2); margin-top:5px; overflow:hidden}
   .kl-bar span{display:block; height:100%; border-radius:3px; transition:width .5s ease}
   .kl-w{flex:0 0 auto; font-size:15px; font-weight:700; letter-spacing:-.3px; min-width:62px; text-align:right}
+  /* awareness tiles: what needs attention now */
+  #kiosk-alerts{display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:12px; margin:14px 0 0}
+  #kiosk-alerts:empty{display:none}
+  .ka{display:flex; gap:13px; align-items:center; border-radius:20px; padding:15px 17px; background:var(--k-card);
+    border:1px solid var(--k-sep); box-shadow:var(--k-shadow)}
+  .ka-ic{font-size:32px; line-height:1; flex:0 0 auto}
+  .ka-tx{min-width:0}
+  .ka-t{font-size:18px; font-weight:700; letter-spacing:-.2px; line-height:1.2}
+  .ka-d{font-size:13.5px; color:var(--k-ink); opacity:.75; margin-top:4px; line-height:1.35}
+  .ka-urgent{background:var(--kb-red-bg); border-color:var(--kb-red-bd)} .ka-urgent .ka-t{color:var(--kb-red)}
+  .ka-warn{background:var(--kb-amber-bg); border-color:var(--kb-amber-bd)} .ka-warn .ka-t{color:var(--kb-amber)}
+  .ka-info{background:var(--kb-blue-bg); border-color:var(--kb-blue-bd)} .ka-info .ka-t{color:var(--kb-blue)}
+  .ka-good{background:var(--kb-green-bg); border-color:var(--kb-green-bd)} .ka-good .ka-t{color:var(--kb-green)}
+  .ka-blink{animation:kaPulse 1.5s ease-in-out infinite}
+  .ka-urgent.ka-blink{animation-name:kaPulseRed}
+  .ka-blink .ka-ic{animation:kaIcon 1.5s ease-in-out infinite}
+  @keyframes kaPulse{0%,100%{box-shadow:0 0 0 0 rgba(255,159,10,0)} 50%{box-shadow:0 0 0 7px rgba(255,159,10,.38); background:rgba(255,159,10,.30)}}
+  @keyframes kaPulseRed{0%,100%{box-shadow:0 0 0 0 rgba(255,69,58,0)} 50%{box-shadow:0 0 0 8px rgba(255,69,58,.42); background:rgba(255,69,58,.36)}}
+  @keyframes kaIcon{50%{transform:scale(1.18)}}
+  @media (prefers-reduced-motion:reduce){.ka-blink,.ka-blink .ka-ic{animation:none} .ka-blink{outline:3px solid currentColor}}
+  .ka-ok{font-size:15px; font-weight:600; color:var(--kb-green); padding:4px 2px}
+  /* calendar */
+  #kiosk-cal:not(:empty){margin:16px 0; background:var(--k-card); border:.5px solid var(--k-sep);
+    border-radius:22px; padding:16px 18px; box-shadow:var(--k-shadow)}
+  .kc-day{font-size:12px; font-weight:700; color:var(--k-sub); text-transform:uppercase; letter-spacing:.06em; margin:12px 0 4px}
+  .kc-day:first-of-type{margin-top:4px}
+  .kc-row{display:flex; align-items:center; gap:10px; padding:6px 0; font-size:16px}
+  .kc-row.on{font-weight:700}
+  .kc-dot{width:9px; height:9px; border-radius:50%; flex:0 0 auto}
+  .kc-time{flex:0 0 auto; min-width:104px; color:var(--k-sub); font-size:14px; font-variant-numeric:tabular-nums}
+  .kc-title{flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .kc-loc{color:var(--k-sub); font-weight:400; font-size:13px}
+  .kc-b{flex:0 0 auto; font-size:12px; font-weight:700; border-radius:999px; padding:3px 10px}
+  .kc-now{background:var(--kb-green-bg); color:var(--kb-green)}
+  .kc-soon{background:var(--kb-amber-bg); color:var(--kb-amber)}
 </style>
 </head>
 <body>
@@ -1638,6 +1673,30 @@
       <button class="btn sec" id="fr-disconnect" style="margin-top:10px" hidden>Verbindung trennen</button>
     </div>
 
+    <div class="card" id="cal-card">
+      <h2>📅 Kalender im Wohn-Dashboard</h2>
+      <div class="note" id="cal-status" style="margin-bottom:10px"></div>
+      <div class="note" style="line-height:1.6; margin-bottom:10px">
+        Zeigt eure Termine auf dem Wohn-Dashboard (<b>…/#dash</b>) – heute, morgen und die nächsten Tage; was in der
+        nächsten Stunde ansteht und Mülltermine am Vorabend als Hinweis. <b>Nur lesend.</b><br>
+        <b>iPhone (iCloud):</b> Kalender-App → <b>Kalender</b> → <b>ⓘ</b> neben dem Kalender → <b>„Öffentlicher
+        Kalender“</b> einschalten → <b>„Link teilen …“</b> → kopieren (beginnt mit <code>webcal://</code>).<br>
+        <b>Google:</b> Kalender-Einstellungen → <b>„Privatadresse im iCal-Format“</b>.<br>
+        Mehrere Kalender: eine Adresse pro Zeile. Die Adressen bleiben <b>nur lokal in der Bridge</b> – wer sie kennt,
+        kann den Kalender lesen.
+      </div>
+      <label>Kalender-Adresse(n)</label>
+      <textarea id="cal-urls" rows="3" autocomplete="off" autocapitalize="off" spellcheck="false"
+        placeholder="webcal://p…-caldav.icloud.com/published/2/…"
+        style="width:100%; box-sizing:border-box; padding:10px 12px; border-radius:12px; border:1px solid var(--line);
+               background:var(--card2); color:var(--ink); font:inherit; font-size:14px; resize:vertical"></textarea>
+      <div style="display:flex; gap:8px; flex-wrap:wrap">
+        <button class="btn" id="cal-save" style="flex:1; min-width:140px">✅ Speichern &amp; prüfen</button>
+        <button class="btn sec" id="cal-clear" style="flex:1; min-width:140px" hidden>Entfernen</button>
+      </div>
+      <div class="note" id="cal-note" style="margin-top:8px; line-height:1.6"></div>
+    </div>
+
     <div class="card" id="export-card">
       <h2>📤 Verbrauchsdaten exportieren (CSV)</h2>
       <div class="note" style="line-height:1.6; margin-bottom:10px">
@@ -1921,8 +1980,10 @@
     <button id="kiosk-theme" aria-label="Hell/Dunkel">🌙</button>
     <button id="kiosk-exit" aria-label="Schließen">✕</button>
   </div>
+  <div id="kiosk-alerts"></div>
   <div id="kiosk-warn"></div>
   <div id="kiosk-banner"></div>
+  <div id="kiosk-cal"></div>
   <div id="kiosk-flow"></div>
   <div id="kiosk-loads"></div>
   <div id="kiosk-rooms"></div>

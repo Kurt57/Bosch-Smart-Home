@@ -17,8 +17,9 @@ Was du danach siehst:
   Phase mit Leistung, Strom, Spannung und cos φ). Der PV-Planer bleibt darunter für Erweiterungen.
 * **Wärmepumpe → Live:** wie viel des Stroms gerade von der Sonne kommt.
 * **Wohn-Dashboard (`…/#dash`):** Energiefluss und Empfehlung mit den **gemessenen** Werten
-  (alle 10 Sekunden). Antwortet der Wechselrichter länger als 2 Minuten nicht, zeigt es wieder
-  die Schätzung – mit Hinweis.
+  (alle 10 Sekunden), vom Haus aus Linien zu den größten Verbrauchern (Wärmepumpe, einzeln
+  gemessene Geräte, nicht einzeln gemessener Rest). Antwortet der Wechselrichter länger als
+  2 Minuten nicht, zeigt es wieder die Schätzung – mit Hinweis.
 
 ## Voraussetzungen
 

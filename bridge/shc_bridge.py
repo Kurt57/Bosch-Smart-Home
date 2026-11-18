@@ -92,6 +92,10 @@ try:
     import fronius  # optional Fronius inverter (local Solar API: PV, battery, smart meter)
 except Exception:  # pragma: no cover - keeps the bridge running without it
     fronius = None
+try:
+    import calendar_ics  # optional calendar feeds (iCloud/Google/.ics) for the dashboard
+except Exception:  # pragma: no cover - keeps the bridge running without it
+    calendar_ics = None
 
 DEFAULT_FRONTEND = os.path.normpath(os.path.join(HERE, "..", "frontend"))
 DEFAULT_DB = os.path.join(HERE, "energy.db")
@@ -6645,6 +6649,23 @@ def _window_events(log_rows: list[dict], now: int) -> list[dict]:
     return events
 
 
+def window_open_since(store: "Store", now: int | None = None, days: float = 3) -> dict:
+    """Room → time it has been open since without a break, from the window
+    change log (the poller writes a row whenever the set of open rooms changes).
+    Only rooms that are open in the latest row."""
+    now = int(now or time.time())
+    since: dict = {}
+    for r in store.window_log_since(int(now - days * 86400)):
+        cur = ({x.strip() for x in (r.get("rooms") or "").split(",") if x.strip()}
+               if (r.get("open_count") or 0) > 0 else set())
+        for room in list(since):
+            if room not in cur:
+                del since[room]
+        for room in cur:
+            since.setdefault(room, int(r["ts"]))
+    return since
+
+
 def compute_window_awareness(store: "Store", days: int = 3, current: list | None = None) -> dict:
     """Window-open events over time + their effect on the indoor temperature –
     so you SEE whether ventilation drops the temperature (and heat is lost)."""
@@ -8334,6 +8355,99 @@ def compute_pv(store: "Store", days: int = 30, price: float = 0.35, feedin: floa
 
 
 # --------------------------------------------------------------------------- #
+# Calendar (dashboard): public iCloud / Google / .ics feeds, read-only
+# --------------------------------------------------------------------------- #
+CAL_MAX_AGE = 900               # s – a feed is fetched again after 15 min
+
+
+def calendar_load(ctx, url: str, max_age: float = CAL_MAX_AGE, force: bool = False) -> dict:
+    """Parsed calendar for url, from the cache unless older than max_age. On a
+    failed refresh the last good copy is kept and the error reported."""
+    now = time.time()
+    with ctx._cal_lock:
+        ent = ctx.cal_cache.get(url)
+        if ent and not force and now - ent["ts"] < max_age:
+            return ent
+    try:
+        cal = calendar_ics.parse(calendar_ics.fetch(url))
+        ent = {"ts": now, "cal": cal, "error": None, "ok_ts": now}
+    except Exception as exc:                      # CalendarError or anything unexpected
+        old = ctx.cal_cache.get(url) or {}
+        ent = {"ts": now, "cal": old.get("cal"), "error": str(exc), "ok_ts": old.get("ok_ts")}
+    with ctx._cal_lock:
+        ctx.cal_cache[url] = ent
+    return ent
+
+
+def _cal_event_out(e: dict, cal_name: str, color: str | None) -> dict:
+    out = {"start": int(time.mktime(e["start"].timetuple())), "end": int(time.mktime(e["end"].timetuple())),
+           "all_day": e["all_day"], "title": e["title"], "location": e["location"],
+           "calendar": cal_name, "color": color, "recurring": e["recurring"]}
+    if e["all_day"]:
+        last = e["end"] - timedelta(days=1) if e["end"] > e["start"] else e["start"]
+        out["start_day"], out["end_day"] = e["start"].strftime("%Y-%m-%d"), last.strftime("%Y-%m-%d")
+    return out
+
+
+def demo_calendar(now: int, days: int = 7) -> dict:
+    """Example family calendar for the demo dashboard (relative to today)."""
+    d0 = datetime.fromtimestamp(now).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    def at(day, h, m=0, dur_min=60):
+        s = d0 + timedelta(days=day, hours=h, minutes=m)
+        return s, s + timedelta(minutes=dur_min)
+
+    items = [("Kita bringen", *at(0, 7, 45, 30), False, ""), ("Zahnarzt", *at(0, 15, 30, 45), False, "Praxis Dr. Weber"),
+             ("Elternabend", *at(0, 19, 30, 90), False, "Grundschule"), ("Bio-Tonne", d0 + timedelta(days=1),
+             d0 + timedelta(days=2), True, ""), ("Schwimmen", *at(1, 17, 0, 60), False, "Hallenbad"),
+             ("Geburtstag Oma", d0 + timedelta(days=2), d0 + timedelta(days=3), True, ""),
+             ("Wartung Wärmepumpe", *at(3, 10, 0, 120), False, "")]
+    nh = datetime.fromtimestamp(now)
+    hour = nh.replace(minute=0, second=0, microsecond=0)
+    items.append(("Paket abholen", hour + timedelta(minutes=80), hour + timedelta(minutes=95), False, "Packstation"))
+    ev = [_cal_event_out({"start": s, "end": e, "all_day": ad, "title": t, "location": loc, "recurring": False},
+                         "Familie (Demo)", "#ff2d55") for t, s, e, ad, loc in items]
+    end = d0 + timedelta(days=days)
+    ev = [x for x in ev if x["end"] > int(d0.timestamp()) and x["start"] < int(end.timestamp())]
+    ev.sort(key=lambda x: (x["start"], not x["all_day"]))
+    return {"ok": True, "demo": True, "ts": now, "days": days, "events": ev,
+            "calendars": [{"name": "Familie (Demo)", "color": "#ff2d55", "error": None, "url": "Demo"}]}
+
+
+def compute_calendar(ctx, days: int = 7, force: bool = False) -> dict:
+    """Events of all configured calendars from today 00:00 for `days` days."""
+    now = int(time.time())
+    days = max(1, min(31, int(days)))
+    if ctx.mode == "demo":
+        return demo_calendar(now, days)
+    urls = [u for u in (ctx.cfg.get("calendar_urls") or []) if isinstance(u, str) and u.strip()]
+    base = {"ok": True, "demo": False, "ts": now, "days": days, "events": [], "calendars": []}
+    if not urls:
+        return {**base, "configured": False}
+    if calendar_ics is None:
+        return {**base, "ok": False, "error": "Kalender-Modul fehlt (bridge/calendar_ics.py)."}
+    d0 = datetime.fromtimestamp(now).replace(hour=0, minute=0, second=0, microsecond=0)
+    w0, w1 = d0, d0 + timedelta(days=days)
+    for url in urls:
+        ent = calendar_load(ctx, url, force=force)
+        cal = ent.get("cal")
+        name = (cal or {}).get("name") or "Kalender"
+        color = (cal or {}).get("color")
+        n = 0
+        if cal:
+            try:
+                for e in calendar_ics.expand(cal, w0, w1):
+                    base["events"].append(_cal_event_out(e, name, color))
+                    n += 1
+            except Exception as exc:
+                ent = {**ent, "error": f"Kalender nicht lesbar: {exc}"}
+        base["calendars"].append({"name": name, "color": color, "error": ent.get("error"), "events": n,
+                                  "url": calendar_ics.mask_url(url), "updated": int(ent.get("ok_ts") or 0) or None})
+    base["events"].sort(key=lambda x: (x["start"], not x["all_day"], x["title"]))
+    return {**base, "configured": True}
+
+
+# --------------------------------------------------------------------------- #
 # AEG / Electrolux appliance poller (washer, dryer, … via the developer API)
 # --------------------------------------------------------------------------- #
 class ElectroluxPoller(threading.Thread):
@@ -8431,6 +8545,8 @@ class Runtime:
         self.ha_last_error = None
         self.fr = None                  # FroniusPoller
         self.fr_state = {}              # latest PV snapshot (live flow, details, identity)
+        self.cal_cache = {}             # calendar url -> {"ts", "cal", "error"}
+        self._cal_lock = threading.Lock()
         # heavy-analytics result cache: these process every raw sample in
         # Python, so recomputing them on every request/refresh is slow. Cache
         # results with a TTL + per-key dedup, and a background thread keeps the
@@ -8872,7 +8988,7 @@ def save_config(cfg: dict, path: str):
             # set in the app as well – were missing here, so they were lost
             # whenever the bridge restarted
             "tibber_token", "ha_url", "ha_token", "ha_entities", "contact_room_map",
-            "fronius_host", "fronius_interval")
+            "fronius_host", "fronius_interval", "calendar_urls")
     data = {k: cfg[k] for k in keep if k in cfg and not str(k).startswith("_")}
     try:
         with open(path, "w", encoding="utf-8") as fh:
@@ -9376,6 +9492,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._post_fronius_connect(body)
             if parsed.path == "/api/fronius/disconnect":
                 return self._post_fronius_disconnect(body)
+            if parsed.path == "/api/calendar/config":
+                return self._post_calendar_config(body)
             if parsed.path == "/api/meter":
                 return self._post_meter(body)
             if parsed.path == "/api/meter/delete":
@@ -9904,6 +10022,46 @@ class Handler(BaseHTTPRequestHandler):
         self.ctx.calc_clear("pv")
         return self._send_json({"ok": True, "identity": ident, "demo": self.ctx.mode == "demo"})
 
+    def _post_calendar_config(self, body):
+        """Save the calendar links (kept only in the local config.json). Each
+        link is fetched once; only readable calendars are stored."""
+        if calendar_ics is None:
+            return self._send_json({"ok": False, "error": "Kalender-Modul fehlt (bridge/calendar_ics.py)."}, 500)
+        if body.get("clear"):
+            self.cfg["calendar_urls"] = []
+            save_config(self.cfg, self.cfg.get("_config_path", DEFAULT_CONFIG))
+            self.ctx.cal_cache.clear()
+            return self._send_json({"ok": True, "count": 0, "results": []})
+        raw = body.get("urls")
+        if isinstance(raw, str):
+            raw = raw.split()
+        urls = []
+        for u in raw or []:
+            u = str(u).strip()
+            if u and u not in urls:
+                urls.append(u)
+        if not urls:
+            return self._send_json({"ok": False, "error": "Bitte mindestens eine Kalender-Adresse eintragen."}, 400)
+        keep, results = [], []
+        for u in urls[:8]:
+            ent = calendar_load(self.ctx, u, force=True)
+            cal = ent.get("cal")
+            if cal is not None and not ent.get("error"):
+                keep.append(u)
+                now = datetime.now()
+                n7 = len(calendar_ics.expand(cal, now.replace(hour=0, minute=0, second=0, microsecond=0),
+                                             now + timedelta(days=7)))
+                results.append({"url": calendar_ics.mask_url(u), "ok": True, "name": cal.get("name") or "Kalender",
+                                "events_7d": n7, "events_total": len(cal.get("events") or [])})
+            else:
+                results.append({"url": calendar_ics.mask_url(u), "ok": False, "error": ent.get("error")})
+        if not keep:
+            return self._send_json({"ok": False, "error": results[0].get("error") if results else "Nicht lesbar.",
+                                    "results": results})
+        self.cfg["calendar_urls"] = keep
+        save_config(self.cfg, self.cfg.get("_config_path", DEFAULT_CONFIG))
+        return self._send_json({"ok": True, "count": len(keep), "results": results})
+
     def _post_fronius_disconnect(self, body):
         self.cfg["fronius_host"] = ""
         save_config(self.cfg, self.cfg.get("_config_path", DEFAULT_CONFIG))
@@ -10191,8 +10349,11 @@ class Handler(BaseHTTPRequestHandler):
                 hp = self._hp_live()
                 cyc = hp_cycle_stats(self.store.hp_samples_since(int(time.time()) - 30 * 86400))
                 if self.ctx.mode == "demo":
-                    return self._send_json({"demo": True,
-                        **compute_heating_diag(_demo_climate(), hp, cyc)})
+                    climate = _demo_climate()
+                    # demo: the open bathroom window has been open for 14 minutes
+                    wsince = {r["room"]: int(time.time()) - 14 * 60 for r in climate if r.get("windows_open")}
+                    return self._send_json({"demo": True, "window_since": wsince,
+                        **compute_heating_diag(climate, hp, cyc)})
                 if self.ctx.mode != "live":
                     return self._send_json({"ok": False, "error": "nur im Live-Modus verfügbar"}, 400)
                 try:
@@ -10200,7 +10361,11 @@ class Handler(BaseHTTPRequestHandler):
                     climate = client.list_climate(self.cfg.get("contact_room_map"))
                 except Exception as exc:
                     return self._send_json({"ok": False, "error": str(exc)}, 200)
-                return self._send_json({"demo": False,
+                try:
+                    wsince = window_open_since(self.store)
+                except Exception:
+                    wsince = {}
+                return self._send_json({"demo": False, "window_since": wsince,
                     **compute_heating_diag(climate, hp, cyc)})
             if path == "/api/climate/raw":
                 # diagnostic: raw thermostat service states, to find the exact
@@ -10403,6 +10568,17 @@ class Handler(BaseHTTPRequestHandler):
                     "last_error": self.ctx.tibber_last_error})
             if path == "/api/fronius":
                 return self._send_json(self._fronius_payload())
+            if path == "/api/calendar":
+                try:
+                    cdays = int(qs.get("days", ["7"])[0])
+                except ValueError:
+                    cdays = 7
+                return self._send_json(compute_calendar(self.ctx, cdays, force=qs.get("refresh", ["0"])[0] == "1"))
+            if path == "/api/calendar/config":
+                urls = [u for u in (self.cfg.get("calendar_urls") or []) if isinstance(u, str)]
+                return self._send_json({"ok": True, "available": calendar_ics is not None,
+                                        "urls": [calendar_ics.mask_url(u) if calendar_ics else "…" for u in urls],
+                                        "count": len(urls)})
             if path == "/api/pv":
                 try:
                     pdays = max(1, min(400, int(qs.get("days", ["30"])[0])))

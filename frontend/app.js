@@ -94,8 +94,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v196';   // short tag shown always-on in the header
-const APP_VERSION = 'v196 · 2026-11-18 · Übersicht mit dem Smart Meter: „Gerade jetzt“ zeigt den gemessenen Hausverbrauch statt der Summe der einzeln gemessenen Geräte. „Noch nicht gemessen“ rechnet live Haus − Wärmepumpe − Geräte (alle 10 s neu) und die Tagesbilanz aus vollständig gemessenen Smart-Meter-Tagen statt aus den Zählerablesungen (die bleiben, bis es einen solchen Tag gibt). Ist der Tag lückenlos gemessen, zeigt „Heute bisher verbraucht“ den Smart-Meter-Wert und „Wofür heute“ den Rest als „Nicht einzeln gemessen“. ' +
+const APP_BUILD = 'v197';   // short tag shown always-on in the header
+const APP_VERSION = 'v197 · 2026-11-18 · Wohn-Dashboard (#dash): standardmäßig dunkel, die Wahl Hell/Dunkel bleibt auf dem Gerät gespeichert. Oben Hinweis-Kacheln: Fenster/Tür offen (ab 10 Minuten blinkend, rot bei Heizbetrieb, Kälte oder Abwesenheit), lüften, Raum zu kalt, Termin in der nächsten Stunde, Mülltonne am Vorabend, Batterie lädt aus dem Netz, PV-Anlage oder Wärmepumpe ohne aktuelle Werte, sehr hoher Verbrauch. Die größten Verbraucher hängen jetzt als Linien am Haus in der Energiefluss-Grafik (Wärmepumpe, Geräte, nicht einzeln gemessener Rest) statt in einer Liste. Neu: Kalender (iCloud-Freigabe, Google, .ics) mit Terminen heute, morgen und der nächsten Tage – Adresse im Setup, sie bleibt nur lokal in der Bridge. ' +
+  'v196 · 2026-11-18 · Übersicht mit dem Smart Meter: „Gerade jetzt“ zeigt den gemessenen Hausverbrauch statt der Summe der einzeln gemessenen Geräte. „Noch nicht gemessen“ rechnet live Haus − Wärmepumpe − Geräte (alle 10 s neu) und die Tagesbilanz aus vollständig gemessenen Smart-Meter-Tagen statt aus den Zählerablesungen (die bleiben, bis es einen solchen Tag gibt). Ist der Tag lückenlos gemessen, zeigt „Heute bisher verbraucht“ den Smart-Meter-Wert und „Wofür heute“ den Rest als „Nicht einzeln gemessen“. ' +
   'v195 · 2026-11-18 · PV-Anlage mit echten Daten (Fronius GEN24, Reserva, Smart Meter TS 65A-3) abgeglichen: Lädt die Batterie aus dem Netz (z. B. „charge boost“ bei sehr niedrigem Ladestand), zeigt der Energiefluss einen Bogen Netz → Batterie, ein Hinweis erklärt es, und die Tageswerte zählen „Batterie aus dem Netz geladen“ extra – dieser Strom zählt nicht mehr als Sonnenstrom. Gibt die Batterie ins Netz ab, wird das ebenfalls gezeigt (und nicht als Sonnen-Überschuss empfohlen). Details: leere String-Plätze ausgeblendet, Smart Meter je Phase mit Leistung, Strom, Spannung und cos φ, Batterie mit Spannung/Strom und Modus. Wohn-Dashboard (#dash): Energiefluss, Empfehlung und Verbraucherliste mit den gemessenen Werten des Wechselrichters (alle 10 s) statt der Schätzung; antwortet er nicht, steht das dabei. Behoben: Bei Zeiträumen über 31 Tage zählte die allererste Viertelstunde nach dem Verbinden nur eine Minute. ' +
   'v194 · 2026-11-18 · Wärmepumpe: Strom aus einer Datenlücke (Bridge oder Bosch-Cloud länger als 30 Minuten nicht erreichbar) wird nicht mehr der Betriebsart am Rand der Lücke zugeschlagen – vorher landete z. B. nach einer abgelaufenen Anmeldung der ganze Verbrauch der Lücke im Warmwasser. Er zählt weiter zum Tagesverbrauch, steht in „Wofür heute“ und im Betriebsarten-Ring aber als „Betriebsart unbekannt (Datenlücke)“. Stundenreihe und Tagesablauf lassen die Lücke leer statt sie als Pause oder als eine einzige Riesen-Stunde zu zeigen. PV-Anlage: Ist die Solar API am Wechselrichter noch aus, zeigt die App die Schritte zum Einschalten mit Link zur Weboberfläche, Anmeldung als „Customer“ und was bei vergessenem Passwort hilft. ' +
   'v193 · 2026-11-18 · Wärmepumpe: Ist die HomeCom-Anmeldung abgelaufen oder die Bosch-Cloud nicht erreichbar, speichert die Bridge keine leeren Messungen mehr, sondern meldet den Grund – die Wärmepumpen-Karte zeigt ihn mit Link zum neuen Verbindungstest (Setup → Wärmepumpe → „Verbindung zur Bosch-Cloud testen“: DNS, Verbindung, Verschlüsselung, Anmeldung, Datenabruf; Ergebnis kopierbar; im Terminal: python3 shc_bridge.py diag). Nach einem Fehler versucht die Bridge es nach 1, 2, 4 Minuten erneut. Die Volumenstrom-Suche fragt schonender ab und bricht bei Verbindungsproblemen sofort ab. Keine Tracebacks mehr im Terminal, wenn ein Browser eine Verbindung schließt. Startskripte nutzen ein aktuelles Python (python.org/Homebrew, TLS 1.3), falls installiert. ' +
@@ -2687,12 +2688,13 @@ const VIEW_RENDERS = {
   pv: ['renderPvReal', 'renderPv', 'renderCarbon', 'renderSmart'],          // the last two also fill PV fields
   borse: ['renderBorse', 'renderCarbon', 'renderSmart'],
   konzept: ['renderKonzept'],
-  settings: ['renderSettings', 'renderMeter', 'renderFroniusSetup'],
+  settings: ['renderSettings', 'renderMeter', 'renderFroniusSetup', 'renderCalSetup'],
 };
 // the order renderAll() always used (some renders build on earlier ones)
 const RENDER_ORDER = ['renderOverview', 'paintNowLine', 'renderToday', 'renderHistory', 'renderHeatpump', 'renderProfile', 'renderPv',
   'renderSettings', 'renderAppliances', 'renderMeter', 'renderBorse', 'renderCarbon', 'renderSmart', 'renderKonzept',
-  'renderHa', 'renderDarkLoad', 'renderSwitches', 'renderHeatExtras', 'renderFlow', 'renderPvReal', 'renderFroniusSetup'];
+  'renderHa', 'renderDarkLoad', 'renderSwitches', 'renderHeatExtras', 'renderFlow', 'renderPvReal', 'renderFroniusSetup',
+  'renderCalSetup'];
 const _viewStale = {};                 // view -> Set of render names waiting for that view
 function activeView() { const el = document.querySelector('.view.on'); return el ? el.id.replace(/^v-/, '') : 'overview'; }
 function _runRender(name) {
@@ -2937,9 +2939,55 @@ function kcol(lvl) {
   return lvl === 'good' ? 'var(--kb-green)' : lvl === 'ok' ? 'var(--kb-amber)'
     : lvl === 'warn' ? 'var(--kb-red)' : 'var(--k-sub)';
 }
-// Animated live energy-flow diagram: PV ☀️ → Haus/Geräte 🏠 ↔ Batterie 🔋 ↔ Netz ⚡,
-// with dots streaming along the active lines (speed/number ∝ power). Measured by
-// the inverter + smart meter when connected, else an instantaneous estimate from
+// Icon for a measured device, from its name (the SHC knows no device kinds)
+function kioskDevIcon(name) {
+  const n = (name || '').toLowerCase();
+  if (/licht|lampe|leuchte|\bled\b|spot|strahler/.test(n)) return '💡';
+  if (/fernseh|\btv\b|beamer|sound|musik|receiver/.test(n)) return '📺';
+  if (/trockn/.test(n)) return '🌀';
+  if (/wasch/.test(n)) return '🧺';
+  if (/spül|spuel|geschirr|quooker/.test(n)) return '🍽️';
+  if (/kühl|kuehl|gefrier/.test(n)) return '🧊';
+  if (/router|wlan|netzwerk|server|\bnas\b|switch|fritz/.test(n)) return '📶';
+  if (/roll|jalousie|markise/.test(n)) return '🪟';
+  if (/\bpc\b|computer|monitor|büro|buero|laptop|drucker/.test(n)) return '💻';
+  if (/herd|ofen|koch|mikrowelle/.test(n)) return '🍳';
+  if (/kaffee|espresso/.test(n)) return '☕';
+  if (/wallbox|auto|laden/.test(n)) return '🚗';
+  if (/pumpe|heiz/.test(n)) return '♨️';
+  return '🔌';
+}
+const trunc = (t, n) => { t = String(t || ''); return t.length > n ? t.slice(0, n - 1) + '…' : t; };
+// The biggest consumers right now for the flow diagram: heat pump, the
+// individually measured devices and – with the smart meter – what nothing
+// measures individually. At most 6 nodes; the smallest devices are pooled.
+function kioskConsumers(houseW) {
+  const hpL = _kioskHp || (STATE.hpA && STATE.hpA.live);
+  const hpW = hpL && typeof hpL.power_w === 'number' ? Math.max(0, hpL.power_w) : 0;
+  const devs = ((_kioskLive && _kioskLive.devices) || (STATE.data && STATE.data.live && STATE.data.live.devices) || [])
+    .filter(d => typeof d.power_w === 'number' && d.power_w >= 3)
+    .map(d => ({ name: d.custom_name || d.name, room: d.room, w: d.power_w, icon: kioskDevIcon(d.custom_name || d.name), col: 'var(--kb-blue)' }))
+    .sort((x, y) => y.w - x.w);
+  const devSum = devs.reduce((t, d) => t + d.w, 0);
+  const rest = houseW != null ? Math.max(0, houseW - hpW - devSum) : 0;
+  const slots = 6 - (hpW >= 5 ? 1 : 0) - (rest >= 20 ? 1 : 0);
+  let shown = devs;
+  if (devs.length > slots) {
+    shown = devs.slice(0, slots - 1);
+    const more = devs.slice(slots - 1);
+    shown.push({ name: `+${more.length} weitere`, w: more.reduce((t, d) => t + d.w, 0), icon: '⋯', col: 'var(--kb-blue)' });
+  }
+  const out = [];
+  if (hpW >= 5) out.push({ name: 'Wärmepumpe', w: hpW, icon: '♨️', col: 'var(--kb-amber)' });
+  out.push(...shown);
+  if (rest >= 20) out.push({ name: 'ungemessen', w: rest, icon: '❔', col: 'var(--kb-grid)', rest: true });
+  return { list: out, hpW, devSum, rest };
+}
+// Animated live energy-flow diagram: PV ☀️ → Haus 🏠 ↔ Batterie 🔋 ↔ Netz ⚡,
+// and from the house a fan of lines to the biggest consumers right now
+// (heat pump, measured devices, the not individually measured rest), with dots
+// streaming along the active lines (speed/number ∝ power). Measured by the
+// inverter + smart meter when connected, else an instantaneous estimate from
 // the PV/load model – the caption says which.
 function renderEnergyFlow() {
   const el = $('kiosk-flow'); if (!el) return;
@@ -2952,7 +3000,6 @@ function renderEnergyFlow() {
   const havePv = !!pvE, pv = pvE ? Math.max(0, pvE.pvKw) : 0;
   const directPV = Math.min(pv, load);
   let surplus = pv - directPV, deficit = load - directPV;
-  // storage chain: home battery first, then the car (if V2H)
   let bCh = 0, bDis = 0, cCh = 0, cDis = 0, exp = 0, imp = 0, gridToBatt = 0;
   const capB = 3.0, capC = 7.0;
   if (meas) {
@@ -2961,6 +3008,7 @@ function renderEnergyFlow() {
     bCh = P.ch / 1000; bDis = P.dis / 1000; imp = P.imp / 1000; exp = P.exp / 1000;
     gridToBatt = P.gridBatt / 1000;
   } else {
+    // storage chain: home battery first, then the car (if V2H)
     if (surplus > 0.02) {
       if (haveBatt) { bCh = Math.min(surplus, capB); surplus -= bCh; }
       if (haveCar && surplus > 0.02) { cCh = Math.min(surplus, capC); surplus -= cCh; }
@@ -2972,12 +3020,12 @@ function renderEnergyFlow() {
       imp = deficit;
     }
   }
-
-  const R = 27;
+  const C = haveCar ? { list: [] } : kioskConsumers(meas ? Math.max(0, M.load_w) : null);
+  const R = 27, X0 = 66, XH = 180, XG = 294, YR = 135, YC = 272;
   const dots = (path, color, kw) => {
-    if (kw < 0.04) return '';
+    if (kw < 0.004) return '';
     const n = Math.max(1, Math.min(4, Math.round(kw / 0.6)));
-    const dur = Math.max(0.9, Math.min(2.4, 2.6 - kw * 0.22));
+    const dur = Math.max(0.9, Math.min(2.6, 2.6 - kw * 0.22));
     let s = '';
     // NEGATIVE begin offsets so every dot is already mid-path at t=0 – otherwise a
     // delayed dot would sit at the SVG origin (0,0) until its turn (stray corner dot).
@@ -2985,81 +3033,198 @@ function renderEnergyFlow() {
       s += `<circle class="kf-dot" r="3.1" fill="${color}"><animateMotion dur="${dur}s" begin="-${(i * dur / n).toFixed(2)}s" repeatCount="indefinite" path="${path}" calcMode="linear"/></circle>`;
     return s;
   };
-  // base grey line + (when active) a pulsing, glowing colour overlay
-  const seg = (x1, y1, x2, y2, color, active) => {
-    let s = `<line class="kf-line" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>`;
-    if (active) s += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${color}" stroke-width="3" ` +
-      `stroke-linecap="round" fill="none" style="filter:drop-shadow(0 0 4px ${color})">` +
-      `<animate attributeName="opacity" values="0.35;0.8;0.35" dur="2.2s" repeatCount="indefinite"/></line>`;
+  // base grey path + (when active) a pulsing, glowing colour overlay
+  const seg = (d, color, active) => {
+    let s = `<path class="kf-line" d="${d}"/>`;
+    if (active) s += `<path d="${d}" stroke="${color}" stroke-width="3" stroke-linecap="round" fill="none" ` +
+      `style="filter:drop-shadow(0 0 4px ${color})"><animate attributeName="opacity" values="0.35;0.8;0.35" dur="2.2s" repeatCount="indefinite"/></path>`;
     return s;
   };
-  const node = (cx, cy, icon, val, label, dim, labelAbove) => {
+  const node = (cx, cy, icon, val, label, dim, labelAbove, r = R, col) => {
     const op = dim ? ' opacity="0.4"' : '';
-    const ly = labelAbove ? cy - R - 7 : cy + R + 13;
-    return `<g${op}><circle class="kf-node-bg" cx="${cx}" cy="${cy}" r="${R}"/>` +
-      `<text class="kf-icon" x="${cx}" y="${cy - 2}" text-anchor="middle">${icon}</text>` +
-      `<text class="kf-val" x="${cx}" y="${cy + 15}" text-anchor="middle">${val}</text>` +
-      `<text class="kf-lbl" x="${cx}" y="${ly}" text-anchor="middle">${label}</text></g>`;
+    const ly = labelAbove ? cy - r - 7 : cy + r + 13;
+    return `<g${op}><circle class="kf-node-bg" cx="${cx}" cy="${cy}" r="${r}"${col ? ` stroke="${col}" stroke-width="1.6"` : ''}/>` +
+      `<text class="kf-icon" x="${cx}" y="${cy - (r > 22 ? 2 : 1)}" text-anchor="middle"${r <= 22 ? ' style="font-size:17px"' : ''}>${icon}</text>` +
+      `<text class="kf-val" x="${cx}" y="${cy + (r > 22 ? 15 : 13)}" text-anchor="middle"${r <= 22 ? ' style="font-size:10px"' : ''}>${val}</text>` +
+      (label ? `<text class="kf-lbl" x="${cx}" y="${ly}" text-anchor="middle">${label}</text>` : '') + `</g>`;
   };
   const storeVal = (kwh, ch, dis) => kwh <= 0 ? '–' : ch > 0.04 ? `+${fmt(ch, 1)}` : dis > 0.04 ? `−${fmt(dis, 1)}` : '0';
   const gridVal = imp > 0.04 ? `↓${fmt(imp, 1)}` : exp > 0.04 ? `↑${fmt(exp, 1)}` : '0';
   const pvActive = pv > 0.04, battActive = bCh > 0.04 || bDis > 0.04, gridActive = imp > 0.04 || exp > 0.04;
-  const vh = haveCar ? 282 : 216;
+  const cons = C.list || [];
+  const vh = cons.length ? 326 : (haveCar ? 282 : 216);
+  const wTxt = w => w >= 1000 ? fmt(w / 1000, 1) + ' kW' : fmt(w, 0) + ' W';
+  let fan = '';
+  if (cons.length) {
+    const n = cons.length, span = 292, x0 = 34;
+    cons.forEach((c, i) => {
+      const x = n === 1 ? XH : x0 + i * span / (n - 1);
+      const d = `M${XH},${YR + R} C${XH},${YR + 70} ${x.toFixed(1)},${YC - 70} ${x.toFixed(1)},${YC - 21}`;
+      fan += seg(d, c.col, c.w >= 5) + dots(d, c.col, c.w / 1000);
+    });
+    cons.forEach((c, i) => {
+      const x = n === 1 ? XH : x0 + i * span / (n - 1);
+      fan += node(x, YC, c.icon, wTxt(c.w), '', false, false, 21, c.col) +
+        `<text class="kf-sub" x="${x.toFixed(1)}" y="${YC + 34}" text-anchor="middle">${esc(trunc(c.name, 11))}</text>`;
+    });
+  }
   const svg =
-    `<svg viewBox="0 -6 300 ${vh}" role="img" aria-label="Energiefluss">` +
-    // connector lines (base + glow) + animated dots
-    seg(150, 69, 150, 108, 'var(--kb-sun)', pvActive) +
-    seg(79, 135, 123, 135, 'var(--kb-teal)', battActive) +
-    seg(221, 135, 177, 135, imp > 0 ? 'var(--kb-blue)' : 'var(--kb-green)', gridActive) +
-    (haveCar ? seg(150, 162, 150, 201, 'var(--kb-teal)', cCh > 0.04 || cDis > 0.04) : '') +
-    dots('M150,69 L150,108', 'var(--kb-sun)', meas ? pv : directPV + bCh + cCh + exp) +
-    (bCh > 0 ? dots('M123,135 L79,135', 'var(--kb-teal)', bCh) : dots('M79,135 L123,135', 'var(--kb-teal)', bDis)) +
-    (imp > 0 ? dots('M221,135 L177,135', 'var(--kb-blue)', imp) : dots('M177,135 L221,135', 'var(--kb-green)', exp)) +
-    (haveCar ? (cCh > 0 ? dots('M150,162 L150,201', 'var(--kb-teal)', cCh) : dots('M150,201 L150,162', 'var(--kb-teal)', cDis)) : '') +
-    // nodes
-    node(150, 42, '☀️', havePv && pvActive ? fmt(pv, 1) : (havePv ? '0' : '–'), 'PV kW', !havePv || !pvActive, true) +
-    node(52, 135, '🔋', storeVal(battKwh, bCh, bDis), meas && M.soc != null ? `Batterie ${fmt(M.soc, 0)} %` : 'Batterie', !haveBatt) +
-    node(150, 135, '🏠', fmt(load, 1), haveCar ? '' : 'Haus kW') +
-    node(248, 135, '⚡', gridVal, 'Netz', !gridActive) +
-    (haveCar ? node(150, 228, '🚗', storeVal(inp.carKwh, cCh, cDis), 'E-Auto (V2H)', false) : '') +
-    `</svg>` +
-    `<div class="k-sub" style="text-align:center;font-size:11px;margin:2px 0 6px">` +
+    `<svg viewBox="0 -6 360 ${vh}" role="img" aria-label="Energiefluss">` +
+    seg(`M${XH},69 L${XH},108`, 'var(--kb-sun)', pvActive) +
+    seg(`M${X0 + R},${YR} L${XH - R},${YR}`, 'var(--kb-teal)', battActive) +
+    seg(`M${XG - R},${YR} L${XH + R},${YR}`, imp > 0 ? 'var(--kb-blue)' : 'var(--kb-green)', gridActive) +
+    (haveCar ? seg(`M${XH},162 L${XH},201`, 'var(--kb-teal)', cCh > 0.04 || cDis > 0.04) : '') +
+    dots(`M${XH},69 L${XH},108`, 'var(--kb-sun)', meas ? pv : directPV + bCh + cCh + exp) +
+    (bCh > 0 ? dots(`M${XH - R},${YR} L${X0 + R},${YR}`, 'var(--kb-teal)', bCh) : dots(`M${X0 + R},${YR} L${XH - R},${YR}`, 'var(--kb-teal)', bDis)) +
+    (imp > 0 ? dots(`M${XG - R},${YR} L${XH + R},${YR}`, 'var(--kb-blue)', imp) : dots(`M${XH + R},${YR} L${XG - R},${YR}`, 'var(--kb-green)', exp)) +
+    (haveCar ? (cCh > 0 ? dots(`M${XH},162 L${XH},201`, 'var(--kb-teal)', cCh) : dots(`M${XH},201 L${XH},162`, 'var(--kb-teal)', cDis)) : '') +
+    fan +
+    node(XH, 42, '☀️', havePv && pvActive ? fmt(pv, 1) : (havePv ? '0' : '–'), 'PV kW', !havePv || !pvActive, true) +
+    node(X0, YR, '🔋', storeVal(battKwh, bCh, bDis), meas && M.soc != null ? `Batterie ${fmt(M.soc, 0)} %` : 'Batterie', !haveBatt) +
+    node(XH, YR, '🏠', fmt(load, 1), haveCar || cons.length ? '' : 'Haus kW') +
+    node(XG, YR, '⚡', gridVal, 'Netz', !gridActive) +
+    (haveCar ? node(XH, 228, '🚗', storeVal(inp.carKwh, cCh, cDis), 'E-Auto (V2H)', false) : '') +
+    `</svg>`;
+  const houseW = meas ? Math.max(0, M.load_w) : null;
+  const sum = cons.length ? `Haus <b>${wTxt(houseW != null ? houseW : load * 1000)}</b>` +
+    (C.hpW >= 5 ? ` = Wärmepumpe ${wTxt(C.hpW)}` : '') + (C.devSum > 0 ? ` + Geräte ${wTxt(C.devSum)}` : '') +
+    (C.rest >= 20 ? ` + <b>nicht einzeln gemessen ${wTxt(C.rest)}</b>` : '') + ' · ' : '';
+  el.innerHTML = svg +
+    `<div class="k-sub" style="text-align:center;font-size:11px;margin:2px 0 6px">` + sum +
     `Speicher +laden/−entladen · Netz ↓Bezug/↑Einspeisung · ` +
     (meas ? (STATE.fr.demo ? '<b>Demo-Werte</b> (simulierte Anlage)'
       : `<b>gemessen</b> (Wechselrichter, ${new Date(STATE.fr.last_poll * 1000).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' })})`) +
       (gridToBatt > 0.025 ? ` · 🔋 lädt ${fmt(gridToBatt, 2)} kW <b>aus dem Netz</b>` : '')
       : `Momentan-Schätzung (${pvE ? pvE.src : 'ohne PV'})` + frSilentNote()) + `</div>`;
-  el.innerHTML = svg;
 }
-// Top live consumers right now (incl. the air-source heat pump), from the latest
-// measured per-device power + the heat pump's live electrical draw.
-function renderKioskLoads() {
-  const el = $('kiosk-loads'); if (!el) return;
-  const list = [];
-  const M = frLiveNow(), houseW = M && M.load_w != null ? Math.max(0, M.load_w) : null;
-  const hp = _kioskHp || (STATE.hpA && STATE.hpA.live);
-  if (hp && typeof hp.power_w === 'number' && hp.power_w > 1)
-    list.push({ name: 'Luft-Wärmepumpe', w: hp.power_w, icon: '♨️', hp: true });
-  const devs = (_kioskLive && _kioskLive.devices) || (STATE.data && STATE.data.live && STATE.data.live.devices) || [];
-  devs.forEach(d => { if (typeof d.power_w === 'number' && d.power_w > 1)
-    list.push({ name: d.custom_name || d.name, room: d.room, w: d.power_w, icon: '🔌' }); });
-  list.sort((a, b) => b.w - a.w);
-  const top = list.slice(0, 5);
-  if (!top.length) { el.innerHTML = ''; return; }
-  const max = top[0].w || 1;
-  const totalW = list.reduce((a, d) => a + d.w, 0);
-  const fmtW = w => w >= 1000 ? fmt(w / 1000, 2) + ' kW' : fmt(w, 0) + ' W';
-  el.innerHTML = `<div class="kl-title">⚡ Größte Verbraucher jetzt</div>` +
-    top.map(d => {
-      const col = d.hp ? 'var(--kb-amber)' : 'var(--kb-blue)';
-      return `<div class="kl-row"><div class="kl-ic">${d.icon}</div>` +
-        `<div class="kl-main"><div class="kl-nm">${esc(d.name)}${d.room ? ` <span class="kl-rm">· ${esc(d.room)}</span>` : ''}</div>` +
-        `<div class="kl-bar"><span style="width:${Math.max(4, d.w / max * 100)}%;background:${col}"></span></div></div>` +
-        `<div class="kl-w">${fmtW(d.w)}</div></div>`;
-    }).join('') +
-    `<div class="k-sub" style="font-size:11px;margin-top:8px">Summe gemessen jetzt: <b>${fmtW(totalW)}</b>` +
-    `${list.length > 5 ? ` · ${list.length} Verbraucher aktiv` : ''}` +
-    (houseW != null ? ` · Haus gesamt <b>${fmtW(houseW)}</b> (${STATE.fr.demo ? 'Demo' : 'Smart Meter'})` : '') + `</div>`;
+// The consumers now live in the flow diagram (lines from the house) – the old
+// list is gone.
+function renderKioskLoads() { const el = $('kiosk-loads'); if (el) el.innerHTML = ''; }
+
+// ---- awareness tiles: what needs attention now (urgent ones pulse) ------------
+const fmtMin = m => m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, '0')} min`;
+const TRASH_RX = /m(ü|ue)ll|tonne|abfuhr|papier|gelber sack|wertstoff|sperrm/i;
+function kioskAlerts() {
+  const A = [], now = Date.now() / 1000;
+  const rooms = _kioskRooms || [], since = (_hdData && _hdData.window_since) || {};
+  const outC = _hdData && _hdData.kpis ? _hdData.kpis.outdoor_c : null;
+  // 1) windows / doors open – longer than 10 min: pulsing
+  rooms.filter(rm => (rm.windows_open || 0) > 0).forEach(rm => {
+    const ws = (rm.windows || []).filter(w => w.open);
+    const door = ws.length > 0 && ws.every(w => w.door);
+    const t0 = since[rm.room];
+    const min = t0 ? Math.max(0, Math.floor((now - t0) / 60)) : null;
+    const long = min != null && min >= 10;
+    const heating = rm.heating === true, cold = outC != null && outC < 12;
+    const level = _kioskAway || (long && (heating || cold)) ? 'urgent' : long ? 'warn' : 'info';
+    A.push({ level, blink: _kioskAway || long, icon: door ? '🚪' : '🪟',
+      title: `${rm.room}: ${door ? 'Tür' : 'Fenster'} offen`,
+      detail: [min == null ? 'offen' : min < 1 ? 'gerade geöffnet' : `seit ${fmtMin(min)}`,
+        _kioskAway ? 'ihr seid abwesend' : '', heating ? 'Heizung läuft' : (cold ? `außen ${fmt(outC, 0)}°` : ''),
+        long && !door ? 'Stoßlüften reicht 5–10 min – bitte schließen' : '',
+        ws.length > 1 ? ws.map(w => w.name).join(', ') : ''].filter(Boolean).join(' · ') });
+  });
+  // 2) air / humidity (rooms without an open window) and clearly too cold rooms
+  rooms.forEach(rm => {
+    if ((rm.windows_open || 0) > 0) return;
+    const va = ventAdvice(rm);
+    if (va.lvl === 'warn') A.push({ level: 'warn', icon: '🌬️', title: `${rm.room}: lüften`, detail: va.short || va.txt });
+    if (rm.temp != null && rm.setpoint != null && rm.temp <= rm.setpoint - 1.5)
+      A.push({ level: 'info', icon: '🥶', title: `${rm.room}: zu kalt`, detail: `${fmt(rm.temp, 1)}° statt ${fmt(rm.setpoint, 0)}°` });
+  });
+  // 3) calendar: what starts within the hour; bins the evening before
+  const C = _kioskCal;
+  if (C && C.events) {
+    const tomorrow = ymdLocal(new Date(Date.now() + 86400000)), today = ymdLocal(new Date());
+    const h = new Date().getHours();
+    C.events.forEach(e => {
+      if (!e.all_day && e.start > now && e.start - now <= 3600)
+        A.push({ level: e.start - now <= 900 ? 'warn' : 'info', blink: e.start - now <= 900, icon: '📅',
+          title: `In ${Math.max(1, Math.round((e.start - now) / 60))} min: ${e.title}`,
+          detail: new Date(e.start * 1000).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) + ' Uhr' + (e.location ? ' · ' + e.location : '') });
+      if (e.all_day && TRASH_RX.test(e.title)) {
+        if (e.start_day === tomorrow && h >= 16) A.push({ level: 'warn', icon: '🗑️', title: `Morgen: ${e.title}`, detail: 'Tonne heute Abend rausstellen' });
+        else if (e.start_day === today && h < 10) A.push({ level: 'warn', icon: '🗑️', title: `Heute: ${e.title}`, detail: 'Tonne rausstellen, falls noch nicht geschehen' });
+      }
+    });
+  }
+  // 4) PV system / battery
+  const M = frLiveNow();
+  if (M) {
+    const P = pvFlowParts(M);
+    if (P.gridBatt > 100) A.push({ level: 'info', icon: '🔋', title: 'Batterie lädt aus dem Netz',
+      detail: `${kwOrW(P.gridBatt)}${M.soc != null ? ` · Ladestand ${fmt(M.soc, 0)} %` : ''}${M.battery_mode ? ` · „${M.battery_mode}“` : ''}` });
+    if (M.load_w != null && M.load_w >= 6000) {
+      const C2 = kioskConsumers(M.load_w), top = (C2.list || []).filter(c => !c.rest)[0];
+      A.push({ level: 'info', icon: '⚡', title: `Hoher Verbrauch: ${kwOrW(M.load_w)}`, detail: top ? `größter: ${top.name} ${kwOrW(top.w)}` : '' });
+    }
+  } else if (STATE.fr && STATE.fr.connected && !STATE.fr.demo) {
+    const note = frSilentNote().replace(/^ · ⚠︎ /, '');
+    A.push({ level: 'warn', icon: '☀️', title: 'PV-Anlage: keine aktuellen Werte', detail: note || 'Wechselrichter antwortet nicht' });
+  }
+  // 5) heat pump without fresh data
+  const hl = _kioskHp || (STATE.hpA && STATE.hpA.live);
+  if (hl && (hl.last_error || (hl.last_poll && now - hl.last_poll > 1500))) {
+    const ago = hl.last_poll ? Math.round((now - hl.last_poll) / 60) : null;
+    A.push({ level: 'warn', icon: '♨️', title: 'Wärmepumpe: keine aktuellen Daten',
+      detail: (ago != null ? `letzte Werte vor ${fmtMin(ago)}` : '') + (hl.last_error ? (ago != null ? ' · ' : '') + trunc(hl.last_error, 70) : '') });
+  }
+  const rank = { urgent: 0, warn: 1, info: 2, good: 3 };
+  return A.sort((x, y) => rank[x.level] - rank[y.level]);
+}
+function renderKioskAlerts() {
+  const el = $('kiosk-alerts'); if (!el) return;
+  const A = kioskAlerts();
+  const w = $('kiosk-warn'); if (w) w.textContent = '';               // folded into the tiles
+  if (!A.length) { el.innerHTML = '<div class="ka-ok">✓ Alles in Ordnung – nichts offen, nichts zu tun.</div>'; return; }
+  el.innerHTML = A.slice(0, 9).map(a => `<div class="ka ka-${a.level}${a.blink ? ' ka-blink' : ''}">` +
+    `<div class="ka-ic">${a.icon}</div><div class="ka-tx"><div class="ka-t">${esc(a.title)}</div>` +
+    (a.detail ? `<div class="ka-d">${esc(a.detail)}</div>` : '') + `</div></div>`).join('') +
+    (A.length > 9 ? `<div class="ka-ok" style="color:var(--k-sub)">+ ${A.length - 9} weitere</div>` : '');
+}
+
+// ---- calendar (public iCloud / Google / .ics, read by the bridge) -------------
+let _kioskCal = null;
+async function kioskLoadCal() {
+  try { const r = await api('/api/calendar?days=7'); if (r && r.ok !== false) _kioskCal = r; } catch (e) { /* keep */ }
+}
+function renderKioskCal() {
+  const el = $('kiosk-cal'); if (!el) return;
+  const C = _kioskCal;
+  if (!C || (!C.configured && !C.demo)) { el.innerHTML = ''; return; }
+  const now = Date.now() / 1000, today = ymdLocal(new Date()), tomorrow = ymdLocal(new Date(Date.now() + 86400000));
+  const dayName = d => d === today ? 'Heute' : d === tomorrow ? 'Morgen'
+    : new Date(d + 'T12:00:00').toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'numeric' });
+  const hm = t => new Date(t * 1000).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+  const groups = {};
+  (C.events || []).forEach(e => {
+    let day;
+    if (e.all_day) day = e.start_day <= today && e.end_day >= today ? today : e.start_day;
+    else { if (e.end <= now) return; day = e.start < now ? today : ymdLocal(new Date(e.start * 1000)); }
+    (groups[day] = groups[day] || []).push(e);
+  });
+  const days = Object.keys(groups).sort();
+  let rows = 0, html = '';
+  for (const d of days) {
+    if (rows >= 11) break;
+    html += `<div class="kc-day">${dayName(d)}</div>`;
+    for (const e of groups[d]) {
+      if (rows >= 11) break;
+      rows++;
+      const on = !e.all_day && e.start <= now && e.end > now, soon = !e.all_day && e.start > now && e.start - now <= 3600;
+      const time = e.all_day ? (e.end_day > e.start_day ? `bis ${new Date(e.end_day + 'T12:00:00').toLocaleDateString('de-DE', { weekday: 'short' })}` : 'ganztägig')
+        : `${hm(e.start)}${e.end > e.start ? '–' + hm(e.end) : ''}`;
+      const badge = on ? '<span class="kc-b kc-now">jetzt</span>'
+        : soon ? `<span class="kc-b kc-soon">in ${Math.max(1, Math.round((e.start - now) / 60))} min</span>` : '';
+      html += `<div class="kc-row${on ? ' on' : ''}"><span class="kc-dot" style="background:${esc(e.color || 'var(--kb-blue)')}"></span>` +
+        `<span class="kc-time">${time}</span><span class="kc-title">${esc(e.title)}` +
+        (e.location ? ` <span class="kc-loc">· ${esc(e.location)}</span>` : '') + `</span>${badge}</div>`;
+    }
+  }
+  const errs = (C.calendars || []).filter(c => c.error);
+  el.innerHTML = `<div class="kl-title">📅 Termine</div>` +
+    (html || '<div class="k-sub">Keine Termine in den nächsten 7 Tagen.</div>') +
+    errs.map(c => `<div class="k-sub" style="font-size:12px;margin-top:8px;color:var(--kb-amber)">⚠︎ ${esc(c.name || 'Kalender')}: ${esc(c.error)}</div>`).join('');
 }
 function paintKiosk() {
   const rooms = _kioskRooms || [];
@@ -3081,7 +3246,9 @@ function paintKiosk() {
   const ban = $('kiosk-banner');
   if (ban) { ban.className = out.level;
     ban.innerHTML = `${out.line}<div class="b-sub">${out.sub}</div>`; }
-  try { renderEnergyFlow(); } catch (e) {}
+  try { renderKioskAlerts(); } catch (e) { console.error(e); }
+  try { renderKioskCal(); } catch (e) { console.error(e); }
+  try { renderEnergyFlow(); } catch (e) { console.error(e); }
   try { renderKioskLoads(); } catch (e) {}
   const og = $('kiosk-out');
   const hp = (_hdData && _hdData.kpis) || {};
@@ -3119,6 +3286,7 @@ async function kioskLoadData() {
   try { const a = await api('/api/analytics?days=2'); if (a && a.live) _kioskLive = a.live; } catch (e) {}
   try { const h = await api('/api/heatpump/analytics?days=2'); if (h && h.live) _kioskHp = h.live; } catch (e) {}
   try { await loadFronius(true); } catch (e) {}
+  try { await kioskLoadCal(); } catch (e) {}
   paintKiosk();
 }
 function kioskTick() {
@@ -3127,11 +3295,11 @@ function kioskTick() {
   if (c) c.textContent = now.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
   if (d) d.textContent = now.toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long' });
 }
-// Apple-like light/dark theme for the kiosk. Default: stored choice, else the
-// device's own appearance (prefers-color-scheme).
+// Apple-like light/dark theme for the kiosk: dark unless light was chosen on this device.
 function kioskTheme() {
-  try { const s = localStorage.getItem('bhe_kiosk_theme'); if (s === 'light' || s === 'dark') return s; } catch (e) {}
-  try { if (window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches) return 'light'; } catch (e) {}
+  // the choice is remembered on THIS device (a wall iPad and a phone may differ),
+  // deliberately outside the synced bhe_* settings; default: dark
+  try { const s = localStorage.getItem('kiosk_theme'); if (s === 'light' || s === 'dark') return s; } catch (e) {}
   return 'dark';
 }
 function applyKioskTheme(t) {
@@ -10535,7 +10703,7 @@ function init() {
   });
   const kt = $('kiosk-theme'); if (kt) kt.addEventListener('click', () => {
     const next = ($('kiosk') && $('kiosk').getAttribute('data-ktheme') === 'light') ? 'dark' : 'light';
-    try { localStorage.setItem('bhe_kiosk_theme', next); } catch (e) {}
+    try { localStorage.setItem('kiosk_theme', next); } catch (e) {}
     applyKioskTheme(next);
   });
   window.addEventListener('hashchange', () => { if (location.hash === '#dash') openKiosk(); });
@@ -11135,6 +11303,7 @@ function init() {
   const pfb = $('perf-bench'); if (pfb) pfb.addEventListener('click', () => renderPerf(true));
   initPvReal();
   initHpDiag();
+  initCalSetup();
   if (!_bootDriven) loadAll();
   setInterval(refreshLive, 30000);
   // Service worker: register, then actively check for a newer version and take
@@ -12112,6 +12281,47 @@ async function hpDiag() {
     out.innerHTML = '<div class="note">Der Test geht nur, wenn die Seite von der Bridge geöffnet ist (und die Bridge läuft).</div>';
   } finally { if (b) b.disabled = false; }
 }
+/* ---- Setup → Kalender im Wohn-Dashboard --------------------------------------- */
+async function renderCalSetup() {
+  const st = $('cal-status'); if (!st) return;
+  try {
+    const r = await api('/api/calendar/config');
+    const clr = $('cal-clear');
+    if (r && r.available === false) st.textContent = 'Das Kalender-Modul fehlt in der Bridge (bridge/calendar_ics.py) – bitte die Bridge aktualisieren.';
+    else if (r && r.count) st.innerHTML = `✅ ${r.count === 1 ? 'Ein Kalender' : r.count + ' Kalender'} eingetragen: ` + (r.urls || []).map(u => `<code>${esc(u)}</code>`).join(', ');
+    else st.textContent = 'Noch kein Kalender eingetragen.';
+    if (clr) clr.hidden = !(r && r.count);
+  } catch (e) { st.textContent = 'Nur möglich, wenn die Seite von der Bridge geöffnet ist.'; }
+}
+async function calSave() {
+  const ta = $('cal-urls'), note = $('cal-note'), b = $('cal-save');
+  const urls = String((ta && ta.value) || '').split(/\s+/).map(x => x.trim()).filter(Boolean);
+  if (!urls.length) { if (note) note.textContent = 'Bitte die Kalender-Adresse einfügen.'; return; }
+  if (b) b.disabled = true;
+  if (note) note.textContent = 'Lade den Kalender …';
+  try {
+    const r = await postJSON('/api/calendar/config', { urls });
+    const res = (r && r.results) || [];
+    if (note) note.innerHTML = res.map(x => x.ok
+      ? `✅ <b>${esc(x.name)}</b>: ${x.events_7d} Termine in den nächsten 7 Tagen (${x.events_total} Einträge insgesamt)`
+      : `❌ <code>${esc(x.url)}</code>: ${esc(x.error || 'nicht lesbar')}`).join('<br>') || esc((r && r.error) || 'Nicht gespeichert.');
+    if (r && r.ok) { if (ta) ta.value = ''; _kioskCal = null; }
+  } catch (e) {
+    if (note) note.textContent = 'Speichern nur möglich, wenn die Seite von der Bridge geöffnet ist.';
+  } finally { if (b) b.disabled = false; renderCalSetup(); }
+}
+async function calClear() {
+  if (!confirm('Kalender aus dem Wohn-Dashboard entfernen?')) return;
+  try { await postJSON('/api/calendar/config', { clear: true }); } catch (e) {}
+  _kioskCal = null;
+  const note = $('cal-note'); if (note) note.textContent = 'Entfernt.';
+  renderCalSetup();
+}
+function initCalSetup() {
+  const b = $('cal-save'); if (b) b.addEventListener('click', calSave);
+  const c = $('cal-clear'); if (c) c.addEventListener('click', calClear);
+}
+
 function initHpDiag() {
   const b = $('hp-diag'); if (b) b.addEventListener('click', hpDiag);
   const cp = $('hp-diag-copy');
