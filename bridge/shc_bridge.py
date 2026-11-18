@@ -96,6 +96,10 @@ try:
     import calendar_ics  # optional calendar feeds (iCloud/Google/.ics) for the dashboard
 except Exception:  # pragma: no cover - keeps the bridge running without it
     calendar_ics = None
+try:
+    import awb_koeln  # optional waste collection dates of the AWB Köln
+except Exception:  # pragma: no cover - keeps the bridge running without it
+    awb_koeln = None
 
 DEFAULT_FRONTEND = os.path.normpath(os.path.join(HERE, "..", "frontend"))
 DEFAULT_DB = os.path.join(HERE, "energy.db")
@@ -8446,6 +8450,30 @@ def demo_calendar(now: int, days: int = 7) -> dict:
             "calendars": [{"name": "Familie (Demo)", "color": "#ff2d55", "error": None, "url": "Demo"}]}
 
 
+AWB_MAX_AGE = 12 * 3600        # s – collection dates rarely change
+
+
+def awb_load(ctx, force: bool = False) -> dict | None:
+    """AWB Köln collection dates for the configured address (cached 12 h; on a
+    failed refresh the last dates are kept and the error reported)."""
+    sc, bn = ctx.cfg.get("awb_street_code"), ctx.cfg.get("awb_building_number")
+    if not awb_koeln or not sc or not bn:
+        return None
+    key, now = (str(sc), str(bn)), time.time()
+    with ctx._cal_lock:
+        ent = ctx.awb_cache
+        if ent and ent.get("key") == key and not force and now - ent["ts"] < AWB_MAX_AGE:
+            return ent
+    try:
+        ent = {"key": key, "ts": now, "dates": awb_koeln.fetch_dates(*key), "error": None, "ok_ts": now}
+    except Exception as exc:
+        old = ctx.awb_cache if ctx.awb_cache.get("key") == key else {}
+        ent = {"key": key, "ts": now, "dates": old.get("dates") or [], "error": str(exc), "ok_ts": old.get("ok_ts")}
+    with ctx._cal_lock:
+        ctx.awb_cache = ent
+    return ent
+
+
 def compute_calendar(ctx, days: int = 7, force: bool = False) -> dict:
     """Events of all configured calendars from today 00:00 for `days` days."""
     now = int(time.time())
@@ -8454,12 +8482,26 @@ def compute_calendar(ctx, days: int = 7, force: bool = False) -> dict:
         return demo_calendar(now, days)
     urls = [u for u in (ctx.cfg.get("calendar_urls") or []) if isinstance(u, str) and u.strip()]
     base = {"ok": True, "demo": False, "ts": now, "days": days, "events": [], "calendars": []}
-    if not urls:
-        return {**base, "configured": False}
-    if calendar_ics is None:
-        return {**base, "ok": False, "error": "Kalender-Modul fehlt (bridge/calendar_ics.py)."}
     d0 = datetime.fromtimestamp(now).replace(hour=0, minute=0, second=0, microsecond=0)
     w0, w1 = d0, d0 + timedelta(days=days)
+    awb = awb_load(ctx, force=force)
+    if awb is not None:                      # waste collection (AWB Köln) as all-day entries
+        n = 0
+        for d in awb.get("dates") or []:
+            s_ = datetime(d["date"].year, d["date"].month, d["date"].day)
+            if w0 <= s_ < w1:
+                base["events"].append(_cal_event_out({"start": s_, "end": s_ + timedelta(days=1), "all_day": True,
+                                                      "title": d["label"], "location": "", "recurring": False},
+                                                     "Müllabfuhr AWB", d["color"]))
+                n += 1
+        base["calendars"].append({"name": "Müllabfuhr AWB Köln", "color": "#8e8e93", "error": awb.get("error"),
+                                  "events": n, "url": ctx.cfg.get("awb_label") or "AWB Köln",
+                                  "updated": int(awb.get("ok_ts") or 0) or None})
+    if not urls:
+        base["events"].sort(key=lambda x: (x["start"], not x["all_day"], x["title"]))
+        return {**base, "configured": awb is not None}
+    if calendar_ics is None:
+        return {**base, "ok": False, "error": "Kalender-Modul fehlt (bridge/calendar_ics.py)."}
     for url in urls:
         ent = calendar_load(ctx, url, force=force)
         cal = ent.get("cal")
@@ -8578,6 +8620,7 @@ class Runtime:
         self.fr = None                  # FroniusPoller
         self.fr_state = {}              # latest PV snapshot (live flow, details, identity)
         self.cal_cache = {}             # calendar url -> {"ts", "cal", "error"}
+        self.awb_cache = {}             # AWB Köln: {"key", "ts", "dates", "error"}
         self._cal_lock = threading.Lock()
         # heavy-analytics result cache: these process every raw sample in
         # Python, so recomputing them on every request/refresh is slow. Cache
@@ -9020,7 +9063,8 @@ def save_config(cfg: dict, path: str):
             # set in the app as well – were missing here, so they were lost
             # whenever the bridge restarted
             "tibber_token", "ha_url", "ha_token", "ha_entities", "contact_room_map",
-            "fronius_host", "fronius_interval", "calendar_urls")
+            "fronius_host", "fronius_interval", "calendar_urls",
+            "awb_street_code", "awb_building_number", "awb_label")
     data = {k: cfg[k] for k in keep if k in cfg and not str(k).startswith("_")}
     try:
         with open(path, "w", encoding="utf-8") as fh:
@@ -9526,6 +9570,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._post_fronius_disconnect(body)
             if parsed.path == "/api/calendar/config":
                 return self._post_calendar_config(body)
+            if parsed.path == "/api/awb/config":
+                return self._post_awb_config(body)
             if parsed.path == "/api/meter":
                 return self._post_meter(body)
             if parsed.path == "/api/meter/delete":
@@ -10058,6 +10104,34 @@ class Handler(BaseHTTPRequestHandler):
             self.ctx.fr_state["live"] = ident.get("flow")
         self.ctx.calc_clear("pv")
         return self._send_json({"ok": True, "identity": ident, "demo": self.ctx.mode == "demo"})
+
+    def _post_awb_config(self, body):
+        """Save the address for the AWB Köln collection dates (local config only);
+        it is checked by fetching the dates once."""
+        if awb_koeln is None:
+            return self._send_json({"ok": False, "error": "AWB-Modul fehlt (bridge/awb_koeln.py)."}, 500)
+        if body.get("clear"):
+            for k in ("awb_street_code", "awb_building_number", "awb_label"):
+                self.cfg.pop(k, None)
+            save_config(self.cfg, self.cfg.get("_config_path", DEFAULT_CONFIG))
+            self.ctx.awb_cache = {}
+            return self._send_json({"ok": True})
+        sc, bn = str(body.get("street_code") or "").strip(), str(body.get("building_number") or "").strip()
+        if not sc or not bn:
+            return self._send_json({"ok": False, "error": "Bitte zuerst die Adresse suchen und auswählen."}, 400)
+        try:
+            dates = awb_koeln.fetch_dates(sc, bn)
+        except Exception as exc:
+            return self._send_json({"ok": False, "error": str(exc)})
+        self.cfg.update({"awb_street_code": sc, "awb_building_number": bn,
+                         "awb_label": str(body.get("label") or "")[:120]})
+        save_config(self.cfg, self.cfg.get("_config_path", DEFAULT_CONFIG))
+        self.ctx.awb_cache = {"key": (sc, bn), "ts": time.time(), "dates": dates, "error": None, "ok_ts": time.time()}
+        today_ = datetime.now().date()
+        nxt = [{"date": d["date"].isoformat(), "label": d["label"], "color": d["color"], "type": d["type"]}
+               for d in dates if d["date"] >= today_][:8]
+        return self._send_json({"ok": True, "count": len(dates), "next": nxt,
+                                "types": sorted({d["type"] for d in dates})})
 
     def _post_calendar_config(self, body):
         """Save the calendar links (kept only in the local config.json). Each
@@ -10611,6 +10685,24 @@ class Handler(BaseHTTPRequestHandler):
                 except ValueError:
                     cdays = 7
                 return self._send_json(compute_calendar(self.ctx, cdays, force=qs.get("refresh", ["0"])[0] == "1"))
+            if path == "/api/awb/streets":
+                if awb_koeln is None:
+                    return self._send_json({"ok": False, "error": "AWB-Modul fehlt (bridge/awb_koeln.py)."})
+                try:
+                    res = awb_koeln.find_address(qs.get("street", [""])[0], qs.get("nr", [""])[0])
+                    return self._send_json({"ok": True, "results": res})
+                except Exception as exc:
+                    return self._send_json({"ok": False, "error": str(exc)})
+            if path == "/api/awb/config":
+                ent = awb_load(self.ctx) if self.cfg.get("awb_street_code") else None
+                today_ = datetime.now().date()
+                nxt = [{"date": d["date"].isoformat(), "label": d["label"], "color": d["color"], "type": d["type"]}
+                       for d in (ent or {}).get("dates") or [] if d["date"] >= today_][:8]
+                return self._send_json({"ok": True, "available": awb_koeln is not None,
+                                        "configured": bool(self.cfg.get("awb_street_code")),
+                                        "label": self.cfg.get("awb_label") or "", "next": nxt,
+                                        "error": (ent or {}).get("error"),
+                                        "types": sorted({d["type"] for d in (ent or {}).get("dates") or []})})
             if path == "/api/calendar/config":
                 urls = [u for u in (self.cfg.get("calendar_urls") or []) if isinstance(u, str)]
                 return self._send_json({"ok": True, "available": calendar_ics is not None,

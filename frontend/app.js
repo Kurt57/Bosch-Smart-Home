@@ -94,8 +94,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v198';   // short tag shown always-on in the header
-const APP_VERSION = 'v198 · 2026-11-18 · Wohn-Dashboard: Das Banner zeigt nur noch, was etwas bringt – PV-Überschuss jetzt nutzen, Börse günstig oder teuer. Sonst die Geldbilanz der PV-Anlage: heute durch Eigenverbrauch gespart + Einspeisevergütung, diesen Monat und seit dem Anschluss. „Strompreis mittel“ und „Kein Börsentarif aktiv“ entfallen. Dieselben Summen (gespart diesen Monat / seit Anschluss) stehen auch in der Übersicht und im Tab PV. ' +
+const APP_BUILD = 'v199';   // short tag shown always-on in the header
+const APP_VERSION = 'v199 · 2026-11-18 · Müllabfuhr der AWB Köln: Setup → „🗑️ Müllabfuhr (AWB Köln)“ → Straße und Hausnummer suchen, Adresse antippen. Die Abfuhrtermine (Rest-, Bio-, Papier-, Wertstofftonne …) erscheinen im Wohn-Dashboard bei den Terminen und als Hinweis am Vorabend ab 16 Uhr bzw. am Morgen („Morgen: Biotonne + Papiertonne“). Die Adresse bleibt lokal in der Bridge. AWB hat dafür keine offizielle Schnittstelle – die App nutzt dieselbe Abfrage wie der Abfuhrkalender auf awbkoeln.de. ' +
+  'v198 · 2026-11-18 · Wohn-Dashboard: Das Banner zeigt nur noch, was etwas bringt – PV-Überschuss jetzt nutzen, Börse günstig oder teuer. Sonst die Geldbilanz der PV-Anlage: heute durch Eigenverbrauch gespart + Einspeisevergütung, diesen Monat und seit dem Anschluss. „Strompreis mittel“ und „Kein Börsentarif aktiv“ entfallen. Dieselben Summen (gespart diesen Monat / seit Anschluss) stehen auch in der Übersicht und im Tab PV. ' +
   'v197 · 2026-11-18 · Wohn-Dashboard (#dash): standardmäßig dunkel, die Wahl Hell/Dunkel bleibt auf dem Gerät gespeichert. Oben Hinweis-Kacheln: Fenster/Tür offen (ab 10 Minuten blinkend, rot bei Heizbetrieb, Kälte oder Abwesenheit), lüften, Raum zu kalt, Termin in der nächsten Stunde, Mülltonne am Vorabend, Batterie lädt aus dem Netz, PV-Anlage oder Wärmepumpe ohne aktuelle Werte, sehr hoher Verbrauch. Die größten Verbraucher hängen jetzt als Linien am Haus in der Energiefluss-Grafik (Wärmepumpe, Geräte, nicht einzeln gemessener Rest) statt in einer Liste. Neu: Kalender (iCloud-Freigabe, Google, .ics) mit Terminen heute, morgen und der nächsten Tage – Adresse im Setup, sie bleibt nur lokal in der Bridge. ' +
   'v196 · 2026-11-18 · Übersicht mit dem Smart Meter: „Gerade jetzt“ zeigt den gemessenen Hausverbrauch statt der Summe der einzeln gemessenen Geräte. „Noch nicht gemessen“ rechnet live Haus − Wärmepumpe − Geräte (alle 10 s neu) und die Tagesbilanz aus vollständig gemessenen Smart-Meter-Tagen statt aus den Zählerablesungen (die bleiben, bis es einen solchen Tag gibt). Ist der Tag lückenlos gemessen, zeigt „Heute bisher verbraucht“ den Smart-Meter-Wert und „Wofür heute“ den Rest als „Nicht einzeln gemessen“. ' +
   'v195 · 2026-11-18 · PV-Anlage mit echten Daten (Fronius GEN24, Reserva, Smart Meter TS 65A-3) abgeglichen: Lädt die Batterie aus dem Netz (z. B. „charge boost“ bei sehr niedrigem Ladestand), zeigt der Energiefluss einen Bogen Netz → Batterie, ein Hinweis erklärt es, und die Tageswerte zählen „Batterie aus dem Netz geladen“ extra – dieser Strom zählt nicht mehr als Sonnenstrom. Gibt die Batterie ins Netz ab, wird das ebenfalls gezeigt (und nicht als Sonnen-Überschuss empfohlen). Details: leere String-Plätze ausgeblendet, Smart Meter je Phase mit Leistung, Strom, Spannung und cos φ, Batterie mit Spannung/Strom und Modus. Wohn-Dashboard (#dash): Energiefluss, Empfehlung und Verbraucherliste mit den gemessenen Werten des Wechselrichters (alle 10 s) statt der Schätzung; antwortet er nicht, steht das dabei. Behoben: Bei Zeiträumen über 31 Tage zählte die allererste Viertelstunde nach dem Verbinden nur eine Minute. ' +
@@ -2689,13 +2690,13 @@ const VIEW_RENDERS = {
   pv: ['renderPvReal', 'renderPv', 'renderCarbon', 'renderSmart'],          // the last two also fill PV fields
   borse: ['renderBorse', 'renderCarbon', 'renderSmart'],
   konzept: ['renderKonzept'],
-  settings: ['renderSettings', 'renderMeter', 'renderFroniusSetup', 'renderCalSetup'],
+  settings: ['renderSettings', 'renderMeter', 'renderFroniusSetup', 'renderCalSetup', 'renderAwbSetup'],
 };
 // the order renderAll() always used (some renders build on earlier ones)
 const RENDER_ORDER = ['renderOverview', 'paintNowLine', 'renderToday', 'renderHistory', 'renderHeatpump', 'renderProfile', 'renderPv',
   'renderSettings', 'renderAppliances', 'renderMeter', 'renderBorse', 'renderCarbon', 'renderSmart', 'renderKonzept',
   'renderHa', 'renderDarkLoad', 'renderSwitches', 'renderHeatExtras', 'renderFlow', 'renderPvReal', 'renderFroniusSetup',
-  'renderCalSetup'];
+  'renderCalSetup', 'renderAwbSetup'];
 const _viewStale = {};                 // view -> Set of render names waiting for that view
 function activeView() { const el = document.querySelector('.view.on'); return el ? el.id.replace(/^v-/, '') : 'overview'; }
 function _runRender(name) {
@@ -3135,21 +3136,24 @@ function kioskAlerts() {
     if (rm.temp != null && rm.setpoint != null && rm.temp <= rm.setpoint - 1.5)
       A.push({ level: 'info', icon: '🥶', title: `${rm.room}: zu kalt`, detail: `${fmt(rm.temp, 1)}° statt ${fmt(rm.setpoint, 0)}°` });
   });
-  // 3) calendar: what starts within the hour; bins the evening before
+  // 3) calendar: what starts within the hour; bins the evening before / that morning
   const C = _kioskCal;
   if (C && C.events) {
     const tomorrow = ymdLocal(new Date(Date.now() + 86400000)), today = ymdLocal(new Date());
     const h = new Date().getHours();
+    const bins = { [today]: [], [tomorrow]: [] };
     C.events.forEach(e => {
       if (!e.all_day && e.start > now && e.start - now <= 3600)
         A.push({ level: e.start - now <= 900 ? 'warn' : 'info', blink: e.start - now <= 900, icon: '📅',
           title: `In ${Math.max(1, Math.round((e.start - now) / 60))} min: ${e.title}`,
           detail: new Date(e.start * 1000).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) + ' Uhr' + (e.location ? ' · ' + e.location : '') });
-      if (e.all_day && TRASH_RX.test(e.title)) {
-        if (e.start_day === tomorrow && h >= 16) A.push({ level: 'warn', icon: '🗑️', title: `Morgen: ${e.title}`, detail: 'Tonne heute Abend rausstellen' });
-        else if (e.start_day === today && h < 10) A.push({ level: 'warn', icon: '🗑️', title: `Heute: ${e.title}`, detail: 'Tonne rausstellen, falls noch nicht geschehen' });
-      }
+      if (e.all_day && TRASH_RX.test(e.title) && bins[e.start_day] && bins[e.start_day].indexOf(e.title) < 0) bins[e.start_day].push(e.title);
     });
+    const many = n => n > 1 ? 'Tonnen' : 'Tonne';
+    if (bins[tomorrow].length && h >= 16) A.push({ level: 'warn', icon: '🗑️', title: `Morgen: ${bins[tomorrow].join(' + ')}`,
+      detail: `${many(bins[tomorrow].length)} heute Abend rausstellen` });
+    if (bins[today].length && h < 10) A.push({ level: 'warn', icon: '🗑️', title: `Heute: ${bins[today].join(' + ')}`,
+      detail: `${many(bins[today].length)} rausstellen, falls noch nicht geschehen` });
   }
   // 4) PV system / battery
   const M = frLiveNow();
@@ -12329,6 +12333,71 @@ async function calClear() {
 function initCalSetup() {
   const b = $('cal-save'); if (b) b.addEventListener('click', calSave);
   const c = $('cal-clear'); if (c) c.addEventListener('click', calClear);
+  const s = $('awb-search'); if (s) s.addEventListener('click', awbSearch);
+  const x = $('awb-clear'); if (x) x.addEventListener('click', awbClear);
+  ['awb-street', 'awb-nr'].forEach(id => { const e = $(id); if (e) e.addEventListener('keydown', ev => { if (ev.key === 'Enter') awbSearch(); }); });
+  const f = $('awb-found');
+  if (f) f.addEventListener('click', ev => { const t = ev.target.closest('[data-awb]'); if (t) awbPick(JSON.parse(t.dataset.awb)); });
+}
+
+/* ---- Setup → Müllabfuhr (AWB Köln) ------------------------------------------- */
+function awbNextHtml(nxt) {
+  if (!nxt || !nxt.length) return '';
+  return nxt.slice(0, 6).map(d => `<span style="display:inline-flex;align-items:center;gap:5px;margin-right:12px;white-space:nowrap">` +
+    `<span style="width:9px;height:9px;border-radius:50%;background:${esc(d.color)}"></span>` +
+    `${new Date(d.date + 'T12:00:00').toLocaleDateString('de-DE', { weekday: 'short', day: 'numeric', month: 'numeric' })} ${esc(d.label)}</span>`).join('');
+}
+async function renderAwbSetup() {
+  const st = $('awb-status'); if (!st) return;
+  try {
+    const r = await api('/api/awb/config');
+    const clr = $('awb-clear');
+    if (r && r.available === false) st.textContent = 'Das AWB-Modul fehlt in der Bridge (bridge/awb_koeln.py) – bitte die Bridge aktualisieren.';
+    else if (r && r.configured) st.innerHTML = `✅ <b>${esc(r.label || 'Adresse eingetragen')}</b>` +
+      (r.error ? `<br>⚠︎ ${esc(r.error)}` : '') + (r.next && r.next.length ? `<br>Nächste Abholungen: ${awbNextHtml(r.next)}` : '');
+    else st.textContent = 'Noch keine Adresse eingetragen.';
+    if (clr) clr.hidden = !(r && r.configured);
+  } catch (e) { st.textContent = 'Nur möglich, wenn die Seite von der Bridge geöffnet ist.'; }
+}
+async function awbSearch() {
+  const note = $('awb-note'), out = $('awb-found'), b = $('awb-search');
+  const street = (($('awb-street') || {}).value || '').trim(), nr = (($('awb-nr') || {}).value || '').trim();
+  if (street.length < 3 || !nr) { if (note) note.textContent = 'Bitte Straße (mind. 3 Buchstaben) und Hausnummer eingeben.'; return; }
+  if (b) b.disabled = true;
+  if (out) out.innerHTML = '';
+  if (note) note.textContent = 'Frage die AWB …';
+  try {
+    const r = await api('/api/awb/streets?street=' + encodeURIComponent(street) + '&nr=' + encodeURIComponent(nr));
+    if (!r || !r.ok) { if (note) note.textContent = (r && r.error) || 'Suche nicht möglich.'; return; }
+    if (!r.results.length) { if (note) note.textContent = 'Keine passende Adresse gefunden – Schreibweise prüfen (z. B. „Straße“ statt „Str.“).'; return; }
+    if (note) note.textContent = r.results.length === 1 ? 'Gefunden – antippen zum Übernehmen:' : `${r.results.length} Treffer – deine Adresse antippen:`;
+    if (out) out.innerHTML = r.results.slice(0, 12).map(x => `<button class="btn sec" data-awb='${esc(JSON.stringify(x))}' ` +
+      `style="text-align:left; margin-top:6px">🏠 ${esc(x.label)}</button>`).join('');
+  } catch (e) {
+    if (note) note.textContent = 'Suche nur möglich, wenn die Seite von der Bridge geöffnet ist.';
+  } finally { if (b) b.disabled = false; }
+}
+async function awbPick(x) {
+  const note = $('awb-note'), out = $('awb-found');
+  if (note) note.textContent = 'Lade die Abfuhrtermine …';
+  try {
+    const r = await postJSON('/api/awb/config', x);
+    if (r && r.ok) {
+      if (out) out.innerHTML = '';
+      if (note) note.innerHTML = `✅ Gespeichert: <b>${esc(x.label)}</b> – ${r.count} Abfuhrtermine im nächsten Jahr.` +
+        (r.next && r.next.length ? `<br>${awbNextHtml(r.next)}` : '') +
+        (r.types && r.types.length ? `<br><small style="color:var(--muted)">Tonnenarten laut AWB: ${r.types.map(esc).join(', ')}</small>` : '');
+      _kioskCal = null;
+    } else if (note) note.textContent = (r && r.error) || 'Nicht gespeichert.';
+  } catch (e) { if (note) note.textContent = 'Speichern nur möglich, wenn die Seite von der Bridge geöffnet ist.'; }
+  renderAwbSetup();
+}
+async function awbClear() {
+  if (!confirm('Müllabfuhr-Termine aus dem Wohn-Dashboard entfernen?')) return;
+  try { await postJSON('/api/awb/config', { clear: true }); } catch (e) {}
+  _kioskCal = null;
+  const note = $('awb-note'); if (note) note.textContent = 'Entfernt.';
+  renderAwbSetup();
 }
 
 function initHpDiag() {

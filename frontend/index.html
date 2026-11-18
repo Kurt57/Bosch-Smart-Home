@@ -1698,6 +1698,29 @@
       <div class="note" id="cal-note" style="margin-top:8px; line-height:1.6"></div>
     </div>
 
+    <div class="card" id="awb-card">
+      <h2>🗑️ Müllabfuhr (AWB Köln)</h2>
+      <div class="note" id="awb-status" style="margin-bottom:10px; line-height:1.6"></div>
+      <div class="note" style="line-height:1.6; margin-bottom:10px">
+        Holt die Abfuhrtermine deiner Adresse direkt bei den <b>AWB Köln</b> und zeigt sie im Wohn-Dashboard –
+        mit Hinweis am Vorabend („Morgen: Biotonne“). Die Adresse bleibt <b>nur lokal in der Bridge</b> und geht
+        nur an awbkoeln.de. Hinweis: AWB hat dafür keine offizielle Schnittstelle; die App nutzt dieselbe Abfrage
+        wie der Abfuhrkalender auf awbkoeln.de.
+      </div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap">
+        <div style="flex:3; min-width:170px"><label>Straße</label>
+          <input id="awb-street" autocomplete="off" placeholder="z. B. Domkloster"></div>
+        <div style="flex:1; min-width:80px"><label>Hausnummer</label>
+          <input id="awb-nr" autocomplete="off" inputmode="text" placeholder="4"></div>
+      </div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap">
+        <button class="btn" id="awb-search" style="flex:1; min-width:140px">🔍 Adresse suchen</button>
+        <button class="btn sec" id="awb-clear" style="flex:1; min-width:140px" hidden>Entfernen</button>
+      </div>
+      <div id="awb-found" style="margin-top:8px"></div>
+      <div class="note" id="awb-note" style="margin-top:8px; line-height:1.6"></div>
+    </div>
+
     <div class="card" id="export-card">
       <h2>📤 Verbrauchsdaten exportieren (CSV)</h2>
       <div class="note" style="line-height:1.6; margin-bottom:10px">
