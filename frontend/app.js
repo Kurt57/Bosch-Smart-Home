@@ -11671,6 +11671,7 @@ async function frConnect(host) {
     const r = await postJSON('/api/fronius/connect', { host });
     if (r && r.ok) {
       const I = r.identity || {};
+      if (inp && I.host) inp.value = I.host;      // the address as saved (no http://, no path)
       await frRefreshHealth();                    // status + live values first, then the message
       STATE.pv = null;
       await loadFronius(true);
