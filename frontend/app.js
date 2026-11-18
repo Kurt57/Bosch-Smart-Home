@@ -94,8 +94,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v199';   // short tag shown always-on in the header
-const APP_VERSION = 'v199 · 2026-11-18 · Müllabfuhr der AWB Köln: Setup → „🗑️ Müllabfuhr (AWB Köln)“ → Straße und Hausnummer suchen, Adresse antippen. Die Abfuhrtermine (Rest-, Bio-, Papier-, Wertstofftonne …) erscheinen im Wohn-Dashboard bei den Terminen und als Hinweis am Vorabend ab 16 Uhr bzw. am Morgen („Morgen: Biotonne + Papiertonne“). Die Adresse bleibt lokal in der Bridge. AWB hat dafür keine offizielle Schnittstelle – die App nutzt dieselbe Abfrage wie der Abfuhrkalender auf awbkoeln.de. ' +
+const APP_BUILD = 'v200';   // short tag shown always-on in the header
+const APP_VERSION = 'v200 · 2026-11-18 · Setup → „🖥️ Wohn-Dashboard“: einstellbar, ab wie vielen Sekunden der Fenster-Hinweis blinkt (Standard 600 s = 10 min, zum Testen z. B. 1 s) und wie viele Abende vorher der Tonnen-Hinweis erscheint (Standard 1; bei 2 z. B. „Übermorgen: Papiertonne“ ab 16 Uhr). Gilt für alle Geräte – ein laufendes Dashboard übernimmt die Werte innerhalb einer Minute. Bei offenem Fenster schaut das Dashboard alle 20 s nach (sonst jede Minute); kurze Zeiten stehen als Sekunden da. ' +
+  'v199 · 2026-11-18 · Müllabfuhr der AWB Köln: Setup → „🗑️ Müllabfuhr (AWB Köln)“ → Straße und Hausnummer suchen, Adresse antippen. Die Abfuhrtermine (Rest-, Bio-, Papier-, Wertstofftonne …) erscheinen im Wohn-Dashboard bei den Terminen und als Hinweis am Vorabend ab 16 Uhr bzw. am Morgen („Morgen: Biotonne + Papiertonne“). Die Adresse bleibt lokal in der Bridge. AWB hat dafür keine offizielle Schnittstelle – die App nutzt dieselbe Abfrage wie der Abfuhrkalender auf awbkoeln.de. ' +
   'v198 · 2026-11-18 · Wohn-Dashboard: Das Banner zeigt nur noch, was etwas bringt – PV-Überschuss jetzt nutzen, Börse günstig oder teuer. Sonst die Geldbilanz der PV-Anlage: heute durch Eigenverbrauch gespart + Einspeisevergütung, diesen Monat und seit dem Anschluss. „Strompreis mittel“ und „Kein Börsentarif aktiv“ entfallen. Dieselben Summen (gespart diesen Monat / seit Anschluss) stehen auch in der Übersicht und im Tab PV. ' +
   'v197 · 2026-11-18 · Wohn-Dashboard (#dash): standardmäßig dunkel, die Wahl Hell/Dunkel bleibt auf dem Gerät gespeichert. Oben Hinweis-Kacheln: Fenster/Tür offen (ab 10 Minuten blinkend, rot bei Heizbetrieb, Kälte oder Abwesenheit), lüften, Raum zu kalt, Termin in der nächsten Stunde, Mülltonne am Vorabend, Batterie lädt aus dem Netz, PV-Anlage oder Wärmepumpe ohne aktuelle Werte, sehr hoher Verbrauch. Die größten Verbraucher hängen jetzt als Linien am Haus in der Energiefluss-Grafik (Wärmepumpe, Geräte, nicht einzeln gemessener Rest) statt in einer Liste. Neu: Kalender (iCloud-Freigabe, Google, .ics) mit Terminen heute, morgen und der nächsten Tage – Adresse im Setup, sie bleibt nur lokal in der Bridge. ' +
   'v196 · 2026-11-18 · Übersicht mit dem Smart Meter: „Gerade jetzt“ zeigt den gemessenen Hausverbrauch statt der Summe der einzeln gemessenen Geräte. „Noch nicht gemessen“ rechnet live Haus − Wärmepumpe − Geräte (alle 10 s neu) und die Tagesbilanz aus vollständig gemessenen Smart-Meter-Tagen statt aus den Zählerablesungen (die bleiben, bis es einen solchen Tag gibt). Ist der Tag lückenlos gemessen, zeigt „Heute bisher verbraucht“ den Smart-Meter-Wert und „Wofür heute“ den Rest als „Nicht einzeln gemessen“. ' +
@@ -2690,13 +2691,13 @@ const VIEW_RENDERS = {
   pv: ['renderPvReal', 'renderPv', 'renderCarbon', 'renderSmart'],          // the last two also fill PV fields
   borse: ['renderBorse', 'renderCarbon', 'renderSmart'],
   konzept: ['renderKonzept'],
-  settings: ['renderSettings', 'renderMeter', 'renderFroniusSetup', 'renderCalSetup', 'renderAwbSetup'],
+  settings: ['renderSettings', 'renderMeter', 'renderFroniusSetup', 'renderCalSetup', 'renderAwbSetup', 'renderDashSetup'],
 };
 // the order renderAll() always used (some renders build on earlier ones)
 const RENDER_ORDER = ['renderOverview', 'paintNowLine', 'renderToday', 'renderHistory', 'renderHeatpump', 'renderProfile', 'renderPv',
   'renderSettings', 'renderAppliances', 'renderMeter', 'renderBorse', 'renderCarbon', 'renderSmart', 'renderKonzept',
   'renderHa', 'renderDarkLoad', 'renderSwitches', 'renderHeatExtras', 'renderFlow', 'renderPvReal', 'renderFroniusSetup',
-  'renderCalSetup', 'renderAwbSetup'];
+  'renderCalSetup', 'renderAwbSetup', 'renderDashSetup'];
 const _viewStale = {};                 // view -> Set of render names waiting for that view
 function activeView() { const el = document.querySelector('.view.on'); return el ? el.id.replace(/^v-/, '') : 'overview'; }
 function _runRender(name) {
@@ -3105,27 +3106,48 @@ function renderEnergyFlow() {
 // list is gone.
 function renderKioskLoads() { const el = $('kiosk-loads'); if (el) el.innerHTML = ''; }
 
+// ---- dashboard settings (Setup → Wohn-Dashboard; synced to all devices) --------
+const KIOSK_DEF = { win_s: 600, bin_days: 1 };
+function kioskSetting(k) {
+  let v = null; try { v = localStorage.getItem('bhe_kiosk_' + k); } catch (e) {}
+  const n = parseFloat(v);
+  if (!isFinite(n)) return KIOSK_DEF[k];
+  return k === 'bin_days' ? Math.max(1, Math.min(7, Math.round(n))) : Math.max(1, Math.min(86400, n));
+}
+// the dashboard runs for days without a reload: take over changes made on
+// another device (the bridge holds the synced settings)
+async function kioskPullSettings() {
+  try {
+    const r = await api('/api/settings'), srv = (r && r.settings) || {}, unsent = _unsentGet();
+    ['bhe_kiosk_win_s', 'bhe_kiosk_bin_days'].forEach(k => {
+      if (srv[k] != null && !(k in unsent)) { try { localStorage.setItem(k, srv[k]); _lastSynced[k] = srv[k]; } catch (e) {} }
+    });
+  } catch (e) { /* keep the local values */ }
+}
+
 // ---- awareness tiles: what needs attention now (urgent ones pulse) ------------
 const fmtMin = m => m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, '0')} min`;
+const fmtAgo = sec => sec < 60 ? `${Math.max(0, Math.floor(sec))} s` : fmtMin(Math.floor(sec / 60));
 const TRASH_RX = /m(ü|ue)ll|tonne|abfuhr|papier|gelber sack|wertstoff|sperrm/i;
 function kioskAlerts() {
   const A = [], now = Date.now() / 1000;
   const rooms = _kioskRooms || [], since = (_hdData && _hdData.window_since) || {};
   const outC = _hdData && _hdData.kpis ? _hdData.kpis.outdoor_c : null;
-  // 1) windows / doors open – longer than 10 min: pulsing
+  // 1) windows / doors open – longer than the set time (default 10 min): pulsing
+  const winS = kioskSetting('win_s');
   rooms.filter(rm => (rm.windows_open || 0) > 0).forEach(rm => {
     const ws = (rm.windows || []).filter(w => w.open);
     const door = ws.length > 0 && ws.every(w => w.door);
     const t0 = since[rm.room];
-    const min = t0 ? Math.max(0, Math.floor((now - t0) / 60)) : null;
-    const long = min != null && min >= 10;
+    const secs = t0 ? Math.max(0, now - t0) : null;
+    const long = secs != null && secs >= winS;
     const heating = rm.heating === true, cold = outC != null && outC < 12;
     const level = _kioskAway || (long && (heating || cold)) ? 'urgent' : long ? 'warn' : 'info';
     A.push({ level, blink: _kioskAway || long, icon: door ? '🚪' : '🪟',
       title: `${rm.room}: ${door ? 'Tür' : 'Fenster'} offen`,
-      detail: [min == null ? 'offen' : min < 1 ? 'gerade geöffnet' : `seit ${fmtMin(min)}`,
+      detail: [secs == null ? 'offen' : secs < 20 && winS >= 60 ? 'gerade geöffnet' : `seit ${fmtAgo(secs)}`,
         _kioskAway ? 'ihr seid abwesend' : '', heating ? 'Heizung läuft' : (cold ? `außen ${fmt(outC, 0)}°` : ''),
-        long && !door ? 'Stoßlüften reicht 5–10 min – bitte schließen' : '',
+        long && !door ? 'bitte schließen' + (winS >= 300 ? ' – Stoßlüften reicht 5–10 min' : '') : '',
         ws.length > 1 ? ws.map(w => w.name).join(', ') : ''].filter(Boolean).join(' · ') });
   });
   // 2) air / humidity (rooms without an open window) and clearly too cold rooms
@@ -3139,21 +3161,32 @@ function kioskAlerts() {
   // 3) calendar: what starts within the hour; bins the evening before / that morning
   const C = _kioskCal;
   if (C && C.events) {
-    const tomorrow = ymdLocal(new Date(Date.now() + 86400000)), today = ymdLocal(new Date());
-    const h = new Date().getHours();
-    const bins = { [today]: [], [tomorrow]: [] };
+    const h = new Date().getHours(), todayNoon = new Date(ymdLocal(new Date()) + 'T12:00:00');
+    const ahead = d => Math.round((new Date(d + 'T12:00:00') - todayNoon) / 86400000);   // days until d
+    const binDays = kioskSetting('bin_days'), bins = {};
     C.events.forEach(e => {
       if (!e.all_day && e.start > now && e.start - now <= 3600)
         A.push({ level: e.start - now <= 900 ? 'warn' : 'info', blink: e.start - now <= 900, icon: '📅',
           title: `In ${Math.max(1, Math.round((e.start - now) / 60))} min: ${e.title}`,
           detail: new Date(e.start * 1000).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) + ' Uhr' + (e.location ? ' · ' + e.location : '') });
-      if (e.all_day && TRASH_RX.test(e.title) && bins[e.start_day] && bins[e.start_day].indexOf(e.title) < 0) bins[e.start_day].push(e.title);
+      if (e.all_day && TRASH_RX.test(e.title)) {
+        const k = ahead(e.start_day);
+        if (k >= 0 && k <= binDays) { bins[k] = bins[k] || []; if (bins[k].indexOf(e.title) < 0) bins[k].push(e.title); }
+      }
     });
+    // shown from 16:00 on the evening `binDays` days before until 10:00 on the day itself
     const many = n => n > 1 ? 'Tonnen' : 'Tonne';
-    if (bins[tomorrow].length && h >= 16) A.push({ level: 'warn', icon: '🗑️', title: `Morgen: ${bins[tomorrow].join(' + ')}`,
-      detail: `${many(bins[tomorrow].length)} heute Abend rausstellen` });
-    if (bins[today].length && h < 10) A.push({ level: 'warn', icon: '🗑️', title: `Heute: ${bins[today].join(' + ')}`,
-      detail: `${many(bins[today].length)} rausstellen, falls noch nicht geschehen` });
+    Object.keys(bins).map(Number).sort((x, y) => x - y).forEach(k => {
+      const show = k === 0 ? h < 10 : k < binDays ? true : h >= 16;
+      if (!show) return;
+      const n = bins[k].length, day = new Date(todayNoon.getTime() + k * 86400000);
+      const when = k === 0 ? 'Heute' : k === 1 ? 'Morgen' : k === 2 ? 'Übermorgen'
+        : 'Am ' + day.toLocaleDateString('de-DE', { weekday: 'long' });
+      A.push({ level: k <= 1 ? 'warn' : 'info', icon: '🗑️', title: `${when}: ${bins[k].join(' + ')}`,
+        detail: k === 0 ? `${many(n)} rausstellen, falls noch nicht geschehen`
+          : k === 1 ? `${many(n)} heute Abend rausstellen`
+          : `Abholung in ${k} Tagen (${day.toLocaleDateString('de-DE', { weekday: 'short', day: 'numeric', month: 'numeric' })}) – am Vorabend rausstellen` });
+    });
   }
   // 4) PV system / battery
   const M = frLiveNow();
@@ -3284,11 +3317,27 @@ function paintKiosk() {
   if (ve) ve.innerHTML = vent.length ? `🌬️ <b>Lüften empfohlen:</b> ${vent.join(', ')} – kurz stoßlüften.` : '✓ Lüften: überall ok.';
   const up = $('kiosk-updated'); if (up) up.textContent = 'aktualisiert ' + new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
 }
+let _kioskWinT = null;
+// while a window/door is open the rooms are looked at every 20 s (else with the
+// regular minute), so "open for longer than …" reacts quickly
+function kioskWatchWindows() {
+  clearTimeout(_kioskWinT); _kioskWinT = null;
+  if (!kioskOpen() || !(_kioskRooms || []).some(rm => (rm.windows_open || 0) > 0)) return;
+  _kioskWinT = setTimeout(async () => {
+    try {
+      const r = await api('/api/heating/diag');
+      if (r && (r.rooms || r.ok !== false)) { _hdData = r; _kioskRooms = r.rooms || []; }
+    } catch (e) { /* keep */ }
+    try { paintKiosk(); } catch (e) {}
+    kioskWatchWindows();
+  }, 20000);
+}
 async function kioskLoadData() {
   try {
     const r = await api('/api/heating/diag');
     if (r && (r.rooms || r.ok !== false)) { _hdData = r; _kioskRooms = r.rooms || []; }
   } catch (e) { /* keep whatever we had */ }
+  kioskWatchWindows();
   try { if (!STATE.spot) STATE.spot = await api('/api/spot'); } catch (e) {}
   // light live-power refresh (small window = cheap; the live snapshot is the
   // latest sample regardless) – kept separate so the other tabs' 90-day data stays.
@@ -3296,6 +3345,7 @@ async function kioskLoadData() {
   try { const h = await api('/api/heatpump/analytics?days=2'); if (h && h.live) _kioskHp = h.live; } catch (e) {}
   try { await loadFronius(true); } catch (e) {}
   try { await kioskLoadCal(); } catch (e) {}
+  try { await kioskPullSettings(); } catch (e) {}
   paintKiosk();
 }
 function kioskTick() {
@@ -3329,6 +3379,7 @@ function openKiosk() {
 function closeKiosk() {
   const k = $('kiosk'); if (k) k.hidden = true;
   clearInterval(_kioskClockT); clearInterval(_kioskDataT); _kioskClockT = _kioskDataT = null;
+  clearTimeout(_kioskWinT); _kioskWinT = null;
   try { const m = document.querySelector('meta[name="theme-color"]'); if (m) m.setAttribute('content', '#0b1220'); } catch (e) {}
   try { if (location.hash === '#dash') history.replaceState(null, '', location.pathname + location.search); } catch (e) {}
 }
@@ -12330,7 +12381,24 @@ async function calClear() {
   const note = $('cal-note'); if (note) note.textContent = 'Entfernt.';
   renderCalSetup();
 }
+function renderDashSetup() {
+  const w = $('dash-win-s'), b = $('dash-bin-days'); if (!w || !b) return;
+  if (document.activeElement !== w) w.value = String(kioskSetting('win_s'));
+  if (document.activeElement !== b) b.value = String(kioskSetting('bin_days'));
+  const s = kioskSetting('win_s'), note = $('dash-note');
+  if (note) note.innerHTML = `Fenster blinkt nach <b>${s >= 60 ? fmtMin(Math.floor(s / 60)) + (s % 60 ? ' ' + Math.round(s % 60) + ' s' : '') : s + ' s'}</b> · ` +
+    `Tonnen-Hinweis <b>${kioskSetting('bin_days') === 1 ? 'am Vorabend' : kioskSetting('bin_days') + ' Abende vorher'}</b> (ab 16 Uhr).`;
+}
+function initDashSetup() {
+  const w = $('dash-win-s'), b = $('dash-bin-days');
+  const save = (k, v) => { try { localStorage.setItem('bhe_kiosk_' + k, String(v)); } catch (e) {} renderDashSetup();
+    if (kioskOpen()) { try { paintKiosk(); } catch (e) {} } };
+  if (w) w.addEventListener('change', () => { const n = parseFloat(w.value); save('win_s', isFinite(n) && n >= 1 ? Math.min(86400, Math.round(n)) : KIOSK_DEF.win_s); });
+  if (b) b.addEventListener('change', () => save('bin_days', Math.max(1, Math.min(7, parseInt(b.value, 10) || 1))));
+  const r = $('dash-reset'); if (r) r.addEventListener('click', () => { save('win_s', KIOSK_DEF.win_s); save('bin_days', KIOSK_DEF.bin_days); });
+}
 function initCalSetup() {
+  initDashSetup();
   const b = $('cal-save'); if (b) b.addEventListener('click', calSave);
   const c = $('cal-clear'); if (c) c.addEventListener('click', calClear);
   const s = $('awb-search'); if (s) s.addEventListener('click', awbSearch);

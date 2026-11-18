@@ -1674,6 +1674,27 @@
       <button class="btn sec" id="fr-disconnect" style="margin-top:10px" hidden>Verbindung trennen</button>
     </div>
 
+    <div class="card" id="dash-card">
+      <h2>🖥️ Wohn-Dashboard</h2>
+      <div class="note" style="line-height:1.6; margin-bottom:10px">
+        Vollbild-Ansicht für ein Wand-iPad: <a href="#dash">…/#dash öffnen</a>. Diese Einstellungen gelten für
+        <b>alle Geräte</b> – ein laufendes Dashboard übernimmt sie innerhalb einer Minute.
+      </div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap">
+        <div style="flex:1; min-width:160px"><label>Fenster-Hinweis blinkt ab (Sekunden)</label>
+          <input id="dash-win-s" type="number" min="1" max="86400" step="1" inputmode="numeric" placeholder="600"></div>
+        <div style="flex:1; min-width:160px"><label>Tonnen-Hinweis: Abende vorher</label>
+          <select id="dash-bin-days">
+            <option value="1">1 – am Vorabend</option><option value="2">2</option><option value="3">3</option>
+            <option value="4">4</option><option value="5">5</option>
+          </select></div>
+      </div>
+      <div class="note" id="dash-note" style="margin-top:8px"></div>
+      <div class="note" style="margin-top:6px; line-height:1.6">Standard: <b>600 s</b> (10 min) und <b>1 Abend</b>. Zum Testen
+        z. B. <b>1 Sekunde</b> – der Hinweis blinkt dann, sobald die Bridge das offene Fenster bemerkt hat (je nach Abfrage
+        bis etwa eine Minute). <a href="#" id="dash-reset" onclick="return false">Auf Standard zurücksetzen</a></div>
+    </div>
+
     <div class="card" id="cal-card">
       <h2>📅 Kalender im Wohn-Dashboard</h2>
       <div class="note" id="cal-status" style="margin-bottom:10px"></div>

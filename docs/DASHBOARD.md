@@ -6,8 +6,9 @@ Adresse öffnen (z. B. `http://<bridge>:8090/#dash`) und zum Homescreen hinzufü
 * **Hell/Dunkel:** dunkel ist Standard; der Knopf 🌙/☀️ oben schaltet um, die Wahl bleibt auf
   diesem Gerät gespeichert.
 * **Hinweis-Kacheln** oben – nur was gerade Aufmerksamkeit braucht, Dringendes pulsiert:
-  * 🪟/🚪 Fenster oder Tür offen – ab 10 Minuten pulsierend, rot bei laufender Heizung, Kälte
-    draußen oder „Abwesend“. Die Dauer zählt ab dem Moment, ab dem die Bridge das Öffnen bemerkt hat.
+  * 🪟/🚪 Fenster oder Tür offen – ab 10 Minuten pulsierend (einstellbar), rot bei laufender
+    Heizung, Kälte draußen oder „Abwesend“. Die Dauer zählt ab dem Moment, ab dem die Bridge das
+    Öffnen bemerkt hat.
   * 🌬️ lüften (Feuchte/Luftqualität), 🥶 Raum deutlich unter Soll.
   * 📅 Termin in der nächsten Stunde, 🗑️ Mülltonnen am Vorabend (ab 16 Uhr) und am Morgen.
   * 🔋 Batterie lädt aus dem Netz, ☀️/♨️ PV-Anlage oder Wärmepumpe ohne aktuelle Werte,
@@ -18,6 +19,11 @@ Adresse öffnen (z. B. `http://<bridge>:8090/#dash`) und zum Homescreen hinzufü
 * **Energiefluss:** Sonne, Batterie, Haus, Netz – gemessen vom Wechselrichter – und vom Haus aus
   Linien zu den größten Verbrauchern (Wärmepumpe, Geräte, nicht einzeln gemessener Rest).
 * **Räume:** Temperatur, Soll, Fenster, Luft.
+
+**Einstellungen:** Setup → **🖥️ Wohn-Dashboard** – ab wie vielen **Sekunden** der Fenster-Hinweis
+blinkt (Standard 600 s; zum Testen z. B. 1 s) und wie viele **Abende vorher** der Tonnen-Hinweis
+erscheint (Standard 1). Gilt für alle Geräte; ein laufendes Dashboard übernimmt die Werte innerhalb
+einer Minute. Ist ein Fenster offen, schaut das Dashboard alle 20 Sekunden nach.
 
 ## Kalender
 
