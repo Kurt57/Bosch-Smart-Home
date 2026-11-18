@@ -94,8 +94,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v197';   // short tag shown always-on in the header
-const APP_VERSION = 'v197 · 2026-11-18 · Wohn-Dashboard (#dash): standardmäßig dunkel, die Wahl Hell/Dunkel bleibt auf dem Gerät gespeichert. Oben Hinweis-Kacheln: Fenster/Tür offen (ab 10 Minuten blinkend, rot bei Heizbetrieb, Kälte oder Abwesenheit), lüften, Raum zu kalt, Termin in der nächsten Stunde, Mülltonne am Vorabend, Batterie lädt aus dem Netz, PV-Anlage oder Wärmepumpe ohne aktuelle Werte, sehr hoher Verbrauch. Die größten Verbraucher hängen jetzt als Linien am Haus in der Energiefluss-Grafik (Wärmepumpe, Geräte, nicht einzeln gemessener Rest) statt in einer Liste. Neu: Kalender (iCloud-Freigabe, Google, .ics) mit Terminen heute, morgen und der nächsten Tage – Adresse im Setup, sie bleibt nur lokal in der Bridge. ' +
+const APP_BUILD = 'v198';   // short tag shown always-on in the header
+const APP_VERSION = 'v198 · 2026-11-18 · Wohn-Dashboard: Das Banner zeigt nur noch, was etwas bringt – PV-Überschuss jetzt nutzen, Börse günstig oder teuer. Sonst die Geldbilanz der PV-Anlage: heute durch Eigenverbrauch gespart + Einspeisevergütung, diesen Monat und seit dem Anschluss. „Strompreis mittel“ und „Kein Börsentarif aktiv“ entfallen. Dieselben Summen (gespart diesen Monat / seit Anschluss) stehen auch in der Übersicht und im Tab PV. ' +
+  'v197 · 2026-11-18 · Wohn-Dashboard (#dash): standardmäßig dunkel, die Wahl Hell/Dunkel bleibt auf dem Gerät gespeichert. Oben Hinweis-Kacheln: Fenster/Tür offen (ab 10 Minuten blinkend, rot bei Heizbetrieb, Kälte oder Abwesenheit), lüften, Raum zu kalt, Termin in der nächsten Stunde, Mülltonne am Vorabend, Batterie lädt aus dem Netz, PV-Anlage oder Wärmepumpe ohne aktuelle Werte, sehr hoher Verbrauch. Die größten Verbraucher hängen jetzt als Linien am Haus in der Energiefluss-Grafik (Wärmepumpe, Geräte, nicht einzeln gemessener Rest) statt in einer Liste. Neu: Kalender (iCloud-Freigabe, Google, .ics) mit Terminen heute, morgen und der nächsten Tage – Adresse im Setup, sie bleibt nur lokal in der Bridge. ' +
   'v196 · 2026-11-18 · Übersicht mit dem Smart Meter: „Gerade jetzt“ zeigt den gemessenen Hausverbrauch statt der Summe der einzeln gemessenen Geräte. „Noch nicht gemessen“ rechnet live Haus − Wärmepumpe − Geräte (alle 10 s neu) und die Tagesbilanz aus vollständig gemessenen Smart-Meter-Tagen statt aus den Zählerablesungen (die bleiben, bis es einen solchen Tag gibt). Ist der Tag lückenlos gemessen, zeigt „Heute bisher verbraucht“ den Smart-Meter-Wert und „Wofür heute“ den Rest als „Nicht einzeln gemessen“. ' +
   'v195 · 2026-11-18 · PV-Anlage mit echten Daten (Fronius GEN24, Reserva, Smart Meter TS 65A-3) abgeglichen: Lädt die Batterie aus dem Netz (z. B. „charge boost“ bei sehr niedrigem Ladestand), zeigt der Energiefluss einen Bogen Netz → Batterie, ein Hinweis erklärt es, und die Tageswerte zählen „Batterie aus dem Netz geladen“ extra – dieser Strom zählt nicht mehr als Sonnenstrom. Gibt die Batterie ins Netz ab, wird das ebenfalls gezeigt (und nicht als Sonnen-Überschuss empfohlen). Details: leere String-Plätze ausgeblendet, Smart Meter je Phase mit Leistung, Strom, Spannung und cos φ, Batterie mit Spannung/Strom und Modus. Wohn-Dashboard (#dash): Energiefluss, Empfehlung und Verbraucherliste mit den gemessenen Werten des Wechselrichters (alle 10 s) statt der Schätzung; antwortet er nicht, steht das dabei. Behoben: Bei Zeiträumen über 31 Tage zählte die allererste Viertelstunde nach dem Verbinden nur eine Minute. ' +
   'v194 · 2026-11-18 · Wärmepumpe: Strom aus einer Datenlücke (Bridge oder Bosch-Cloud länger als 30 Minuten nicht erreichbar) wird nicht mehr der Betriebsart am Rand der Lücke zugeschlagen – vorher landete z. B. nach einer abgelaufenen Anmeldung der ganze Verbrauch der Lücke im Warmwasser. Er zählt weiter zum Tagesverbrauch, steht in „Wofür heute“ und im Betriebsarten-Ring aber als „Betriebsart unbekannt (Datenlücke)“. Stundenreihe und Tagesablauf lassen die Lücke leer statt sie als Pause oder als eine einzige Riesen-Stunde zu zeigen. PV-Anlage: Ist die Solar API am Wechselrichter noch aus, zeigt die App die Schritte zum Einschalten mit Link zur Weboberfläche, Anmeldung als „Customer“ und was bei vergessenem Passwort hilft. ' +
@@ -2905,34 +2906,36 @@ function kioskWashAdvice() {
       line: `☀️ PV-Überschuss ${ca}<b>${fmt(pv.surplusKw, 1)} kW</b> – Großverbraucher ${act} (Eigenverbrauch).`,
       sub: `Erzeugung ${ca}${fmt(pv.pvKw, 1)} kW − Last ${ca}${fmt(pv.loadKw, 1)} kW · Quelle: ${pv.src}` + (spot ? ` · ${spot.sub}` : '') };
   }
-  // 2) else the Börse signal
-  if (spot) {
-    return { level: spot.cheap ? 'green' : spot.dear ? 'red' : 'amber',
+  // 2) else the Börse signal – only when it says something: cheap or dear
+  if (spot && (spot.cheap || spot.dear)) {
+    return { level: spot.cheap ? 'green' : 'red',
       line: spot.cheap
         ? `🟢 Börse günstig – guter Moment für Waschmaschine, Trockner, Spüler & E-Auto (${act}).`
-        : spot.dear
-          ? '🔴 Strom gerade teuer – große Verbraucher besser später laufen lassen.'
-          : '🟡 Strompreis mittel – kein Schnäppchen, aber kein Grund zu warten.',
-      sub: spot.sub + (pv && pv.surplusKw > 0 ? ` · ☀️ etwas PV (~${fmt(pv.surplusKw, 1)} kW)` : '') };
+        : '🔴 Strom gerade teuer – große Verbraucher besser später laufen lassen.',
+      sub: spot.sub + (pv && pv.surplusKw > 0 ? ` · ☀️ etwas PV (${ca}${fmt(pv.surplusKw, 1)} kW)` : '') };
   }
-  // 3) no spot tariff – with a measuring inverter say what the house runs on now
-  const M = pv && pv.measured ? frLiveNow() : null;
-  if (M && M.has_meter) {
-    const P = pvFlowParts(M), soc = M.soc != null ? ` – Ladestand ${fmt(M.soc, 0)} %` : '';
-    const line = pv.surplusKw > 0.05 ? `☀️ Die Sonne deckt das Haus – ${fmt(pv.surplusKw, 1)} kW übrig${P.ch > 25 ? ' (gehen in die Batterie)' : ''}.`
-      : P.gridBatt > 100 ? `🔋 Die Batterie lädt gerade aus dem Netz (${kwOrW(P.gridBatt)})${soc}.`
-      : P.battHouse > 100 ? `🔋 Die Batterie versorgt das Haus (${kwOrW(P.battHouse)})${soc}.`
-      : `🔌 Gerade kein Sonnenstrom übrig – das Haus bezieht ${kwOrW(P.gridHouse)} aus dem Netz.`;
-    return { level: pv.surplusKw > 0.05 ? 'green' : 'blue', line,
-      sub: `Erzeugung ${fmt(pv.pvKw, 1)} kW · Haus ${fmt(pv.loadKw, 1)} kW · ${pv.src} · ` +
-        'mit Börsentarif (Setup) gibt es hier auch Preis-Empfehlungen' };
-  }
-  return { level: pv && pv.pvKw > 0.2 ? 'green' : 'blue',
-    line: pv && pv.surplusKw > 0
-      ? `☀️ PV deckt die Last gerade etwa – Eigenverbrauch lohnt (~${fmt(Math.max(0, pv.surplusKw), 1)} kW Überschuss).`
-      : 'ℹ️ Kein Börsentarif aktiv – ohne dynamische Preise keine „jetzt-waschen"-Empfehlung.',
-    sub: pv ? `Erzeugung ~${fmt(pv.pvKw, 1)} kW − Last ~${fmt(pv.loadKw, 1)} kW · Quelle: ${pv.src}`
-      : 'Im Setup „Dynamischer Börsentarif" aktivieren oder im PV-Tab die Anlage eintragen.' };
+  // 3) otherwise: what the PV system has earned (no filler text without one)
+  const pm = kioskPvMoney();
+  if (pm) return pm;
+  return null;
+}
+// The PV system's money: own consumption not bought from the grid + feed-in
+// paid – today, this month, since it was connected (bridge: /api/fronius money).
+function kioskPvMoney() {
+  const F = STATE.fr, m = F && F.connected && F.money;
+  if (!m || !m.today) return null;
+  const e = v => eur(v || 0), t = m.today, mo = m.month, tot = m.total;
+  const sinceTxt = m.since ? new Date(m.since * 1000).toLocaleDateString('de-DE', { day: 'numeric', month: 'numeric', year: '2-digit' }) : '';
+  const parts = [];
+  if (mo && mo.days > t.days) parts.push(`diesen Monat <b>${e(mo.saved_eur)}</b>`);
+  if (tot && tot.days > (mo ? mo.days : 0)) parts.push(`seit ${sinceTxt} <b>${e(tot.saved_eur)}</b>`);
+  else if (tot && sinceTxt) parts.push(`seit dem Anschluss am ${sinceTxt}`);
+  return { level: 'green',
+    line: `☀️ PV heute: <b>${e(t.self_eur)}</b> gespart` + ((t.feed_eur || 0) >= 0.005 ? ` + <b>${e(t.feed_eur)}</b> Einspeisung` : ''),
+    sub: `Eigenverbrauch ${fmt(Math.max(0, (t.load_kwh || 0) - (t.imp_kwh || 0)), 1)} kWh × ${fmt(m.price * 100, 0)} ct · ` +
+      `eingespeist ${fmt(t.exp_kwh || 0, 1)} kWh × ${fmt(m.feedin * 100, 1)} ct` +
+      (t.autarky != null ? ` · Autarkie ${fmt(t.autarky * 100, 0)} %` : '') + (parts.length ? ' · ' + parts.join(' · ') : '') +
+      (F.demo ? ' · Demo-Anlage' : '') };
 }
 // map a rating level (good/ok/warn/na) to a theme-aware kiosk colour token
 function kcol(lvl) {
@@ -3244,8 +3247,10 @@ function paintKiosk() {
   }
   const out = kioskWashAdvice();
   const ban = $('kiosk-banner');
-  if (ban) { ban.className = out.level;
-    ban.innerHTML = `${out.line}<div class="b-sub">${out.sub}</div>`; }
+  if (ban) {
+    ban.className = out ? out.level : '';
+    ban.innerHTML = out ? `${out.line}<div class="b-sub">${out.sub}</div>` : '';     // nothing to say → no banner
+  }
   try { renderKioskAlerts(); } catch (e) { console.error(e); }
   try { renderKioskCal(); } catch (e) { console.error(e); }
   try { renderEnergyFlow(); } catch (e) { console.error(e); }
@@ -11686,14 +11691,18 @@ function hpLiveW() {
   return (STATE.ov && STATE.ov.now && STATE.ov.now.heatpump_w != null) ? STATE.ov.now.heatpump_w : null;
 }
 
-function pvTodayKpis(T, L) {
+function pvTodayKpis(T, L, MNY) {
   const d = T && T.today;
   if (!d) return '<div class="note">Heute noch keine gespeicherten Werte – die Bridge speichert ab der Verbindung jede Minute einen Wert.</div>';
   const tile = (v, l) => `<div><b>${v}</b><small>${l}</small></div>`;
   let h = tile(kwh(d.pv_kwh, d.pv_kwh < 10 ? 2 : 1), 'PV heute');
   if (d.load_kwh != null) {
     h += tile(pctOf(d.autarky), 'Autarkie') + tile(pctOf(d.self_rate), 'Eigenverbrauch') +
-      tile(kwh(d.exp_kwh, 1), 'eingespeist') + tile(kwh(d.imp_kwh, 1), 'Netzbezug') + tile(money(d.saved_eur), 'gespart heute');
+      tile(kwh(d.exp_kwh, 1), 'eingespeist') + tile(kwh(d.imp_kwh, 1), 'Netzbezug') +
+      tile(money(d.saved_eur), 'gespart heute' + (d.feed_eur ? ` <span style="opacity:.8">(${eur(d.self_eur)} + ${eur(d.feed_eur)} Einsp.)</span>` : ''));
+    if (MNY && MNY.month && MNY.month.days > 1) h += tile(money(MNY.month.saved_eur), 'gespart diesen Monat');
+    if (MNY && MNY.total && MNY.total.days > ((MNY.month && MNY.month.days) || 0))
+      h += tile(money(MNY.total.saved_eur), `gespart seit ${new Date(MNY.since * 1000).toLocaleDateString('de-DE', { day: 'numeric', month: 'numeric', year: '2-digit' })}`);
   }
   if (d.ch_grid_kwh != null && d.ch_grid_kwh >= 0.05) h += tile(kwh(d.ch_grid_kwh, d.ch_grid_kwh < 10 ? 2 : 1), 'Batterie aus dem Netz geladen');
   if (d.hp_sun_share != null) h += tile(pctOf(d.hp_sun_share), 'WP-Strom von der Sonne');
@@ -11783,7 +11792,7 @@ function renderFlow() {
   $('ov-flow-head').innerHTML = pvStatusTag(F);
   $('ov-flow').innerHTML = F.live ? pvFlowSvg(F.live, hpLiveW())
     : `<div class="note">${F.error ? '⚠︎ ' + esc(F.error) : 'Warte auf die erste Messung des Wechselrichters …'}</div>`;
-  $('ov-flow-kpi').innerHTML = pvTodayKpis(F.today, F.live);
+  $('ov-flow-kpi').innerHTML = pvTodayKpis(F.today, F.live, F.money);
   $('ov-flow-note').innerHTML = pvHint(F.live, F);
 }
 
@@ -11796,7 +11805,7 @@ function renderPvReal() {
   $('pvr-head').innerHTML = pvStatusTag(F);
   $('pvr-flow').innerHTML = F.live ? pvFlowSvg(F.live, hpLiveW())
     : `<div class="note">${F.error ? '⚠︎ ' + esc(F.error) : 'Warte auf die erste Messung des Wechselrichters …'}</div>`;
-  $('pvr-today').innerHTML = pvTodayKpis(F.today, F.live);
+  $('pvr-today').innerHTML = pvTodayKpis(F.today, F.live, F.money);
   const ser = (F.today && F.today.series) || [];
   $('pvr-day').innerHTML = ser.length ? pvRealDayChart(ser) : '<div class="note">Der Tagesverlauf füllt sich ab der ersten gespeicherten Minute.</div>';
   $('pvr-day-legend').innerHTML = ser.length ? legendHtml([

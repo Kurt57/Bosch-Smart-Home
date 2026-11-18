@@ -72,9 +72,11 @@ nach einem Neustart verbindet sich die Bridge von selbst wieder.
 
 * **Eigenverbrauch** = Anteil der PV-Erzeugung, der nicht eingespeist wurde (inkl. Batterieladung).
 * **Autarkie** = Anteil deines Verbrauchs, der nicht aus dem Netz kam.
-* **Gespart** = (Verbrauch − Netzbezug) × Strompreis + Einspeisung × Einspeisevergütung.
-  Strompreis aus dem Setup, Vergütung aus dem PV-Planer (Feld „Einspeisung ct/kWh") –
-  dort deinen Satz laut Netzbetreiber eintragen.
+* **Gespart** = (Verbrauch − Netzbezug) × Strompreis (selbst genutzter Sonnen-/Batteriestrom,
+  den du nicht kaufen musstest) + Einspeisung × Einspeisevergütung. Strompreis aus dem Setup,
+  Vergütung aus dem PV-Planer (Feld „Einspeisung ct/kWh") – dort deinen Satz laut Netzbetreiber
+  eintragen. Gezeigt für heute, den laufenden Monat und seit dem Anschluss (Übersicht, Tab PV und
+  das Banner im Wohn-Dashboard).
 * **Netzbezug und Einspeisung** kommen aus den **Zählerständen des Smart Meters** (exakt).
   An Tagen mit Datenlücke (Bridge oder Wechselrichter nicht erreichbar) oder wenn ein
   Zählerstand springt (z. B. Zähler getauscht), nimmt die App die gemessenen Leistungswerte

@@ -8120,10 +8120,13 @@ def _pv_day_result(a: dict, price: float, feedin: float) -> dict:
                     "direct_kwh": k(max(0.0, a["pv"] - exp - max(0.0, a["ch"] - a["gch"]))),
                     "self_rate": round(self_wh / a["pv"], 3) if a["pv"] > 50 else None,
                     "autarky": round(avoided / load, 3) if load > 50 else None,
+                    # money: own consumption covered by sun/battery (not bought) + feed-in paid
+                    "self_eur": round(avoided / 1000.0 * price, 2), "feed_eur": round(exp / 1000.0 * feedin, 2),
                     "saved_eur": round(avoided / 1000.0 * price + exp / 1000.0 * feedin, 2)})
     else:
         out.update({"load_kwh": None, "imp_kwh": None, "exp_kwh": None, "grid_src": None, "self_kwh": None,
-                    "direct_kwh": None, "self_rate": None, "autarky": None, "saved_eur": None})
+                    "direct_kwh": None, "self_rate": None, "autarky": None, "saved_eur": None,
+                    "self_eur": None, "feed_eur": None})
     out["hp_kwh"] = k(a["hp"]) if a["hp_cov"] > 0 else None
     out["hp_sun_kwh"] = k(a["hp_sun"]) if a["hp_cov"] > 0 else None
     out["hp_sun_share"] = round(a["hp_sun"] / a["hp"], 3) if a["hp"] > 50 else None
@@ -8302,7 +8305,7 @@ def compute_pv(store: "Store", days: int = 30, price: float = 0.35, feedin: floa
     def total(items):
         t = {"pv_kwh": 0.0, "load_kwh": 0.0, "imp_kwh": 0.0, "exp_kwh": 0.0, "self_kwh": 0.0,
              "direct_kwh": 0.0, "ch_kwh": 0.0, "dis_kwh": 0.0, "ch_grid_kwh": 0.0, "ch_pv_kwh": 0.0,
-             "saved_eur": 0.0, "hp_kwh": 0.0,
+             "saved_eur": 0.0, "self_eur": 0.0, "feed_eur": 0.0, "hp_kwh": 0.0,
              "hp_sun_kwh": 0.0, "mpp1_kwh": 0.0, "mpp2_kwh": 0.0, "gap_h": 0.0, "days": len(items)}
         for x in items:
             for kk in t:
@@ -8316,7 +8319,7 @@ def compute_pv(store: "Store", days: int = 30, price: float = 0.35, feedin: floa
                         if (has_load and t["load_kwh"] > 0.05) else None)
         t["hp_sun_share"] = round(t["hp_sun_kwh"] / t["hp_kwh"], 3) if t["hp_kwh"] > 0.05 else None
         if not has_load:
-            for kk in ("load_kwh", "imp_kwh", "exp_kwh", "self_kwh", "direct_kwh", "saved_eur"):
+            for kk in ("load_kwh", "imp_kwh", "exp_kwh", "self_kwh", "direct_kwh", "saved_eur", "self_eur", "feed_eur"):
                 t[kk] = None
         if not has_batt:
             t["ch_kwh"] = t["dis_kwh"] = t["ch_grid_kwh"] = t["ch_pv_kwh"] = None
@@ -8352,6 +8355,35 @@ def compute_pv(store: "Store", days: int = 30, price: float = 0.35, feedin: floa
             "has_meter": has_load, "has_battery": has_batt,
             "has_hp": hp_ok, "today": td, "daily": daily, "monthly": monthly, "totals": tot,
             "hourly": hourly, "series": series, "strings": strings}
+
+
+def compute_pv_money(store: "Store", price: float, feedin: float, now: int | None = None) -> dict | None:
+    """What the PV system brought in money: today, this calendar month and since
+    the first stored reading (up to 400 days) – own consumption not bought from
+    the grid × electricity price, plus feed-in × feed-in tariff."""
+    now = int(now or time.time())
+    first, _last, n = store.pv_span()
+    if not n:
+        return None
+    days = max(1, min(400, int((now - first) / 86400) + 2))
+    r = compute_pv(store, days, price, feedin, now=now)
+    if r.get("empty") or not r.get("has_meter"):
+        return None
+    today = _day_of(now)[2]
+    month = today[:7]
+    keys = ("self_eur", "feed_eur", "saved_eur", "pv_kwh", "self_kwh", "exp_kwh", "load_kwh", "imp_kwh")
+
+    def agg(items):
+        out = {k: round(sum((x.get(k) or 0.0) for x in items), 2) for k in keys}
+        out["days"] = len(items)
+        out["autarky"] = (round(max(0.0, out["load_kwh"] - out["imp_kwh"]) / out["load_kwh"], 3)
+                          if out["load_kwh"] > 0.05 else None)
+        return out
+    daily = r.get("daily") or []
+    return {"today": agg([d for d in daily if d["day"] == today]),
+            "month": agg([d for d in daily if d["day"].startswith(month)]),
+            "total": agg(daily), "since": first, "price": price, "feedin": feedin,
+            "capped": days >= 400}
 
 
 # --------------------------------------------------------------------------- #
@@ -9962,6 +9994,11 @@ class Handler(BaseHTTPRequestHandler):
                                                  lambda: compute_pv(self.store, 1, price, feedin))
             except Exception as exc:
                 out["today_error"] = str(exc)
+            try:      # month / since connection: heavier, so refreshed every 10 min
+                out["money"] = self.ctx.calc_get(("pvmoney", 0, price, feedin), 600,
+                                                 lambda: compute_pv_money(self.store, price, feedin))
+            except Exception as exc:
+                out["money_error"] = str(exc)
         return out
 
     def _fronius_discover(self, qs) -> dict:
