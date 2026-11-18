@@ -104,6 +104,7 @@ importierten Monaten statt auf einer Hochrechnung.
 | „Name … nicht auflösbar (DNS)" / „antwortet nicht" | Internet, Router/DNS, VPN oder Filter am Rechner der Bridge prüfen. |
 | „HTTP 429 – Bosch drosselt gerade" | Zu viele Anfragen; legt sich meist nach einiger Zeit. Die Bridge versucht es danach von selbst. |
 | „HomeCom antwortet, liefert aber keine Werte" | Anmeldung ok, aber das Gateway meldet nichts – in der HomeCom-App prüfen, ob die Wärmepumpe online ist. |
+| „WP · Betriebsart unbekannt (Datenlücke)" | Die Bridge hat die Wärmepumpe länger als 30 Minuten nicht erreicht (Rechner aus/im Ruhezustand, Cloud gestört, Anmeldung abgelaufen). Der Stromzähler zeigt danach, wie viel in der Zeit verbraucht wurde – das zählt voll zum Tagesverbrauch. Ob dafür geheizt oder Warmwasser gemacht wurde, war aber nicht zu sehen; deshalb wird diese Menge keiner Betriebsart zugeschlagen. In der Stundenreihe und im Tagesablauf bleibt die Lücke leer. |
 
 ### Verbindungstest
 

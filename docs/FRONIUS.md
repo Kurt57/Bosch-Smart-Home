@@ -30,11 +30,25 @@ Was du danach siehst:
 1. **IP-Adresse des Wechselrichters herausfinden:** in der Geräteliste deines Routers
    (z. B. FRITZ!Box: Heimnetz → Netzwerk) oder in der Fronius-App. Tipp: dort gleich
    **„immer dieselbe IP vergeben"** einstellen, damit sich die Adresse nie ändert.
-2. **Solar API einschalten (GEN24/Tauro):** die IP im Browser öffnen, als **Kunde**
-   anmelden (das Passwort wird bei der Inbetriebnahme vergeben) → **Kommunikation →
-   Solar API** → „Kommunikation über Solar API aktivieren" einschalten und speichern.
-   (Die genaue Bezeichnung kann je nach Firmware leicht abweichen.) Ältere Geräte mit
-   Datamanager haben die Solar API immer an.
+2. **Solar API einschalten (GEN24/Tauro):** die IP im Browser öffnen, als Benutzer
+   **Customer** (Kunde) anmelden → **Kommunikation → Solar API** → „Kommunikation über
+   Solar API aktivieren" einschalten und speichern. (Die genaue Bezeichnung kann je nach
+   Firmware leicht abweichen.) Ältere Geräte mit Datamanager haben die Solar API immer an.
+   Findet die App den Wechselrichter, aber die Solar API ist aus, zeigt sie diese Schritte
+   mit einem Link zur Weboberfläche direkt an.
+
+   **Welches Passwort?** Die Weboberfläche kennt die Benutzer **Customer** (Kunde) und
+   **Technician** (Techniker). Beide Passwörter werden bei der Inbetriebnahme vergeben –
+   frag deinen Installateur, oft steht das Customer-Passwort im Inbetriebnahme-Protokoll.
+   **Customer-Passwort vergessen** (Ablauf laut Fronius-Hilfe): auf der Anmeldeseite
+   „Passwort vergessen?" → Benutzer **Customer** → es erscheint ein **PIN**. In
+   **Solar.web** (dort musst du als Besitzer der Anlage eingetragen sein) unter
+   Einstellungen → Komponenten → beim Wechselrichter „Aktionen" → „Customer Passwort
+   zurücksetzen" mit dem PIN einen Freischalt-Code erzeugen, ihn auf der Anmeldeseite
+   eintragen und ein neues Passwort setzen. Der PIN gilt nur, solange er angezeigt wird.
+   Das **Technician**-Passwort kann nur der
+   Installateur bzw. Fronius zurücksetzen. Alternativ: den Installateur bitten, die
+   Solar API einzuschalten.
 3. In der App: **Setup → ☀️ PV-Anlage (Fronius) verbinden** → **„Im Netz suchen"** antippen
    (die Bridge durchsucht ihr eigenes Netz, bis zu 30 s) oder die IP eintragen →
    **Verbinden**. Die App zeigt danach Gerät, installierte kWp, ob ein Smart Meter und eine
@@ -72,6 +86,8 @@ nach einem Neustart verbindet sich die Bridge von selbst wieder.
 | Meldung | Bedeutung / Abhilfe |
 |---|---|
 | „… gibt es nicht (HTTP 404) – ist die Solar API eingeschaltet?" | Der Wechselrichter antwortet, aber die Solar API ist aus → Schritt 2. |
+| „Fronius-Weboberfläche gefunden, aber die Solar API antwortet nicht" | Wie oben: Gerät gefunden, Solar API aus → Schritt 2 (Anmeldung als Customer). |
+| Weboberfläche will eine Anmeldung, Passwort unbekannt | Benutzer **Customer**; Passwort vom Installateur oder per „Passwort vergessen?" + Solar.web zurücksetzen → Schritt 2. |
 | „verweigert den Zugriff (HTTP 403)" | ebenfalls Solar API aus (je nach Firmware) → Schritt 2. |
 | „… nicht erreichbar" / „Zeitüberschreitung" | IP falsch, Wechselrichter aus (nachts schlafen manche ohne Batterie ein) oder in einem anderen Netz. |
 | „Kein Fronius im Netz gefunden" | Die Suche prüft nur das Netz der Bridge (x.x.x.1–254). IP aus dem Router eintragen. |

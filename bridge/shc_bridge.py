@@ -2958,10 +2958,41 @@ def _spread_delta_over_days(out: dict, pt: int, ts: int, delta: float):
         seg_start = seg_end
 
 
-def _hp_mode_buckets(rows: list[dict], only_day: str | None = None) -> dict:
+HP_GAP_MIN_S = 1800      # counter readings further apart than this: a data gap
+
+
+_HP_DATA_KEYS = ("energy_kwh", "power_w", "heat_kwh", "modulation", "supply_c", "outdoor_c")
+
+
+def _hp_has_data(s: dict) -> bool:
+    """False for an empty sample: older bridges stored one per poll while the
+    cloud login was expired (all values None, mode 'off'). It is a data gap,
+    not a pause of the heat pump."""
+    return any(s.get(k) is not None for k in _HP_DATA_KEYS)
+
+
+def _hp_gap_s(rows: list[dict]) -> float:
+    """Longest interval between two counter readings that still counts as normal
+    polling. Across a longer one the bridge did not see the heat pump (bridge
+    stopped, Mac asleep, cloud login expired): the counter still says how much
+    energy was used, but not when, nor for which operating mode. 30 min, or three
+    typical poll intervals for a bridge set to poll less often (typical = lower
+    quartile, so a few long gaps among few samples cannot stretch it)."""
+    ts = [s["ts"] for s in rows if s.get("energy_kwh") is not None] \
+        or [s["ts"] for s in rows if _hp_has_data(s)]
+    d = sorted(b - a for a, b in zip(ts, ts[1:]) if b > a)
+    return float(max(HP_GAP_MIN_S, 3 * d[len(d) // 4])) if d else float(HP_GAP_MIN_S)
+
+
+def _hp_mode_buckets(rows: list[dict], only_day: str | None = None,
+                     gap_s: float | None = None) -> dict:
     """Electrical kWh attributed to the operating mode (Heizung/Warmwasser/Sonstiges)
-    by consecutive counter deltas – the heat pump's own 'wofür'."""
-    b = {"heating": 0.0, "water": 0.0, "other": 0.0}
+    by consecutive counter deltas – the heat pump's own 'wofür'. Energy counted
+    across a data gap stays in the total but goes to 'gap' (mode unknown) instead
+    of being credited to whatever mode ran at the edge of the gap."""
+    if gap_s is None:
+        gap_s = _hp_gap_s(rows)
+    b = {"heating": 0.0, "water": 0.0, "other": 0.0, "gap": 0.0}
     prev = None
     for s in rows:
         v = s.get("energy_kwh")
@@ -2974,10 +3005,13 @@ def _hp_mode_buckets(rows: list[dict], only_day: str | None = None) -> dict:
             # same plausibility as the day-splitter, so the mode split covers the
             # SAME energy as 'Strom heute' (no undercounting after an outage).
             if delta > 0 and 0 < dt_h <= 24 * 31 and (delta / dt_h) <= 25:
-                # attribute the interval to the mode that was actually running
-                # (higher power), so an off→on transition counts as the active mode
-                m = pm if (pp or 0) >= (s.get("power_w") or 0) else s.get("mode")
-                key = "heating" if m == "ch" else "water" if m == "dhw" else "other"
+                if s["ts"] - pt > gap_s:
+                    key = "gap"          # hours unseen: the mode at either edge says nothing
+                else:
+                    # attribute the interval to the mode that was actually running
+                    # (higher power), so an off→on transition counts as the active mode
+                    m = pm if (pp or 0) >= (s.get("power_w") or 0) else s.get("mode")
+                    key = "heating" if m == "ch" else "water" if m == "dhw" else "other"
                 if only_day is None:
                     b[key] += delta
                 else:
@@ -3105,8 +3139,9 @@ def compute_hp_analytics(store: Store, days: int, price: float,
     tot_e = sum(elec_day.values())
     tot_h = sum(heat_day.values())
 
-    mode_today = _hp_mode_buckets(rows, only_day=today)
-    mode_window = _hp_mode_buckets(rows)
+    gap_s = _hp_gap_s(rows)
+    mode_today = _hp_mode_buckets(rows, only_day=today, gap_s=gap_s)
+    mode_window = _hp_mode_buckets(rows, gap_s=gap_s)
     cop_by_temp = _hp_cop_by_temp(rows)
 
     # meter-based average over the whole observed history (robust to polling
@@ -3153,14 +3188,14 @@ def compute_hp_analytics(store: Store, days: int, price: float,
             water = sum(r.get("water_kwh") or 0.0 for r in win)
             elec_sum = sum(r.get("elec_kwh") or 0.0 for r in win)
             mode_window = {"heating": round(heating, 3), "water": round(water, 3),
-                           "other": round(max(0.0, elec_sum - heating - water), 3)}
+                           "other": round(max(0.0, elec_sum - heating - water), 3), "gap": 0.0}
         trow = next((r for r in imp_days if r["date"] == today), None)
         if trow and trow.get("heating_kwh") is not None:
             mode_today = {"heating": round(trow.get("heating_kwh") or 0.0, 3),
                           "water": round(trow.get("water_kwh") or 0.0, 3),
                           "other": round(max(0.0, (trow.get("elec_kwh") or 0.0)
                                              - (trow.get("heating_kwh") or 0.0)
-                                             - (trow.get("water_kwh") or 0.0)), 3)}
+                                             - (trow.get("water_kwh") or 0.0)), 3), "gap": 0.0}
     if imp_months:
         # prefer the real monthly figures for the monthly chart
         monthly = [{"month": r["date"], "elec_kwh": round(r["elec_kwh"] or 0.0, 1),
@@ -3471,6 +3506,9 @@ def _live_hourly(rows: list[dict], cutoff: int) -> dict:
     so the time-series works without a CSV import. Consumption comes from the
     cumulative electric/heat counters (per-sample deltas, split by mode)."""
     rows = sorted(rows, key=lambda s: s.get("ts", 0))
+    # across a data gap the counters say how much, but not in which hour or
+    # mode – such deltas are left out rather than piled onto the hour after it
+    gap_s = _hp_gap_s(rows)
     buckets: dict[int, dict] = {}
     prev_e = prev_h = None
     for s in rows:
@@ -3489,7 +3527,7 @@ def _live_hourly(rows: list[dict], cutoff: int) -> dict:
         e = s.get("energy_kwh")
         if e is not None and prev_e is not None:
             de, dt_h = e - prev_e[1], (ts - prev_e[0]) / 3600.0
-            if de > 0 and 0 < dt_h <= 24 and (de / dt_h) <= 25:
+            if de > 0 and 0 < ts - prev_e[0] <= gap_s and (de / dt_h) <= 25:
                 b["elec"] += de
                 if is_water:
                     b["water"] += de
@@ -3500,7 +3538,7 @@ def _live_hourly(rows: list[dict], cutoff: int) -> dict:
         h = s.get("heat_kwh")
         if h is not None and prev_h is not None:
             dh, dt_h = h - prev_h[1], (ts - prev_h[0]) / 3600.0
-            if dh >= 0 and 0 < dt_h <= 24 and (dh / dt_h) <= 60:
+            if dh >= 0 and 0 < ts - prev_h[0] <= gap_s and (dh / dt_h) <= 60:
                 b["heat"] += dh
         if h is not None:
             prev_h = (ts, h)
@@ -3530,7 +3568,12 @@ def _hp_day_metrics(rows: list[dict]) -> tuple:
     Returns (kpis, segments, heater_segments, comp_max_w). Shared by the day
     timeline and the multi-day trend. Defrost / backup-heater are derived from
     the physical signatures (heat collapses while the compressor draws;
-    electrical power above the compressor envelope)."""
+    electrical power above the compressor envelope). Across a data gap the
+    state is unknown: no segment and no minutes for it (the ribbon shows a
+    hole), only its energy still counts (up to 2 h, as before)."""
+    rows = [s for s in rows if _hp_has_data(s)] or rows      # empty samples = gap
+    gap_s = _hp_gap_s(rows)
+
     def cop_of(s):
         p, h = s.get("power_w") or 0.0, s.get("heat_w") or 0.0
         return (h / p) if p > 50 else 0.0
@@ -3560,15 +3603,15 @@ def _hp_day_metrics(rows: list[dict]) -> tuple:
     segs, heat_segs = [], []
     for i in range(len(rows) - 1):
         a, b = rows[i], rows[i + 1]
-        if b["ts"] - a["ts"] > 2 * 3600:
+        if b["ts"] - a["ts"] > gap_s:
             continue
         st = state_of(a)
-        if segs and segs[-1][0] == st and a["ts"] - segs[-1][2] <= 2 * 3600:
+        if segs and segs[-1][0] == st and a["ts"] - segs[-1][2] <= gap_s:
             segs[-1][2] = b["ts"]
         else:
             segs.append([st, a["ts"], b["ts"]])
         if heater_on(a):
-            if heat_segs and a["ts"] - heat_segs[-1][1] <= 2 * 3600:
+            if heat_segs and a["ts"] - heat_segs[-1][1] <= gap_s:
                 heat_segs[-1][1] = b["ts"]
             else:
                 heat_segs.append([a["ts"], b["ts"]])
@@ -3596,6 +3639,7 @@ def _hp_day_metrics(rows: list[dict]) -> tuple:
             ha = max(a.get("heat_w") or 0.0, 0.0)
             hb = max(b.get("heat_w") or 0.0, 0.0)
             heat_wh += (ha + hb) / 2.0 * dt_h
+        if 0 < dt_s <= gap_s:
             mode_s[st] += dt_s
             (runtime_s, pause_s) = (runtime_s + dt_s, pause_s) if run else (runtime_s, pause_s + dt_s)
             if heater_on(a):
@@ -7019,11 +7063,14 @@ def compute_overview(store: Store, days: int, price: float,
     mt = hp.get("mode_today", {})
     heat_ = round(mt.get("heating", 0.0), 3)
     water_ = round(mt.get("water", 0.0), 3)
+    # energy counted across a data gap (bridge/cloud not reachable): known
+    # amount, unknown operating mode – its own slice instead of a wrong one
+    gap_ = round(mt.get("gap", 0.0), 3)
     # reconcile with the authoritative day total ('Strom heute'): energy the mode
-    # split couldn't classify (mode unknown, or recovered after an outage) is
-    # shown as "Sonstiges" so the WP slices SUM to hp_today instead of undercounting.
-    other_ = round(max(mt.get("other", 0.0), (hp_today or 0.0) - heat_ - water_), 3)
-    if heat_ > 0.01 or water_ > 0.01 or other_ > 0.01:
+    # split couldn't classify (mode unknown) is shown as "Sonstiges" so the WP
+    # slices SUM to hp_today instead of undercounting.
+    other_ = round(max(mt.get("other", 0.0), (hp_today or 0.0) - heat_ - water_ - gap_), 3)
+    if heat_ > 0.01 or water_ > 0.01 or other_ > 0.01 or gap_ > 0.01:
         if heat_ > 0.01:
             breakdown.append({"key": "hp_heating", "label": "WP · Heizung",
                               "kwh": heat_, "color": "#ef6c4d"})
@@ -7033,6 +7080,9 @@ def compute_overview(store: Store, days: int, price: float,
         if other_ > 0.01:
             breakdown.append({"key": "hp_other", "label": "WP · Sonstiges",
                               "kwh": other_, "color": "#b07a4d"})
+        if gap_ > 0.01:
+            breakdown.append({"key": "hp_gap", "label": "WP · Betriebsart unbekannt (Datenlücke)",
+                              "kwh": gap_, "color": "#8b93a1"})
     elif hp_today > 0 or (hp_live and hp_live.get("connected")):
         breakdown.append({"key": "heatpump", "label": "Wärmepumpe",
                           "kwh": hp_today, "color": "#ef6c4d"})
@@ -9819,14 +9869,15 @@ class Handler(BaseHTTPRequestHandler):
         try:
             ident = fronius.FroniusClient(host).identify()
         except fronius.FroniusError as exc:
-            hint = None
+            hint, api_off = None, False
             try:
                 found = fronius.check_host(host)
                 if found and not found.get("solar_api"):
-                    hint = found.get("note")
+                    hint, api_off = found.get("note"), True    # Fronius web UI, Solar API off
             except Exception:
                 pass
-            return self._send_json({"ok": False, "error": str(exc), "hint": hint})
+            return self._send_json({"ok": False, "error": str(exc), "hint": hint,
+                                    "api_off": api_off, "host": host})
         self.cfg["fronius_host"] = ident["host"]
         save_config(self.cfg, self.cfg.get("_config_path", DEFAULT_CONFIG))
         if self.ctx.mode != "demo":

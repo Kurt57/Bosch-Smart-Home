@@ -364,6 +364,7 @@
       <h2><span class="info" data-info="wofuer" role="button" aria-label="Info">i</span>Wofür heute? <span class="r" id="ov-break-sum"></span></h2>
       <div id="ov-donut"></div>
       <div class="legend" id="ov-legend"></div>
+      <div class="note" id="ov-break-note" hidden style="margin-top:10px"></div>
     </div>
     <div class="card">
       <h2><span class="info" data-info="fill" role="button" aria-label="Info">i</span>Letzte 14 Tage · Strom gesamt</h2>
@@ -1606,7 +1607,8 @@
         Die App liest den Wechselrichter <b>direkt im Heimnetz</b> über die <b>Fronius Solar API</b> –
         ohne Konto, ohne Cloud, <b>nur lesend</b> (es wird nichts am Wechselrichter verstellt).<br>
         1. Der Wechselrichter muss im Heimnetz sein (LAN-Kabel oder WLAN – richtet meist der Installateur ein).<br>
-        2. <b>GEN24:</b> einmal die Weboberfläche öffnen (seine IP im Browser) → <b>Kommunikation → Solar API</b> →
+        2. <b>GEN24:</b> einmal die Weboberfläche öffnen (seine IP im Browser), als Benutzer <b>Customer</b> anmelden
+        (Passwort vom Installateur, vergeben bei der Inbetriebnahme) → <b>Kommunikation → Solar API</b> →
         „Kommunikation über Solar API aktivieren" einschalten und speichern. <b>Ab Werk ist das aus.</b>
         Die IP findest du in der Geräteliste deines Routers oder in der Fronius-App.<br>
         3. Hier <b>„Im Netz suchen"</b> tippen oder die IP eintragen → <b>Verbinden</b>.

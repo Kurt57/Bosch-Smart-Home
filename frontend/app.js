@@ -90,11 +90,13 @@ const SERIES_LABEL = {
   sh: 'Hausstrom', hp: 'Wärmepumpe', heat: 'Wärme', e: 'Strom', h: 'Wärme',
   pv: 'PV', ev: 'E-Auto', ac: 'Klima', batt: 'Batterie', away: 'Abwesenheit',
   hp_heating: 'WP Heizen', hp_water: 'WP Warmwasser', hp_other: 'WP sonstiges', heatpump: 'Wärmepumpe',
+  hp_gap: 'WP Betriebsart unbekannt',
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v193';   // short tag shown always-on in the header
-const APP_VERSION = 'v193 · 2026-11-18 · Wärmepumpe: Ist die HomeCom-Anmeldung abgelaufen oder die Bosch-Cloud nicht erreichbar, speichert die Bridge keine leeren Messungen mehr, sondern meldet den Grund – die Wärmepumpen-Karte zeigt ihn mit Link zum neuen Verbindungstest (Setup → Wärmepumpe → „Verbindung zur Bosch-Cloud testen“: DNS, Verbindung, Verschlüsselung, Anmeldung, Datenabruf; Ergebnis kopierbar; im Terminal: python3 shc_bridge.py diag). Nach einem Fehler versucht die Bridge es nach 1, 2, 4 Minuten erneut. Die Volumenstrom-Suche fragt schonender ab und bricht bei Verbindungsproblemen sofort ab. Keine Tracebacks mehr im Terminal, wenn ein Browser eine Verbindung schließt. Startskripte nutzen ein aktuelles Python (python.org/Homebrew, TLS 1.3), falls installiert. ' +
+const APP_BUILD = 'v194';   // short tag shown always-on in the header
+const APP_VERSION = 'v194 · 2026-11-18 · Wärmepumpe: Strom aus einer Datenlücke (Bridge oder Bosch-Cloud länger als 30 Minuten nicht erreichbar) wird nicht mehr der Betriebsart am Rand der Lücke zugeschlagen – vorher landete z. B. nach einer abgelaufenen Anmeldung der ganze Verbrauch der Lücke im Warmwasser. Er zählt weiter zum Tagesverbrauch, steht in „Wofür heute“ und im Betriebsarten-Ring aber als „Betriebsart unbekannt (Datenlücke)“. Stundenreihe und Tagesablauf lassen die Lücke leer statt sie als Pause oder als eine einzige Riesen-Stunde zu zeigen. PV-Anlage: Ist die Solar API am Wechselrichter noch aus, zeigt die App die Schritte zum Einschalten mit Link zur Weboberfläche, Anmeldung als „Customer“ und was bei vergessenem Passwort hilft. ' +
+  'v193 · 2026-11-18 · Wärmepumpe: Ist die HomeCom-Anmeldung abgelaufen oder die Bosch-Cloud nicht erreichbar, speichert die Bridge keine leeren Messungen mehr, sondern meldet den Grund – die Wärmepumpen-Karte zeigt ihn mit Link zum neuen Verbindungstest (Setup → Wärmepumpe → „Verbindung zur Bosch-Cloud testen“: DNS, Verbindung, Verschlüsselung, Anmeldung, Datenabruf; Ergebnis kopierbar; im Terminal: python3 shc_bridge.py diag). Nach einem Fehler versucht die Bridge es nach 1, 2, 4 Minuten erneut. Die Volumenstrom-Suche fragt schonender ab und bricht bei Verbindungsproblemen sofort ab. Keine Tracebacks mehr im Terminal, wenn ein Browser eine Verbindung schließt. Startskripte nutzen ein aktuelles Python (python.org/Homebrew, TLS 1.3), falls installiert. ' +
   'v192 · 2026-11-18 · PV-Anlage (Fronius): Die Bridge liest den Wechselrichter direkt im Heimnetz über die Solar API (nur lesend, ohne Cloud) – Setup mit Suche im Netz, Verbinden und Rohdaten-Diagnose. Neu: Energiefluss jetzt (Sonne, Haus, Batterie, Netz, Wärmepumpe) in der Übersicht; im Tab PV „Deine PV-Anlage“ mit Tageswerten, Tagesverlauf, Verlauf über 7/30/90 Tage oder ein Jahr, Monatswerten mit Erwartung aus Planer/PVGIS sowie Wechselrichter, Strings, Batterie und Smart Meter; in der Wärmepumpen-Karte der Sonnenstrom-Anteil. Netzbezug und Einspeisung kommen aus den Zählerständen des Smart Meters, mit Prüfung auf Lücken und Zählersprünge. Im Demo-Modus eine simulierte Anlage. Außerdem behoben: Tibber-Token, Home-Assistant-Zugang und die Zuordnung Fensterkontakt → Raum gingen bei jedem Neustart der Bridge verloren. ' +
   'v191 · 2026-11-16 · Volumenstrom in der Live-Karte immer sichtbar: mit Wert (gelesen/abgeleitet) oder mit dem Grund, warum es noch keinen gibt (z. B. kein Rücklauf gemeldet, kein Heizbetrieb erkannt, Läufe zu kurz, Spreizung zu klein). Neben Vor-/Rücklauf steht jetzt die Spreizung. Abgeleiteter Volumenstrom genauer: Abtau-Abschnitte zählen weder bei der Wärme noch bei der Zeit (vorher zu niedrig, z. B. 15,9 statt 17,2 l/min). ' +
   'v190 · 2026-11-16 · Volumenstrom der Wärmepumpe: Die Bridge durchsucht einmal (dann wöchentlich) alle Werte, die die Wärmepumpe über HomeCom meldet, nach einem Volumenstrom und schreibt ihn mit („gelesen“). Meldet sie keinen, wird er aus Wärmemenge ÷ Spreizung je Heizlauf berechnet („abgeleitet“) – auch mit grobem 1-kWh-Wärmezähler über viele Läufe genau. Anzeige in der Live-Karte und im Abgleich: Volumenstrom gegen die Summe der Ziel-Durchflüsse aller Kreise; liefert die Pumpe weniger, steht je Kreis der erreichbare Wert, und dein Tacosetter-Wert wird damit verglichen. Unter „Datenlage“: Quelle, Suchergebnis, die letzten Heizläufe und ein Knopf für eine neue Suche. ' +
@@ -295,8 +297,9 @@ const INFO = {
   fronius: () => 'Die Bridge liest den <b>Fronius-Wechselrichter</b> direkt im Heimnetz über dessen <b>Solar API</b> ' +
     '(HTTP/JSON, ohne Konto, ohne Cloud) – <b>nur lesend</b>, es wird nichts verstellt. Alle 15 s holt sie den Energiefluss ' +
     '(PV, Haus, Netz, Batterie), einmal pro Minute dazu Strings, Smart-Meter-Zählerstände und Batterie, und speichert je ' +
-    'Minute einen Mittelwert. <b>GEN24:</b> die Solar API ist ab Werk aus – in der Weboberfläche des Wechselrichters unter ' +
-    '<b>Kommunikation → Solar API</b> einschalten. Ohne <b>Smart Meter</b> sieht der Wechselrichter nur die Erzeugung.',
+    'Minute einen Mittelwert. <b>GEN24:</b> die Solar API ist ab Werk aus – in der Weboberfläche des Wechselrichters ' +
+    '(Anmeldung als Benutzer <b>Customer</b>, Passwort vom Installateur) unter <b>Kommunikation → Solar API</b> einschalten. ' +
+    'Ohne <b>Smart Meter</b> sieht der Wechselrichter nur die Erzeugung.',
   'pv-flow': () => 'Wer liefert gerade an wen (alle 10 s aktualisiert, solange die Seite offen ist). Die Sonne versorgt zuerst ' +
     'das <b>Haus</b>, mit dem Überschuss lädt die <b>Batterie</b>, der Rest geht ins <b>Netz</b>; was fehlt, kommt aus Batterie ' +
     'oder Netz. Die Wärmepumpe zeigt ihren Strom laut HomeCom (5-Minuten-Mittel). Die Zahlen darunter gelten für <b>heute</b>.',
@@ -311,7 +314,10 @@ const INFO = {
     'Spannung, Strom und Leistung, die <b>Batterie</b> und den <b>Smart Meter</b> mit Zählerständen und Phasen. Einmal pro ' +
     'Minute aktualisiert.',
   wofuer: () => 'Aufteilung des heutigen Stroms nach Quelle. Die Wärmepumpe wird nach ' +
-    '<b>Heizung</b> und <b>Warmwasser</b> getrennt (aus ihrem Betriebsmodus), dazu jedes Smart-Home-Gerät.',
+    '<b>Heizung</b> und <b>Warmwasser</b> getrennt (aus ihrem Betriebsmodus), dazu jedes Smart-Home-Gerät. ' +
+    '<b>Betriebsart unbekannt (Datenlücke)</b>: Strom, den die Wärmepumpe verbraucht hat, während die Bridge sie nicht ' +
+    'erreicht hat (Rechner aus/im Ruhezustand, Bosch-Cloud gestört, Anmeldung abgelaufen). Die Menge stimmt – sie ' +
+    'kommt aus dem Zähler –, nur wofür sie lief, war in der Zeit nicht zu sehen.',
   roomtemp: () => 'Alle Räume als <b>Balken nebeneinander</b>: Höhe = aktuelle Temperatur, der gestrichelte ' +
     'Strich ist dein <b>Ziel</b> (Wohlfühl-Temperatur). Grün = am Ziel, gelb/rot = noch zu kalt, blau = wärmer als nötig. ' +
     '<b>Ziel des hydraulischen Abgleichs:</b> bei offenen Ventilen soll jeder Raum sein Ziel erreichen. Räume, die trotz ' +
@@ -1767,6 +1773,18 @@ function donutChart(segs, opts = {}) {
     `<text x="100" y="119" text-anchor="middle" class="donut-l">${opts.center || ''}</text></svg>`;
 }
 
+const HP_GAP_COL = '#8b93a1';   // heat-pump energy from a data gap: amount known, mode not
+// hot-water kWh of a mode split, plus the same share of the gap energy (the
+// bridge counted it, but could not see the mode while it was unreachable)
+function mwWater(mw) {
+  if (!mw) return 0;
+  const w = mw.water || 0, known = (mw.heating || 0) + w + (mw.other || 0);
+  return w + (known > 0 ? (mw.gap || 0) * w / known : 0);
+}
+function hpGapNote(gap) {
+  return `<br><span style="color:var(--muted)">Grau: <b>${kwh(gap, 1)}</b> aus Datenlücken – der Zähler hat sie erfasst, ` +
+    'die Bridge hat die Wärmepumpe in der Zeit aber nicht erreicht. Für die Jahreswerte wird sie wie der Rest aufgeteilt.</span>';
+}
 function legendHtml(items) {
   return items.map(it => `<div class="it"><span class="sw" style="background:${it.color}"></span>${esc(it.label)}${it.sub ? `<small>${esc(it.sub)}</small>` : ''}</div>`).join('');
 }
@@ -5516,6 +5534,13 @@ function renderOverview() {
     ? donutChart(segs, { big: fmt(ov.today.total_kwh, 1), center: 'kWh heute' })
     : '<div class="note">Noch keine Verbrauchsdaten für heute.</div>';
   $('ov-legend').innerHTML = legendHtml(segs.slice(0, 8).map(s => ({ label: s.label, color: s.color, sub: kwh(s.value, 2) })));
+  const gapB = ov.breakdown.find(b => b.key === 'hp_gap' && b.kwh > 0.01), bn = $('ov-break-note');
+  if (bn) {
+    bn.hidden = !gapB;
+    if (gapB) bn.innerHTML = `<b>Betriebsart unbekannt</b>: ${kwh(gapB.kwh, 2)} hat die Wärmepumpe verbraucht, während ` +
+      'die Bridge sie nicht erreicht hat. Die Menge kommt aus dem Zähler und stimmt; ob Heizung oder Warmwasser, ' +
+      'war in der Zeit nicht zu sehen – deshalb wird sie keiner Betriebsart zugeschlagen.';
+  }
 
   const now = new Date();
   const w = filledDaily(new Date(now.getTime() - 13 * 86400000), now);
@@ -5623,7 +5648,7 @@ function renderSavings() {
     const spread = Math.max(0, (avg - mean(cheap)) / 100);         // €/kWh saved by shifting
     let wwYear = 600;
     const mw = STATE.hpA && STATE.hpA.mode_window, nD = (STATE.hpA && STATE.hpA.daily || []).length;
-    if (mw && mw.water > 0 && nD > 0) wwYear = mw.water / nD * 365;
+    if (mw && mw.water > 0 && nD > 0) wwYear = mwWater(mw) / nD * 365;
     const flex = wwYear + 1.5 * 365;                                // warm water + ~1.5 kWh/day flexible household
     const eur = flex * spread;
     if (eur > 10) L.push({ label: 'Flexible Lasten in günstige Stunden', hint: 'Börse / Smart-Timer', eur, color: '#4be0b0' });
@@ -5778,7 +5803,7 @@ function renderToday() {
     : '<div class="note">Noch keine Daten für heute.</div>';
   $('t-legend').innerHTML = legendHtml(segs.map(s => ({ label: s.label, color: s.color, sub: kwh(s.value, 2) })));
 
-  const HP_KEYS = new Set(['heatpump', 'hp_heating', 'hp_water', 'hp_other']);
+  const HP_KEYS = new Set(['heatpump', 'hp_heating', 'hp_water', 'hp_other', 'hp_gap']);
   const devs = ov.breakdown.filter(b => !HP_KEYS.has(b.key) && b.kwh > 0);
   const maxD = Math.max(0.0001, ...devs.map(d => d.kwh));
   $('t-devices').innerHTML = devs.length
@@ -6580,8 +6605,10 @@ function renderHeatpump() {
     { label: 'Heizung', value: mw.heating || 0, color: COL.hp },
     { label: 'Warmwasser', value: mw.water || 0, color: COL.heat },
     { label: 'Sonstiges', value: mw.other || 0, color: '#b07a4d' },
+    { label: 'Betriebsart unbekannt (Datenlücke)', value: mw.gap || 0, color: HP_GAP_COL },
   ].filter(s => s.value > 0.01);
   const mTot = mSegs.reduce((a, s) => a + s.value, 0);
+  const mKnown = mTot - (mw.gap > 0.01 ? mw.gap : 0);
   $('hp-mode-sum').textContent = mTot > 0 ? kwh(mTot, 0) : '';
   $('hp-mode-donut').innerHTML = mSegs.length
     ? donutChart(mSegs, { big: mTot >= 100 ? fmt(mTot, 0) : fmt(mTot, 1), center: 'kWh Strom' })
@@ -6591,10 +6618,11 @@ function renderHeatpump() {
   // warm-water: annual electricity & cost, plus an optimisation hint
   const nDays = (A.daily || []).length;
   const waterKwh = mw.water || 0;
-  if (waterKwh > 0.01 && nDays > 0 && mTot > 0) {
+  if (waterKwh > 0.01 && nDays > 0 && mKnown > 0) {
     const price = STATE.price;
-    const waterYear = waterKwh / nDays * 365, waterCost = waterYear * price;
-    const sharePct = waterKwh / mTot * 100;
+    // share of the energy whose mode is known; the gap is assumed to split alike
+    const waterYear = mwWater(mw) / nDays * 365, waterCost = waterYear * price;
+    const sharePct = waterKwh / mKnown * 100;
     const cbhW = ((A.imported && A.imported.cop_by_hour) || []).filter(x => x.water_kwh > 0);
     let tip;
     if (cbhW.length) {
@@ -6606,8 +6634,9 @@ function renderHeatpump() {
       tip = `Bereite Warmwasser möglichst <b>mittags</b> (PV/günstiger Börsenstrom, wärmere Luft = besserer COP) und halte die Temperatur moderat (Legionellenschaltung ~1×/Woche auf 60&nbsp;°C reicht) – das spürst du direkt hier.`;
     }
     $('hp-mode-note').innerHTML = `🚿 <b>Warmwasser</b>: ~<b>${kwh(waterYear, 0)}/Jahr</b> Strom (~${money(waterCost)}), ` +
-      `${fmt(sharePct, 0)} % des Wärmepumpen-Stroms. ` + tip;
-  } else { $('hp-mode-note').innerHTML = ''; }
+      `${fmt(sharePct, 0)} % des Wärmepumpen-Stroms` + (mw.gap > 0.01 ? ' mit bekannter Betriebsart' : '') + '. ' + tip +
+      (mw.gap > 0.01 ? hpGapNote(mw.gap) : '');
+  } else { $('hp-mode-note').innerHTML = mw.gap > 0.01 ? hpGapNote(mw.gap).replace(/^<br>/, '') : ''; }
 
   const daily = (A.daily || []).slice(-30);
   $('hp-daily').innerHTML = daily.length ? groupedBar(
@@ -11184,13 +11213,14 @@ function demoOverview(sh, hp) {
   // breakdown today (heat pump split by heating vs hot water)
   const breakdown = [];
   const mt = hp.mode_today || { heating: 0, water: 0, other: 0 };
-  const heat_ = round(mt.heating || 0, 3), water_ = round(mt.water || 0, 3);
+  const heat_ = round(mt.heating || 0, 3), water_ = round(mt.water || 0, 3), gap_ = round(mt.gap || 0, 3);
   // reconcile: unclassified WP energy → "Sonstiges" so slices sum to hpToday
-  const other_ = round(Math.max(mt.other || 0, (hpToday || 0) - heat_ - water_), 3);
-  if (heat_ > 0.01 || water_ > 0.01 || other_ > 0.01) {
+  const other_ = round(Math.max(mt.other || 0, (hpToday || 0) - heat_ - water_ - gap_), 3);
+  if (heat_ > 0.01 || water_ > 0.01 || other_ > 0.01 || gap_ > 0.01) {
     if (heat_ > 0.01) breakdown.push({ key: 'hp_heating', label: 'WP · Heizung', kwh: heat_, color: COL.hp });
     if (water_ > 0.01) breakdown.push({ key: 'hp_water', label: 'WP · Warmwasser', kwh: water_, color: COL.heat });
     if (other_ > 0.01) breakdown.push({ key: 'hp_other', label: 'WP · Sonstiges', kwh: other_, color: '#b07a4d' });
+    if (gap_ > 0.01) breakdown.push({ key: 'hp_gap', label: 'WP · Betriebsart unbekannt (Datenlücke)', kwh: gap_, color: HP_GAP_COL });
   } else if (hpToday > 0) {
     breakdown.push({ key: 'heatpump', label: 'Wärmepumpe', kwh: hpToday, color: COL.hp });
   }
@@ -11647,6 +11677,27 @@ async function frRefreshHealth() {
   try { const h = await api('/api/health'); if (h && h.ok) STATE.health = h; } catch (e) {}
 }
 
+// The inverter's web UI answers but its Solar API is off (GEN24 factory
+// default): how to switch it on, incl. the login the owner usually lacks.
+function frApiOffHelp(host) {
+  const ok = /^[\w.\-:\[\]]+$/.test(host || '');
+  const link = ok ? `<a href="http://${esc(host)}/" target="_blank" rel="noopener">Weboberfläche öffnen (${esc(host)}) ↗</a>`
+    : 'Weboberfläche öffnen (IP des Wechselrichters im Browser)';
+  return '<div class="note fr-help" style="line-height:1.6; margin-top:8px; padding:10px 12px; border-radius:10px; background:var(--card2)">' +
+    '<b>So schaltest du die Solar API ein (einmalig):</b><br>' +
+    `1. ${link} – klappt nur im Heimnetz.<br>` +
+    '2. Anmelden als Benutzer <b>Customer</b> (Kunde). Das Passwort wird bei der Inbetriebnahme vergeben – ' +
+    'frag deinen Installateur, oft steht es im Inbetriebnahme-Protokoll.<br>' +
+    '3. <b>Kommunikation → Solar API</b> → „Kommunikation über Solar API aktivieren" einschalten und speichern.<br>' +
+    '4. Hier noch einmal <b>Verbinden</b> tippen.<br>' +
+    '<b>Passwort unbekannt?</b> Auf der Anmeldeseite „Passwort vergessen?" → Benutzer <b>Customer</b> wählen → es erscheint ' +
+    'ein <b>PIN</b>. In <b>Solar.web</b> (dort als Besitzer der Anlage eingetragen) unter Einstellungen → Komponenten → beim ' +
+    'Wechselrichter „Aktionen" → „Customer Passwort zurücksetzen" mit dem PIN einen <b>Freischalt-Code</b> erzeugen, ihn auf ' +
+    'der Anmeldeseite eintragen und ein neues Passwort setzen. Der PIN gilt nur, solange er angezeigt wird. ' +
+    'Oder den Installateur bitten, die Solar API einzuschalten.<br>' +
+    '<small style="color:var(--muted)">Ablauf laut Fronius-Hilfe; die Bezeichnungen können je nach Firmware leicht abweichen.</small></div>';
+}
+
 async function frFind() {
   const b = $('fr-find'), out = $('fr-found'), note = $('fr-note');
   if (b) b.disabled = true;
@@ -11661,10 +11712,12 @@ async function frFind() {
       return;
     }
     if (note) note.textContent = r.found.length === 1 ? 'Gefunden – antippen zum Verbinden:' : `${r.found.length} Geräte gefunden – antippen zum Verbinden:`;
+    const off = r.found.find(f => !f.solar_api);
     if (out) out.innerHTML = r.found.map(f => `<button class="btn sec" data-fr-host="${esc(f.host)}" style="text-align:left; margin-top:6px">` +
       `${f.solar_api ? '☀️' : '⚠︎'} <b>${esc(f.host)}</b> · ${esc(f.name || f.type || 'Fronius')}` +
       (f.pv_power_w ? ` · ${fmt(f.pv_power_w / 1000, 1)} kWp` : '') +
-      (f.note ? `<br><small style="color:var(--muted)">${esc(f.note)}</small>` : '') + '</button>').join('');
+      (f.note ? `<br><small style="color:var(--muted)">${esc(f.note)}</small>` : '') + '</button>').join('') +
+      (off ? frApiOffHelp(off.host) : '');
   } catch (e) {
     if (note) note.textContent = 'Suche nur möglich, wenn die Seite von der Bridge geöffnet ist.';
   } finally { if (b) b.disabled = false; }
@@ -11691,6 +11744,11 @@ async function frConnect(host) {
         (r.demo ? 'Im Demo-Modus laufen weiter die Beispielwerte – die Adresse gilt im Normalbetrieb.'
           : 'Live-Werte erscheinen in der <b>Übersicht</b> und im Tab <b>PV</b>; die Bridge speichert ab jetzt jede Minute einen Wert.');
       const fo = $('fr-found'); if (fo) fo.innerHTML = '';
+    } else if (note && r && r.api_off) {
+      // reachable Fronius, Solar API switched off: say that plainly + how to fix
+      const fo = $('fr-found'); if (fo) fo.innerHTML = '';
+      note.innerHTML = `⚠︎ <b>${esc(r.host || host)}</b> ist ein Fronius-Wechselrichter, aber seine <b>Solar API ist noch ausgeschaltet</b>.` +
+        frApiOffHelp(r.host || host) + `<small style="color:var(--muted)">Technisch: ${esc(r.error || '')}</small>`;
     } else if (note) {
       note.innerHTML = `❌ ${esc((r && r.error) || 'Verbindung fehlgeschlagen.')}` + (r && r.hint ? `<br>💡 ${esc(r.hint)}` : '');
     }
