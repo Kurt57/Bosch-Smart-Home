@@ -312,7 +312,7 @@
   @media (prefers-reduced-motion:reduce){.ka-blink,.ka-blink .ka-ic{animation:none} .ka-blink{outline:3px solid currentColor}}
   .ka-ok{font-size:15px; font-weight:600; color:var(--kb-green); padding:4px 2px}
   /* calendar */
-  #kiosk-cal:not(:empty){margin:16px 0; background:var(--k-card); border:.5px solid var(--k-sep);
+  #kiosk-cal:not(:empty),#kiosk-school:not(:empty){margin:16px 0; background:var(--k-card); border:.5px solid var(--k-sep);
     border-radius:22px; padding:16px 18px; box-shadow:var(--k-shadow)}
   .kc-day{font-size:12px; font-weight:700; color:var(--k-sub); text-transform:uppercase; letter-spacing:.06em; margin:12px 0 4px}
   .kc-day:first-of-type{margin-top:4px}
@@ -1695,6 +1695,26 @@
         bis etwa eine Minute). <a href="#" id="dash-reset" onclick="return false">Auf Standard zurücksetzen</a></div>
     </div>
 
+    <div class="card" id="school-card">
+      <h2>🎒 Stundenplan im Wohn-Dashboard</h2>
+      <div class="note" style="line-height:1.6; margin-bottom:10px">
+        Eine Zeile je Stunde: <code>Zeit | Mo | Di | Mi | Do | Fr</code>, „-“ = frei. Das Dashboard zeigt den heutigen
+        bzw. nächsten Schultag, die laufende Stunde und den Schulschluss, am Vorabend „Morgen Sport – Sportsachen
+        einpacken“. <b>Feiertage in NRW</b> erkennt es selbst; <b>Ferien</b>: ganztägiger Kalendertermin mit „Ferien“
+        oder „schulfrei“ im Namen. Der Plan bleibt in der Bridge (wie die übrigen Einstellungen).
+      </div>
+      <label>Titel (optional)</label>
+      <input id="school-title" autocomplete="off" placeholder="z. B. Stundenplan Klasse 1a">
+      <label>Stundenplan</label>
+      <textarea id="school-plan" rows="7" autocomplete="off" autocapitalize="off" spellcheck="false"
+        placeholder="08:10-08:55 | Deutsch | Mathe | Religion | Deutsch | Mathe"
+        style="width:100%; box-sizing:border-box; padding:10px 12px; border-radius:12px; border:1px solid var(--line);
+               background:var(--card2); color:var(--ink); font:13px ui-monospace,Menlo,monospace; resize:vertical"></textarea>
+      <div id="school-preview" style="margin-top:8px; overflow-x:auto"></div>
+      <button class="btn" id="school-save">✅ Speichern</button>
+      <div class="note" id="school-note" style="margin-top:8px"></div>
+    </div>
+
     <div class="card" id="cal-card">
       <h2>📅 Kalender im Wohn-Dashboard</h2>
       <div class="note" id="cal-status" style="margin-bottom:10px"></div>
@@ -2029,6 +2049,7 @@
   <div id="kiosk-warn"></div>
   <div id="kiosk-banner"></div>
   <div id="kiosk-cal"></div>
+  <div id="kiosk-school"></div>
   <div id="kiosk-flow"></div>
   <div id="kiosk-loads"></div>
   <div id="kiosk-rooms"></div>

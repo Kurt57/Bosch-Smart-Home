@@ -94,8 +94,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v200';   // short tag shown always-on in the header
-const APP_VERSION = 'v200 · 2026-11-18 · Setup → „🖥️ Wohn-Dashboard“: einstellbar, ab wie vielen Sekunden der Fenster-Hinweis blinkt (Standard 600 s = 10 min, zum Testen z. B. 1 s) und wie viele Abende vorher der Tonnen-Hinweis erscheint (Standard 1; bei 2 z. B. „Übermorgen: Papiertonne“ ab 16 Uhr). Gilt für alle Geräte – ein laufendes Dashboard übernimmt die Werte innerhalb einer Minute. Bei offenem Fenster schaut das Dashboard alle 20 s nach (sonst jede Minute); kurze Zeiten stehen als Sekunden da. ' +
+const APP_BUILD = 'v201';   // short tag shown always-on in the header
+const APP_VERSION = 'v201 · 2026-11-18 · Stundenplan im Wohn-Dashboard: Setup → „🎒 Stundenplan“ (eine Zeile je Stunde: Zeit | Mo | Di | Mi | Do | Fr, „-“ = frei, mit Vorschau). Das Dashboard zeigt den heutigen bzw. nächsten Schultag mit laufender Stunde und Schulschluss; Hinweise „Morgen Sport – Sportsachen einpacken“ (ab 16 Uhr), „Heute Sport“ am Morgen und „Schule aus um …“ 30 Minuten vorher. Feiertage in NRW werden erkannt, Ferien über einen ganztägigen Kalendertermin mit „Ferien“/„schulfrei“. Der Plan liegt wie die übrigen Einstellungen in der Bridge. ' +
+  'v200 · 2026-11-18 · Setup → „🖥️ Wohn-Dashboard“: einstellbar, ab wie vielen Sekunden der Fenster-Hinweis blinkt (Standard 600 s = 10 min, zum Testen z. B. 1 s) und wie viele Abende vorher der Tonnen-Hinweis erscheint (Standard 1; bei 2 z. B. „Übermorgen: Papiertonne“ ab 16 Uhr). Gilt für alle Geräte – ein laufendes Dashboard übernimmt die Werte innerhalb einer Minute. Bei offenem Fenster schaut das Dashboard alle 20 s nach (sonst jede Minute); kurze Zeiten stehen als Sekunden da. ' +
   'v199 · 2026-11-18 · Müllabfuhr der AWB Köln: Setup → „🗑️ Müllabfuhr (AWB Köln)“ → Straße und Hausnummer suchen, Adresse antippen. Die Abfuhrtermine (Rest-, Bio-, Papier-, Wertstofftonne …) erscheinen im Wohn-Dashboard bei den Terminen und als Hinweis am Vorabend ab 16 Uhr bzw. am Morgen („Morgen: Biotonne + Papiertonne“). Die Adresse bleibt lokal in der Bridge. AWB hat dafür keine offizielle Schnittstelle – die App nutzt dieselbe Abfrage wie der Abfuhrkalender auf awbkoeln.de. ' +
   'v198 · 2026-11-18 · Wohn-Dashboard: Das Banner zeigt nur noch, was etwas bringt – PV-Überschuss jetzt nutzen, Börse günstig oder teuer. Sonst die Geldbilanz der PV-Anlage: heute durch Eigenverbrauch gespart + Einspeisevergütung, diesen Monat und seit dem Anschluss. „Strompreis mittel“ und „Kein Börsentarif aktiv“ entfallen. Dieselben Summen (gespart diesen Monat / seit Anschluss) stehen auch in der Übersicht und im Tab PV. ' +
   'v197 · 2026-11-18 · Wohn-Dashboard (#dash): standardmäßig dunkel, die Wahl Hell/Dunkel bleibt auf dem Gerät gespeichert. Oben Hinweis-Kacheln: Fenster/Tür offen (ab 10 Minuten blinkend, rot bei Heizbetrieb, Kälte oder Abwesenheit), lüften, Raum zu kalt, Termin in der nächsten Stunde, Mülltonne am Vorabend, Batterie lädt aus dem Netz, PV-Anlage oder Wärmepumpe ohne aktuelle Werte, sehr hoher Verbrauch. Die größten Verbraucher hängen jetzt als Linien am Haus in der Energiefluss-Grafik (Wärmepumpe, Geräte, nicht einzeln gemessener Rest) statt in einer Liste. Neu: Kalender (iCloud-Freigabe, Google, .ics) mit Terminen heute, morgen und der nächsten Tage – Adresse im Setup, sie bleibt nur lokal in der Bridge. ' +
@@ -2691,13 +2692,13 @@ const VIEW_RENDERS = {
   pv: ['renderPvReal', 'renderPv', 'renderCarbon', 'renderSmart'],          // the last two also fill PV fields
   borse: ['renderBorse', 'renderCarbon', 'renderSmart'],
   konzept: ['renderKonzept'],
-  settings: ['renderSettings', 'renderMeter', 'renderFroniusSetup', 'renderCalSetup', 'renderAwbSetup', 'renderDashSetup'],
+  settings: ['renderSettings', 'renderMeter', 'renderFroniusSetup', 'renderCalSetup', 'renderAwbSetup', 'renderDashSetup', 'renderSchoolSetup'],
 };
 // the order renderAll() always used (some renders build on earlier ones)
 const RENDER_ORDER = ['renderOverview', 'paintNowLine', 'renderToday', 'renderHistory', 'renderHeatpump', 'renderProfile', 'renderPv',
   'renderSettings', 'renderAppliances', 'renderMeter', 'renderBorse', 'renderCarbon', 'renderSmart', 'renderKonzept',
   'renderHa', 'renderDarkLoad', 'renderSwitches', 'renderHeatExtras', 'renderFlow', 'renderPvReal', 'renderFroniusSetup',
-  'renderCalSetup', 'renderAwbSetup', 'renderDashSetup'];
+  'renderCalSetup', 'renderAwbSetup', 'renderDashSetup', 'renderSchoolSetup'];
 const _viewStale = {};                 // view -> Set of render names waiting for that view
 function activeView() { const el = document.querySelector('.view.on'); return el ? el.id.replace(/^v-/, '') : 'overview'; }
 function _runRender(name) {
@@ -3119,7 +3120,7 @@ function kioskSetting(k) {
 async function kioskPullSettings() {
   try {
     const r = await api('/api/settings'), srv = (r && r.settings) || {}, unsent = _unsentGet();
-    ['bhe_kiosk_win_s', 'bhe_kiosk_bin_days'].forEach(k => {
+    ['bhe_kiosk_win_s', 'bhe_kiosk_bin_days', 'bhe_school_plan', 'bhe_school_title'].forEach(k => {
       if (srv[k] != null && !(k in unsent)) { try { localStorage.setItem(k, srv[k]); _lastSynced[k] = srv[k]; } catch (e) {} }
     });
   } catch (e) { /* keep the local values */ }
@@ -3209,6 +3210,7 @@ function kioskAlerts() {
     A.push({ level: 'warn', icon: '♨️', title: 'Wärmepumpe: keine aktuellen Daten',
       detail: (ago != null ? `letzte Werte vor ${fmtMin(ago)}` : '') + (hl.last_error ? (ago != null ? ' · ' : '') + trunc(hl.last_error, 70) : '') });
   }
+  try { schoolAlerts(A); } catch (e) { console.error(e); }
   const rank = { urgent: 0, warn: 1, info: 2, good: 3 };
   return A.sort((x, y) => rank[x.level] - rank[y.level]);
 }
@@ -3221,6 +3223,138 @@ function renderKioskAlerts() {
     `<div class="ka-ic">${a.icon}</div><div class="ka-tx"><div class="ka-t">${esc(a.title)}</div>` +
     (a.detail ? `<div class="ka-d">${esc(a.detail)}</div>` : '') + `</div></div>`).join('') +
     (A.length > 9 ? `<div class="ka-ok" style="color:var(--k-sub)">+ ${A.length - 9} weitere</div>` : '');
+}
+
+
+// ---- school timetable (Setup → Stundenplan; kept in the synced settings, so it
+// lives only in the bridge – never in the code) ----------------------------------
+const SCHOOL_DAYS = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag'];
+// "08:10-08:55 | Unterricht | Kunst | - | Sport | Musik" per line; '-' or empty = free
+function parseSchoolPlan(text) {
+  const periods = [], errors = [];
+  String(text || '').split(/\r?\n/).forEach((line, i) => {
+    const l = line.trim();
+    if (!l || l.startsWith('#') || /^zeit\b/i.test(l)) return;
+    const parts = l.split('|').map(x => x.trim());
+    const m = (parts[0] || '').match(/^(\d{1,2})[.:](\d{2})\s*[-–]\s*(\d{1,2})[.:](\d{2})$/);
+    if (!m) { errors.push(i + 1); return; }
+    const hm = (h, mi) => String(+h).padStart(2, '0') + ':' + mi;
+    const subj = [];
+    for (let d = 0; d < 5; d++) {
+      const x = (parts[d + 1] || '').trim();
+      subj.push(!x || /^[-–—]+$/.test(x) ? '' : x);
+    }
+    periods.push({ from: hm(m[1], m[2]), to: hm(m[3], m[4]), subj });
+  });
+  periods.sort((a, b) => a.from.localeCompare(b.from));
+  return { periods, errors };
+}
+function schoolPlan() {
+  let t = ''; try { t = localStorage.getItem('bhe_school_plan') || ''; } catch (e) {}
+  const P = parseSchoolPlan(t);
+  return P.periods.length ? P : null;
+}
+// Easter Sunday (Gregorian) – for the moveable holidays
+function easterSunday(y) {
+  const a = y % 19, b = Math.floor(y / 100), c = y % 100, d = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25),
+    g = Math.floor((b - f + 1) / 3), h = (19 * a + b - d - g + 15) % 30, i = Math.floor(c / 4), k = c % 4,
+    l = (32 + 2 * e + 2 * i - h - k) % 7, m = Math.floor((a + 11 * h + 22 * l) / 451),
+    mo = Math.floor((h + l - 7 * m + 114) / 31), da = ((h + l - 7 * m + 114) % 31) + 1;
+  return new Date(y, mo - 1, da, 12);
+}
+// public holidays in North Rhine-Westphalia (school-free) → {'YYYY-MM-DD': name}
+function holidaysNRW(y) {
+  const E = easterSunday(y), off = n => ymdLocal(new Date(E.getTime() + n * 86400000));
+  const H = { [`${y}-01-01`]: 'Neujahr', [off(-2)]: 'Karfreitag', [off(1)]: 'Ostermontag', [`${y}-05-01`]: 'Tag der Arbeit',
+    [off(39)]: 'Christi Himmelfahrt', [off(50)]: 'Pfingstmontag', [off(60)]: 'Fronleichnam',
+    [`${y}-10-03`]: 'Tag der Deutschen Einheit', [`${y}-11-01`]: 'Allerheiligen', [`${y}-12-25`]: '1. Weihnachtstag',
+    [`${y}-12-26`]: '2. Weihnachtstag' };
+  return H;
+}
+const SCHOOL_FREE_RX = /ferien|schulfrei|unterrichtsfrei|beweglicher ferientag|brückentag/i;
+// why there is no school on that day (null = school day)
+function schoolFreeReason(d) {
+  const wd = d.getDay();
+  if (wd === 0 || wd === 6) return 'Wochenende';
+  const ymd = ymdLocal(d), hol = holidaysNRW(d.getFullYear())[ymd];
+  if (hol) return hol;
+  const ev = ((_kioskCal && _kioskCal.events) || []).find(e => e.all_day && SCHOOL_FREE_RX.test(e.title) &&
+    e.start_day <= ymd && e.end_day >= ymd);
+  return ev ? ev.title : null;
+}
+// the lessons of one weekday, neighbouring periods with the same subject merged
+function schoolLessons(P, d) {
+  const di = d.getDay() - 1;
+  if (di < 0 || di > 4) return [];
+  const out = [];
+  P.periods.forEach(p => {
+    const sj = p.subj[di]; if (!sj) return;
+    const last = out[out.length - 1];
+    if (last && last.subj === sj && last.to === p.from) { last.to = p.to; last.periods++; }   // back to back
+    else out.push({ from: p.from, to: p.to, subj: sj, periods: 1 });
+  });
+  return out;
+}
+const minOfDay = hm => { const [h, m] = hm.split(':').map(Number); return h * 60 + m; };
+// which day to show: today until school is out, else the next school day
+function schoolTarget(P) {
+  const now = new Date(), nowMin = now.getHours() * 60 + now.getMinutes();
+  for (let k = 0; k < 21; k++) {
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + k, 12);
+    if (schoolFreeReason(d)) continue;
+    const L = schoolLessons(P, d);
+    if (!L.length) continue;
+    if (k === 0 && nowMin >= minOfDay(L[L.length - 1].to)) continue;      // already out today
+    return { d, k, L };
+  }
+  return null;
+}
+function renderKioskSchool() {
+  const el = $('kiosk-school'); if (!el) return;
+  const P = schoolPlan();
+  if (!P) { el.innerHTML = ''; return; }
+  let title = 'Stundenplan'; try { title = localStorage.getItem('bhe_school_title') || title; } catch (e) {}
+  const T = schoolTarget(P);
+  if (!T) { el.innerHTML = `<div class="kl-title">🎒 ${esc(title)}</div><div class="k-sub">In den nächsten drei Wochen kein Schultag.</div>`; return; }
+  const now = new Date(), nowMin = now.getHours() * 60 + now.getMinutes();
+  const todayFree = schoolFreeReason(now);
+  const dayTxt = T.k === 0 ? 'Heute' : T.k === 1 ? 'Morgen' : T.d.toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'numeric' });
+  const start = T.L[0].from, end = T.L[T.L.length - 1].to;
+  const rows = T.L.map(l => {
+    const on = T.k === 0 && nowMin >= minOfDay(l.from) && nowMin < minOfDay(l.to);
+    const past = T.k === 0 && nowMin >= minOfDay(l.to);
+    return `<div class="kc-row${on ? ' on' : ''}"${past ? ' style="opacity:.45"' : ''}><span class="kc-dot" style="background:${/sport|schwimm|turn/i.test(l.subj) ? 'var(--kb-green)' : 'var(--kb-amber)'}"></span>` +
+      `<span class="kc-time">${l.from}–${l.to}</span><span class="kc-title">${esc(l.subj)}</span>` +
+      (on ? '<span class="kc-b kc-now">jetzt</span>' : '') + `</div>`;
+  }).join('');
+  el.innerHTML = `<div class="kl-title">🎒 ${esc(title)}</div>` +
+    (T.k > 0 && todayFree && todayFree !== 'Wochenende' ? `<div class="k-sub" style="margin-bottom:6px">Heute schulfrei: ${esc(todayFree)}</div>` : '') +
+    (() => {          // a free day before the shown one (holiday / Ferien tomorrow)
+      if (T.k < 2) return '';
+      const tm = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 12), r = schoolFreeReason(tm);
+      return r && r !== 'Wochenende' ? `<div class="k-sub" style="margin-bottom:6px">Morgen schulfrei: ${esc(r)}</div>` : '';
+    })() +
+    `<div class="kc-day" style="margin-top:4px">${dayTxt} · ${start}–${end} · Schulschluss ${end}</div>` + rows;
+}
+// awareness: sports kit the evening before / that morning, school out soon
+function schoolAlerts(A) {
+  const P = schoolPlan(); if (!P) return;
+  const now = new Date(), h = now.getHours(), nowMin = h * 60 + now.getMinutes();
+  const kit = L => {
+    const s = L.map(l => l.subj).join(' ');
+    return /schwimm/i.test(s) ? ['Schwimmen', 'Schwimmsachen'] : /sport|turn/i.test(s) ? ['Sport', 'Sportsachen'] : null;
+  };
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12), tomorrow = new Date(today.getTime() + 86400000);
+  const Lt = schoolFreeReason(today) ? [] : schoolLessons(P, today), Lm = schoolFreeReason(tomorrow) ? [] : schoolLessons(P, tomorrow);
+  const kt = kit(Lt), km = kit(Lm);
+  if (kt && Lt.length && nowMin < minOfDay(Lt[0].from))
+    A.push({ level: 'warn', icon: '🎒', title: `Heute ${kt[0]}`, detail: `${kt[1]} nicht vergessen – Schule ab ${Lt[0].from}` });
+  if (km && h >= 16) A.push({ level: 'warn', icon: '🎒', title: `Morgen ${km[0]}`, detail: `${km[1]} heute Abend einpacken` });
+  if (Lt.length) {
+    const end = minOfDay(Lt[Lt.length - 1].to);
+    if (nowMin >= end - 30 && nowMin < end)
+      A.push({ level: 'info', icon: '🏫', title: `Schule aus um ${Lt[Lt.length - 1].to}`, detail: `in ${end - nowMin} min` });
+  }
 }
 
 // ---- calendar (public iCloud / Google / .ics, read by the bridge) -------------
@@ -3290,6 +3424,7 @@ function paintKiosk() {
   }
   try { renderKioskAlerts(); } catch (e) { console.error(e); }
   try { renderKioskCal(); } catch (e) { console.error(e); }
+  try { renderKioskSchool(); } catch (e) { console.error(e); }
   try { renderEnergyFlow(); } catch (e) { console.error(e); }
   try { renderKioskLoads(); } catch (e) {}
   const og = $('kiosk-out');
@@ -12397,8 +12532,42 @@ function initDashSetup() {
   if (b) b.addEventListener('change', () => save('bin_days', Math.max(1, Math.min(7, parseInt(b.value, 10) || 1))));
   const r = $('dash-reset'); if (r) r.addEventListener('click', () => { save('win_s', KIOSK_DEF.win_s); save('bin_days', KIOSK_DEF.bin_days); });
 }
+function schoolPreviewHtml(text) {
+  const P = parseSchoolPlan(text);
+  if (!P.periods.length) return P.errors.length ? `⚠︎ Keine Zeile erkannt (Zeile ${P.errors.join(', ')}). Format: <code>08:10-08:55 | Mo | Di | Mi | Do | Fr</code>` : '';
+  const cs = 'style="text-align:left;white-space:normal;word-break:break-word;padding:4px 3px;vertical-align:top"';
+  const head = `<tr><th ${cs}>Zeit</th>` + SCHOOL_DAYS.map(d => `<th ${cs}>${d.slice(0, 2)}</th>`).join('') + '</tr>';
+  const body = P.periods.map(p => `<tr><td ${cs}>${p.from}<br>${p.to}</td>` +
+    p.subj.map(x => `<td ${cs}>${x ? esc(x) : '<span style="color:var(--muted)">–</span>'}</td>`).join('') + '</tr>').join('');
+  return `<table class="pvt" style="font-size:11px;table-layout:fixed;width:100%">${head}${body}</table>` +
+    (P.errors.length ? `<div class="note" style="margin-top:4px">⚠︎ Zeile ${P.errors.join(', ')} nicht erkannt (Format: Zeit | Mo | Di | Mi | Do | Fr).</div>` : '');
+}
+function renderSchoolSetup() {
+  const ta = $('school-plan'), ti = $('school-title'); if (!ta) return;
+  let t = '', tt = ''; try { t = localStorage.getItem('bhe_school_plan') || ''; tt = localStorage.getItem('bhe_school_title') || ''; } catch (e) {}
+  if (document.activeElement !== ta && !ta.dataset.dirty) ta.value = t;
+  if (ti && document.activeElement !== ti && !ti.dataset.dirty) ti.value = tt;
+  const pv = $('school-preview'); if (pv) pv.innerHTML = schoolPreviewHtml(ta.value);
+}
+function initSchoolSetup() {
+  const ta = $('school-plan'), ti = $('school-title'), b = $('school-save'), pv = $('school-preview'), note = $('school-note');
+  if (ta) ta.addEventListener('input', () => { ta.dataset.dirty = '1'; if (pv) pv.innerHTML = schoolPreviewHtml(ta.value); });
+  if (ti) ti.addEventListener('input', () => { ti.dataset.dirty = '1'; });
+  if (b) b.addEventListener('click', () => {
+    const P = parseSchoolPlan(ta ? ta.value : '');
+    try {
+      localStorage.setItem('bhe_school_plan', ta ? ta.value.trim() : '');
+      localStorage.setItem('bhe_school_title', ti ? ti.value.trim() : '');
+    } catch (e) {}
+    if (ta) delete ta.dataset.dirty; if (ti) delete ti.dataset.dirty;
+    if (note) note.innerHTML = P.periods.length ? `✅ Gespeichert – ${P.periods.length} Stunden je Tag. Das Wohn-Dashboard zeigt ihn innerhalb einer Minute.`
+      : (ta && ta.value.trim() ? '⚠︎ Gespeichert, aber keine Zeile erkannt.' : 'Stundenplan entfernt.');
+    if (kioskOpen()) { try { paintKiosk(); } catch (e) {} }
+  });
+}
 function initCalSetup() {
   initDashSetup();
+  initSchoolSetup();
   const b = $('cal-save'); if (b) b.addEventListener('click', calSave);
   const c = $('cal-clear'); if (c) c.addEventListener('click', calClear);
   const s = $('awb-search'); if (s) s.addEventListener('click', awbSearch);

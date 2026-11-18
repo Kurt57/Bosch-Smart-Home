@@ -25,6 +25,17 @@ blinkt (Standard 600 s; zum Testen z. B. 1 s) und wie viele **Abende vorher** de
 erscheint (Standard 1). Gilt für alle Geräte; ein laufendes Dashboard übernimmt die Werte innerhalb
 einer Minute. Ist ein Fenster offen, schaut das Dashboard alle 20 Sekunden nach.
 
+## Stundenplan
+
+Setup → **🎒 Stundenplan im Wohn-Dashboard**: eine Zeile je Stunde im Format
+`08:10-08:55 | Mo | Di | Mi | Do | Fr` („-“ = frei), darunter eine Vorschau. Das Dashboard zeigt
+den heutigen bzw. – nach Schulschluss, am Wochenende, an Feiertagen – den nächsten Schultag mit
+der laufenden Stunde und dem Schulschluss. Hinweise: „Morgen Sport – Sportsachen einpacken“ ab
+16 Uhr, „Heute Sport“ morgens vor Schulbeginn, „Schule aus um …“ in der letzten halben Stunde.
+Feiertage in NRW werden selbst berechnet; **Ferien** und bewegliche Ferientage als ganztägigen
+Termin mit „Ferien“ oder „schulfrei“ im Namen in den Kalender eintragen. Der Plan liegt wie die
+übrigen App-Einstellungen in der Bridge, nicht im Repository.
+
 ## Kalender
 
 Setup → **📅 Kalender im Wohn-Dashboard** → Adresse einfügen → „Speichern & prüfen“.
