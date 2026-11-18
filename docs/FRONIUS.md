@@ -13,8 +13,12 @@ Was du danach siehst:
   Batterie-Ladestand), **Verlauf** über 7/30/90 Tage oder ein Jahr („Wohin ging der
   Sonnenstrom?", „Woher kam dein Strom?", typischer Tag), **Monatswerte** mit Vergleich
   zur **Erwartung** aus dem PV-Planer/PVGIS sowie **Wechselrichter, Strings, Batterie und
-  Smart Meter** im Detail. Der PV-Planer bleibt darunter für Erweiterungen.
+  Smart Meter** im Detail (Strings, Batterie mit Spannung/Strom/Temperatur/Modus, Smart Meter je
+  Phase mit Leistung, Strom, Spannung und cos φ). Der PV-Planer bleibt darunter für Erweiterungen.
 * **Wärmepumpe → Live:** wie viel des Stroms gerade von der Sonne kommt.
+* **Wohn-Dashboard (`…/#dash`):** Energiefluss und Empfehlung mit den **gemessenen** Werten
+  (alle 10 Sekunden). Antwortet der Wechselrichter länger als 2 Minuten nicht, zeigt es wieder
+  die Schätzung – mit Hinweis.
 
 ## Voraussetzungen
 
@@ -74,6 +78,12 @@ nach einem Neustart verbindet sich die Bridge von selbst wieder.
   An Tagen mit Datenlücke (Bridge oder Wechselrichter nicht erreichbar) oder wenn ein
   Zählerstand springt (z. B. Zähler getauscht), nimmt die App die gemessenen Leistungswerte
   und markiert den Tag.
+* **Batterie aus dem Netz geladen:** Bezieht das Haus mehr aus dem Netz, als es selbst
+  verbraucht, während die Batterie lädt, geht der Rest in die Batterie (samt Wandlungsverlusten).
+  Das passiert z. B., wenn ein GEN24 bei sehr niedrigem Ladestand nachlädt (gemeldet als
+  „charge boost“ – Fronius beschreibt den Begriff nicht genau; die App zeigt, was gemessen wird).
+  Diese Menge steht als „Batterie aus dem Netz geladen“ da, zählt bei „Wohin ging der
+  Sonnenstrom?“ **nicht** als Sonnenstrom und kostet den normalen Netzpreis.
 * **Sonnenstrom der Wärmepumpe:** Die Wärmepumpe bekommt je 5 Minuten denselben Anteil
   Sonnen-/Batteriestrom zugeordnet wie das ganze Haus (anteilige Rechnung – ein eigener
   Zähler nur für die Wärmepumpe wäre genauer).

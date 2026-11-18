@@ -263,7 +263,7 @@ def parse_inverter_realtime(data: dict) -> dict:
     for i in range(1, 10):
         sfx = "" if i == 1 else f"_{i}"
         u, a = _val(data, "UDC" + sfx), _val(data, "IDC" + sfx)
-        if ("UDC" + sfx) not in data and ("IDC" + sfx) not in data:
+        if u is None and a is None:                # slot not present / not wired (GEN24: null)
             continue
         p = round(u * a, 1) if (u is not None and a is not None) else None
         strings.append({"n": i, "u_v": u, "i_a": a, "p_w": p})
@@ -297,8 +297,9 @@ def parse_meters(data: dict) -> list:
             p = _first(m, f"PowerReal_P_Phase_{ph}", f"SMARTMETER_POWERACTIVE_0{ph}_F64")
             u = _first(m, f"Voltage_AC_Phase_{ph}", f"SMARTMETER_VOLTAGE_0{ph}_F64")
             a = _first(m, f"Current_AC_Phase_{ph}", f"ACBRIDGE_CURRENT_ACTIVE_MEAN_0{ph}_F32")
+            pf = _first(m, f"PowerFactor_Phase_{ph}", f"SMARTMETER_FACTOR_POWER_0{ph}_F64")
             if p is not None or u is not None or a is not None:
-                phases.append({"n": ph, "p_w": p, "u_v": u, "i_a": a})
+                phases.append({"n": ph, "p_w": p, "u_v": u, "i_a": a, "pf": pf})
         p_sum = _first(m, "PowerReal_P_Sum", "SMARTMETER_POWERACTIVE_MEAN_SUM_F64")
         if p_sum is None and phases and all(x["p_w"] is not None for x in phases):
             p_sum = sum(x["p_w"] for x in phases)
@@ -314,6 +315,7 @@ def parse_meters(data: dict) -> list:
             "export_wh": _first(m, "EnergyReal_WAC_Sum_Produced", "SMARTMETER_ENERGYACTIVE_PRODUCED_SUM_F64",
                                 "EnergyReal_WAC_Minus_Absolute", "SMARTMETER_ENERGYACTIVE_ABSOLUT_MINUS_F64"),
             "freq_hz": _first(m, "Frequency_Phase_Average", "SMARTMETER_FREQUENCY_MEAN_F64"),
+            "pf": _first(m, "PowerFactor_Sum", "SMARTMETER_FACTOR_POWER_SUM_F64"),
             "phases": phases,
             "enabled": m.get("Enable", m.get("COMPONENTS_MODE_ENABLE_U16")),
         })

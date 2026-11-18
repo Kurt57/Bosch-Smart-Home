@@ -94,8 +94,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v194';   // short tag shown always-on in the header
-const APP_VERSION = 'v194 · 2026-11-18 · Wärmepumpe: Strom aus einer Datenlücke (Bridge oder Bosch-Cloud länger als 30 Minuten nicht erreichbar) wird nicht mehr der Betriebsart am Rand der Lücke zugeschlagen – vorher landete z. B. nach einer abgelaufenen Anmeldung der ganze Verbrauch der Lücke im Warmwasser. Er zählt weiter zum Tagesverbrauch, steht in „Wofür heute“ und im Betriebsarten-Ring aber als „Betriebsart unbekannt (Datenlücke)“. Stundenreihe und Tagesablauf lassen die Lücke leer statt sie als Pause oder als eine einzige Riesen-Stunde zu zeigen. PV-Anlage: Ist die Solar API am Wechselrichter noch aus, zeigt die App die Schritte zum Einschalten mit Link zur Weboberfläche, Anmeldung als „Customer“ und was bei vergessenem Passwort hilft. ' +
+const APP_BUILD = 'v195';   // short tag shown always-on in the header
+const APP_VERSION = 'v195 · 2026-11-18 · PV-Anlage mit echten Daten (Fronius GEN24, Reserva, Smart Meter TS 65A-3) abgeglichen: Lädt die Batterie aus dem Netz (z. B. „charge boost“ bei sehr niedrigem Ladestand), zeigt der Energiefluss einen Bogen Netz → Batterie, ein Hinweis erklärt es, und die Tageswerte zählen „Batterie aus dem Netz geladen“ extra – dieser Strom zählt nicht mehr als Sonnenstrom. Gibt die Batterie ins Netz ab, wird das ebenfalls gezeigt (und nicht als Sonnen-Überschuss empfohlen). Details: leere String-Plätze ausgeblendet, Smart Meter je Phase mit Leistung, Strom, Spannung und cos φ, Batterie mit Spannung/Strom und Modus. Wohn-Dashboard (#dash): Energiefluss, Empfehlung und Verbraucherliste mit den gemessenen Werten des Wechselrichters (alle 10 s) statt der Schätzung; antwortet er nicht, steht das dabei. Behoben: Bei Zeiträumen über 31 Tage zählte die allererste Viertelstunde nach dem Verbinden nur eine Minute. ' +
+  'v194 · 2026-11-18 · Wärmepumpe: Strom aus einer Datenlücke (Bridge oder Bosch-Cloud länger als 30 Minuten nicht erreichbar) wird nicht mehr der Betriebsart am Rand der Lücke zugeschlagen – vorher landete z. B. nach einer abgelaufenen Anmeldung der ganze Verbrauch der Lücke im Warmwasser. Er zählt weiter zum Tagesverbrauch, steht in „Wofür heute“ und im Betriebsarten-Ring aber als „Betriebsart unbekannt (Datenlücke)“. Stundenreihe und Tagesablauf lassen die Lücke leer statt sie als Pause oder als eine einzige Riesen-Stunde zu zeigen. PV-Anlage: Ist die Solar API am Wechselrichter noch aus, zeigt die App die Schritte zum Einschalten mit Link zur Weboberfläche, Anmeldung als „Customer“ und was bei vergessenem Passwort hilft. ' +
   'v193 · 2026-11-18 · Wärmepumpe: Ist die HomeCom-Anmeldung abgelaufen oder die Bosch-Cloud nicht erreichbar, speichert die Bridge keine leeren Messungen mehr, sondern meldet den Grund – die Wärmepumpen-Karte zeigt ihn mit Link zum neuen Verbindungstest (Setup → Wärmepumpe → „Verbindung zur Bosch-Cloud testen“: DNS, Verbindung, Verschlüsselung, Anmeldung, Datenabruf; Ergebnis kopierbar; im Terminal: python3 shc_bridge.py diag). Nach einem Fehler versucht die Bridge es nach 1, 2, 4 Minuten erneut. Die Volumenstrom-Suche fragt schonender ab und bricht bei Verbindungsproblemen sofort ab. Keine Tracebacks mehr im Terminal, wenn ein Browser eine Verbindung schließt. Startskripte nutzen ein aktuelles Python (python.org/Homebrew, TLS 1.3), falls installiert. ' +
   'v192 · 2026-11-18 · PV-Anlage (Fronius): Die Bridge liest den Wechselrichter direkt im Heimnetz über die Solar API (nur lesend, ohne Cloud) – Setup mit Suche im Netz, Verbinden und Rohdaten-Diagnose. Neu: Energiefluss jetzt (Sonne, Haus, Batterie, Netz, Wärmepumpe) in der Übersicht; im Tab PV „Deine PV-Anlage“ mit Tageswerten, Tagesverlauf, Verlauf über 7/30/90 Tage oder ein Jahr, Monatswerten mit Erwartung aus Planer/PVGIS sowie Wechselrichter, Strings, Batterie und Smart Meter; in der Wärmepumpen-Karte der Sonnenstrom-Anteil. Netzbezug und Einspeisung kommen aus den Zählerständen des Smart Meters, mit Prüfung auf Lücken und Zählersprünge. Im Demo-Modus eine simulierte Anlage. Außerdem behoben: Tibber-Token, Home-Assistant-Zugang und die Zuordnung Fensterkontakt → Raum gingen bei jedem Neustart der Bridge verloren. ' +
   'v191 · 2026-11-16 · Volumenstrom in der Live-Karte immer sichtbar: mit Wert (gelesen/abgeleitet) oder mit dem Grund, warum es noch keinen gibt (z. B. kein Rücklauf gemeldet, kein Heizbetrieb erkannt, Läufe zu kurz, Spreizung zu klein). Neben Vor-/Rücklauf steht jetzt die Spreizung. Abgeleiteter Volumenstrom genauer: Abtau-Abschnitte zählen weder bei der Wärme noch bei der Zeit (vorher zu niedrig, z. B. 15,9 statt 17,2 l/min). ' +
@@ -2829,7 +2830,25 @@ let _kioskLive = null, _kioskHp = null;   // light live-power snapshot (kiosk on
 let _kioskAway = (() => { try { return localStorage.getItem('bhe_kiosk_away') === '1'; } catch (e) { return false; } })();
 // Average household+heat-pump load in the current hour (kW ≈ kWh/h), from the
 // measured hourly profile and the daily averages.
+// The inverter's live reading when it is current (≤ 2 min old): the measured
+// truth for "now". null → the callers fall back to their estimate.
+function frLiveNow() {
+  const F = STATE.fr, L = F && F.connected ? F.live : null;
+  if (!L || !F.last_poll) return null;
+  const age = (F.server_time || Date.now() / 1000) - F.last_poll;
+  return age <= 120 ? L : null;
+}
+function kioskOpen() { const k = $('kiosk'); return !!(k && !k.hidden); }
+// connected, but no current reading: say so instead of quietly showing the estimate
+function frSilentNote() {
+  const F = STATE.fr;
+  if (!F || !F.connected || frLiveNow()) return '';
+  const age = F.last_poll ? Math.round(((F.server_time || Date.now() / 1000) - F.last_poll) / 60) : null;
+  return ` · ⚠︎ Wechselrichter ${age != null ? `seit ${age} min ` : ''}ohne Antwort`;
+}
 function loadNowKw() {
+  const M = frLiveNow();
+  if (M && M.load_w != null) return Math.max(0, M.load_w) / 1000;     // smart meter: measured
   const h = new Date().getHours();
   const shShape = normFrac((STATE.data && STATE.data.hourly_profile || []).map(x => x.avg_w));
   const hpProf = (STATE.hpA && STATE.hpA.hourly_profile) || [];
@@ -2838,10 +2857,18 @@ function loadNowKw() {
   const hpH = hpAvgDaily() * (hpShape ? hpShape[h] : 1 / 24);
   return shH + hpH;
 }
-// Estimated PV surplus right NOW (kW): expected production (weather forecast if
-// available, else the clear-day shape) minus the typical house+WP load. Honest
-// estimate, clearly labelled – the app has no live PV meter.
+// PV surplus right NOW (kW). With a connected Fronius: measured production and
+// house load. Otherwise an estimate – expected production (weather forecast if
+// available, else the clear-day shape) minus the typical house+WP load –
+// clearly labelled as such.
 function pvNowEstimate() {
+  const M = frLiveNow();
+  if (M && M.pv_w != null) {                       // the inverter measures it
+    const pvKw = Math.max(0, M.pv_w) / 1000, loadKw = loadNowKw();
+    return { pvKw, loadKw, surplusKw: pvKw - loadKw, measured: true,
+             src: STATE.fr.demo ? 'Demo-Anlage (simuliert)'
+               : M.load_w != null ? 'gemessen (Wechselrichter)' : 'PV gemessen, Verbrauch geschätzt' };
+  }
   let kwp = 0; try { kwp = Math.max(0, parseFloat(($('pv-kwp') || {}).value) || 0); } catch (e) {}
   if (kwp <= 0) return null;
   const now = new Date(), m = now.getMonth(), h = now.getHours();
@@ -2866,11 +2893,12 @@ function kioskWashAdvice() {
   }
   const strongSurplus = pv && pv.surplusKw >= 0.4;
   const act = _kioskAway ? 'per Zeitvorwahl programmieren' : 'jetzt einschalten';
+  const ca = pv && pv.measured ? '' : '~';            // measured values need no "about"
   // 1) Real PV surplus wins – free solar power beats any tariff signal
   if (strongSurplus) {
     return { level: 'green',
-      line: `☀️ PV-Überschuss ~<b>${fmt(pv.surplusKw, 1)} kW</b> – Großverbraucher ${act} (Eigenverbrauch).`,
-      sub: `Erzeugung ~${fmt(pv.pvKw, 1)} kW − Last ~${fmt(pv.loadKw, 1)} kW · Quelle: ${pv.src}` + (spot ? ` · ${spot.sub}` : '') };
+      line: `☀️ PV-Überschuss ${ca}<b>${fmt(pv.surplusKw, 1)} kW</b> – Großverbraucher ${act} (Eigenverbrauch).`,
+      sub: `Erzeugung ${ca}${fmt(pv.pvKw, 1)} kW − Last ${ca}${fmt(pv.loadKw, 1)} kW · Quelle: ${pv.src}` + (spot ? ` · ${spot.sub}` : '') };
   }
   // 2) else the Börse signal
   if (spot) {
@@ -2882,7 +2910,18 @@ function kioskWashAdvice() {
           : '🟡 Strompreis mittel – kein Schnäppchen, aber kein Grund zu warten.',
       sub: spot.sub + (pv && pv.surplusKw > 0 ? ` · ☀️ etwas PV (~${fmt(pv.surplusKw, 1)} kW)` : '') };
   }
-  // 3) no spot tariff
+  // 3) no spot tariff – with a measuring inverter say what the house runs on now
+  const M = pv && pv.measured ? frLiveNow() : null;
+  if (M && M.has_meter) {
+    const P = pvFlowParts(M), soc = M.soc != null ? ` – Ladestand ${fmt(M.soc, 0)} %` : '';
+    const line = pv.surplusKw > 0.05 ? `☀️ Die Sonne deckt das Haus – ${fmt(pv.surplusKw, 1)} kW übrig${P.ch > 25 ? ' (gehen in die Batterie)' : ''}.`
+      : P.gridBatt > 100 ? `🔋 Die Batterie lädt gerade aus dem Netz (${kwOrW(P.gridBatt)})${soc}.`
+      : P.battHouse > 100 ? `🔋 Die Batterie versorgt das Haus (${kwOrW(P.battHouse)})${soc}.`
+      : `🔌 Gerade kein Sonnenstrom übrig – das Haus bezieht ${kwOrW(P.gridHouse)} aus dem Netz.`;
+    return { level: pv.surplusKw > 0.05 ? 'green' : 'blue', line,
+      sub: `Erzeugung ${fmt(pv.pvKw, 1)} kW · Haus ${fmt(pv.loadKw, 1)} kW · ${pv.src} · ` +
+        'mit Börsentarif (Setup) gibt es hier auch Preis-Empfehlungen' };
+  }
   return { level: pv && pv.pvKw > 0.2 ? 'green' : 'blue',
     line: pv && pv.surplusKw > 0
       ? `☀️ PV deckt die Last gerade etwa – Eigenverbrauch lohnt (~${fmt(Math.max(0, pv.surplusKw), 1)} kW Überschuss).`
@@ -2896,30 +2935,39 @@ function kcol(lvl) {
     : lvl === 'warn' ? 'var(--kb-red)' : 'var(--k-sub)';
 }
 // Animated live energy-flow diagram: PV ☀️ → Haus/Geräte 🏠 ↔ Batterie 🔋 ↔ Netz ⚡,
-// with dots streaming along the active lines (speed/number ∝ power). Instantaneous
-// estimate from the same PV/load model – clearly labelled, no live PV/battery meter.
+// with dots streaming along the active lines (speed/number ∝ power). Measured by
+// the inverter + smart meter when connected, else an instantaneous estimate from
+// the PV/load model – the caption says which.
 function renderEnergyFlow() {
   const el = $('kiosk-flow'); if (!el) return;
+  const M = frLiveNow(), meas = !!(M && M.has_meter);    // inverter + smart meter: all measured
   const pvE = pvNowEstimate();
   const load = loadNowKw();
   const inp = pvInputs();
-  const battKwh = inp.batt, haveBatt = battKwh > 0;
-  const haveCar = !!inp.v2h && inp.carKwh > 0;
+  let battKwh = inp.batt, haveBatt = battKwh > 0;
+  const haveCar = !meas && !!inp.v2h && inp.carKwh > 0;   // the inverter knows no car
   const havePv = !!pvE, pv = pvE ? Math.max(0, pvE.pvKw) : 0;
   const directPV = Math.min(pv, load);
   let surplus = pv - directPV, deficit = load - directPV;
   // storage chain: home battery first, then the car (if V2H)
-  let bCh = 0, bDis = 0, cCh = 0, cDis = 0, exp = 0, imp = 0;
+  let bCh = 0, bDis = 0, cCh = 0, cDis = 0, exp = 0, imp = 0, gridToBatt = 0;
   const capB = 3.0, capC = 7.0;
-  if (surplus > 0.02) {
-    if (haveBatt) { bCh = Math.min(surplus, capB); surplus -= bCh; }
-    if (haveCar && surplus > 0.02) { cCh = Math.min(surplus, capC); surplus -= cCh; }
-    exp = surplus;
-  }
-  if (deficit > 0.02) {
-    if (haveBatt) { bDis = Math.min(deficit, capB); deficit -= bDis; }
-    if (haveCar && deficit > 0.02) { cDis = Math.min(deficit, capC); deficit -= cDis; }
-    imp = deficit;
+  if (meas) {
+    const P = pvFlowParts(M);
+    haveBatt = P.hasBatt; battKwh = haveBatt ? 1 : 0;
+    bCh = P.ch / 1000; bDis = P.dis / 1000; imp = P.imp / 1000; exp = P.exp / 1000;
+    gridToBatt = P.gridBatt / 1000;
+  } else {
+    if (surplus > 0.02) {
+      if (haveBatt) { bCh = Math.min(surplus, capB); surplus -= bCh; }
+      if (haveCar && surplus > 0.02) { cCh = Math.min(surplus, capC); surplus -= cCh; }
+      exp = surplus;
+    }
+    if (deficit > 0.02) {
+      if (haveBatt) { bDis = Math.min(deficit, capB); deficit -= bDis; }
+      if (haveCar && deficit > 0.02) { cDis = Math.min(deficit, capC); deficit -= cDis; }
+      imp = deficit;
+    }
   }
 
   const R = 27;
@@ -2961,19 +3009,23 @@ function renderEnergyFlow() {
     seg(79, 135, 123, 135, 'var(--kb-teal)', battActive) +
     seg(221, 135, 177, 135, imp > 0 ? 'var(--kb-blue)' : 'var(--kb-green)', gridActive) +
     (haveCar ? seg(150, 162, 150, 201, 'var(--kb-teal)', cCh > 0.04 || cDis > 0.04) : '') +
-    dots('M150,69 L150,108', 'var(--kb-sun)', directPV + bCh + cCh + exp) +
+    dots('M150,69 L150,108', 'var(--kb-sun)', meas ? pv : directPV + bCh + cCh + exp) +
     (bCh > 0 ? dots('M123,135 L79,135', 'var(--kb-teal)', bCh) : dots('M79,135 L123,135', 'var(--kb-teal)', bDis)) +
     (imp > 0 ? dots('M221,135 L177,135', 'var(--kb-blue)', imp) : dots('M177,135 L221,135', 'var(--kb-green)', exp)) +
     (haveCar ? (cCh > 0 ? dots('M150,162 L150,201', 'var(--kb-teal)', cCh) : dots('M150,201 L150,162', 'var(--kb-teal)', cDis)) : '') +
     // nodes
     node(150, 42, '☀️', havePv && pvActive ? fmt(pv, 1) : (havePv ? '0' : '–'), 'PV kW', !havePv || !pvActive, true) +
-    node(52, 135, '🔋', storeVal(battKwh, bCh, bDis), 'Batterie', !haveBatt) +
+    node(52, 135, '🔋', storeVal(battKwh, bCh, bDis), meas && M.soc != null ? `Batterie ${fmt(M.soc, 0)} %` : 'Batterie', !haveBatt) +
     node(150, 135, '🏠', fmt(load, 1), haveCar ? '' : 'Haus kW') +
     node(248, 135, '⚡', gridVal, 'Netz', !gridActive) +
     (haveCar ? node(150, 228, '🚗', storeVal(inp.carKwh, cCh, cDis), 'E-Auto (V2H)', false) : '') +
     `</svg>` +
     `<div class="k-sub" style="text-align:center;font-size:11px;margin:2px 0 6px">` +
-    `Speicher +laden/−entladen · Netz ↓Bezug/↑Einspeisung · Momentan-Schätzung (${pvE ? pvE.src : 'ohne PV'})</div>`;
+    `Speicher +laden/−entladen · Netz ↓Bezug/↑Einspeisung · ` +
+    (meas ? (STATE.fr.demo ? '<b>Demo-Werte</b> (simulierte Anlage)'
+      : `<b>gemessen</b> (Wechselrichter, ${new Date(STATE.fr.last_poll * 1000).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' })})`) +
+      (gridToBatt > 0.025 ? ` · 🔋 lädt ${fmt(gridToBatt, 2)} kW <b>aus dem Netz</b>` : '')
+      : `Momentan-Schätzung (${pvE ? pvE.src : 'ohne PV'})` + frSilentNote()) + `</div>`;
   el.innerHTML = svg;
 }
 // Top live consumers right now (incl. the air-source heat pump), from the latest
@@ -2981,6 +3033,7 @@ function renderEnergyFlow() {
 function renderKioskLoads() {
   const el = $('kiosk-loads'); if (!el) return;
   const list = [];
+  const M = frLiveNow(), houseW = M && M.load_w != null ? Math.max(0, M.load_w) : null;
   const hp = _kioskHp || (STATE.hpA && STATE.hpA.live);
   if (hp && typeof hp.power_w === 'number' && hp.power_w > 1)
     list.push({ name: 'Luft-Wärmepumpe', w: hp.power_w, icon: '♨️', hp: true });
@@ -3002,7 +3055,8 @@ function renderKioskLoads() {
         `<div class="kl-w">${fmtW(d.w)}</div></div>`;
     }).join('') +
     `<div class="k-sub" style="font-size:11px;margin-top:8px">Summe gemessen jetzt: <b>${fmtW(totalW)}</b>` +
-    `${list.length > 5 ? ` · ${list.length} Verbraucher aktiv` : ''}</div>`;
+    `${list.length > 5 ? ` · ${list.length} Verbraucher aktiv` : ''}` +
+    (houseW != null ? ` · Haus gesamt <b>${fmtW(houseW)}</b> (${STATE.fr.demo ? 'Demo' : 'Smart Meter'})` : '') + `</div>`;
 }
 function paintKiosk() {
   const rooms = _kioskRooms || [];
@@ -3061,6 +3115,7 @@ async function kioskLoadData() {
   // latest sample regardless) – kept separate so the other tabs' 90-day data stays.
   try { const a = await api('/api/analytics?days=2'); if (a && a.live) _kioskLive = a.live; } catch (e) {}
   try { const h = await api('/api/heatpump/analytics?days=2'); if (h && h.live) _kioskHp = h.live; } catch (e) {}
+  try { await loadFronius(true); } catch (e) {}
   paintKiosk();
 }
 function kioskTick() {
@@ -11296,23 +11351,33 @@ function pvFlowParts(f) {
   const pvBatt = Math.min(pv, ch);
   const pvGrid = Math.min(pv - pvBatt, exp);
   const pvHouse = Math.max(0, pv - pvBatt - pvGrid);
-  const gridBatt = Math.max(0, ch - pvBatt);
-  return { pv, load, ch, dis, imp, exp, pvBatt, pvGrid, pvHouse, gridBatt,
-           gridHouse: Math.max(0, imp - gridBatt), battHouse: dis,
+  // charging beyond what the sun delivers comes from the grid (e.g. a GEN24
+  // 'charge boost' at a very low charge level); feed-in beyond the sun's share
+  // comes from the battery
+  const gridBatt = grid != null ? Math.max(0, Math.min(ch - pvBatt, imp)) : 0;
+  const battGrid = Math.max(0, Math.min(dis, exp - pvGrid));
+  const battHouse = Math.max(0, dis - battGrid);
+  // what the house gets from the grid – the rest of the import are the
+  // inverter's conversion losses while it charges the battery
+  let gridHouse = Math.max(0, imp - gridBatt);
+  if (load != null) gridHouse = Math.min(gridHouse, Math.max(0, load - pvHouse - battHouse));
+  return { pv, load, ch, dis, imp, exp, pvBatt, pvGrid, pvHouse, gridBatt, battGrid, gridHouse, battHouse,
            hasBatt: batt != null || (f && f.soc != null), hasMeter: !!(f && f.has_meter) };
 }
 
 function pvFlowSvg(f, hpW) {
   const P = pvFlowParts(f);
   const showHp = hpW != null && P.hasMeter;
-  const H = showHp ? 262 : 204;
-  const node = (x, y, col, icon, l1, l2, anchor) => {
+  const gb = P.hasBatt && P.hasMeter && (P.gridBatt > 25 || P.battGrid > 25);   // grid <-> battery now
+  const H = showHp ? 262 : (gb ? 214 : 204);
+  const node = (x, y, col, icon, l1, l2, anchor, l3) => {
     const tx = anchor === 'start' ? x + 32 : anchor === 'end' ? x - 32 : x;
     const ty = anchor ? y - 3 : y + 42;
     return `<circle cx="${x}" cy="${y}" r="25" fill="var(--card2)" stroke="${col}" stroke-width="2.2"/>` +
       `<text x="${x}" y="${y + 7}" text-anchor="middle" font-size="19">${icon}</text>` +
       `<text x="${tx}" y="${ty}" text-anchor="${anchor || 'middle'}" font-size="13.5" font-weight="700" style="fill:var(--ink)">${l1}</text>` +
-      (l2 ? `<text x="${tx}" y="${ty + 15}" text-anchor="${anchor || 'middle'}" font-size="11" style="fill:var(--muted)">${l2}</text>` : '');
+      (l2 ? `<text x="${tx}" y="${ty + 15}" text-anchor="${anchor || 'middle'}" font-size="11" style="fill:var(--muted)">${l2}</text>` : '') +
+      (l3 ? `<text x="${tx}" y="${ty + 29}" text-anchor="${anchor || 'middle'}" font-size="11" font-weight="700" style="fill:#ff6b8a">${l3}</text>` : '');
   };
   const line = (d, w, col) => {
     const on = w > 25;
@@ -11324,13 +11389,17 @@ function pvFlowSvg(f, hpW) {
   let g = line('M180 66 L180 102', P.pvHouse, COL.heat);
   if (P.hasMeter) g += line('M202 52 Q278 60 294 102', P.pvGrid, COL.heat) + line('M274 128 L206 128', P.gridHouse, '#ff6b8a');
   if (P.hasBatt) g += line('M158 52 Q82 60 66 102', P.pvBatt, COL.heat) + line('M86 128 L154 128', P.battHouse, COL.batt);
+  // grid <-> battery (only drawn while it happens): an arc over the house
+  if (gb) g += P.gridBatt >= P.battGrid ? line('M281 111 Q180 72 79 111', P.gridBatt, '#ff6b8a')
+    : line('M79 111 Q180 72 281 111', P.battGrid, COL.batt);
   if (showHp) g += line('M199 146 Q236 196 276 214', hpW, COL.hp);
   g += node(180, 40, COL.heat, '☀️', kwOrW(P.pv), 'Sonne', 'start');
   g += node(180, 128, COL.sh, '🏠', P.load != null ? kwOrW(P.load) : '–', 'Haus');
   if (P.hasMeter) g += node(300, 128, gridCol, '🔌', P.imp > 25 ? kwOrW(P.imp) : (P.exp > 25 ? kwOrW(P.exp) : '0 W'),
     P.imp > 25 ? 'Bezug' : (P.exp > 25 ? 'Einspeisung' : 'Netz'));
   if (P.hasBatt) g += node(60, 128, COL.batt, '🔋', f.soc != null ? fmt(f.soc, 0) + ' %' : '–',
-    P.ch > 25 ? 'lädt ' + kwOrW(P.ch) : (P.dis > 25 ? 'liefert ' + kwOrW(P.dis) : 'Ruhe'));
+    P.ch > 25 ? 'lädt ' + kwOrW(P.ch) : (P.dis > 25 ? 'liefert ' + kwOrW(P.dis) : 'Ruhe'), undefined,
+    P.gridBatt > 25 ? 'aus dem Netz' : (P.battGrid > 25 ? 'ins Netz' : ''));
   if (showHp) g += node(300, 226, COL.hp, '♨️', kwOrW(hpW), 'Wärmepumpe', 'end');
   return `<svg viewBox="0 0 360 ${H}" style="width:100%;height:auto;max-width:460px;display:block;margin:0 auto" role="img" aria-label="Energiefluss">${g}</svg>`;
 }
@@ -11350,6 +11419,7 @@ function pvTodayKpis(T, L) {
     h += tile(pctOf(d.autarky), 'Autarkie') + tile(pctOf(d.self_rate), 'Eigenverbrauch') +
       tile(kwh(d.exp_kwh, 1), 'eingespeist') + tile(kwh(d.imp_kwh, 1), 'Netzbezug') + tile(money(d.saved_eur), 'gespart heute');
   }
+  if (d.ch_grid_kwh != null && d.ch_grid_kwh >= 0.05) h += tile(kwh(d.ch_grid_kwh, d.ch_grid_kwh < 10 ? 2 : 1), 'Batterie aus dem Netz geladen');
   if (d.hp_sun_share != null) h += tile(pctOf(d.hp_sun_share), 'WP-Strom von der Sonne');
   if (L && L.soc != null) h += tile(fmt(L.soc, 0) + ' %', 'Batterie' + (d.soc_min != null ? ` · heute ${fmt(d.soc_min, 0)}–${fmt(Math.max(d.soc_max, L.soc), 0)} %` : ''));
   return `<div class="pvk">${h}</div>`;
@@ -11359,7 +11429,13 @@ function pvHint(L, F) {
   if (!L) return F && F.error ? `⚠︎ ${esc(F.error)}` : '';
   if (!L.has_meter) return 'Ohne <b>Smart Meter</b> sieht der Wechselrichter nur die <b>Erzeugung</b> – Verbrauch, Einspeisung und Autarkie lassen sich dann nicht zeigen.';
   const P = pvFlowParts(L);
-  if (P.exp > 1500) return `☀️ Gerade gehen <b>${kwOrW(P.exp)}</b> ins Netz – guter Moment für Waschmaschine, Spülmaschine oder das E-Auto.`;
+  if (P.gridBatt > 100) return `🔋 Die Batterie lädt gerade <b>aus dem Netz</b> (${kwOrW(P.gridBatt)})` +
+    (L.battery_mode ? ` – der Wechselrichter meldet „${esc(L.battery_mode)}“` : '') +
+    (L.soc != null && L.soc < 15 ? `. Bei ${fmt(L.soc, 0)} % Ladestand vermutlich eine Schutzladung, damit sie nicht tiefentladen wird` : '') +
+    '. Diesen Strom zahlst du zum Netzpreis.';
+  if (P.battGrid > 300) return `🔋 Die Batterie gibt gerade <b>${kwOrW(P.battGrid)}</b> ins Netz ab` +
+    (L.battery_mode ? ` – der Wechselrichter meldet „${esc(L.battery_mode)}“` : '') + '. Das steuert der Wechselrichter selbst.';
+  if (P.pvGrid > 1500) return `☀️ Gerade gehen <b>${kwOrW(P.pvGrid)}</b> Sonnenstrom ins Netz – guter Moment für Waschmaschine, Spülmaschine oder das E-Auto.`;
   if (P.ch > 800 && (L.soc == null || L.soc < 97)) return `🔋 Der Überschuss lädt gerade die Batterie (${kwOrW(P.ch)}).`;
   if (P.pv < 30 && P.dis > 100) return '🌙 Die Batterie versorgt gerade das Haus.';
   if (P.imp > 1000 && L.soc != null && L.soc <= 10) return `🔌 Batterie leer – ${kwOrW(P.imp)} kommen gerade aus dem Netz.`;
@@ -11409,7 +11485,8 @@ function pvRealDayChart(series) {
     if (!p) return `<b>${hh}</b> – ${i > now ? 'kommt noch' : 'keine Daten'}`;
     const gridTxt = p.grid_w == null ? '' : ` · 🔌 ${p.grid_w >= 0 ? 'Bezug ' + kwOrW(p.grid_w) : 'Einspeisung ' + kwOrW(-p.grid_w)}`;
     return `<b>${hh}</b> · ☀️ ${kwOrW(p.pv_w)}${p.load_w != null ? ' · 🏠 ' + kwOrW(p.load_w) : ''}${gridTxt}` +
-      (p.batt_w != null ? ` · 🔋 ${p.batt_w < 0 ? 'lädt ' + kwOrW(-p.batt_w) : (p.batt_w > 0 ? 'liefert ' + kwOrW(p.batt_w) : 'Ruhe')}` : '') +
+      (p.batt_w != null ? ` · 🔋 ${p.batt_w < 0 ? 'lädt ' + kwOrW(-p.batt_w) +
+        (p.grid_w != null && p.load_w != null && p.grid_w > p.load_w + 25 ? ' aus dem Netz' : '') : (p.batt_w > 0 ? 'liefert ' + kwOrW(p.batt_w) : 'Ruhe')}` : '') +
       (p.soc != null ? ` (${fmt(p.soc, 0)} %)` : '');
   });
   return svg(h, gridLines(h, top, base, pad, max, { step: sc.step, unit: 'kW' }) +
@@ -11501,7 +11578,7 @@ function paintPvHist() {
       .concat(R.has_battery ? [{ key: 'batt', color: COL.batt, label: 'in die Batterie' }] : [])
       .concat([{ key: 'feed', color: COL.heat, label: 'eingespeist' }]);
     $('pvr-daily').innerHTML = stackedBar(items.map(d => ({ label: d.label, full: d.full,
-      values: { direct: d.direct_kwh || 0, batt: d.ch_kwh || 0, feed: d.exp_kwh || 0 } })), sDst, { h: 190, unit });
+      values: { direct: d.direct_kwh || 0, batt: (d.ch_pv_kwh != null ? d.ch_pv_kwh : d.ch_kwh) || 0, feed: d.exp_kwh || 0 } })), sDst, { h: 190, unit });
     $('pvr-daily-legend').innerHTML = legendHtml(sDst.map(s => ({ label: s.label, color: s.color })));
     const sSrc = [{ key: 'sun', color: COL.pv, label: 'eigener Strom (Sonne + Batterie)' }, { key: 'grid', color: '#ff6b8a', label: 'aus dem Netz' }];
     $('pvr-src').innerHTML = stackedBar(items.map(d => ({ label: d.label, full: d.full,
@@ -11565,9 +11642,12 @@ function renderPvDevices() {
     statusRow('Gerät', esc(I.name || 'Fronius') + (I.type && I.type !== I.name ? ' ' + sub(esc(I.type)) : '')),
     statusRow('Zustand', esc(inv.state_de || ((I.inverters || [])[0] || {}).state_de || '–')),
     I.pv_power_w ? statusRow('PV-Leistung installiert', fmt(I.pv_power_w / 1000, 2) + ' kWp') : '',
-    statusRow('AC-Leistung jetzt', kwOrW(inv.pac_w != null ? inv.pac_w : null)),
+    statusRow('AC-Leistung jetzt', inv.pac_w != null && inv.pac_w < -25
+      // negative: the inverter draws from the house grid (charging the battery or its own standby)
+      ? 'bezieht ' + kwOrW(-inv.pac_w) + ' ' + sub(pvFlowParts(L).ch > 25 ? 'aus dem Hausnetz – lädt die Batterie' : 'aus dem Hausnetz (Eigenbedarf)')
+      : kwOrW(inv.pac_w != null ? inv.pac_w : null)),
     inv.uac_v != null ? statusRow('Netzspannung · Frequenz', fmt(inv.uac_v, 1) + ' V · ' + fmt(inv.fac_hz, 2) + ' Hz') : '',
-    inv.total_wh != null ? statusRow('erzeugt seit Inbetriebnahme (AC)', kwh(inv.total_wh / 1000, 0)) : '',
+    inv.total_wh != null ? statusRow('erzeugt seit Inbetriebnahme (AC)', kwh(inv.total_wh / 1000, inv.total_wh < 100000 ? 1 : 0)) : '',
     L.mode_de ? statusRow('Betriebsart', esc(L.mode_de)) : '',
     F.host ? statusRow('Adresse', esc(F.host)) : '',
   ].join('');
@@ -11587,9 +11667,12 @@ function renderPvDevices() {
       B && (B.manufacturer || B.model) ? statusRow('Modell', esc([B.manufacturer, B.model].filter(Boolean).join(' '))) : '',
       B && B.capacity_wh ? statusRow('Kapazität', kwh(B.capacity_wh / 1000, 1)) : '',
       statusRow('Ladestand', L.soc != null ? fmt(L.soc, 0) + ' %' : (B && B.soc != null ? fmt(B.soc, 0) + ' %' : '–')),
-      statusRow('gerade', P.ch > 25 ? 'lädt mit ' + kwOrW(P.ch) : (P.dis > 25 ? 'liefert ' + kwOrW(P.dis) : 'Ruhe')),
+      statusRow('gerade', P.ch > 25 ? 'lädt mit ' + kwOrW(P.ch) + (P.gridBatt > 25 ? ' <b>aus dem Netz</b>' : (P.pvBatt > 25 ? ' von der Sonne' : ''))
+        : (P.dis > 25 ? 'liefert ' + kwOrW(P.dis) + (P.battGrid > 25 ? ' (davon ' + kwOrW(P.battGrid) + ' ins Netz)' : '') : 'Ruhe')),
       B && B.temp_c != null ? statusRow('Zelltemperatur', fmt(B.temp_c, 1) + ' °C') : '',
-      L.battery_mode_de ? statusRow('Zustand', esc(L.battery_mode_de)) : '',
+      B && B.u_v != null ? statusRow('Spannung · Strom', fmt(B.u_v, 0) + ' V' + (B.i_a != null ? ' · ' + fmt(Math.abs(B.i_a), 2) + ' A' : '')) : '',
+      L.battery_mode ? statusRow('Modus (Wechselrichter)', esc(L.battery_mode_de || L.battery_mode) +
+        (L.battery_mode_de && L.battery_mode_de.toLowerCase() !== String(L.battery_mode).toLowerCase() ? ' ' + sub('„' + esc(L.battery_mode) + '“') : '')) : '',
     ].join('');
   }
   (D.meters || []).forEach(m => {
@@ -11600,8 +11683,18 @@ function renderPvDevices() {
       pw != null ? statusRow('jetzt', m.location === 'grid' ? (pw >= 0 ? 'Bezug ' + kwOrW(pw) : 'Einspeisung ' + kwOrW(-pw)) : kwOrW(pw)) : '',
       m.location === 'grid' && m.import_wh != null ? statusRow('Zählerstand Bezug', kwh(m.import_wh / 1000, 1)) : '',
       m.location === 'grid' && m.export_wh != null ? statusRow('Zählerstand Einspeisung', kwh(m.export_wh / 1000, 1)) : '',
-      (m.phases || []).length ? statusRow('Phasen', m.phases.map(p => `L${p.n}: ${kwOrW(p.p_w)}${p.u_v != null ? ' · ' + fmt(p.u_v, 0) + ' V' : ''}`).join('<br>')) : '',
+      m.freq_hz != null ? statusRow('Netzfrequenz', fmt(m.freq_hz, 2) + ' Hz') : '',
     ].join('');
+    const ph = m.phases || [];
+    if (ph.length) {
+      const hasPf = ph.some(p => p.pf != null);
+      h += `<table class="pvt" style="margin-top:6px"><tr><th>Phase</th><th>Leistung</th><th>Strom</th><th>Spannung</th>${hasPf ? '<th>cos φ</th>' : ''}</tr>` +
+        ph.map(p => `<tr><td>L${p.n}</td><td>${kwOrW(p.p_w)}</td><td>${p.i_a != null ? fmt(p.i_a, 1) + ' A' : '–'}</td>` +
+          `<td>${p.u_v != null ? fmt(p.u_v, 0) + ' V' : '–'}</td>${hasPf ? `<td>${p.pf != null ? fmt(Math.abs(p.pf), 2) : '–'}</td>` : ''}</tr>`).join('') + '</table>' +
+        `<div class="note" style="margin-top:6px">${m.location === 'grid' ? 'Leistung je Phase: + Bezug, − Einspeisung. ' : ''}` +
+        (hasPf ? 'cos φ = wie viel der Leistung tatsächlich genutzt wird (1 = alles); Blindleistung wird Haushalten nicht berechnet. ' : '') +
+        'Spannung im Netz: 230 V ± 10 %.</div>';
+    }
   });
   (D.ohmpilots || []).forEach(o => {
     h += H('♨️ Ohmpilot') + statusRow('Leistung', kwOrW(o.p_w)) + (o.temp_c != null ? statusRow('Temperatur', fmt(o.temp_c, 1) + ' °C') : '');
@@ -11671,6 +11764,7 @@ async function loadFronius(force) {
   finally { _frBusy = false; }
   // the heat-pump card shows the solar share too (redrawn when its tab is open)
   paintViews(['renderFlow', 'renderPvReal', 'renderFroniusSetup', 'renderHeatpump']);
+  if (kioskOpen()) { try { paintKiosk(); } catch (e) {} }
 }
 
 async function frRefreshHealth() {
@@ -11845,11 +11939,11 @@ function initPvReal() {
     fcp.textContent = ok ? '✅ Kopiert' : 'Bitte Text markieren und kopieren';
     setTimeout(() => { fcp.textContent = '📋 Kopieren'; }, 2500);
   });
-  // live values every 10 s while the Übersicht or the PV tab is on screen
+  // live values every 10 s while the Übersicht, the PV tab or the dashboard is on screen
   setInterval(() => {
     const h = STATE.health;
     if (!h || !h.fronius_connected || document.visibilityState !== 'visible') return;
-    if (['overview', 'pv'].includes(activeView())) loadFronius();
+    if (kioskOpen() || ['overview', 'pv'].includes(activeView())) loadFronius();
   }, 10000);
 }
 

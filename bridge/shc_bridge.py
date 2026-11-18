@@ -1120,12 +1120,15 @@ class Store:
         """Like pv_rows, but averaged over ``bucket`` seconds by SQLite (for long
         ranges). Columns: PV_COLS order (ts = last row of the bucket, n = rows in
         it) + the separate means of import, export, charge and discharge – so the
-        energies stay exact even when the grid flips direction inside a bucket."""
+        energies stay exact even when the grid flips direction inside a bucket –
+        and of the battery's charging from the grid (see compute_pv)."""
         with self.lock:
             cur = self.conn.execute(
                 "SELECT MAX(ts), COUNT(*), AVG(pv_w), AVG(grid_w), AVG(load_w), AVG(batt_w), AVG(soc),"
                 " AVG(inv_w), MAX(e_total_wh), MAX(imp_wh), MAX(exp_wh), AVG(mpp1_w), AVG(mpp2_w),"
-                " AVG(MAX(grid_w, 0)), AVG(MAX(-grid_w, 0)), AVG(MAX(-batt_w, 0)), AVG(MAX(batt_w, 0))"
+                " AVG(MAX(grid_w, 0)), AVG(MAX(-grid_w, 0)), AVG(MAX(-batt_w, 0)), AVG(MAX(batt_w, 0)),"
+                " AVG(CASE WHEN batt_w < 0 AND grid_w > load_w THEN MIN(grid_w - load_w, -batt_w * 1.25)"
+                " ELSE 0 END)"
                 " FROM pv_samples WHERE ts>=? AND ts<? GROUP BY (ts - 1) / ? ORDER BY 1",
                 (since_ts, until_ts, bucket))
             return [tuple(r) for r in cur.fetchall()]
@@ -8062,7 +8065,7 @@ _PV_I = {c: i for i, c in enumerate(Store.PV_COLS)}
 
 
 def _pv_day_acc(day: str) -> dict:
-    return {"day": day, "pv": 0.0, "load": 0.0, "imp_i": 0.0, "exp_i": 0.0, "ch": 0.0, "dis": 0.0,
+    return {"day": day, "pv": 0.0, "load": 0.0, "imp_i": 0.0, "exp_i": 0.0, "ch": 0.0, "dis": 0.0, "gch": 0.0,
             "mpp1": 0.0, "mpp2": 0.0, "cov": 0.0, "gap": 0.0, "has_load": False, "has_batt": False,
             "imp_c": 0.0, "exp_c": 0.0, "cnt_rows": 0, "rows": 0, "cnt_bad": False,
             "soc_min": None, "soc_max": None, "peak": 0.0, "hp": 0.0, "hp_sun": 0.0, "hp_cov": 0.0}
@@ -8083,13 +8086,17 @@ def _pv_day_result(a: dict, price: float, feedin: float) -> dict:
            "cov_h": round(a["cov"] / 3600.0, 2), "gap_h": round(a["gap"] / 3600.0, 2),
            "soc_min": a["soc_min"], "soc_max": a["soc_max"],
            "ch_kwh": k(a["ch"]) if a["has_batt"] else None, "dis_kwh": k(a["dis"]) if a["has_batt"] else None,
+           # battery charged from the grid (AC, incl. conversion losses) vs from the sun
+           "ch_grid_kwh": k(a["gch"]) if a["has_batt"] else None,
+           "ch_pv_kwh": k(max(0.0, a["ch"] - a["gch"])) if a["has_batt"] else None,
            "mpp1_kwh": k(a["mpp1"]), "mpp2_kwh": k(a["mpp2"])}
     if a["has_load"]:
         load = a["load"]
         self_wh = max(0.0, a["pv"] - exp)
         avoided = max(0.0, load - imp)
         out.update({"load_kwh": k(load), "imp_kwh": k(imp), "exp_kwh": k(exp), "grid_src": src,
-                    "self_kwh": k(self_wh), "direct_kwh": k(max(0.0, a["pv"] - exp - a["ch"])),
+                    "self_kwh": k(self_wh),
+                    "direct_kwh": k(max(0.0, a["pv"] - exp - max(0.0, a["ch"] - a["gch"]))),
                     "self_rate": round(self_wh / a["pv"], 3) if a["pv"] > 50 else None,
                     "autarky": round(avoided / load, 3) if load > 50 else None,
                     "saved_eur": round(avoided / 1000.0 * price + exp / 1000.0 * feedin, 2)})
@@ -8137,7 +8144,9 @@ def compute_pv(store: "Store", days: int = 30, price: float = 0.35, feedin: floa
     has_load = has_batt = has_mpp2 = False
     for r in rows:
         ts = r[0]
-        dt = ts - last[0] if last else step
+        # the very first row has no predecessor: it stands for one stored step –
+        # or, bucketed, for all the rows SQLite averaged into it
+        dt = ts - last[0] if last else (r[1] * step if bucketed else step)
         if dt <= 0:
             continue
         if bucketed:                               # n rows of `step` seconds each
@@ -8174,9 +8183,16 @@ def compute_pv(store: "Store", days: int = 30, price: float = 0.35, feedin: floa
             if bucketed:
                 a["ch"] += (r[15] or 0.0) * h
                 a["dis"] += (r[16] or 0.0) * h
+                a["gch"] += (r[17] or 0.0) * h
             else:
-                a["ch"] += max(0.0, -batt) * h
+                ch_w = max(0.0, -batt)
+                a["ch"] += ch_w * h
                 a["dis"] += max(0.0, batt) * h
+                # import beyond the house's own consumption can only go into the
+                # battery (plus conversion losses): it is being charged from the
+                # grid – e.g. a GEN24 'charge boost' at a very low charge level
+                if ch_w > 0 and grid is not None and load is not None and grid > load:
+                    a["gch"] += min(grid - load, ch_w * 1.25) * h
         if soc is not None:
             a["soc_min"] = soc if a["soc_min"] is None else min(a["soc_min"], soc)
             a["soc_max"] = soc if a["soc_max"] is None else max(a["soc_max"], soc)
@@ -8264,7 +8280,8 @@ def compute_pv(store: "Store", days: int = 30, price: float = 0.35, feedin: floa
 
     def total(items):
         t = {"pv_kwh": 0.0, "load_kwh": 0.0, "imp_kwh": 0.0, "exp_kwh": 0.0, "self_kwh": 0.0,
-             "direct_kwh": 0.0, "ch_kwh": 0.0, "dis_kwh": 0.0, "saved_eur": 0.0, "hp_kwh": 0.0,
+             "direct_kwh": 0.0, "ch_kwh": 0.0, "dis_kwh": 0.0, "ch_grid_kwh": 0.0, "ch_pv_kwh": 0.0,
+             "saved_eur": 0.0, "hp_kwh": 0.0,
              "hp_sun_kwh": 0.0, "mpp1_kwh": 0.0, "mpp2_kwh": 0.0, "gap_h": 0.0, "days": len(items)}
         for x in items:
             for kk in t:
@@ -8281,7 +8298,7 @@ def compute_pv(store: "Store", days: int = 30, price: float = 0.35, feedin: floa
             for kk in ("load_kwh", "imp_kwh", "exp_kwh", "self_kwh", "direct_kwh", "saved_eur"):
                 t[kk] = None
         if not has_batt:
-            t["ch_kwh"] = t["dis_kwh"] = None
+            t["ch_kwh"] = t["dis_kwh"] = t["ch_grid_kwh"] = t["ch_pv_kwh"] = None
         return t
 
     monthly = []
