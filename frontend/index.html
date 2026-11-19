@@ -169,6 +169,25 @@
   table.pvt{width:100%; border-collapse:collapse; font-size:12.5px}
   table.pvt td, table.pvt th{padding:5px 4px; text-align:right; border-bottom:1px solid var(--line)}
   table.pvt th{color:var(--muted); font-weight:600} table.pvt td:first-child, table.pvt th:first-child{text-align:left}
+  /* verdict lists (string comparison, plausibility check) */
+  .vlist{display:flex; flex-direction:column; gap:9px}
+  .vrow{display:flex; gap:10px; align-items:flex-start; font-size:13px; line-height:1.45}
+  .vrow .vi{flex:0 0 22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center;
+    font-size:12px; font-weight:800; margin-top:1px}
+  .vrow.v-ok .vi{background:rgba(75,224,176,.16); color:#4be0b0}
+  .vrow.v-info .vi{background:rgba(77,163,255,.16); color:#4da3ff}
+  .vrow.v-warn .vi{background:rgba(255,182,77,.18); color:#ffb64d}
+  .vrow .vt{flex:1; min-width:0} .vrow .vt small{display:block; color:var(--muted); font-size:12px; margin-top:1px}
+  .strbar{display:grid; grid-template-columns:auto 1fr auto; gap:4px 10px; align-items:center; font-size:13px}
+  .strbar .bar{height:10px; border-radius:6px; background:var(--card2); overflow:hidden}
+  .strbar .bar i{display:block; height:100%; border-radius:6px}
+  .strbar .num{text-align:right; font-weight:650; white-space:nowrap}
+  .strbar .sub{grid-column:2 / 4; margin:-2px 0 4px; color:var(--muted); font-size:11.5px}
+  .strform{display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px}
+  .strform fieldset{border:1px solid var(--line); border-radius:12px; padding:8px 10px; margin:0; min-width:0}
+  .strform legend{font-size:12px; font-weight:700; padding:0 4px}
+  .strform label{display:block; font-size:11.5px; color:var(--muted); margin-top:6px}
+  .strform input, .strform select{padding:7px 8px; border-radius:9px; font-size:14px; margin-top:2px}
   /* sub-tab bar inside a view (e.g. Wärme split into clusters) */
   .subnav{display:flex; gap:6px; overflow-x:auto; padding:2px 0 12px; -webkit-overflow-scrolling:touch; scrollbar-width:none}
   .subnav::-webkit-scrollbar{display:none}
@@ -1091,6 +1110,32 @@
       <div class="legend" id="pvr-typ-legend"></div>
       <div id="pvr-months" style="margin-top:12px"></div>
       <div class="note" id="pvr-hist-note" style="margin-top:8px"></div>
+    </div>
+    <div class="card" id="pvr-str-card" hidden>
+      <h2><span class="info" data-info="pv-str" role="button" aria-label="Info">i</span>🧵 String-Vergleich <span class="r" id="pvr-str-head"></span></h2>
+      <div id="pvr-str-live"></div>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:14px">
+        <h2 style="font-size:14px;margin:0;flex:1">Heute im Tagesverlauf</h2>
+        <div class="seg" id="pvr-str-norm" style="padding:3px" hidden>
+          <button data-n="0" class="on" style="padding:4px 10px;white-space:nowrap">kW</button>
+          <button data-n="1" style="padding:4px 10px;white-space:nowrap">je kWp</button>
+        </div>
+      </div>
+      <div id="pvr-str-day"></div>
+      <div class="legend" id="pvr-str-day-legend"></div>
+      <h2 style="font-size:14px;margin-top:14px" id="pvr-str-daily-h">Tageswerte im Zeitraum</h2>
+      <div id="pvr-str-daily"></div>
+      <div class="legend" id="pvr-str-daily-legend"></div>
+      <div id="pvr-str-table" style="margin-top:10px"></div>
+      <div id="pvr-str-verdict" style="margin-top:12px"></div>
+      <details id="pvr-str-cfg" style="margin-top:12px">
+        <summary style="cursor:pointer;font-weight:600;font-size:13px">✏️ Strings beschreiben (optional – Name, Module, kWp, Ausrichtung)</summary>
+        <div id="pvr-str-form" style="margin-top:10px"></div>
+      </details>
+    </div>
+    <div class="card" id="pvr-chk-card" hidden>
+      <h2><span class="info" data-info="pv-chk" role="button" aria-label="Info">i</span>🔎 Plausibilitätsprüfung <span class="r" id="pvr-chk-head"></span></h2>
+      <div id="pvr-chk"></div>
     </div>
     <div class="card" id="pvr-dev-card" hidden>
       <h2><span class="info" data-info="pv-dev" role="button" aria-label="Info">i</span>🔧 Wechselrichter, Speicher &amp; Zähler <span class="r" id="pvr-dev-head"></span></h2>

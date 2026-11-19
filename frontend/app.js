@@ -94,8 +94,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v202';   // short tag shown always-on in the header
-const APP_VERSION = 'v202 · 2026-11-19 · HomeCom-/AEG-Anmeldung geht nicht mehr verloren: Ursache war eine zweite Bridge (z. B. update-macos.command, während die alte noch lief) – sie erneuerte den einmal gültigen Bosch-Token und beendete sich erst danach; die alte arbeitete mit dem verbrauchten Token weiter, Bosch sperrte die Anmeldung. Jetzt: nur eine Bridge pro Konfiguration (die zweite beendet sich vorher mit Hinweis), Port zuerst belegen, Start-/Update-Skripte beenden die alte Bridge sauber, beim Beenden und beim Neustart nach Updates wird eine laufende Token-Erneuerung abgewartet, config.json wird atomar geschrieben, der Demo-Modus fasst echte Zugänge nicht an. Einmal im Setup neu verbinden. ' +
+const APP_BUILD = 'v203';   // short tag shown always-on in the header
+const APP_VERSION = 'v203 · 2026-11-19 · PV geprüft und erweitert: Neue Karte „🧵 String-Vergleich“ im Tab PV – beide Strings jetzt (Leistung, Spannung, Strom, Anteil), heute als Kurven (umschaltbar auf je kWp), Tages-/Monatswerte, Tabelle mit kWh je kWp, Spitze, „erzeugt im Mittel um“ (Ost früher, West später) und Spannung im Betrieb, dazu eine Bewertung: String liefert nichts, Summe = PV, gleiche Tageszeit/Ausrichtung, Vergleich je kWp, Trend des Verhältnisses, Spannungssprung (Modul/Bypass-Diode). Name, Module, kWp und Ausrichtung je String lassen sich eintragen; sonst schätzt die App die kWp aus den Spannungen. Neue Karte „🔎 Plausibilitätsprüfung“: Datenlage, Strings = PV, Energiebilanz mit Umwandlungsverlusten, Zählerstände gegen Messwerte, Batterie-Wirkungsgrad, Zähler des Wechselrichters (E-Total), Spitzenleistung. Behoben: Strings werden nach Tracker-Nummer gespeichert (ein leerer Platz verschiebt MPP 2 nicht mehr auf MPP 1), die String-Spannungen werden mitgespeichert; die Monatserwartung zählt einen angefangenen Tag nur mit den erfassten Sonnenstunden (und nutzt die Ausrichtung der Strings, wenn eingetragen); „Woher kam dein Strom?“ zeigt Netzbezug für die Batterie nicht mehr als Hausverbrauch; die erste Viertelstunde nach dem Verbinden fehlte bei Zeiträumen über 31 Tage im Zählerstand. ' +
+  'v202 · 2026-11-19 · HomeCom-/AEG-Anmeldung geht nicht mehr verloren: Ursache war eine zweite Bridge (z. B. update-macos.command, während die alte noch lief) – sie erneuerte den einmal gültigen Bosch-Token und beendete sich erst danach; die alte arbeitete mit dem verbrauchten Token weiter, Bosch sperrte die Anmeldung. Jetzt: nur eine Bridge pro Konfiguration (die zweite beendet sich vorher mit Hinweis), Port zuerst belegen, Start-/Update-Skripte beenden die alte Bridge sauber, beim Beenden und beim Neustart nach Updates wird eine laufende Token-Erneuerung abgewartet, config.json wird atomar geschrieben, der Demo-Modus fasst echte Zugänge nicht an. Einmal im Setup neu verbinden. ' +
   'v201 · 2026-11-18 · Stundenplan im Wohn-Dashboard: Setup → „🎒 Stundenplan“ (eine Zeile je Stunde: Zeit | Mo | Di | Mi | Do | Fr, „-“ = frei, mit Vorschau). Das Dashboard zeigt den heutigen bzw. nächsten Schultag mit laufender Stunde und Schulschluss; Hinweise „Morgen Sport – Sportsachen einpacken“ (ab 16 Uhr), „Heute Sport“ am Morgen und „Schule aus um …“ 30 Minuten vorher. Feiertage in NRW werden erkannt, Ferien über einen ganztägigen Kalendertermin mit „Ferien“/„schulfrei“. Der Plan liegt wie die übrigen Einstellungen in der Bridge. ' +
   'v200 · 2026-11-18 · Setup → „🖥️ Wohn-Dashboard“: einstellbar, ab wie vielen Sekunden der Fenster-Hinweis blinkt (Standard 600 s = 10 min, zum Testen z. B. 1 s) und wie viele Abende vorher der Tonnen-Hinweis erscheint (Standard 1; bei 2 z. B. „Übermorgen: Papiertonne“ ab 16 Uhr). Gilt für alle Geräte – ein laufendes Dashboard übernimmt die Werte innerhalb einer Minute. Bei offenem Fenster schaut das Dashboard alle 20 s nach (sonst jede Minute); kurze Zeiten stehen als Sekunden da. ' +
   'v199 · 2026-11-18 · Müllabfuhr der AWB Köln: Setup → „🗑️ Müllabfuhr (AWB Köln)“ → Straße und Hausnummer suchen, Adresse antippen. Die Abfuhrtermine (Rest-, Bio-, Papier-, Wertstofftonne …) erscheinen im Wohn-Dashboard bei den Terminen und als Hinweis am Vorabend ab 16 Uhr bzw. am Morgen („Morgen: Biotonne + Papiertonne“). Die Adresse bleibt lokal in der Bridge. AWB hat dafür keine offizielle Schnittstelle – die App nutzt dieselbe Abfrage wie der Abfuhrkalender auf awbkoeln.de. ' +
@@ -318,6 +319,17 @@ const INFO = {
   'pv-hist': () => 'Tageswerte aus den gespeicherten Minutenwerten der Bridge. <b>Bezug und Einspeisung</b> kommen aus den ' +
     'Zählerständen des Smart Meters (exakt), an Tagen mit Datenlücke aus den Messwerten. Die Spalte <b>Erwartung</b> rechnet ' +
     'mit dem Jahresertrag aus dem PV-Planer (bzw. PVGIS) – ein Durchschnittsjahr, das Wetter schwankt um ±15 %.',
+  'pv-str': () => 'Jeder <b>String</b> (Modulreihe an einem MPP-Eingang des Wechselrichters) wird einmal pro Minute mit ' +
+    'Spannung, Strom und Leistung gespeichert. <b>Je kWp</b> macht unterschiedlich große Strings vergleichbar – die kWp je String ' +
+    'kannst du eintragen; sonst schätzt die App sie aus den Spannungen (gleiche Module vorausgesetzt: die Spannung wächst mit der Zahl ' +
+    'der Module in Reihe). <b>Erzeugt im Mittel um</b> zeigt die Ausrichtung: Ost liefert früher, West später. Auffällig wird es, ' +
+    'wenn ein String plötzlich weniger liefert als sonst im Verhältnis zum anderen (neue Verschattung, Schnee, Defekt) oder seine ' +
+    'Spannung im Verhältnis sinkt (ein Modul oder eine Bypass-Diode fällt aus) – das Wetter wirkt auf beide Strings gleich.',
+  'pv-chk': () => 'Prüft, ob die gespeicherten Zahlen zueinander passen: <b>Datenlage</b> (Lücken), <b>Strings</b> = PV-Erzeugung, ' +
+    '<b>Energiebilanz</b> (Sonne + Batterie + Netz hinein = Haus + Batterie + Netz heraus + Umwandlungsverluste), <b>Zählerstände</b> ' +
+    'des Smart Meters gegen die aufsummierten Leistungswerte, <b>Batterie</b> (geladen gegen entladen, um den Ladestand bereinigt), den ' +
+    '<b>Zähler des Wechselrichters</b> (E-Total) und die <b>Spitzenleistung</b> gegen die installierte Leistung. Grün = plausibel, ' +
+    'blau = Hinweis, gelb = auffällig.',
   'pv-dev': () => 'Was der Wechselrichter über sich meldet: Zustand, installierte PV-Leistung, je <b>String</b> (MPP-Tracker) ' +
     'Spannung, Strom und Leistung, die <b>Batterie</b> und den <b>Smart Meter</b> mit Zählerständen und Phasen. Einmal pro ' +
     'Minute aktualisiert.',
@@ -1672,7 +1684,7 @@ function stackedBar(rows, series, opts = {}) {
 function _seriesTip(r, series, opts) {
   const parts = series.map(s => {
     const name = s.label || SERIES_LABEL[s.key] || s.key;
-    return `<span style="color:${s.color}">●</span> ${esc(name)} <b>${fmt(r.values[s.key] || 0, 1)}${opts.unit ? (' ' + esc(opts.unit)) : ''}</b>`;
+    return `<span style="color:${s.color}">●</span> ${esc(name)} <b>${fmt(r.values[s.key] || 0, opts.dec != null ? opts.dec : 1)}${opts.unit ? (' ' + esc(opts.unit)) : ''}</b>`;
   });
   return `<b>${esc(r.full || r.label || '')}</b><div class="note" style="margin-top:2px">${parts.join(' · ')}</div>`;
 }
@@ -11992,7 +12004,10 @@ function renderPvReal() {
   const F = STATE.fr, card = $('pvr-card'); if (!card) return;
   const on = !!(F && F.connected);
   ['pvr-card', 'pvr-hist-card', 'pvr-dev-card'].forEach(id => { const c = $(id); if (c) c.hidden = !on; });
-  if (!on) { const pr = $('pv-plan-real'); if (pr) pr.hidden = true; return; }
+  if (!on) {
+    ['pvr-str-card', 'pvr-chk-card'].forEach(id => { const c = $(id); if (c) c.hidden = true; });
+    const pr = $('pv-plan-real'); if (pr) pr.hidden = true; return;
+  }
   $('pvr-head').innerHTML = pvStatusTag(F);
   $('pvr-flow').innerHTML = F.live ? pvFlowSvg(F.live, hpLiveW())
     : `<div class="note">${F.error ? '⚠︎ ' + esc(F.error) : 'Warte auf die erste Messung des Wechselrichters …'}</div>`;
@@ -12007,6 +12022,7 @@ function renderPvReal() {
   $('pvr-note').innerHTML = [pvHint(F.live, F),
     since ? `Gespeichert seit ${new Date(since * 1000).toLocaleDateString('de-DE')} (Minutenwerte; ${F.demo ? 'Demo-Daten' : 'der Wechselrichter selbst liefert keine abrufbare Historie'}).` : ''].filter(Boolean).join('<br>');
   renderPvDevices();
+  renderPvStrings();
   if (!STATE.pv || STATE.pv.days !== STATE.pvDays || Date.now() - (STATE.pvAt || 0) > 120000) loadPvHist();
   else paintPvHist();
 }
@@ -12031,6 +12047,7 @@ function paintPvHist() {
     kp.innerHTML = '<div class="note">Im Zeitraum gibt es noch keine gespeicherten Werte – die Bridge speichert ab der Verbindung jede Minute einen Wert.</div>';
     ids.forEach(id => { const e = $(id); if (e) e.innerHTML = ''; });
     $('pvr-hist-head').textContent = '';
+    renderPvStrings(); renderPvChecks();
     return;
   }
   const T = R.totals, meter = R.has_meter;
@@ -12058,7 +12075,8 @@ function paintPvHist() {
     $('pvr-daily-legend').innerHTML = legendHtml(sDst.map(s => ({ label: s.label, color: s.color })));
     const sSrc = [{ key: 'sun', color: COL.pv, label: 'eigener Strom (Sonne + Batterie)' }, { key: 'grid', color: '#ff6b8a', label: 'aus dem Netz' }];
     $('pvr-src').innerHTML = stackedBar(items.map(d => ({ label: d.label, full: d.full,
-      values: { sun: Math.max(0, (d.load_kwh || 0) - (d.imp_kwh || 0)), grid: d.imp_kwh || 0 } })), sSrc, { h: 190, unit });
+      // import beyond the consumption went into the battery (grid charging) – not into the house
+      values: { sun: Math.max(0, (d.load_kwh || 0) - (d.imp_kwh || 0)), grid: Math.min(d.imp_kwh || 0, d.load_kwh || 0) } })), sSrc, { h: 190, unit });
     $('pvr-src-legend').innerHTML = legendHtml(sSrc.map(s => ({ label: s.label, color: s.color })));
   } else {
     const sPv = [{ key: 'pv', color: COL.heat, label: 'PV-Erzeugung' }];
@@ -12072,14 +12090,21 @@ function paintPvHist() {
   $('pvr-typ-legend').innerHTML = legendHtml([{ label: 'PV (kW, Ø je Stunde)', color: COL.heat }]
     .concat(meter ? [{ label: 'Verbrauch (kW)', color: COL.sh }, { label: 'direkt gedeckt', color: COL.pv }] : []));
   // months, with the expected yield from the planner / PVGIS where known
-  const spec = parseFloat(($('pv-orient') || {}).value) || 0;
+  // yearly yield per kWp: from the orientation of the strings when both are
+  // entered (more exact for e.g. south-east + west), else from the planner / PVGIS
+  const sCfg = pvStrCfg(), sK = pvStrKwp(sCfg, R.strings, F);
+  const fromStr = !!(sK && sCfg[0].az && sCfg[1].az);
+  const spec = fromStr ? (sK.k[0] * PV_AZ_SPEC[sCfg[0].az] + sK.k[1] * PV_AZ_SPEC[sCfg[1].az]) / (sK.k[0] + sK.k[1])
+    : parseFloat(($('pv-orient') || {}).value) || 0;
   const kwpReal = F.identity && F.identity.pv_power_w ? F.identity.pv_power_w / 1000 : (parseFloat(($('pv-kwp') || {}).value) || 0);
   const shape = pvMonth();
   const exp = m => {
     if (!spec || !kwpReal) return null;
     const y = +m.month.slice(0, 4), mo = +m.month.slice(5, 7);
     const dim = new Date(y, mo, 0).getDate();
-    const cov = R.daily.filter(d => d.day.startsWith(m.month)).length;
+    // complete days with data, weighted by the sun hours they cover (a day
+    // that starts at 22:00 counts ~0, not as a whole day)
+    const cov = m.pv_days != null ? m.pv_days : R.daily.filter(d => d.day.startsWith(m.month)).length;
     return spec * kwpReal * shape[mo - 1] * cov / dim;
   };
   const showExp = spec && kwpReal;
@@ -12101,15 +12126,20 @@ function paintPvHist() {
       `(Strompreis aus dem Setup, Vergütung aus dem PV-Planer – <a href="#" data-pvr-feed="1" style="color:var(--accent)">ändern</a>).` : '',
     meter ? 'Bezug und Einspeisung stammen aus den <b>Zählerständen des Smart Meters</b> (exakt); Tage mit Datenlücke aus den Messwerten.' : '',
     gaps ? `⚠︎ ${gaps} Tag(e) mit Datenlücke (Bridge oder Wechselrichter nicht erreichbar) – deren Werte sind unvollständig.` : '',
-    showExp ? `<b>Erwartung</b> = ${fmt(spec, 0)} kWh/kWp (Planer${$('pv-orient') && $('pv-orient').selectedOptions[0] && $('pv-orient').selectedOptions[0].dataset.pvgis ? ', PVGIS' : ''}) × ${fmt(kwpReal, 2)} kWp × Monatsanteil, auf die Tage mit Daten gerechnet – das Wetter schwankt von Jahr zu Jahr um ±15 %.` : '',
+    showExp ? `<b>Erwartung</b> = ${fmt(spec, 0)} kWh/kWp (` +
+      (fromStr ? 'aus der Ausrichtung der Strings: ' + [0, 1].map(i => `${PV_AZ_LABEL[sCfg[i].az]} ${fmt(sK.k[i], 1)} kWp × ${PV_AZ_SPEC[sCfg[i].az]}`).join(', ')
+        : 'Planer' + ($('pv-orient') && $('pv-orient').selectedOptions[0] && $('pv-orient').selectedOptions[0].dataset.pvgis ? ', PVGIS' : '')) +
+      `) × ${fmt(kwpReal, 2)} kWp × Monatsanteil, auf die erfassten Sonnenstunden gerechnet (ein angefangener Tag zählt anteilig) – das Wetter schwankt von Jahr zu Jahr um ±15 %.` : '',
     T.hp_sun_share != null ? '<b>WP-Strom von der Sonne</b>: der Wärmepumpe wird je 5 Minuten derselbe Anteil Sonnen- bzw. Batteriestrom zugeordnet wie dem ganzen Haus (anteilige Rechnung).' : '',
   ].filter(Boolean).join('<br>');
+  renderPvStrings();
+  renderPvChecks();
 }
 
 function renderPvDevices() {
   const F = STATE.fr, body = $('pvr-dev'); if (!body || !F) return;
   const I = F.identity || {}, D = F.details || {}, L = F.live || {};
-  const inv = (D.inverters || {})['1'] || {};
+  const inv = pvInv1(F);
   const sub = t => `<small style="color:var(--muted)">${t}</small>`;
   const H = t => `<h2 style="font-size:14px;margin:14px 0 6px">${t}</h2>`;
   const stTxt = inv.state_de || ((I.inverters || [])[0] || {}).state_de;
@@ -12123,7 +12153,7 @@ function renderPvDevices() {
       ? 'bezieht ' + kwOrW(-inv.pac_w) + ' ' + sub(pvFlowParts(L).ch > 25 ? 'aus dem Hausnetz – lädt die Batterie' : 'aus dem Hausnetz (Eigenbedarf)')
       : kwOrW(inv.pac_w != null ? inv.pac_w : null)),
     inv.uac_v != null ? statusRow('Netzspannung · Frequenz', fmt(inv.uac_v, 1) + ' V · ' + fmt(inv.fac_hz, 2) + ' Hz') : '',
-    inv.total_wh != null ? statusRow('erzeugt seit Inbetriebnahme (AC)', kwh(inv.total_wh / 1000, inv.total_wh < 100000 ? 1 : 0)) : '',
+    inv.total_wh != null ? statusRow('AC-Abgabe seit Inbetriebnahme ' + sub('Zähler E-Total'), kwh(inv.total_wh / 1000, inv.total_wh < 100000 ? 1 : 0)) : '',
     L.mode_de ? statusRow('Betriebsart', esc(L.mode_de)) : '',
     F.host ? statusRow('Adresse', esc(F.host)) : '',
   ].join('');
@@ -12132,9 +12162,10 @@ function renderPvDevices() {
     const td = F.today && F.today.strings;
     const kwhToday = [td && td.today_mpp1_kwh, td && td.today_mpp2_kwh];
     h += H('🧵 Strings (MPP-Tracker)') + `<table class="pvt"><tr><th>String</th><th>Spannung</th><th>Strom</th><th>Leistung</th><th>heute</th></tr>` +
-      st.map((s, i) => `<tr><td>${s.n}</td><td>${s.u_v != null ? fmt(s.u_v, 0) + ' V' : '–'}</td><td>${s.i_a != null ? fmt(s.i_a, 2) + ' A' : '–'}</td>` +
-        `<td>${kwOrW(s.p_w)}</td><td>${kwhToday[i] != null ? kwh(kwhToday[i], 1) : '–'}</td></tr>`).join('') + '</table>' +
-      (st.length > 1 ? `<div class="note" style="margin-top:6px">Gleich große, gleich ausgerichtete Strings sollten ähnlich viel liefern. Sind sie unterschiedlich belegt oder ausgerichtet (z. B. Ost/West), ist ein Unterschied normal${STATE.pv && STATE.pv.strings && STATE.pv.strings.ratio != null ? ` – im Zeitraum lieferte String 2 ${fmt(STATE.pv.strings.ratio * 100, 0)} % von String 1` : ''}.</div>` : '');
+      // by tracker number: an empty slot is left out, so the list index is not the tracker
+      st.map(s => `<tr><td>${s.n}</td><td>${s.u_v != null ? fmt(s.u_v, 0) + ' V' : '–'}</td><td>${s.i_a != null ? fmt(s.i_a, 2) + ' A' : '–'}</td>` +
+        `<td>${kwOrW(s.p_w)}</td><td>${kwhToday[s.n - 1] != null ? kwh(kwhToday[s.n - 1], 1) : '–'}</td></tr>`).join('') + '</table>' +
+      (st.length > 1 ? '<div class="note" style="margin-top:6px">Vergleich der Strings über Tage, je kWp und mit Bewertung: Karte <b>🧵 String-Vergleich</b> weiter oben.</div>' : '');
   }
   const B = D.storage;
   if (B || L.soc != null) {
@@ -12185,6 +12216,453 @@ function renderPvDevices() {
   }
   if (F.demo) h += '<div class="note" style="margin-top:8px">Demo-Anlage: alle Werte sind simuliert.</div>';
   body.innerHTML = h;
+}
+
+/* ---- PV tab: string comparison (MPP trackers) ------------------------------ */
+const PVSTR_KEY = 'bhe_pv_strings';             // synced: [{name, mods, kwp, az}] per MPP tracker
+const PVSTR_NORM_KEY = 'pvr_str_norm';          // UI preference on this device: curves per kWp
+const PV_AZ = { O: -90, SO: -45, S: 0, SW: 45, W: 90, NO: -135, NW: 135, N: 180 };
+const PV_AZ_LABEL = { '': 'unbekannt', O: 'Ost', SO: 'Südost', S: 'Süd', SW: 'Südwest', W: 'West',
+  NO: 'Nordost', NW: 'Nordwest', N: 'Nord', F: 'flach' };
+const STR_COL = ['#f6b93b', '#38bdd8'];         // string 1 amber, string 2 turquoise
+// typical yearly yield in Germany per kWp by orientation (30–35° roof; flat ≈ 10–15°)
+const PV_AZ_SPEC = { S: 1000, SO: 950, SW: 950, O: 840, W: 840, NO: 680, NW: 680, N: 600, F: 870 };
+
+function medianOf(a) {
+  const s = (a || []).filter(x => x != null && isFinite(x)).slice().sort((x, y) => x - y);
+  if (!s.length) return null;
+  const m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+const hmOf = x => { const m = Math.round(x * 60); return String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0'); };
+const sgnPct = (d, dec = 1) => (d >= 0 ? '+' : '−') + fmt(Math.abs(d) * 100, dec) + ' %';
+
+function pvStrCfg() {
+  let a = [];
+  try { a = JSON.parse(localStorage.getItem(PVSTR_KEY) || '[]'); } catch (e) { a = []; }
+  if (!Array.isArray(a)) a = [];
+  return [0, 1].map(i => {
+    const c = a[i] && typeof a[i] === 'object' ? a[i] : {};
+    return {
+      name: typeof c.name === 'string' ? c.name.trim().slice(0, 24) : '',
+      mods: +c.mods > 0 ? Math.round(+c.mods) : null,
+      kwp: +c.kwp > 0 ? +c.kwp : null,
+      az: typeof c.az === 'string' && Object.prototype.hasOwnProperty.call(PV_AZ_LABEL, c.az) ? c.az : '',
+    };
+  });
+}
+const pvStrLabel = (i, cfg) => 'String ' + (i + 1) + (cfg && cfg[i] && cfg[i].name ? ' · ' + esc(cfg[i].name) : '');
+
+// installed power per string: entered > from the module counts > estimated
+// from the MPP voltages (same modules: the voltage grows with the modules in series)
+function pvStrKwp(cfg, S, F) {
+  const tot = F && F.identity && F.identity.pv_power_w > 0 ? F.identity.pv_power_w / 1000 : null;
+  const [a, b] = cfg;
+  if (a.kwp && b.kwp) return { k: [a.kwp, b.kwp], src: 'eingetragen', tot };
+  if (tot && (a.kwp || b.kwp)) {
+    const k = a.kwp ? [a.kwp, tot - a.kwp] : [tot - b.kwp, b.kwp];
+    if (k[0] > 0.2 && k[1] > 0.2) return { k, src: 'eingetragen bzw. Rest der Anlage', tot };
+  }
+  if (a.mods && b.mods && tot) {
+    const m = a.mods + b.mods;
+    return { k: [tot * a.mods / m, tot * b.mods / m], src: 'aus der Modulzahl', tot };
+  }
+  if (tot && S && S.mpp1_u > 50 && S.mpp2_u > 50) {
+    const u = S.mpp1_u + S.mpp2_u;
+    return { k: [tot * S.mpp1_u / u, tot * S.mpp2_u / u], src: 'geschätzt aus den String-Spannungen', tot, est: true };
+  }
+  return null;
+}
+
+function pvInv1(F) {
+  const inv = (F && F.details && F.details.inverters) || {};
+  return inv['1'] || Object.values(inv).find(v => v && v.strings && v.strings.length) || {};
+}
+
+// right now: one bar per string with voltage, current, share and W per kWp
+function pvStrLive(F, cfg, K) {
+  const st = (pvInv1(F).strings || []).filter(s => s.n === 1 || s.n === 2);
+  if (!st.length) return '<div class="note">Der Wechselrichter meldet gerade keine String-Werte.</div>';
+  const tot = st.reduce((a, s) => a + Math.max(0, s.p_w || 0), 0);
+  const pmax = Math.max(1, ...st.map(s => Math.max(0, s.p_w || 0)));
+  let h = '<div class="strbar">';
+  st.forEach(s => {
+    const i = s.n - 1, p = Math.max(0, s.p_w || 0);
+    h += `<span style="font-weight:650;color:${STR_COL[i]}">${pvStrLabel(i, cfg)}</span>` +
+      `<div class="bar"><i style="width:${(p / pmax * 100).toFixed(1)}%;background:${STR_COL[i]}"></i></div>` +
+      `<span class="num">${kwOrW(p)}</span>` +
+      `<div class="sub">${s.u_v != null ? fmt(s.u_v, 0) + ' V' : '– V'} · ${s.i_a != null ? fmt(s.i_a, 2) + ' A' : '– A'}` +
+      (tot > 30 ? ` · ${fmt(p / tot * 100, 0)} %` : '') + (K && tot > 30 ? ` · ${fmt(p / K.k[i], 0)} W/kWp` : '') + '</div>';
+  });
+  h += '</div>';
+  const pv = F.live && F.live.pv_w;
+  const when = F.details && F.details.ts ? new Date(F.details.ts * 1000).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) : '';
+  return h + `<div class="note" style="margin-top:2px">Zusammen <b>${kwOrW(tot)}</b>` +
+    (pv != null ? ` · PV laut Energiefluss ${kwOrW(pv)}` : '') +
+    (when ? ` · Strings von ${when} Uhr (einmal pro Minute abgefragt)` : '') +
+    (tot <= 30 ? ' · nachts bleibt an den Modulen eine kleine Spannung ohne Strom – normal' : '') + '</div>';
+}
+
+// today in 15-min steps: one line per string (kW, or W per kWp)
+function pvStrDayChart(series, norm, K) {
+  const h = 170, pad = 30, padR = 8, top = 12, base = h - 22, n = 96;
+  const mid = new Date(); mid.setHours(0, 0, 0, 0);
+  const t0 = mid.getTime() / 1000;
+  const pts = new Array(n).fill(null);
+  (series || []).forEach(p => { const i = Math.round((p.t - t0) / 900); if (i >= 0 && i < n) pts[i] = p; });
+  const val = (p, k) => {
+    const w = p ? p['mpp' + (k + 1) + '_w'] : null;
+    return w == null ? null : (norm ? w / K.k[k] : w / 1000);
+  };
+  const all = [];
+  pts.forEach(p => [0, 1].forEach(k => { const v = val(p, k); if (v != null) all.push(v); }));
+  const sc = niceScale(Math.max(norm ? 20 : 0.1, ...all)), max = sc.max;
+  const X = i => pad + (CW - pad - padR) * (i / (n - 1));
+  const Y = v => top + (base - top) * (1 - Math.max(0, v) / max);
+  const path = k => {
+    let d = '', open = false;
+    pts.forEach((p, i) => {
+      const v = val(p, k);
+      if (v == null) { open = false; return; }
+      d += `${open ? 'L' : 'M'}${X(i).toFixed(1)} ${Y(v).toFixed(1)} `; open = true;
+    });
+    return d;
+  };
+  let labels = '';
+  for (let hh = 0; hh <= 24; hh += 3) labels += `<text class="axis" x="${X(Math.min(n - 1, hh * 4)).toFixed(1)}" y="${h - 8}" text-anchor="middle">${hh}</text>`;
+  const now = Math.min(n - 1, Math.max(0, Math.round((Date.now() / 1000 - t0) / 900)));
+  const f = v => v == null ? '–' : (norm ? fmt(v, 0) + ' W/kWp' : kwOrW(v * 1000));
+  const tips = pts.map((p, i) => {
+    const hh = String(Math.floor(i / 4)).padStart(2, '0') + ':' + String((i % 4) * 15).padStart(2, '0');
+    if (!p || (p.mpp1_w == null && p.mpp2_w == null)) return `<b>${hh}</b> – ${i > now ? 'kommt noch' : 'keine String-Werte'}`;
+    const a = p.mpp1_w || 0, b = p.mpp2_w || 0;
+    return `<b>${hh}</b> · <span style="color:${STR_COL[0]}">●</span> String 1 ${f(val(p, 0))} · ` +
+      `<span style="color:${STR_COL[1]}">●</span> String 2 ${f(val(p, 1))}` +
+      (a + b > 30 ? ` · zusammen ${kwOrW(a + b)}` : '');
+  });
+  return svg(h, gridLines(h, top, base, pad, max, { step: sc.step, unit: norm ? 'W/kWp' : 'kW' }) +
+    [0, 1].map(k => `<path d="${path(k)}" fill="none" stroke="${STR_COL[k]}" stroke-width="2.3" stroke-linejoin="round"/>`).join('') +
+    `<line x1="${X(now).toFixed(1)}" y1="${top}" x2="${X(now).toFixed(1)}" y2="${base}" stroke="var(--muted)" stroke-width="1" stroke-dasharray="2 3" opacity=".6"/>` +
+    labels, { kind: 'area', pad, padR, n, h, tips });
+}
+
+// per day (per month for the year view): string 1 and 2 side by side
+function pvStrDaily(R, norm, K) {
+  const months = R.days > 120;
+  const items = months
+    ? R.monthly.map(m => ({ label: MON[+m.month.slice(5, 7) - 1], full: MON[+m.month.slice(5, 7) - 1] + ' ' + m.month.slice(0, 4), a: m.mpp1_kwh, b: m.mpp2_kwh }))
+    : R.daily.map(d => ({ label: dayLabel(d.day).slice(0, 3), a: d.mpp1_kwh, b: d.mpp2_kwh,
+        full: longDay(d.day) + (d.pv_cov != null && d.pv_cov < 0.9 ? ` · nur ${fmt(d.pv_cov * 100, 0)} % der Sonnenstunden erfasst` : '') }));
+  const ser = [0, 1].map(k => ({ key: 's' + k, color: STR_COL[k], label: 'String ' + (k + 1) }));
+  const rows = items.map(x => ({ label: x.label, full: x.full, values: {
+    s0: norm ? (x.a || 0) / K.k[0] : (x.a || 0), s1: norm ? (x.b || 0) / K.k[1] : (x.b || 0) } }));
+  return groupedBar(rows, ser, { h: 170, unit: norm ? 'kWh/kWp' : 'kWh', dec: norm ? 2 : 1 });
+}
+
+function pvStrTable(R, cfg, K) {
+  const S = R.strings; if (!S) return '';
+  const e = [S.mpp1_kwh || 0, S.mpp2_kwh || 0], sum = e[0] + e[1];
+  const u = [S.mpp1_u, S.mpp2_u], pk = [S.mpp1_peak_w, S.mpp2_peak_w], tc = [S.mpp1_tc, S.mpp2_tc];
+  const sm = t => ` <small style="color:var(--muted)">${t}</small>`;
+  const row = (lbl, f) => `<tr><td>${lbl}</td>${[0, 1].map(i => `<td>${f(i)}</td>`).join('')}</tr>`;
+  let h = `<table class="pvt"><tr><th>${R.days > 120 ? 'Zeitraum' : R.days + ' Tage'}</th>` +
+    [0, 1].map(i => `<th style="color:${STR_COL[i]}">${pvStrLabel(i, cfg)}</th>`).join('') + '</tr>';
+  if (cfg[0].az || cfg[1].az) h += row('Ausrichtung', i => cfg[i].az ? PV_AZ_LABEL[cfg[i].az] : '–');
+  if (cfg[0].mods || cfg[1].mods) h += row('Module', i => cfg[i].mods || '–');
+  if (K) h += row('Leistung', i => (K.est ? '≈ ' : '') + fmt(K.k[i], K.est ? 1 : 2) + ' kWp');
+  h += row('Energie', i => kwh(e[i], e[i] < 100 ? 1 : 0) + (sum > 0.05 ? sm(fmt(e[i] / sum * 100, 0) + ' %') : ''));
+  if (K) h += row('je kWp', i => fmt(e[i] / K.k[i], 2) + ' kWh');
+  h += row('Spitze', i => pk[i] != null ? kwOrW(pk[i]) + (K ? sm(fmt(pk[i] / K.k[i], 0) + ' W/kWp') : '') : '–');
+  if (tc[0] != null || tc[1] != null) h += row('Erzeugt im Mittel um', i => tc[i] != null ? hmOf(tc[i]) + ' Uhr' : '–');
+  if (u[0] != null || u[1] != null) h += row('Spannung im Betrieb', i => u[i] != null ? fmt(u[i], 0) + ' V' : '–');
+  h += '</table>';
+  const notes = [];
+  if (K) notes.push(`kWp ${K.src}${K.est ? ' (gleiche Module angenommen) – genauer mit Modulzahl oder kWp unten' : ''}` +
+    (K.tot ? ` · Anlage laut Wechselrichter ${fmt(K.tot, 2)} kWp` : '') + '.');
+  if (tc[0] != null) notes.push('<b>Erzeugt im Mittel um</b>: Schwerpunkt der Tageserzeugung – Ostdächer liefern früher, Westdächer später.');
+  if (u[0] != null) notes.push('<b>Spannung im Betrieb</b>: gewichtet nach Leistung, nur solange der String Strom liefert.');
+  return h + `<div class="note" style="margin-top:6px">${notes.join(' ')}</div>`;
+}
+
+function verdictHtml(list) {
+  const ic = { ok: '✓', info: 'i', warn: '!' }, ord = { warn: 0, info: 1, ok: 2 };
+  return '<div class="vlist">' + list.slice().sort((a, b) => ord[a.lvl] - ord[b.lvl]).map(v =>
+    `<div class="vrow v-${v.lvl}"><span class="vi">${ic[v.lvl]}</span><div class="vt"><b>${v.t}</b>${v.d ? `<small>${v.d}</small>` : ''}</div></div>`).join('') + '</div>';
+}
+
+function pvStrVerdicts(R, F, cfg, K) {
+  const out = [], S = R.strings, C = R.checks || {};
+  const add = (lvl, t, d) => out.push({ lvl, t, d });
+  const L = i => pvStrLabel(i, cfg);
+  // 1. right now: one string silent while the other produces
+  const st = pvInv1(F).strings || [];
+  const s1 = st.find(s => s.n === 1), s2 = st.find(s => s.n === 2);
+  if (s1 && s2 && F.details && Date.now() / 1000 - (F.details.ts || 0) < 300) {
+    const p = [Math.max(0, s1.p_w || 0), Math.max(0, s2.p_w || 0)];
+    const lo = p[0] < p[1] ? 0 : 1, hi = 1 - lo, sl = [s1, s2][lo];
+    if (p[hi] > 300 && p[lo] < 0.02 * p[hi])
+      add('warn', `${L(lo)} liefert gerade nichts`, `während ${L(hi)} ${kwOrW(p[hi])} bringt (${L(lo)}: ` +
+        `${fmt(sl.u_v || 0, 0)} V, ${fmt(sl.i_a || 0, 2)} A). Schnee oder starke Verschattung? Sonst DC-Trennschalter, ` +
+        'Steckverbinder und Sicherung prüfen lassen.');
+  }
+  // 2. days on which one string (almost) delivered nothing
+  const dead = [];
+  (R.daily || []).forEach(d => {
+    const a = d.mpp1_kwh || 0, b = d.mpp2_kwh || 0;
+    if (Math.max(a, b) >= 1 && Math.min(a, b) < 0.03 * Math.max(a, b)) dead.push(dayLabel(d.day) + ' String ' + (a < b ? 1 : 2));
+  });
+  if (dead.length) add('warn', `An ${dead.length} Tag${dead.length > 1 ? 'en' : ''} lieferte ein String fast nichts`,
+    dead.slice(-6).join(', ') + ' – Schnee, Verschattung oder ein Defekt (Steckverbinder, Sicherung, Eingang des Wechselrichters)?');
+  // 3. Σ strings = PV generation (same rows)
+  const cs = C.strings;
+  if (cs && cs.pv_kwh >= 1) {
+    const dv = Math.abs(cs.dev);
+    add(dv <= 0.03 ? 'ok' : dv <= 0.06 ? 'info' : 'warn', dv <= 0.03 ? 'Summe der Strings = PV-Erzeugung' : 'Summe der Strings weicht von der PV-Erzeugung ab',
+      `${kwh(cs.sum_kwh, 1)} aus den Strings, ${kwh(cs.pv_kwh, 1)} laut Energiefluss (${sgnPct(cs.dev)})` +
+      (dv > 0.03 ? ' – die Strings werden nur einmal pro Minute abgefragt, bei wechselnden Wolken streut das.' : '.'));
+  }
+  if (!S || S.mpp2_kwh == null) return out;
+  const e = [S.mpp1_kwh || 0, S.mpp2_kwh || 0];
+  // 4. when each string produces (east early, west late) and the orientation
+  const ew = cfg.map(c => c.az && c.az !== 'F' ? Math.sin(PV_AZ[c.az] * Math.PI / 180) : null);   // −1 east … +1 west
+  const tc = [S.mpp1_tc, S.mpp2_tc];
+  const dT = tc[0] != null && tc[1] != null ? tc[1] - tc[0] : null;                              // h, + = string 2 later
+  const diffAz = ew[0] != null && ew[1] != null && Math.abs(ew[1] - ew[0]) > 0.3;
+  if (dT != null && e[0] >= 0.5 && e[1] >= 0.5) {
+    if (diffAz && ((ew[1] > ew[0] && dT < -0.25) || (ew[1] < ew[0] && dT > 0.25))) {
+      const w = ew[1] > ew[0] ? 1 : 0;
+      add('warn', 'Ausrichtung passt nicht zu den Messwerten', `Laut Eintrag zeigt ${L(w)} weiter nach Westen, er erzeugt aber im Mittel ` +
+        `${fmtMin(Math.round(Math.abs(dT) * 60))} früher (${hmOf(tc[w])} statt später als ${hmOf(tc[1 - w])} Uhr). Sind die Strings beim Eintragen vertauscht?`);
+    } else if (Math.abs(dT) >= 0.3) {
+      const late = dT > 0 ? 1 : 0;
+      add('info', `${L(late)} erzeugt im Mittel ${fmtMin(Math.round(Math.abs(dT) * 60))} später`,
+        `Schwerpunkt ${hmOf(tc[0])} bzw. ${hmOf(tc[1])} Uhr → ${L(late)} ist weiter nach Westen ausgerichtet` +
+        (diffAz ? ' (passt zum Eintrag)' : '') + ' – oder der andere wird nachmittags verschattet.');
+    } else if (!diffAz) add('ok', 'Beide Strings erzeugen zur gleichen Tageszeit', `Schwerpunkt ${hmOf(tc[0])} bzw. ${hmOf(tc[1])} Uhr – gleiche Ausrichtung, keine einseitige Verschattung.`);
+  }
+  // 5. yield per kWp
+  if (K && e[0] >= 0.5 && e[1] >= 0.5) {
+    const y = [e[0] / K.k[0], e[1] / K.k[1]], d = y[1] / y[0] - 1, ad = Math.abs(d), lo = d < 0 ? 1 : 0;
+    const sameDir = (cfg[0].az && cfg[0].az === cfg[1].az) || (!diffAz && dT != null && Math.abs(dT) < 0.3);
+    const est = K.est ? ' (kWp aus den Spannungen geschätzt)' : '';
+    if (sameDir) {
+      add(ad <= 0.08 ? 'ok' : ad <= 0.15 ? 'info' : 'warn',
+        ad <= 0.08 ? 'Beide Strings liefern je kWp gleich viel' : `${L(lo)} liefert je kWp ${fmt(ad * 100, 0)} % weniger`,
+        `${fmt(y[0], 2)} bzw. ${fmt(y[1], 2)} kWh je kWp${est}` +
+        (ad <= 0.08 ? ' – bis 8 % Unterschied sind normal (Modultoleranz, Kabel).'
+          : ad <= 0.15 ? ' – leichte Verschattung, Verschmutzung oder Modultoleranz.'
+            : ' – bei gleicher Ausrichtung zu viel: Verschattung, Schmutz/Laub/Schnee oder ein defektes Modul? Bei Sonne die Ströme vergleichen.'));
+    } else {
+      add('info', `Je kWp: ${fmt(y[0], 2)} kWh (String 1) und ${fmt(y[1], 2)} kWh (String 2)`,
+        (diffAz || (dT != null && Math.abs(dT) >= 0.3)
+          ? 'Unterschiedlich ausgerichtete Dachflächen liefern unterschiedlich viel – im Winter steht die Sonne tief im Süden, Ost- und Westflächen bekommen dann deutlich weniger als im Sommer. Entscheidend ist, ob das Verhältnis über die Wochen stabil bleibt.'
+          : 'Ohne bekannte Ausrichtung lässt sich nicht sagen, welcher Unterschied normal ist – unten eintragen.') + est);
+    }
+  }
+  // 6. trend of the daily ratio: a sudden change = new shade, snow, dirt or a defect
+  const days = (R.daily || []).filter(d => (d.mpp1_kwh || 0) >= 0.2 && (d.mpp2_kwh || 0) >= 0.2 && (d.pv_cov == null || d.pv_cov >= 0.8));
+  if (days.length >= 7) {
+    const r = days.map(d => d.mpp2_kwh / d.mpp1_kwh);
+    const base = medianOf(r.slice(0, -3)), last = r.slice(-3).map(x => x / base - 1);
+    const down = last.every(x => x < -0.25), up = last.every(x => x > 0.25);
+    if (down || up) add('warn', 'Verhältnis der Strings hat sich verändert',
+      `In den letzten 3 Sonnentagen lieferte ${L(down ? 1 : 0)} im Verhältnis rund ${fmt(Math.abs(medianOf(last)) * 100, 0)} % weniger als davor. Neue Verschattung, Schnee, Laub – oder ein Defekt?`);
+    else add('ok', 'Verhältnis der Strings stabil', `An ${days.length} Tagen lieferte String 2 zwischen ${fmt(Math.min(...r) * 100, 0)} und ` +
+      `${fmt(Math.max(...r) * 100, 0)} % von String 1 (meist ${fmt(medianOf(r) * 100, 0)} %) – die Schwankung kommt vom Wetter.`);
+  } else add('info', 'Trend noch offen', `Für eine Trend-Aussage braucht es mindestens 7 Tage, an denen beide Strings Strom geliefert haben ` +
+    `(bisher ${days.length}${R.days < 30 ? '; evtl. Zeitraum 30 T wählen' : ''}).`);
+  // 7. voltage ratio: temperature acts on both strings alike – a lost module or
+  // bypass diode lowers only one string's voltage
+  const vd = (R.daily || []).filter(d => d.mpp1_u > 50 && d.mpp2_u > 50);
+  if (vd.length >= 5) {
+    const q = vd.map(d => d.mpp1_u / d.mpp2_u), base = medianOf(q.slice(0, -2)), last = q.slice(-2).map(x => x / base - 1);
+    if (last.every(x => x < -0.06) || last.every(x => x > 0.06)) {
+      const lo = last[0] < 0 ? 0 : 1;
+      add('warn', `Spannung von ${L(lo)} gesunken`, `Gegenüber String ${2 - lo} rund ${fmt(Math.abs(medianOf(last)) * 100, 0)} % niedriger als an den ` +
+        `Tagen davor – das entspricht etwa einem Modul bzw. einer Bypass-Diode${cfg[lo].mods ? ` (1 von ${cfg[lo].mods} Modulen = ${fmt(100 / cfg[lo].mods, 0)} %)` : ''}. ` +
+        'Teilverschattung kann das auch kurz bewirken – hält es an, vom Installateur prüfen lassen.');
+    } else add('ok', 'Spannungen stabil', `Verhältnis String 1 : String 2 = ${fmt(medianOf(q), 2)} an ${vd.length} Tagen ohne Sprung` +
+      (cfg[0].mods && cfg[1].mods ? '' : ' – bei gleichen Modulen ist das auch das Verhältnis der Modulzahl in Reihe') + '.');
+    if (cfg[0].mods && cfg[1].mods) {
+      const ex = cfg[0].mods / cfg[1].mods, dq = medianOf(q) / ex - 1;
+      add(Math.abs(dq) <= 0.08 ? 'ok' : 'info', Math.abs(dq) <= 0.08 ? 'Spannungen passen zur Modulzahl' : 'Spannungen passen nicht zur eingetragenen Modulzahl',
+        `Modulzahl ${cfg[0].mods} : ${cfg[1].mods} = ${fmt(ex, 2)}, Spannung ${fmt(medianOf(q), 2)}` +
+        (Math.abs(dq) <= 0.08 ? '.' : ' – bei parallel geschalteten Strängen an einem Eingang oder unterschiedlichen Modulen normal, sonst Modulzahl prüfen.'));
+    }
+  }
+  // 8. entered kWp vs the power stored in the inverter
+  if (K && K.tot && cfg[0].kwp && cfg[1].kwp && Math.abs((cfg[0].kwp + cfg[1].kwp) / K.tot - 1) > 0.05)
+    add('info', 'Summe der kWp weicht ab', `Eingetragen ${fmt(cfg[0].kwp + cfg[1].kwp, 2)} kWp, im Wechselrichter hinterlegt ${fmt(K.tot, 2)} kWp.`);
+  return out;
+}
+
+function pvStrForm(cfg) {
+  const opt = sel => Object.keys(PV_AZ_LABEL).map(k => `<option value="${k}"${k === sel ? ' selected' : ''}>${PV_AZ_LABEL[k]}</option>`).join('');
+  return '<div class="strform">' + [0, 1].map(i => {
+    const c = cfg[i];
+    return `<fieldset><legend style="color:${STR_COL[i]}">String ${i + 1}</legend>` +
+      `<label>Name<input data-sf="name" data-i="${i}" maxlength="24" placeholder="z. B. Süddach" value="${esc(c.name)}"></label>` +
+      `<label>Module<input data-sf="mods" data-i="${i}" type="number" inputmode="numeric" min="1" max="80" step="1" value="${c.mods || ''}"></label>` +
+      `<label>Leistung (kWp)<input data-sf="kwp" data-i="${i}" type="text" inputmode="decimal" autocomplete="off" placeholder="z. B. 8,16" value="${c.kwp ? fmt(c.kwp, 2) : ''}"></label>` +
+      `<label>Ausrichtung<select data-sf="az" data-i="${i}">${opt(c.az)}</select></label></fieldset>`;
+  }).join('') + '</div>' +
+    '<div style="display:flex;gap:10px;align-items:center;margin-top:10px;flex-wrap:wrap">' +
+    '<button class="btn" id="pvr-str-save" style="width:auto;padding:8px 16px;margin:0">Speichern</button>' +
+    '<span class="note" id="pvr-str-msg" style="margin:0;flex:1;min-width:180px">Steht im Angebot bzw. Datenblatt des Installateurs. ' +
+    'Leer lassen ist okay – dann schätzt die App die kWp aus den Spannungen. Gilt für alle Geräte.</span></div>';
+}
+
+function renderPvStrings() {
+  const card = $('pvr-str-card'); if (!card) return;
+  const F = STATE.fr, R = STATE.pv;
+  const live = (pvInv1(F).strings || []).filter(s => s.n === 1 || s.n === 2);
+  const S = R && !R.empty ? R.strings : null;
+  if (!F || !F.connected || !(live.length >= 2 || (S && S.mpp2_kwh != null))) { card.hidden = true; return; }
+  card.hidden = false;
+  const cfg = pvStrCfg(), K = pvStrKwp(cfg, S, F);
+  let norm = false;
+  try { norm = !!K && localStorage.getItem(PVSTR_NORM_KEY) === '1'; } catch (e) { /* default kW */ }
+  const ns = $('pvr-str-norm');
+  if (ns) { ns.hidden = !K; ns.querySelectorAll('button').forEach(b => b.classList.toggle('on', (b.dataset.n === '1') === norm)); }
+  $('pvr-str-live').innerHTML = pvStrLive(F, cfg, K);
+  const ser = (F.today && F.today.series) || [];
+  const hasSer = ser.some(p => p.mpp1_w != null || p.mpp2_w != null);
+  $('pvr-str-day').innerHTML = hasSer ? pvStrDayChart(ser, norm, K)
+    : '<div class="note">Die String-Kurven füllen sich ab der ersten gespeicherten Minute mit String-Werten.</div>';
+  $('pvr-str-day-legend').innerHTML = hasSer ? legendHtml([0, 1].map(i => ({ label: 'String ' + (i + 1) + (cfg[i].name ? ' · ' + cfg[i].name : ''), color: STR_COL[i] }))) : '';
+  const hd = $('pvr-str-head');
+  if (S && R.daily && R.daily.length) {
+    $('pvr-str-daily-h').textContent = R.days > 120 ? 'Monatswerte im Zeitraum' : 'Tageswerte im Zeitraum';
+    $('pvr-str-daily').innerHTML = pvStrDaily(R, norm, K);
+    $('pvr-str-daily-legend').innerHTML = legendHtml([0, 1].map(i => ({ label: 'String ' + (i + 1) + (norm ? ' (kWh je kWp)' : ' (kWh)'), color: STR_COL[i] })));
+    $('pvr-str-table').innerHTML = pvStrTable(R, cfg, K);
+    const V = pvStrVerdicts(R, F, cfg, K);
+    $('pvr-str-verdict').innerHTML = verdictHtml(V);
+    const nw = V.filter(v => v.lvl === 'warn').length;
+    if (hd) hd.innerHTML = nw ? `<span style="color:#ffb64d">${nw} Hinweis${nw > 1 ? 'e' : ''}</span>` : '<span style="color:#4be0b0">unauffällig</span>';
+  } else {
+    $('pvr-str-daily').innerHTML = R && R.empty ? '' : '<div class="note">Lade die Tageswerte …</div>';
+    ['pvr-str-daily-legend', 'pvr-str-table'].forEach(id => { const el = $(id); if (el) el.innerHTML = ''; });
+    $('pvr-str-verdict').innerHTML = R && !R.empty && !S
+      ? '<div class="note">Im Zeitraum haben die Strings noch keinen Strom geliefert (oder es gibt noch keine String-Werte) – der Vergleich füllt sich, sobald die Sonne scheint.</div>' : '';
+    if (hd) hd.innerHTML = '';
+  }
+  const det = $('pvr-str-cfg'), form = $('pvr-str-form');
+  if (det && form && !form.dataset.ready) { form.innerHTML = pvStrForm(cfg); form.dataset.ready = '1'; }
+}
+
+function savePvStrings() {
+  const form = $('pvr-str-form'); if (!form) return;
+  const cfg = [{}, {}];
+  form.querySelectorAll('[data-sf]').forEach(el => {
+    const i = +el.dataset.i, k = el.dataset.sf, raw = String(el.value || '').trim(), v = raw.replace(',', '.');
+    if (k === 'name') cfg[i].name = raw.slice(0, 24);
+    else if (k === 'az') cfg[i].az = v;
+    else if (k === 'mods') cfg[i].mods = parseInt(v, 10) > 0 ? Math.min(80, parseInt(v, 10)) : null;
+    else if (k === 'kwp') cfg[i].kwp = parseFloat(v) > 0 ? Math.min(40, Math.round(parseFloat(v) * 100) / 100) : null;
+  });
+  try { localStorage.setItem(PVSTR_KEY, JSON.stringify(cfg)); } catch (e) { /* private mode */ }
+  const m = $('pvr-str-msg'); if (m) m.textContent = '✅ Gespeichert.';
+  renderPvStrings();
+}
+
+/* ---- PV tab: plausibility check of the stored numbers ---------------------- */
+function renderPvChecks() {
+  const card = $('pvr-chk-card'); if (!card) return;
+  const F = STATE.fr || {}, R = STATE.pv;
+  if (!F.connected || !R || R.empty || !R.checks) { card.hidden = true; return; }
+  card.hidden = false;
+  const C = R.checks, T = R.totals || {}, out = [];
+  const add = (lvl, t, d) => out.push({ lvl, t, d });
+  // 1. data coverage
+  const cv = C.coverage;
+  if (cv && cv.span_h > 0) {
+    const pct = Math.min(1, cv.covered_h / cv.span_h);
+    add(pct >= 0.97 ? 'ok' : pct >= 0.9 ? 'info' : 'warn', `Werte für ${fmt(pct * 100, pct < 0.995 ? 1 : 0)} % der Zeit`,
+      `${fmt(cv.covered_h, 0)} von ${fmt(cv.span_h, 0)} Stunden seit Beginn des Zeitraums bzw. der Aufzeichnung` +
+      (cv.gap_h >= 0.05 ? ` · Lücken zusammen ${fmt(cv.gap_h, 1)} h${cv.gap_days.length ? ' (' + cv.gap_days.slice(-5).map(dayLabel).join(', ') + ')' : ''}` +
+        ' – Bridge-Rechner aus, WLAN oder Wechselrichter nicht erreichbar.' : ' · keine Lücken.'));
+  }
+  const today = _hpdDateStr(new Date());
+  const part = (R.daily || []).filter(d => d.pv_cov != null && d.pv_cov < 0.9 && d.day !== today);
+  if (part.length) add('info', `${part.length} Tag${part.length > 1 ? 'e' : ''} nicht vollständig erfasst`,
+    part.slice(-6).map(d => `${dayLabel(d.day)} ${fmt(d.pv_cov * 100, 0)} %`).join(', ') + ' der Sonnenstunden – deren Werte sind zu niedrig ' +
+    '(z. B. der Tag der Inbetriebnahme). Die Erwartung im Monatsvergleich rechnet sie nur anteilig.');
+  // 2. strings = PV
+  const cs = C.strings;
+  if (cs && cs.pv_kwh >= 1) {
+    const dv = Math.abs(cs.dev);
+    add(dv <= 0.03 ? 'ok' : dv <= 0.06 ? 'info' : 'warn', `Strings ${dv <= 0.03 ? '=' : '≈'} PV-Erzeugung`,
+      `${kwh(cs.sum_kwh, 1)} aus den einzelnen Strings, ${kwh(cs.pv_kwh, 1)} laut Energiefluss (${sgnPct(cs.dev)}).`);
+  }
+  // 3. energy balance: what comes in = what goes out + conversion losses
+  const B = C.balance;
+  if (B && B.load_kwh > 0.5) {
+    const inn = B.pv_kwh + B.dis_kwh + B.imp_kwh, outt = B.load_kwh + B.ch_kwh + B.exp_kwh, loss = inn - outt;
+    const conv = Math.max(0.5, B.pv_kwh + B.dis_kwh - B.ch_kwh + 2 * (T.ch_grid_kwh || 0));
+    const rel = loss / conv, fine = rel >= -0.01 && rel <= 0.1, near = rel >= -0.03 && rel <= 0.15;
+    add(fine ? 'ok' : near ? 'info' : 'warn',
+      near ? `Energiebilanz geht auf – ${fmt(Math.max(0, rel) * 100, 1)} % Umwandlungsverluste` : 'Energiebilanz geht nicht auf',
+      `Hinein: Sonne ${fmt(B.pv_kwh, 1)} + Batterie ${fmt(B.dis_kwh, 1)} + Netz ${fmt(B.imp_kwh, 1)} = ${kwh(inn, 1)} · ` +
+      `Heraus: Haus ${fmt(B.load_kwh, 1)} + Batterie ${fmt(B.ch_kwh, 1)} + Netz ${fmt(B.exp_kwh, 1)} = ${kwh(outt, 1)} → ` +
+      `Differenz ${kwh(loss, 1)} = Umwandlungsverluste von Wechselrichter und Batterie (üblich 3–8 %)` +
+      (rel < -0.01 ? ' – mehr heraus als hinein: ein Wert ist zu hoch oder fehlt.' : rel > 0.15 ? ' – auffällig hoch.' : '.'));
+  }
+  // 4. meter counters vs the integrated power readings
+  const M = C.meter;
+  if (M && M.days && M.imp_int_kwh + M.exp_int_kwh >= 1) {
+    const di = M.imp_int_kwh >= 0.5 ? M.imp_cnt_kwh / M.imp_int_kwh - 1 : 0;
+    const de = M.exp_int_kwh >= 0.5 ? M.exp_cnt_kwh / M.exp_int_kwh - 1 : 0;
+    const worst = Math.max(Math.abs(di), Math.abs(de));
+    add(worst <= 0.03 ? 'ok' : worst <= 0.08 ? 'info' : 'warn', worst <= 0.03 ? 'Zählerstände passen zu den Messwerten' : 'Zählerstände weichen von den Messwerten ab',
+      `Bezug ${kwh(M.imp_cnt_kwh, 1)} laut Smart Meter, ${kwh(M.imp_int_kwh, 1)} aus den Leistungswerten (${sgnPct(di)}) · ` +
+      `Einspeisung ${kwh(M.exp_cnt_kwh, 1)} bzw. ${kwh(M.exp_int_kwh, 1)}${M.exp_int_kwh >= 0.5 ? ' (' + sgnPct(de) + ')' : ''} – ` +
+      `an ${M.days} Tag${M.days > 1 ? 'en' : ''} ohne Lücke. Angezeigt werden die Zählerstände.`);
+  }
+  if (C.meter_jumps && C.meter_jumps.length) add('warn', 'Sprung im Zählerstand',
+    `Am ${C.meter_jumps.slice(-5).map(dayLabel).join(', ')} sprang ein Zählerstand des Smart Meters (Tausch, Neustart?) – diese Tage werden aus den Leistungswerten gerechnet.`);
+  // 5. battery: charged vs discharged, corrected by the change of the charge level
+  const Bt = C.battery, cap = F.details && F.details.storage && F.details.storage.capacity_wh;
+  if (Bt && cap > 0 && Bt.ch_kwh != null) {
+    const dE = ((Bt.soc_last || 0) - (Bt.soc_first || 0)) / 100 * cap / 1000;
+    const inp = Bt.ch_kwh - dE;
+    if (Bt.ch_kwh >= 0.5 * cap / 1000 && inp > 0.2) {
+      const eta = Bt.dis_kwh / inp;
+      add(eta >= 0.8 && eta <= 1.0 ? 'ok' : eta >= 0.7 && eta <= 1.03 ? 'info' : 'warn', `Batterie: ${fmt(eta * 100, 0)} % Wirkungsgrad`,
+        `Geladen ${kwh(Bt.ch_kwh, 1)}, entladen ${kwh(Bt.dis_kwh, 1)}, Ladestand ${fmt(Bt.soc_first, 0)} → ${fmt(Bt.soc_last, 0)} % ` +
+        `(${dE >= 0 ? '+' : '−'}${kwh(Math.abs(dE), 2)}) – von 10 kWh hinein kommen ${fmt(eta * 10, 1)} kWh wieder heraus` +
+        (eta > 1.0 ? ' – mehr als hinein geht nicht: Ladestand oder Kapazität stimmen nicht.' : ' (üblich 8,5–9,5; Standby und Schutzladung kosten etwas).'));
+    } else add('info', 'Batterie: noch zu wenig geladen für eine Aussage', `Bisher ${kwh(Bt.ch_kwh, 1)} geladen – für den Wirkungsgrad braucht es mindestens einen halben Zyklus (${kwh(cap / 2000, 1)}).`);
+  }
+  // 6. the inverter's own energy counter
+  const E = C.etotal;
+  if (E && E.et_kwh >= 1) {
+    const dA = E.ac_kwh > 0.5 ? E.et_kwh / E.ac_kwh - 1 : null, dP = E.pv_kwh > 0.5 ? E.et_kwh / E.pv_kwh - 1 : null;
+    if (dA != null && Math.abs(dA) <= 0.04)
+      add('ok', 'Zähler des Wechselrichters passt', `E-Total stieg um ${kwh(E.et_kwh, 1)}, die gemessene AC-Abgabe war ${kwh(E.ac_kwh, 1)} (${sgnPct(dA)}). ` +
+        `Er zählt also alles, was er ins Hausnetz abgibt – Sonne und Batterie –, nicht die PV-Erzeugung allein (${kwh(E.pv_kwh, 1)}).`);
+    else if (dP != null && Math.abs(dP) <= 0.04)
+      add('ok', 'Zähler des Wechselrichters passt', `E-Total stieg um ${kwh(E.et_kwh, 1)} – wie die PV-Erzeugung (${kwh(E.pv_kwh, 1)}, ${sgnPct(dP)}).`);
+    else add('info', 'Zähler des Wechselrichters weicht ab', `E-Total +${kwh(E.et_kwh, 1)}, AC-Abgabe ${kwh(E.ac_kwh, 1)}, PV ${kwh(E.pv_kwh, 1)} – ` +
+      'manche Geräte zählen in groben Schritten oder anders; die App rechnet nicht mit diesem Zähler.');
+    if (E.jumps && E.jumps.length) add('info', 'Sprung im Zähler des Wechselrichters', `Am ${E.jumps.slice(-5).map(dayLabel).join(', ')} (Neustart, Update?) – nicht mitgezählt.`);
+  }
+  // 7. peak power vs installed modules
+  const kwp = F.identity && F.identity.pv_power_w ? F.identity.pv_power_w / 1000 : null;
+  if (C.peak && kwp && C.peak.pv_w > 0) {
+    const r = C.peak.pv_w / 1000 / kwp;
+    add(r <= 1.0 ? 'ok' : r <= 1.1 ? 'info' : 'warn', `Höchste PV-Leistung ${kwOrW(C.peak.pv_w)} = ${fmt(r * 100, 0)} % der Modulleistung`,
+      `am ${dayLabel(C.peak.day)} · installiert ${fmt(kwp, 2)} kWp` +
+      (r > 1.1 ? ' – deutlich über der installierten Leistung: stimmt die kWp-Angabe im Wechselrichter?'
+        : r > 1.0 ? ' – kurz über Nennleistung ist an kalten Tagen mit Wolkenrand-Effekt möglich.'
+          : ' – plausibel. Die volle Leistung erreichen Module nur bei hoch stehender Sonne und Kälte; im Winter und bei ' +
+            'Dachflächen in verschiedene Richtungen (die zu verschiedenen Zeiten Sonne bekommen) bleibt die Spitze deutlich darunter.'));
+  }
+  $('pvr-chk').innerHTML = verdictHtml(out) +
+    `<div class="note" style="margin-top:10px">Geprüft über den gewählten Zeitraum (${R.days > 120 ? 'Jahr' : R.days + ' Tage'}) mit denselben ` +
+    'Zahlen, die oben angezeigt werden. Die Bridge speichert jede Minute einen Mittelwert; Zählerstände und Strings fragt sie einmal pro Minute ab.</div>';
+  const nw = out.filter(v => v.lvl === 'warn').length, nok = out.filter(v => v.lvl === 'ok').length;
+  $('pvr-chk-head').innerHTML = nw ? `<span style="color:#ffb64d">${nw} auffällig</span>` : `<span style="color:#4be0b0">${nok} × ✓</span>`;
 }
 
 /* ---- heat pump card: share of solar power right now ------------------------ */
@@ -12389,6 +12867,14 @@ function initPvReal() {
       loadPvHist(true);
     });
   }
+  const ns = $('pvr-str-norm');
+  if (ns) ns.addEventListener('click', e => {
+    const b = e.target.closest('button[data-n]'); if (!b) return;
+    try { localStorage.setItem(PVSTR_NORM_KEY, b.dataset.n); } catch (err) { /* private mode */ }
+    renderPvStrings();
+  });
+  const sc = $('pvr-str-card');
+  if (sc) sc.addEventListener('click', e => { if (e.target.closest('#pvr-str-save')) { e.preventDefault(); savePvStrings(); } });
   const dev = $('pvr-dev-card');
   if (dev) dev.addEventListener('click', e => {
     const b = e.target.closest('[data-pvr-kwp]'); if (!b) return;

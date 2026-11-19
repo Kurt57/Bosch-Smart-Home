@@ -1089,8 +1089,14 @@ class Store:
                 "CREATE TABLE IF NOT EXISTS pv_samples("
                 " ts INTEGER PRIMARY KEY, n INTEGER,"
                 " pv_w REAL, grid_w REAL, load_w REAL, batt_w REAL, soc REAL, inv_w REAL,"
-                " e_total_wh REAL, imp_wh REAL, exp_wh REAL, mpp1_w REAL, mpp2_w REAL)"
+                " e_total_wh REAL, imp_wh REAL, exp_wh REAL, mpp1_w REAL, mpp2_w REAL,"
+                " mpp1_v REAL, mpp2_v REAL)"
             )
+            pvcols = [r[1] for r in self.conn.execute("PRAGMA table_info(pv_samples)")]
+            # string voltages (v203): compare the strings and spot a lost module
+            for col in ("mpp1_v", "mpp2_v"):
+                if col not in pvcols:
+                    self.conn.execute(f"ALTER TABLE pv_samples ADD COLUMN {col} REAL")
             # hardware product catalog (PV inverters / batteries / all-in-one),
             # seeded from curated datasheets, extensible by the user. `data` holds
             # the full spec document as JSON so the schema stays flexible.
@@ -1102,7 +1108,10 @@ class Store:
 
     # -- PV system (Fronius) --------------------------------------------- #
     PV_COLS = ("ts", "n", "pv_w", "grid_w", "load_w", "batt_w", "soc", "inv_w",
-               "e_total_wh", "imp_wh", "exp_wh", "mpp1_w", "mpp2_w")
+               "e_total_wh", "imp_wh", "exp_wh", "mpp1_w", "mpp2_w", "mpp1_v", "mpp2_v")
+    # extra columns of pv_rows_bucketed (after the PV_COLS ones)
+    PV_BUCKET_EXTRA = ("imp_w", "exp_w", "ch_w", "dis_w", "gch_w", "vw1", "wv1", "vw2", "wv2",
+                       "inv_pos_w", "mpp1_max", "mpp2_max", "pv_max")
 
     def pv_add(self, row: dict):
         with self.lock, self.conn:
@@ -1112,11 +1121,14 @@ class Store:
                 tuple(row.get(c) for c in self.PV_COLS))
 
     def pv_add_bulk(self, rows: list[tuple]):
-        """rows in PV_COLS order – demo seeding."""
+        """rows in PV_COLS order – demo seeding. Shorter rows (written before a
+        column was added) get None for the missing columns."""
+        n = len(self.PV_COLS)
+        rows = [tuple(r) + (None,) * (n - len(r)) if len(r) < n else tuple(r) for r in rows]
         with self.lock, self.conn:
             self.conn.executemany(
                 f"INSERT OR REPLACE INTO pv_samples({','.join(self.PV_COLS)})"
-                f" VALUES({','.join('?' * len(self.PV_COLS))})", rows)
+                f" VALUES({','.join('?' * n)})", rows)
 
     def pv_rows(self, since_ts: int, until_ts: int | None = None) -> list[tuple]:
         """Rows (PV_COLS order) with since ≤ ts < until, oldest first."""
@@ -1133,16 +1145,24 @@ class Store:
     def pv_rows_bucketed(self, since_ts: int, until_ts: int, bucket: int = 900) -> list[tuple]:
         """Like pv_rows, but averaged over ``bucket`` seconds by SQLite (for long
         ranges). Columns: PV_COLS order (ts = last row of the bucket, n = rows in
-        it) + the separate means of import, export, charge and discharge – so the
-        energies stay exact even when the grid flips direction inside a bucket –
-        and of the battery's charging from the grid (see compute_pv)."""
+        it) + PV_BUCKET_EXTRA: the separate means of import, export, charge and
+        discharge – so the energies stay exact even when the grid flips direction
+        inside a bucket –, of the battery's charging from the grid (see
+        compute_pv), the string voltages weighted by the string power (only while
+        the string produces), the inverter's AC output and the bucket peaks."""
         with self.lock:
             cur = self.conn.execute(
                 "SELECT MAX(ts), COUNT(*), AVG(pv_w), AVG(grid_w), AVG(load_w), AVG(batt_w), AVG(soc),"
                 " AVG(inv_w), MAX(e_total_wh), MAX(imp_wh), MAX(exp_wh), AVG(mpp1_w), AVG(mpp2_w),"
+                " AVG(mpp1_v), AVG(mpp2_v),"
                 " AVG(MAX(grid_w, 0)), AVG(MAX(-grid_w, 0)), AVG(MAX(-batt_w, 0)), AVG(MAX(batt_w, 0)),"
                 " AVG(CASE WHEN batt_w < 0 AND grid_w > load_w THEN MIN(grid_w - load_w, -batt_w * 1.25)"
-                " ELSE 0 END)"
+                " ELSE 0 END),"
+                f" AVG(CASE WHEN mpp1_v IS NOT NULL AND mpp1_w > {PV_STR_MIN_W} THEN mpp1_v * mpp1_w ELSE 0 END),"
+                f" AVG(CASE WHEN mpp1_v IS NOT NULL AND mpp1_w > {PV_STR_MIN_W} THEN mpp1_w ELSE 0 END),"
+                f" AVG(CASE WHEN mpp2_v IS NOT NULL AND mpp2_w > {PV_STR_MIN_W} THEN mpp2_v * mpp2_w ELSE 0 END),"
+                f" AVG(CASE WHEN mpp2_v IS NOT NULL AND mpp2_w > {PV_STR_MIN_W} THEN mpp2_w ELSE 0 END),"
+                " AVG(MAX(inv_w, 0)), MAX(mpp1_w), MAX(mpp2_w), MAX(pv_w)"
                 " FROM pv_samples WHERE ts>=? AND ts<? GROUP BY (ts - 1) / ? ORDER BY 1",
                 (since_ts, until_ts, bucket))
             return [tuple(r) for r in cur.fetchall()]
@@ -7814,6 +7834,7 @@ class HeatPumpPoller(threading.Thread):
 # PV system (Fronius inverter): poller, demo installation, evaluation
 # --------------------------------------------------------------------------- #
 PV_STORE_EVERY = 60            # s – one stored row = mean of the live readings
+PV_STR_MIN_W = 50              # W – a string below this is not producing (night, dawn)
 PV_DETAILS_EVERY = 60          # s – inverter strings, meter counters, battery
 PV_IDENT_EVERY = 6 * 3600      # s – model / installed power (rarely changes)
 PV_FEEDIN_DEFAULT_CT = 8.0     # same default as the PV planner's input
@@ -7870,9 +7891,14 @@ class FroniusPoller(threading.Thread):
             gm = next((m for m in det.get("meters") or [] if m.get("location") == "grid"), None)
             if gm:
                 row["imp_wh"], row["exp_wh"] = gm.get("import_wh"), gm.get("export_wh")
-            st = ((det.get("inverters") or {}).get("1") or {}).get("strings") or []
-            row["mpp1_w"] = st[0].get("p_w") if len(st) > 0 else None
-            row["mpp2_w"] = st[1].get("p_w") if len(st) > 1 else None
+            invs = det.get("inverters") or {}
+            inv = invs.get("1") or next((v for _k, v in sorted(invs.items()) if (v or {}).get("strings")), None) or {}
+            # by tracker number – an empty slot (GEN24: null) must not shift
+            # MPP 2 into the place of MPP 1
+            st = {s_.get("n"): s_ for s_ in inv.get("strings") or [] if isinstance(s_, dict)}
+            for n in (1, 2):
+                row[f"mpp{n}_w"] = (st.get(n) or {}).get("p_w")
+                row[f"mpp{n}_v"] = (st.get(n) or {}).get("u_v")
         self.store.pv_add(row)
         self._acc, self._n = {}, 0
         self._last_store = now
@@ -7922,6 +7948,20 @@ class FroniusPoller(threading.Thread):
 # --- demo installation: 9.9 kWp south roof, 9.45 kWh battery, smart meter ----- #
 DEMO_PV_KWP = 9.9
 DEMO_BATT_WH = 9450.0
+DEMO_STR_MODULES = (14, 8)     # 22 × 450 W modules on two MPP trackers, same roof
+
+
+def _demo_strings(pv_w: float) -> list:
+    """(power W, voltage V) per MPP tracker of the demo array: the power in
+    proportion to the modules, the MPP voltage ~32–34 V per module (a bit
+    lower when bright and hot), a small residual voltage at night."""
+    tot = float(sum(DEMO_STR_MODULES))
+    g = min(1.2, max(0.0, pv_w) / (DEMO_PV_KWP * 1000.0))      # relative irradiance
+    out = []
+    for nm in DEMO_STR_MODULES:
+        u = nm * (34.0 * (1.0 + 0.02 * math.log(max(0.05, g))) - 2.2 * g) if pv_w > 20 else nm * 4.6
+        out.append((round(max(0.0, pv_w) * nm / tot, 1), round(u, 1)))
+    return out
 
 
 def _demo_cloud(ts: float, lt) -> float:
@@ -8003,9 +8043,9 @@ def seed_demo_pv(store: "Store", days: int = 90):
     rows = []
     while t <= now:
         v = _demo_pv_step(st, t, 300)
+        (p1, u1), (p2, u2) = _demo_strings(v["pv_w"])
         rows.append((t, 1, v["pv_w"], v["grid_w"], v["load_w"], v["batt_w"], v["soc"], v["inv_w"],
-                     round(st["etot"], 1), round(st["imp"], 1), round(st["exp"], 1),
-                     round(v["pv_w"] * 0.62, 1), round(v["pv_w"] * 0.38, 1)))
+                     round(st["etot"], 1), round(st["imp"], 1), round(st["exp"], 1), p1, p2, u1, u2))
         t += 300
     store.pv_add_bulk(rows)
     print(f"[demo] inserted {len(rows)} PV rows (Fronius demo installation).")
@@ -8057,8 +8097,7 @@ class DemoFronius:
     def details(self) -> dict:
         v = self.v or self._advance()
         pv, grid = v["pv_w"], v["grid_w"]
-        s1, s2 = pv * 0.62, pv * 0.38
-        u1, u2 = (412.0, 368.0) if pv > 20 else (31.0, 28.0)
+        (s1, u1), (s2, u2) = _demo_strings(pv)
         ph = [{"n": i + 1, "p_w": round(grid * f, 1), "u_v": u, "i_a": round(abs(grid * f) / 230.0, 2)}
               for i, (f, u) in enumerate(((0.34, 230.4), (0.38, 231.2), (0.28, 229.8)))]
         return {"inverters": {"1": {"pac_w": v["inv_w"], "sac_va": round(v["inv_w"] + 35, 1),
@@ -8066,8 +8105,8 @@ class DemoFronius:
                                     "day_wh": None, "year_wh": None, "total_wh": round(self.st["etot"], 1),
                                     "status_code": 7, "state": "Running", "state_de": "in Betrieb",
                                     "error_code": 0,
-                                    "strings": [{"n": 1, "u_v": u1, "i_a": round(s1 / u1, 2), "p_w": round(s1, 1)},
-                                                {"n": 2, "u_v": u2, "i_a": round(s2 / u2, 2), "p_w": round(s2, 1)}]}},
+                                    "strings": [{"n": 1, "u_v": u1, "i_a": round(s1 / u1, 2), "p_w": s1},
+                                                {"n": 2, "u_v": u2, "i_a": round(s2 / u2, 2), "p_w": s2}]}},
                 "meters": [{"id": "0", "location": "grid", "location_code": 0, "location_de": "Einspeisepunkt (Netz)",
                             "manufacturer": "Fronius", "model": "Smart Meter TS 65A-3 (Demo)", "serial": "demo",
                             "p_w": grid, "import_wh": round(self.st["imp"], 1), "export_wh": round(self.st["exp"], 1),
@@ -8093,13 +8132,27 @@ class DemoFronius:
 
 # --- evaluation ------------------------------------------------------------- #
 _PV_I = {c: i for i, c in enumerate(Store.PV_COLS)}
+_PV_XI = {c: len(Store.PV_COLS) + i for i, c in enumerate(Store.PV_BUCKET_EXTRA)}
 
 
 def _pv_day_acc(day: str) -> dict:
     return {"day": day, "pv": 0.0, "load": 0.0, "imp_i": 0.0, "exp_i": 0.0, "ch": 0.0, "dis": 0.0, "gch": 0.0,
             "mpp1": 0.0, "mpp2": 0.0, "cov": 0.0, "gap": 0.0, "has_load": False, "has_batt": False,
             "imp_c": 0.0, "exp_c": 0.0, "cnt_rows": 0, "rows": 0, "cnt_bad": False,
-            "soc_min": None, "soc_max": None, "peak": 0.0, "hp": 0.0, "hp_sun": 0.0, "hp_cov": 0.0}
+            "soc_min": None, "soc_max": None, "peak": 0.0, "hp": 0.0, "hp_sun": 0.0, "hp_cov": 0.0,
+            # strings: PV vs Σ strings on the same rows, voltage × power while
+            # producing, peaks, energy × time of day (→ when a string produces)
+            "pv_s": 0.0, "mpp_s": 0.0, "vw1": 0.0, "wv1": 0.0, "vw2": 0.0, "wv2": 0.0,
+            "pk1": 0.0, "pk2": 0.0, "tc1": 0.0, "tc2": 0.0,
+            # the inverter's own energy counter vs its integrated AC output
+            "et": 0.0, "et_n": 0, "et_bad": False, "ac_et": 0.0, "pv_et": 0.0,
+            "soc0": None, "soc1": None, "hc": [0.0] * 24, "pv_cov": 0.0}
+
+
+def _pv_cnt_ok(a: dict) -> bool:
+    """The smart meter's counters are used for the day: no data gap, they came
+    with (nearly) every row and never jumped (meter swapped, inverter reset …)."""
+    return a["gap"] < 1800 and not a["cnt_bad"] and a["rows"] > 0 and a["cnt_rows"] >= 0.9 * a["rows"]
 
 
 def _pv_day_result(a: dict, price: float, feedin: float) -> dict:
@@ -8107,10 +8160,7 @@ def _pv_day_result(a: dict, price: float, feedin: float) -> dict:
     smart meter's counters when the day has no data gap (exact), otherwise from
     the integrated readings (consistent with the PV/consumption sums)."""
     imp, exp, src = a["imp_i"], a["exp_i"], "gemessen"
-    # the meter's counters are exact – used when the day has no data gap, the
-    # counters came with (nearly) every row and never jumped (meter swapped,
-    # inverter reset …)
-    if a["gap"] < 1800 and not a["cnt_bad"] and a["rows"] and a["cnt_rows"] >= 0.9 * a["rows"]:
+    if _pv_cnt_ok(a):                    # the meter's counters are exact
         imp, exp, src = a["imp_c"], a["exp_c"], "Zähler"
     k = lambda wh: round(wh / 1000.0, 3)
     out = {"day": a["day"], "pv_kwh": k(a["pv"]), "peak_pv_w": round(a["peak"]),
@@ -8120,7 +8170,12 @@ def _pv_day_result(a: dict, price: float, feedin: float) -> dict:
            # battery charged from the grid (AC, incl. conversion losses) vs from the sun
            "ch_grid_kwh": k(a["gch"]) if a["has_batt"] else None,
            "ch_pv_kwh": k(max(0.0, a["ch"] - a["gch"])) if a["has_batt"] else None,
-           "mpp1_kwh": k(a["mpp1"]), "mpp2_kwh": k(a["mpp2"])}
+           "mpp1_kwh": k(a["mpp1"]), "mpp2_kwh": k(a["mpp2"]),
+           # power-weighted mean MPP voltage while the string produces
+           "mpp1_u": round(a["vw1"] / a["wv1"], 1) if a["wv1"] > 20 else None,
+           "mpp2_u": round(a["vw2"] / a["wv2"], 1) if a["wv2"] > 20 else None,
+           # share of a typical day's PV hours with data (1 = complete day)
+           "pv_cov": round(a["pv_cov"], 3)}
     if a["has_load"]:
         load = a["load"]
         self_wh = max(0.0, a["pv"] - exp)
@@ -8166,6 +8221,11 @@ def compute_pv(store: "Store", days: int = 30, price: float = 0.35, feedin: floa
     if not rows:
         return {**base, "empty": True}
     I = _PV_I
+    XI = _PV_XI
+    i_m1, i_m2 = I["mpp1_w"], I["mpp2_w"]
+    # per string: accumulator keys + row indices (minute rows / SQLite buckets)
+    SK1 = ("mpp1", "tc1", "pk1", "vw1", "wv1", I["mpp1_v"], XI["mpp1_max"], XI["vw1"], XI["wv1"])
+    SK2 = ("mpp2", "tc2", "pk2", "vw2", "wv2", I["mpp2_v"], XI["mpp2_max"], XI["vw2"], XI["wv2"])
     prev = store.pv_before(start)
     cap = max(90.0, 2.5 * (900 if bucketed else step))
     D: dict = {}
@@ -8175,6 +8235,8 @@ def compute_pv(store: "Store", days: int = 30, price: float = 0.35, feedin: floa
     last = prev
     imp_seen = prev[I["imp_wh"]] if prev else None
     exp_seen = prev[I["exp_wh"]] if prev else None
+    et_seen = prev[I["e_total_wh"]] if prev else None
+    soc_first = soc_last = None
     has_load = has_batt = has_mpp2 = False
     for r in rows:
         ts = r[0]
@@ -8197,17 +8259,21 @@ def compute_pv(store: "Store", days: int = 30, price: float = 0.35, feedin: floa
         pv = max(0.0, pv or 0.0)
         a["pv"] += pv * h
         a["cov"] += eff
-        if dt > cap or (bucketed and dt - eff > 120):
+        hour = min(23, max(0, int((ts - d0 - 1) // 3600)))
+        a["hc"][hour] += eff
+        is_gap = dt > cap or (bucketed and dt - eff > 120)
+        if is_gap:
             a["gap"] += dt - eff
-        if pv > a["peak"]:
-            a["peak"] = pv
+        pk = (r[XI["pv_max"]] or 0.0) if bucketed else pv
+        if pk > a["peak"]:
+            a["peak"] = pk
         imp_w = exp_w = 0.0
         if load is not None:
             has_load = a["has_load"] = True
             a["load"] += load * h
         if grid is not None:
             if bucketed:
-                imp_w, exp_w = r[13] or 0.0, r[14] or 0.0
+                imp_w, exp_w = r[XI["imp_w"]] or 0.0, r[XI["exp_w"]] or 0.0
             else:
                 imp_w, exp_w = max(0.0, grid), max(0.0, -grid)
             a["imp_i"] += imp_w * h
@@ -8215,9 +8281,9 @@ def compute_pv(store: "Store", days: int = 30, price: float = 0.35, feedin: floa
         if batt is not None:
             has_batt = a["has_batt"] = True
             if bucketed:
-                a["ch"] += (r[15] or 0.0) * h
-                a["dis"] += (r[16] or 0.0) * h
-                a["gch"] += (r[17] or 0.0) * h
+                a["ch"] += (r[XI["ch_w"]] or 0.0) * h
+                a["dis"] += (r[XI["dis_w"]] or 0.0) * h
+                a["gch"] += (r[XI["gch_w"]] or 0.0) * h
             else:
                 ch_w = max(0.0, -batt)
                 a["ch"] += ch_w * h
@@ -8230,12 +8296,53 @@ def compute_pv(store: "Store", days: int = 30, price: float = 0.35, feedin: floa
         if soc is not None:
             a["soc_min"] = soc if a["soc_min"] is None else min(a["soc_min"], soc)
             a["soc_max"] = soc if a["soc_max"] is None else max(a["soc_max"], soc)
-        m1, m2 = r[I["mpp1_w"]], r[I["mpp2_w"]]
-        if m1 is not None:
-            a["mpp1"] += m1 * h
-        if m2 is not None:
-            a["mpp2"] += m2 * h
-            has_mpp2 = has_mpp2 or m2 > 0
+            if a["soc0"] is None:
+                a["soc0"] = soc
+            a["soc1"] = soc
+            if soc_first is None:
+                soc_first = soc
+            soc_last = soc
+        m1, m2 = r[i_m1], r[i_m2]
+        if m1 is not None or m2 is not None:
+            # Σ strings vs PV on exactly these rows (strings come once a minute)
+            a["pv_s"] += pv * h
+            a["mpp_s"] += (max(0.0, m1 or 0.0) + max(0.0, m2 or 0.0)) * h
+            tod = (ts - eff / 2.0 - d0) / 3600.0            # hour of the day (middle of the step)
+            for m_, sk in ((m1, SK1), (m2, SK2)):
+                if m_ is None:
+                    continue
+                k_e, k_tc, k_pk, k_vw, k_wv, i_u, x_max, x_vw, x_wv = sk
+                m_ = max(0.0, m_)
+                e_ = m_ * h
+                a[k_e] += e_
+                a[k_tc] += e_ * tod
+                pk = (r[x_max] or 0.0) if bucketed else m_
+                if pk > a[k_pk]:
+                    a[k_pk] = pk
+                if bucketed:
+                    a[k_vw] += (r[x_vw] or 0.0) * h
+                    a[k_wv] += (r[x_wv] or 0.0) * h
+                else:
+                    u_ = r[i_u]
+                    if u_ is not None and m_ > PV_STR_MIN_W:
+                        a[k_vw] += u_ * e_
+                        a[k_wv] += e_
+            if m2 is not None and m2 > 0:
+                has_mpp2 = True
+        # the inverter's energy counter (E_Total) vs its integrated AC output –
+        # only over steps without a gap, so both cover the same time
+        et, inv = r[I["e_total_wh"]], r[I["inv_w"]]
+        if et is not None:
+            if et_seen is not None and not is_gap and inv is not None:
+                de = et - et_seen
+                if 0.0 <= de <= max(dt, 60.0) * 30000.0 / 3600.0:    # 30 kW: more is a jump
+                    a["et"] += de
+                    a["et_n"] += 1
+                    a["ac_et"] += ((r[XI["inv_pos_w"]] or 0.0) if bucketed else max(0.0, inv)) * h
+                    a["pv_et"] += pv * h
+                else:
+                    a["et_bad"] = True
+            et_seen = et
         ci, ce = r[I["imp_wh"]], r[I["exp_wh"]]
         if ci is not None and ce is not None:
             if imp_seen is not None and exp_seen is not None:
@@ -8247,8 +8354,14 @@ def compute_pv(store: "Store", days: int = 30, price: float = 0.35, feedin: floa
                     a["cnt_rows"] += 1
                 else:
                     a["cnt_bad"] = True
+            elif grid is not None:
+                # the very first counter reading has no predecessor: its step
+                # (up to 15 min when bucketed) comes from the power readings
+                a["imp_c"] += imp_w * h
+                a["exp_c"] += exp_w * h
+                a["cnt_rows"] += 1
             imp_seen, exp_seen = ci, ce
-        hb = hours[min(23, max(0, int((ts - d0 - 1) // 3600)))]
+        hb = hours[hour]
         hb[0] += pv * h
         hb[1] += (load or 0.0) * h
         hb[2] += imp_w * h
@@ -8256,7 +8369,7 @@ def compute_pv(store: "Store", days: int = 30, price: float = 0.35, feedin: floa
         hb[4] += eff
         if ts > today0:
             b = int((ts - today0 - 1) // 900)
-            s_ = ser.setdefault(b, [0.0, 0.0, 0.0, 0.0, 0.0, None, 0])
+            s_ = ser.setdefault(b, [0.0, 0.0, 0.0, 0.0, 0.0, None, 0, 0.0, 0.0, 0.0, 0.0])
             s_[0] += pv * eff
             s_[1] += (load or 0.0) * eff
             s_[2] += (grid or 0.0) * eff
@@ -8265,6 +8378,12 @@ def compute_pv(store: "Store", days: int = 30, price: float = 0.35, feedin: floa
             if soc is not None:
                 s_[5] = soc
             s_[6] += 1
+            if m1 is not None:
+                s_[7] += max(0.0, m1) * eff
+                s_[8] += eff
+            if m2 is not None:
+                s_[9] += max(0.0, m2) * eff
+                s_[10] += eff
         T.append(ts)
         LC.append(LC[-1] + (load or 0.0) * h)
         MC.append(MC[-1] + imp_w * h)
@@ -8310,6 +8429,15 @@ def compute_pv(store: "Store", days: int = 30, price: float = 0.35, feedin: floa
             a["hp_cov"] += span
             hp_ok = True
 
+    # how complete each day is, weighted by when the sun produces: the mean
+    # PV power per hour of the day over the range is the typical profile – a
+    # day that starts at 22:00 has 2 h of data but ~0 % of the day's sun hours
+    prof = [hb[0] / hb[4] if hb[4] > 0 else 0.0 for hb in hours]
+    psum = sum(prof)
+    for a in D.values():
+        a["pv_cov"] = (sum(min(1.0, a["hc"][hh] / 3600.0) * prof[hh] for hh in range(24)) / psum
+                       if psum > 0 else min(1.0, a["cov"] / 86400.0))
+
     daily = [_pv_day_result(D[d], price, feedin) for d in sorted(D)]
 
     def total(items):
@@ -8324,6 +8452,7 @@ def compute_pv(store: "Store", days: int = 30, price: float = 0.35, feedin: floa
         for kk in list(t):
             if kk != "days":
                 t[kk] = round(t[kk], 2)
+        t["pv_days"] = round(sum(x.get("pv_cov") or 0.0 for x in items), 2)    # complete PV days
         t["self_rate"] = round(t["self_kwh"] / t["pv_kwh"], 3) if (has_load and t["pv_kwh"] > 0.05) else None
         t["autarky"] = (round(max(0.0, t["load_kwh"] - t["imp_kwh"]) / t["load_kwh"], 3)
                         if (has_load and t["load_kwh"] > 0.05) else None)
@@ -8354,17 +8483,58 @@ def compute_pv(store: "Store", days: int = 30, price: float = 0.35, feedin: floa
         series.append({"t": today0 + b * 900, "pv_w": round(s_[0] / s_[4]),
                        "load_w": round(s_[1] / s_[4]) if has_load else None,
                        "grid_w": round(s_[2] / s_[4]) if has_load else None,
-                       "batt_w": round(s_[3] / s_[4]) if has_batt else None, "soc": s_[5]})
+                       "batt_w": round(s_[3] / s_[4]) if has_batt else None, "soc": s_[5],
+                       "mpp1_w": round(s_[7] / s_[8]) if s_[8] > 0 else None,
+                       "mpp2_w": round(s_[9] / s_[10]) if (s_[10] > 0 and has_mpp2) else None})
+    acc = [D[d] for d in sorted(D)]
+
+    def S(key):
+        return sum(x[key] for x in acc)
     strings = None
     if has_mpp2 or tot["mpp1_kwh"]:
+        e1, e2 = S("mpp1"), S("mpp2")
         strings = {"mpp1_kwh": tot["mpp1_kwh"], "mpp2_kwh": tot["mpp2_kwh"] if has_mpp2 else None,
                    "today_mpp1_kwh": td["mpp1_kwh"] if td else None,
                    "today_mpp2_kwh": td["mpp2_kwh"] if (td and has_mpp2) else None,
-                   "ratio": round(tot["mpp2_kwh"] / tot["mpp1_kwh"], 3) if (has_mpp2 and tot["mpp1_kwh"] > 0.5) else None}
+                   "ratio": round(tot["mpp2_kwh"] / tot["mpp1_kwh"], 3) if (has_mpp2 and tot["mpp1_kwh"] > 0.5) else None,
+                   # power-weighted MPP voltage, peak, and the energy-weighted
+                   # hour of the day (when the string produces: east early, west late)
+                   "mpp1_u": round(S("vw1") / S("wv1"), 1) if S("wv1") > 20 else None,
+                   "mpp2_u": round(S("vw2") / S("wv2"), 1) if (has_mpp2 and S("wv2") > 20) else None,
+                   "mpp1_peak_w": round(max(x["pk1"] for x in acc)),
+                   "mpp2_peak_w": round(max(x["pk2"] for x in acc)) if has_mpp2 else None,
+                   "mpp1_tc": round(S("tc1") / e1, 2) if e1 > 50 else None,
+                   "mpp2_tc": round(S("tc2") / e2, 2) if (has_mpp2 and e2 > 50) else None}
+    # --- plausibility: do the stored numbers agree with each other? ----------
+    span = max(1, (last_ts or now) - max(start, first_ts or start))
+    pv_s = S("pv_s")
+    cnt_days = [x for x in acc if _pv_cnt_ok(x)]
+    checks = {
+        "coverage": {"covered_h": round(S("cov") / 3600.0, 1), "span_h": round(span / 3600.0, 1),
+                     "gap_h": round(S("gap") / 3600.0, 1), "gap_days": [x["day"] for x in acc if x["gap"] > 1800]},
+        "strings": ({"pv_kwh": round(pv_s / 1000.0, 2), "sum_kwh": round(S("mpp_s") / 1000.0, 2),
+                     "dev": round(S("mpp_s") / pv_s - 1.0, 4)} if pv_s > 200 else None),
+        "balance": ({"pv_kwh": tot["pv_kwh"], "dis_kwh": tot["dis_kwh"] or 0.0, "imp_kwh": tot["imp_kwh"],
+                     "load_kwh": tot["load_kwh"], "ch_kwh": tot["ch_kwh"] or 0.0, "exp_kwh": tot["exp_kwh"]}
+                    if has_load else None),
+        "meter": ({"days": len(cnt_days),
+                   "imp_cnt_kwh": round(sum(x["imp_c"] for x in cnt_days) / 1000.0, 2),
+                   "imp_int_kwh": round(sum(x["imp_i"] for x in cnt_days) / 1000.0, 2),
+                   "exp_cnt_kwh": round(sum(x["exp_c"] for x in cnt_days) / 1000.0, 2),
+                   "exp_int_kwh": round(sum(x["exp_i"] for x in cnt_days) / 1000.0, 2)}
+                  if (has_load and cnt_days) else None),
+        "meter_jumps": [x["day"] for x in acc if x["cnt_bad"]],
+        "battery": ({"ch_kwh": tot["ch_kwh"], "dis_kwh": tot["dis_kwh"], "soc_first": soc_first,
+                     "soc_last": soc_last} if has_batt and soc_first is not None else None),
+        "etotal": ({"et_kwh": round(S("et") / 1000.0, 2), "ac_kwh": round(S("ac_et") / 1000.0, 2),
+                    "pv_kwh": round(S("pv_et") / 1000.0, 2), "jumps": [x["day"] for x in acc if x["et_bad"]]}
+                   if sum(x["et_n"] for x in acc) >= 10 else None),
+        "peak": (lambda x: {"pv_w": round(x["peak"]), "day": x["day"]})(max(acc, key=lambda x: x["peak"])),
+    }
     return {**base, "empty": False, "step_s": step, "bucketed": bucketed,
             "has_meter": has_load, "has_battery": has_batt,
             "has_hp": hp_ok, "today": td, "daily": daily, "monthly": monthly, "totals": tot,
-            "hourly": hourly, "series": series, "strings": strings}
+            "hourly": hourly, "series": series, "strings": strings, "checks": checks}
 
 
 def compute_pv_money(store: "Store", price: float, feedin: float, now: int | None = None) -> dict | None:

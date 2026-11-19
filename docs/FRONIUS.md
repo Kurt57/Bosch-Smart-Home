@@ -15,6 +15,9 @@ Was du danach siehst:
   zur **Erwartung** aus dem PV-Planer/PVGIS sowie **Wechselrichter, Strings, Batterie und
   Smart Meter** im Detail (Strings, Batterie mit Spannung/Strom/Temperatur/Modus, Smart Meter je
   Phase mit Leistung, Strom, Spannung und cos φ). Der PV-Planer bleibt darunter für Erweiterungen.
+* **Tab PV → 🧵 String-Vergleich:** die beiden MPP-Tracker (Strings) nebeneinander – jetzt, heute
+  als Kurven, je Tag, je kWp, wann sie erzeugen, mit Bewertung (siehe unten).
+* **Tab PV → 🔎 Plausibilitätsprüfung:** passen die gespeicherten Zahlen zueinander? (siehe unten)
 * **Wärmepumpe → Live:** wie viel des Stroms gerade von der Sonne kommt.
 * **Wohn-Dashboard (`…/#dash`):** Energiefluss und Empfehlung mit den **gemessenen** Werten
   (alle 10 Sekunden), vom Haus aus Linien zu den größten Verbrauchern (Wärmepumpe, einzeln
@@ -60,8 +63,8 @@ Was du danach siehst:
    Batterie erkannt wurden.
 
 Ab jetzt holt die Bridge **alle 15 Sekunden** den Energiefluss und **einmal pro Minute**
-Strings, Smart-Meter-Zählerstände und Batterie. Gespeichert wird **je Minute ein Mittelwert**
-(Tabelle `pv_samples` in `bridge/energy.db`). Die Adresse steht in `bridge/config.json`;
+Strings (Leistung und Spannung je MPP-Tracker), Smart-Meter-Zählerstände und Batterie.
+Gespeichert wird **je Minute ein Mittelwert** (Tabelle `pv_samples` in `bridge/energy.db`). Die Adresse steht in `bridge/config.json`;
 nach einem Neustart verbindet sich die Bridge von selbst wieder.
 
 > **Historie:** Der GEN24 bietet über die Solar API keine abrufbare Vergangenheit. Die
@@ -90,9 +93,72 @@ nach einem Neustart verbindet sich die Bridge von selbst wieder.
 * **Sonnenstrom der Wärmepumpe:** Die Wärmepumpe bekommt je 5 Minuten denselben Anteil
   Sonnen-/Batteriestrom zugeordnet wie das ganze Haus (anteilige Rechnung – ein eigener
   Zähler nur für die Wärmepumpe wäre genauer).
-* **Erwartung** (Monatstabelle) = Jahresertrag je kWp aus dem PV-Planer bzw. PVGIS ×
-  installierte kWp × Monatsanteil, auf die Tage mit Daten gerechnet. Das Wetter schwankt von
-  Jahr zu Jahr um etwa ±15 %.
+* **Erwartung** (Monatstabelle) = Jahresertrag je kWp × installierte kWp × Monatsanteil,
+  gerechnet auf die **erfassten Sonnenstunden**: ein Tag, an dem die Bridge erst um 14 Uhr
+  startete, zählt nur mit dem Teil, den die Sonne nach 14 Uhr typischerweise liefert (aus dem
+  mittleren Tagesprofil im Zeitraum), nicht als ganzer Tag. Der Jahresertrag je kWp kommt aus
+  der **Ausrichtung der Strings**, wenn du sie im String-Vergleich einträgst (Süd 1000,
+  Südost/Südwest 950, Ost/West 840, Nordost/Nordwest 680, Nord 600, flach 870 kWh/kWp,
+  gewichtet mit den kWp der Strings), sonst aus dem PV-Planer bzw. PVGIS. Das Wetter schwankt
+  von Jahr zu Jahr um etwa ±15 %.
+
+## Strings vergleichen (🧵 String-Vergleich)
+
+Ein **String** ist eine Reihe von Modulen an einem MPP-Eingang des Wechselrichters (der GEN24
+hat zwei). Die Karte zeigt:
+
+* **Jetzt:** Leistung, Spannung und Strom je String, Anteil an der Summe und – sobald die kWp
+  je String bekannt sind – Watt je kWp. Nachts bleibt an den Modulen eine kleine Spannung ohne
+  Strom (z. B. 70 V und 49 V bei 0 A) – das ist normal.
+* **Heute im Tagesverlauf:** beide Strings als Kurven (Viertelstunden), umschaltbar auf
+  **je kWp**, damit unterschiedlich große Strings vergleichbar werden.
+* **Tageswerte** (beim Jahr: Monatswerte) je String und eine Tabelle über den gewählten
+  Zeitraum: Energie und Anteil, kWp, **kWh je kWp**, Spitzenleistung, **„erzeugt im Mittel
+  um“** (Schwerpunkt der Tageserzeugung – Ostdächer liefern früher, Westdächer später) und die
+  **Spannung im Betrieb** (nach Leistung gewichtet, nur solange der String Strom liefert).
+* **✏️ Strings beschreiben** (optional): Name, Zahl der Module, kWp und Ausrichtung je String.
+  Ohne Eintrag schätzt die App die kWp aus den Spannungen: Bei gleichen Modulen wächst die
+  Spannung mit der Zahl der Module in Reihe, also teilt sich die installierte Leistung im
+  Verhältnis der Spannungen auf (gekennzeichnet mit „≈“). Gilt für alle Geräte.
+
+**Bewertung** (grün = unauffällig, blau = Hinweis, gelb = auffällig):
+
+* Ein String liefert **jetzt** fast nichts, während der andere über 300 W bringt – oder er
+  lieferte an einem ganzen Tag fast nichts → Schnee, Verschattung oder ein Defekt
+  (Steckverbinder, Sicherung, DC-Trennschalter, Eingang des Wechselrichters).
+* **Summe der Strings = PV-Erzeugung** (auf denselben Minuten; bis 3 % unauffällig – die
+  Strings werden einmal pro Minute abgefragt, bei wechselnden Wolken streut das).
+* **Zur gleichen Tageszeit?** Erzeugt ein String im Mittel deutlich später, zeigt er weiter nach
+  Westen (oder der andere wird nachmittags verschattet). Passt das nicht zur eingetragenen
+  Ausrichtung, fragt die App, ob die Strings vertauscht eingetragen sind.
+* **Je kWp:** Bei gleicher Ausrichtung sollten beide Strings je kWp gleich viel liefern (bis 8 %
+  normal, über 15 % auffällig). Bei unterschiedlicher Ausrichtung ist ein Unterschied normal –
+  im Winter bekommen Ost- und Westflächen deutlich weniger als die Südseite.
+* **Trend:** Ab 7 Sonnentagen vergleicht die App das Verhältnis der beiden Strings der letzten
+  3 Tage mit den Tagen davor. Das Wetter wirkt auf beide Strings, ein plötzlicher Einbruch nur
+  eines Strings (über 25 %) deutet auf neue Verschattung, Schnee, Laub oder einen Defekt.
+* **Spannungen:** Die Temperatur verändert beide Strings gleich – sinkt das Spannungsverhältnis
+  an zwei Tagen um mehr als 6 %, fehlt einem String etwa ein Modul bzw. eine Bypass-Diode.
+  Mit eingetragener Modulzahl prüft die App auch, ob das Spannungsverhältnis dazu passt.
+
+## Plausibilitätsprüfung (🔎)
+
+Prüft über den gewählten Zeitraum, ob die gespeicherten Zahlen zueinander passen:
+
+| Prüfung | Was verglichen wird | unauffällig |
+|---|---|---|
+| Datenlage | Stunden mit Werten ÷ Stunden im Zeitraum, Lücken, unvollständige Tage | ≥ 97 % |
+| Strings = PV | Summe der String-Energie ÷ PV-Erzeugung (gleiche Minuten) | ± 3 % |
+| Energiebilanz | Sonne + Batterie + Netz hinein − (Haus + Batterie + Netz heraus) = Umwandlungsverluste, bezogen auf die umgewandelte Energie | 0–10 % |
+| Zählerstände | Bezug/Einspeisung laut Smart Meter ÷ aufsummierte Leistungswerte (Tage ohne Lücke) | ± 3 % |
+| Batterie | entladen ÷ (geladen − Änderung des Ladestands × Kapazität), ab einem halben Zyklus | 80–100 % |
+| Zähler des Wechselrichters | Zuwachs von E-Total ÷ gemessene AC-Abgabe (bzw. PV-Erzeugung) | ± 4 % |
+| Spitzenleistung | höchste PV-Leistung ÷ installierte kWp | ≤ 100 % |
+
+Was E-Total genau zählt, ist je nach Gerät verschieden (bei einem Hybrid-Wechselrichter wie dem
+GEN24 vermutlich alles, was er ins Hausnetz abgibt – Sonne **und Batterie**); die Prüfung zeigt
+anhand deiner Messwerte, ob er zur AC-Abgabe oder zur PV-Erzeugung passt. Die Auswertungen der
+App rechnen nicht mit diesem Zähler.
 
 ## Häufige Meldungen
 
