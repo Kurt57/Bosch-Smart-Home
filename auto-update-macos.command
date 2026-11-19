@@ -34,16 +34,35 @@ done
 echo "Python: $PY ($("$PY" -c 'import sys,ssl; print(sys.version.split()[0], "·", ssl.OPENSSL_VERSION)' 2>/dev/null))"
 
 start_bridge() {
-  ( cd bridge && "$PY" shc_bridge.py serve ) &
+  # exec: the background job IS the bridge – so stop_bridge reaches it (before,
+  # only the wrapping shell was stopped and the old bridge kept running)
+  ( cd bridge && exec "$PY" shc_bridge.py serve ) &
   BRIDGE_PID=$!
   echo "Bridge gestartet (PID $BRIDGE_PID)."
 }
 
+# Eine schon laufende Bridge zuerst sauber beenden: zwei gleichzeitig wuerden
+# dieselbe Bosch-/AEG-Anmeldung benutzen – Bosch sperrt sie dann.
+stop_running_bridge() {
+  PIDS=$(pgrep -f "[s]hc_bridge\.py.* serve" 2>/dev/null | tr '\n' ' ')
+  [ -z "${PIDS// /}" ] && return 0
+  echo "Beende die laufende Bridge (PID $PIDS) …"
+  kill -TERM $PIDS 2>/dev/null
+  for _ in $(seq 1 50); do
+    sleep 0.5
+    pgrep -f "[s]hc_bridge\.py.* serve" >/dev/null 2>&1 || { echo "  beendet."; return 0; }
+  done
+  echo "  Sie reagiert nicht – erzwinge das Beenden."
+  kill -KILL $PIDS 2>/dev/null
+  sleep 1
+}
+
 stop_bridge() {
   if [ -n "$BRIDGE_PID" ] && kill -0 "$BRIDGE_PID" 2>/dev/null; then
-    kill "$BRIDGE_PID" 2>/dev/null
+    kill -TERM "$BRIDGE_PID" 2>/dev/null
     wait "$BRIDGE_PID" 2>/dev/null
   fi
+  stop_running_bridge          # also one started elsewhere (other window)
 }
 
 # sauber beenden, wenn das Fenster geschlossen wird
@@ -52,6 +71,7 @@ trap 'echo; echo "Beende …"; stop_bridge; exit 0' INT TERM
 echo "Adresse am iPhone im Safari oeffnen. Zum Beenden Fenster schliessen oder Strg+C."
 echo "Auto-Update: alle ${INTERVAL_MIN} Minuten."
 echo
+stop_running_bridge
 start_bridge
 
 while true; do

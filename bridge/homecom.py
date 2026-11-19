@@ -174,6 +174,7 @@ class HomeComClient:
         self._access = None
         self._access_exp = 0
         self._lock = threading.Lock()   # serialise token refreshes
+        self._retired = False           # replaced by a newer client – must not refresh any more
         self._ctx = ssl.create_default_context()  # public hosts -> verify on
 
     # -- low level -------------------------------------------------------- #
@@ -283,9 +284,22 @@ class HomeComClient:
 
     def _valid_token(self) -> str:
         with self._lock:
+            if self._retired:
+                # a newer client owns the (single-use) refresh token now: refreshing
+                # here with the old one would make Bosch revoke the whole login
+                raise HomeComError("HomeCom-Verbindung wurde neu aufgebaut.")
             if not self._access or time.time() >= self._access_exp:
                 self._refresh()
             return self._access
+
+    def retire(self, timeout: float = 20.0) -> bool:
+        """Stop using this client for good (it is replaced, or the process ends).
+        Waits for a refresh in flight, then keeps the token from being used again."""
+        got = self._lock.acquire(timeout=timeout)
+        self._retired = True
+        if got:
+            self._lock.release()
+        return got
 
     # -- data ------------------------------------------------------------- #
     def list_gateways(self) -> list[str]:

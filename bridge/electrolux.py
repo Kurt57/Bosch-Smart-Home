@@ -133,9 +133,19 @@ class ElectroluxClient:
 
     def _valid_token(self) -> str:
         with self._lock:
+            if getattr(self, "_retired", False):
+                raise ElectroluxError("AEG-Verbindung wurde neu aufgebaut.")
             if not self._access or time.time() >= self._access_exp:
                 self._refresh()
             return self._access
+
+    def retire(self, timeout: float = 20.0) -> bool:
+        """Never refresh again (replaced / process ends); waits for a refresh in flight."""
+        got = self._lock.acquire(timeout=timeout)
+        self._retired = True
+        if got:
+            self._lock.release()
+        return got
 
     # -- data ------------------------------------------------------------- #
     def list_appliances(self) -> list[dict]:

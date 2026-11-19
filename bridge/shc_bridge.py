@@ -42,6 +42,7 @@ import json
 import math
 import os
 import re
+import signal
 import socket
 import sqlite3
 import ssl
@@ -259,6 +260,11 @@ def _schedule_restart(delay: float = 1.2) -> None:
     can flush first."""
     def _restart():
         time.sleep(delay)
+        try:
+            if _RUNTIME is not None:          # never re-exec in the middle of a token refresh
+                _RUNTIME.quiesce_tokens()
+        except Exception as exc:  # pragma: no cover
+            print(f"[update] quiesce: {exc}", file=sys.stderr)
         try:
             os.execv(sys.executable, [sys.executable] + sys.argv)
         except Exception as exc:  # pragma: no cover
@@ -9010,6 +9016,11 @@ class Runtime:
     def stop_heatpump(self):
         if self.hp:
             self.hp.stop()
+            # the replaced client must never refresh again – its refresh token is
+            # single-use and a newer client takes over (else Bosch revokes the login)
+            cl = getattr(self.hp, "client", None)
+            if cl is not None and hasattr(cl, "retire"):
+                cl.retire()
             self.hp = None
 
     # -- AEG / Electrolux ------------------------------------------------ #
@@ -9050,7 +9061,27 @@ class Runtime:
     def stop_electrolux(self):
         if self.ael:
             self.ael.stop()
+            cl = getattr(self.ael, "client", None)
+            if cl is not None and hasattr(cl, "retire"):
+                cl.retire()
             self.ael = None
+
+    def quiesce_tokens(self, timeout: float = 20.0):
+        """Before the process ends or re-executes itself: stop the cloud pollers
+        and wait until no refresh-token rotation is in flight (HomeCom/AEG issue a
+        new single-use token on every refresh – a process killed in the middle
+        would leave a used-up token in config.json and the login would be lost)."""
+        for name in ("hp", "ael"):
+            poller = getattr(self, name, None)
+            if poller:
+                poller.stop()
+                cl = getattr(poller, "client", None)
+                if cl is not None and hasattr(cl, "retire"):
+                    cl.retire(timeout)
+
+
+_CONFIG_WRITE_LOCK = threading.Lock()
+_RUNTIME = None          # the serving Runtime (for a clean re-exec after an update)
 
 
 def save_config(cfg: dict, path: str):
@@ -9065,12 +9096,23 @@ def save_config(cfg: dict, path: str):
             "tibber_token", "ha_url", "ha_token", "ha_entities", "contact_room_map",
             "fronius_host", "fronius_interval", "calendar_urls",
             "awb_street_code", "awb_building_number", "awb_label")
-    data = {k: cfg[k] for k in keep if k in cfg and not str(k).startswith("_")}
-    try:
-        with open(path, "w", encoding="utf-8") as fh:
-            json.dump(data, fh, indent=2, ensure_ascii=False)
-    except OSError as exc:
-        print(f"[config] could not write {path}: {exc}", file=sys.stderr)
+    # one writer at a time, and atomically (temp file + rename): two saves at once
+    # (e.g. a rotated HomeCom token while a setting is stored) could otherwise
+    # leave an older token – or a half-written file – on disk
+    with _CONFIG_WRITE_LOCK:
+        data = {k: cfg[k] for k in keep if k in cfg and not str(k).startswith("_")}
+        tmp = f"{path}.tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(data, fh, indent=2, ensure_ascii=False)
+                fh.flush()
+                try:
+                    os.fsync(fh.fileno())
+                except OSError:
+                    pass
+            os.replace(tmp, path)
+        except OSError as exc:
+            print(f"[config] could not write {path}: {exc}", file=sys.stderr)
 
 
 # --------------------------------------------------------------------------- #
@@ -11057,7 +11099,10 @@ def _homecom_verdict(d: dict) -> tuple:
     if tok and not tok.get("ok"):
         if tok.get("expired"):
             return ("error", "Die HomeCom-Anmeldung ist abgelaufen.",
-                    ["Im Setup unter „Wärmepumpe (HomeCom)“ neu verbinden (Login-Link → Code einfügen)."])
+                    ["Im Setup unter „Wärmepumpe (HomeCom)“ neu verbinden (Login-Link → Code einfügen).",
+                     "Passiert das öfter: Lief die Bridge zweimal (z. B. update-macos.command gestartet, während "
+                     "die alte noch lief)? Dann verbraucht eine die Anmeldung der anderen. Ab v202 verhindert die "
+                     "Bridge das und die Startskripte beenden die alte vorher."])
         return ("error", f"Die Anmeldung bei Bosch klappt gerade nicht: {tok.get('error')}",
                 ["Später erneut testen; bleibt es, im Setup neu verbinden."])
     api = d.get("api") or {}
@@ -11281,7 +11326,43 @@ def cmd_pair(args, cfg):
                  "press; gen 1: hold until LED flashes) when you pressed Enter, then retry.")
 
 
+def _instance_lock(cfg_path: str):
+    """Exclusive lock next to config.json for the lifetime of this process. A
+    second bridge on the same config would use the same single-use HomeCom/AEG
+    refresh tokens – the first refresh of one process makes the other one's token
+    invalid and Bosch then revokes the login. Returns the open file (keep it
+    referenced), or None where file locks are unavailable."""
+    try:
+        import fcntl
+    except ImportError:                      # Windows: rely on the port check
+        return None
+    lock_path = os.path.join(os.path.dirname(os.path.abspath(cfg_path)) or ".", ".bridge.lock")
+    fh = open(lock_path, "a+")
+    try:
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        fh.seek(0)
+        other = (fh.read().strip() or "?")[:20]
+        fh.close()
+        print("\n  ⚠️  Die Bridge läuft bereits" + (f" (PID {other})" if other != "?" else "") + ".\n"
+              "  Eine zweite würde die Anmeldung bei Bosch (HomeCom) und AEG verbrauchen –\n"
+              "  deshalb startet diese hier nicht. Zum Neustart das andere Terminal-Fenster\n"
+              "  schließen (oder dort Strg+C) oder update-macos.command / start-macos.command\n"
+              "  benutzen: sie beenden die laufende Bridge vorher selbst.\n", file=sys.stderr)
+        sys.exit(3)
+    fh.seek(0)
+    fh.truncate()
+    fh.write(str(os.getpid()))
+    fh.flush()
+    return fh
+
+
 def cmd_serve(args, cfg):
+    global _RUNTIME
+    # one bridge per config, and the web port taken BEFORE anything talks to a
+    # cloud: a second start used to refresh the HomeCom token first and only then
+    # fail on the busy port – leaving the running bridge with a used-up token
+    _lock_fh = None if args.demo else _instance_lock(args.config)
     store = Store(cfg["db"])
     seed_products(store)                      # keep the hardware catalog in the DB
     cfg["_config_path"] = args.config
@@ -11291,6 +11372,14 @@ def cmd_serve(args, cfg):
         cfg["price_per_kwh"] = args.price
 
     ctx = Runtime(store, cfg)
+    _RUNTIME = ctx
+    frontend = args.frontend or DEFAULT_FRONTEND
+    try:
+        httpd = make_server(args.host, args.port, ctx, frontend)
+    except OSError as exc:
+        print(f"\n  ⚠️  Port {args.port} ist belegt ({exc.strerror or exc}) – läuft die Bridge schon "
+              f"(z. B. als Demo)?\n  Diese hier startet nicht; die Anmeldungen bleiben unberührt.\n", file=sys.stderr)
+        sys.exit(3)
     have_cert = os.path.exists(cfg["cert"]) and os.path.exists(cfg["key"])
     if args.demo:
         ctx.start_demo(days=args.demo_days)
@@ -11304,12 +11393,13 @@ def cmd_serve(args, cfg):
     ctx.start_rollup()
     ctx.start_warmer()
 
-    # optional: start the heat-pump (HomeCom) poller if already connected
-    if ctx.start_heatpump():
+    # optional: start the heat-pump (HomeCom) poller if already connected – not
+    # in the demo, which must never touch the real accounts (single-use tokens)
+    if not args.demo and ctx.start_heatpump():
         print(f"  Heat pump:   HomeCom gateway {cfg.get('homecom_gateway')}")
 
     # optional: start the AEG / Electrolux appliance poller if already connected
-    if ctx.start_electrolux():
+    if not args.demo and ctx.start_electrolux():
         print("  Appliances:  AEG/Electrolux connected")
 
     # optional: PV inverter (Fronius) – demo/live already started it
@@ -11322,8 +11412,6 @@ def cmd_serve(args, cfg):
     if _ensure_auto_update(cfg):
         print(f"  Auto-update: on (alle {int(cfg.get('auto_update_interval', 0))} min)")
 
-    frontend = args.frontend or DEFAULT_FRONTEND
-    httpd = make_server(args.host, args.port, ctx, frontend)
     ip_hint = local_ip()
     mode_txt = {"demo": "DEMO", "live": "LIVE (" + cfg.get("shc_ip", "") + ")",
                 "idle": "IDLE – noch nicht gekoppelt, bitte Setup im Browser öffnen"}[ctx.mode]
@@ -11332,14 +11420,30 @@ def cmd_serve(args, cfg):
     print(f"  Open on this machine:  http://localhost:{args.port}/")
     print(f"  Open on your iPhone:   http://{ip_hint}:{args.port}/")
     print("  (iPhone must be on the same Wi-Fi. Press Ctrl+C to stop.)\n")
+    # Terminal closed (SIGHUP) or `kill` (SIGTERM): end like Ctrl+C, so the
+    # cleanup below can wait for a token refresh in flight
+    def _graceful(signum, frame):
+        raise KeyboardInterrupt
+    for sig in ("SIGTERM", "SIGHUP"):
+        if hasattr(signal, sig):
+            try:
+                signal.signal(getattr(signal, sig), _graceful)
+            except (ValueError, OSError):
+                pass
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         print("\nStopping …")
     finally:
+        try:
+            ctx.quiesce_tokens()
+        except Exception as exc:  # pragma: no cover
+            print(f"[stop] {exc}", file=sys.stderr)
         ctx.stop()
         ctx.stop_fronius()
         httpd.server_close()
+        if _lock_fh is not None:
+            _lock_fh.close()
 
 
 def main():

@@ -16,6 +16,23 @@ git pull --ff-only || {
   exit 1
 }
 
+# Eine schon laufende Bridge zuerst sauber beenden: zwei gleichzeitig wuerden
+# dieselbe Bosch-/AEG-Anmeldung benutzen – Bosch sperrt sie dann.
+stop_running_bridge() {
+  PIDS=$(pgrep -f "[s]hc_bridge\.py.* serve" 2>/dev/null | tr '\n' ' ')
+  [ -z "${PIDS// /}" ] && return 0
+  echo "Beende die laufende Bridge (PID $PIDS) …"
+  kill -TERM $PIDS 2>/dev/null
+  for _ in $(seq 1 50); do
+    sleep 0.5
+    pgrep -f "[s]hc_bridge\.py.* serve" >/dev/null 2>&1 || { echo "  beendet."; return 0; }
+  done
+  echo "  Sie reagiert nicht – erzwinge das Beenden."
+  kill -KILL $PIDS 2>/dev/null
+  sleep 1
+}
+
+stop_running_bridge
 echo
 echo "Starte die Bridge …"
 echo "Adresse am iPhone im Safari oeffnen. Zum Beenden Fenster schliessen oder Strg+C."

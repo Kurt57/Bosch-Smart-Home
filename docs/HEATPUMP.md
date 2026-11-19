@@ -98,13 +98,33 @@ importierten Monaten statt auf einer Hochrechnung.
 | „Login fehlgeschlagen … Code korrekt/kopiert?" | Der Code ist nur wenige Minuten gültig. Login-Link neu öffnen, neu anmelden, Adresse frisch kopieren. |
 | „Keine Wärmepumpe gefunden" | Anmeldung ok, aber HomeCom liefert kein Gateway. Ist die WP in der HomeCom-App online? |
 | „Fehler" im Setup-Status | Letzter Abruf schlug fehl (z. B. Token abgelaufen/Netz). Die Bridge erneuert den Token automatisch; bei dauerhaftem Fehler neu verbinden. |
-| „HomeCom-Anmeldung abgelaufen" / `invalid_grant` | Der Refresh-Token ist verbraucht/ungültig – im Setup einfach **neu verbinden** (neuer Login-Code). Wird ab Werk automatisch rotiert und gespeichert. |
+| „HomeCom-Anmeldung abgelaufen" / `invalid_grant` | Der Refresh-Token ist verbraucht/ungültig – im Setup einfach **neu verbinden** (neuer Login-Code). Wird ab Werk automatisch rotiert und gespeichert. Häufigste Ursache war eine **zweite laufende Bridge** (siehe unten). |
 | „HomeCom-Modul nicht installiert" | Datei `bridge/homecom.py` fehlt – aus dem Repo nachziehen. |
 | „Zeitüberschreitung beim Verschlüsseln (TLS-Handshake) mit …" | Die Bridge erreicht den Bosch-Server, die verschlüsselte Verbindung kommt aber nicht zustande. Erst den **Verbindungstest** (unten) machen. Zeigt er „kein TLS 1.3" und klappt `curl` im Terminal, liegt es am Python der Bridge → siehe „Python der Bridge". |
 | „Name … nicht auflösbar (DNS)" / „antwortet nicht" | Internet, Router/DNS, VPN oder Filter am Rechner der Bridge prüfen. |
 | „HTTP 429 – Bosch drosselt gerade" | Zu viele Anfragen; legt sich meist nach einiger Zeit. Die Bridge versucht es danach von selbst. |
 | „HomeCom antwortet, liefert aber keine Werte" | Anmeldung ok, aber das Gateway meldet nichts – in der HomeCom-App prüfen, ob die Wärmepumpe online ist. |
 | „WP · Betriebsart unbekannt (Datenlücke)" | Die Bridge hat die Wärmepumpe länger als 30 Minuten nicht erreicht (Rechner aus/im Ruhezustand, Cloud gestört, Anmeldung abgelaufen). Der Stromzähler zeigt danach, wie viel in der Zeit verbraucht wurde – das zählt voll zum Tagesverbrauch. Ob dafür geheizt oder Warmwasser gemacht wurde, war aber nicht zu sehen; deshalb wird diese Menge keiner Betriebsart zugeschlagen. In der Stundenreihe und im Tagesablauf bleibt die Lücke leer. |
+
+### Warum die Anmeldung verloren gehen kann
+
+Bosch (SingleKey ID) gibt bei **jeder** Token-Erneuerung (etwa stündlich) einen neuen Refresh-Token
+aus; der alte gilt danach nicht mehr. Benutzt eine zweite Stelle den alten noch einmal, sperrt Bosch
+die ganze Anmeldung. Genau das passierte, wenn die Bridge **zweimal lief** – z. B. weil
+`update-macos.command` gestartet wurde, während die alte Bridge noch lief: die neue erneuerte sofort
+den Token und beendete sich erst danach wegen des belegten Ports; die alte arbeitete mit dem
+verbrauchten Token weiter. Seit v202:
+
+* Pro `config.json` läuft nur **eine** Bridge (Sperrdatei `bridge/.bridge.lock`); eine zweite
+  beendet sich mit einem Hinweis, **bevor** sie Bosch oder AEG kontaktiert. Auch den Port belegt
+  die Bridge zuerst.
+* `start-macos.command`, `update-macos.command` und `auto-update-macos.command` beenden eine
+  laufende Bridge vorher sauber.
+* Beim Beenden (Fenster schließen, Strg+C, `kill`) und beim Neustart nach einem Update wartet die
+  Bridge eine laufende Token-Erneuerung ab; `config.json` wird atomar geschrieben.
+* Der Demo-Modus benutzt die echten Bosch-/AEG-Zugänge nicht.
+
+Nach einer Sperre hilft nur einmal **neu verbinden**; danach sollte sie halten.
 
 ### Verbindungstest
 
