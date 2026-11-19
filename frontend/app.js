@@ -94,8 +94,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v206';   // short tag shown always-on in the header
-const APP_VERSION = 'v206 · 2026-11-19 · PV-Tab mit Wetter: drei Kacheln heute/morgen/übermorgen mit Wetterart (sonnig, heiter, wechselhaft, trüb, Regen/Schnee), Sonnenstunden von den Stunden Tageslicht, Bewölkung, Temperatur und erwartetem Ertrag – aus der Einstrahlung und dem, was deine Anlage an den letzten Tagen daraus gemacht hat. Im Verlauf die Sonnenstunden je Tag direkt unter den PV-Balken, das Wetter im Tooltip und eine Zusammenfassung (sonnigster/trübster Tag mit Ertrag). Neuer Zeitraum „Heute“ mit Balken je Stunde. Wetter: Open-Meteo (Modell für deinen Standort); fehlt der Standort, fragt die App nach dem Ort. Wohn-Dashboard: Termine und Stundenplan stehen auf breiten Bildschirmen nebeneinander. ' +
+const APP_BUILD = 'v207';   // short tag shown always-on in the header
+const APP_VERSION = 'v207 · 2026-11-19 · PV-Planer: neue Karte „🔬 Theorie vs. Praxis“ unter „PV-Nutzung pro Monat“ – je Monat, was der Planer für deine Anlage erwartet (mit kWp und Batterie laut Wechselrichter, Ausrichtung der Strings, Verbrauch laut Planer), neben dem gemessenen Ergebnis: vier Balken (PV Theorie/Praxis, Verbrauch Theorie/Praxis; Theorie gestrichelt), Tabelle mit Abweichungen bei PV, Verbrauch, Netzbezug und Autarkie, angefangene Monate anteilig, und eine Einordnung mit den Sonnenstunden des Monats gegenüber dem langjährigen Mittel. ' +
+  'v206 · 2026-11-19 · PV-Tab mit Wetter: drei Kacheln heute/morgen/übermorgen mit Wetterart (sonnig, heiter, wechselhaft, trüb, Regen/Schnee), Sonnenstunden von den Stunden Tageslicht, Bewölkung, Temperatur und erwartetem Ertrag – aus der Einstrahlung und dem, was deine Anlage an den letzten Tagen daraus gemacht hat. Im Verlauf die Sonnenstunden je Tag direkt unter den PV-Balken, das Wetter im Tooltip und eine Zusammenfassung (sonnigster/trübster Tag mit Ertrag). Neuer Zeitraum „Heute“ mit Balken je Stunde. Wetter: Open-Meteo (Modell für deinen Standort); fehlt der Standort, fragt die App nach dem Ort. Wohn-Dashboard: Termine und Stundenplan stehen auf breiten Bildschirmen nebeneinander. ' +
   'v205 · 2026-11-19 · Profil → „Lastspitzen & Dimensionierung“ mit dem Smart Meter: statt der Summe der einzeln gemessenen Steckdosen + Wärmepumpe (und einer Schätzung für den Rest) rechnet die Karte mit dem gemessenen Verbrauch des ganzen Hauses – Lastdauerlinie und Kennwerte aus den Minutenmitteln, die Spitzen aus den 15-s-Abfragen (die Bridge speichert dafür je Minute den höchsten Wert von Verbrauch und Netzbezug). Neu: höchster Netzbezug, höchste Batterie-Abgabe und bei jeder Top-Spitze, wie viel aus Netz, Batterie und Sonne kam. Aufschlüsselung je Gerät und Verbrauch je Stunde zeigen den Rest als gemessene Differenz statt Schätzung. Stufen bis 15 kW für den ganzen Haushalt. ' +
   'v204 · 2026-11-19 · Wohn-Dashboard: neue Kachel „Heute“ mit Autarkie-Ring (Anteil des Verbrauchs, der nicht aus dem Netz kam; daneben gestern zum Vergleich) und den Tageswerten Sonne (mit „selbst genutzt“), verbraucht (mit Wärmepumpe und deren Sonnenanteil), aus dem Netz/eingespeist, gespart, Batterie (jetzt und heute min–max) und vermiedenes CO₂; darunter 7 Tage, Monat, seit Anschluss und der beste Sonnentag. Auf breiten Bildschirmen (iPad quer) steht sie neben dem Energiefluss. Die Geldbilanz steht jetzt dort statt im Banner – das Banner erscheint nur noch, wenn es etwas zu tun gibt. IP-Adressen im Heimnetz sind verdeckt, bis man „anzeigen“ antippt (PV-Gerätekarte, Setup, Fehlermeldungen, Eingabefelder; der Rohdaten-Text lässt die Adresse weg). ' +
   'v203 · 2026-11-19 · PV geprüft und erweitert: Neue Karte „🧵 String-Vergleich“ im Tab PV – beide Strings jetzt (Leistung, Spannung, Strom, Anteil), heute als Kurven (umschaltbar auf je kWp), Tages-/Monatswerte, Tabelle mit kWh je kWp, Spitze, „erzeugt im Mittel um“ (Ost früher, West später) und Spannung im Betrieb, dazu eine Bewertung: String liefert nichts, Summe = PV, gleiche Tageszeit/Ausrichtung, Vergleich je kWp, Trend des Verhältnisses, Spannungssprung (Modul/Bypass-Diode). Name, Module, kWp und Ausrichtung je String lassen sich eintragen; sonst schätzt die App die kWp aus den Spannungen. Neue Karte „🔎 Plausibilitätsprüfung“: Datenlage, Strings = PV, Energiebilanz mit Umwandlungsverlusten, Zählerstände gegen Messwerte, Batterie-Wirkungsgrad, Zähler des Wechselrichters (E-Total), Spitzenleistung. Behoben: Strings werden nach Tracker-Nummer gespeichert (ein leerer Platz verschiebt MPP 2 nicht mehr auf MPP 1), die String-Spannungen werden mitgespeichert; die Monatserwartung zählt einen angefangenen Tag nur mit den erfassten Sonnenstunden (und nutzt die Ausrichtung der Strings, wenn eingetragen); „Woher kam dein Strom?“ zeigt Netzbezug für die Batterie nicht mehr als Hausverbrauch; die erste Viertelstunde nach dem Verbinden fehlte bei Zeiträumen über 31 Tage im Zählerstand. ' +
@@ -652,6 +653,12 @@ const INFO = {
     'später ins Haus zurück – so kannst du einen <b>kleineren Heimspeicher</b> kaufen. Entscheidend ist, wie oft das ' +
     'Auto <b>tagsüber</b> zuhause steht: nur dann fängt es die Mittagssonne ein. Stell das unter „Auto tagsüber" ein. ' +
     'Braucht eine <b>bidirektionale Wallbox</b> und ein <b>V2H-fähiges Auto</b>.',
+  'pv-tp': () => 'Vergleicht je Monat, was der <b>PV-Planer</b> für deine Anlage erwartet (<b>Theorie</b>: Durchschnittsjahr, ' +
+    'mit der installierten Leistung und Batterie laut Wechselrichter und deinem Verbrauch laut Planer) mit dem, was die Anlage ' +
+    'tatsächlich gemacht hat (<b>Praxis</b>: Wechselrichter + Smart Meter). Je Monat vier Balken: PV-Erzeugung Theorie und Praxis ' +
+    '(aufgeteilt in direkt genutzt, in die Batterie, eingespeist) und Verbrauch Theorie und Praxis (selbst gedeckt bzw. aus dem Netz). ' +
+    'Angefangene Monate zählen in der Theorie nur anteilig. Weicht die PV-Erzeugung ab, hilft der Blick auf die Sonnenstunden des ' +
+    'Monats: ein trüber Monat erklärt weniger Ertrag, bei normaler Sonne lohnt ein Blick auf Verschattung und Ausrichtung.',
   'pv-batt': () => `Linker Balken = dein PV-Ertrag, aufgeteilt in <b style="color:${COL.pv}">direkt genutzt</b>, ` +
     `<b style="color:${COL.batt}">über die Batterie genutzt</b> und <b style="color:${COL.heat}">eingespeist</b>. ` +
     'Der lila Anteil ist genau das, was der <b>Speicher</b> bringt: sonst eingespeister Strom, den du dank ' +
@@ -9430,6 +9437,7 @@ function renderPv() {
   renderPvBasis();
   renderPvMargin();
   renderPvProduct();
+  renderPvTheory();
 
   _pvRep = { summer: r.repDay, winter: r.repDayW };
   renderPvDay();
@@ -12149,7 +12157,7 @@ function renderPvReal() {
   const on = !!(F && F.connected);
   ['pvr-card', 'pvr-hist-card', 'pvr-dev-card'].forEach(id => { const c = $(id); if (c) c.hidden = !on; });
   if (!on) {
-    ['pvr-str-card', 'pvr-chk-card'].forEach(id => { const c = $(id); if (c) c.hidden = true; });
+    ['pvr-str-card', 'pvr-chk-card', 'pv-tp-card'].forEach(id => { const c = $(id); if (c) c.hidden = true; });
     const pr = $('pv-plan-real'); if (pr) pr.hidden = true; return;
   }
   $('pvr-head').innerHTML = pvStatusTag(F);
@@ -12169,8 +12177,163 @@ function renderPvReal() {
   renderPvStrings();
   if (!STATE.pvwx || Date.now() - (STATE.pvwxAt || 0) > 30 * 60000) loadPvWeather();
   else paintPvWeather();
+  try { renderPvTheory(); } catch (e) { console.error(e); }
   if (!STATE.pv || STATE.pv.days !== STATE.pvDays || Date.now() - (STATE.pvAt || 0) > 120000) loadPvHist();
   else paintPvHist();
+}
+
+/* ---- PV planner: theory (simulation) vs practice (the real installation) ---- */
+// typical sunshine per day and month in Germany (DWD means 1991–2020, rounded)
+const TYPICAL_SUN_H = [1.7, 2.8, 4.0, 6.2, 6.9, 7.4, 7.5, 6.9, 5.5, 3.6, 1.9, 1.4];
+let _pvYearBusy = false;
+async function loadPvYear() {
+  if (_pvYearBusy) return;
+  _pvYearBusy = true;
+  STATE.pvYearAt = Date.now();
+  try {
+    const r = await api('/api/pv?days=365');
+    if (r && r.ok) STATE.pvYear = r;
+    const loc = getLatLon(), demo = STATE.health && STATE.health.mode === 'demo';
+    if (loc || demo) {
+      const w = await api('/api/pvweather?days=365' + (loc ? `&lat=${loc.lat}&lon=${loc.lon}` : ''));
+      if (w && w.ok !== false) STATE.pvwxYear = w;
+    }
+  } catch (e) { /* keep the last values */ }
+  finally { _pvYearBusy = false; }
+  renderPvTheory();
+}
+// the planner with the data of the REAL installation (where known)
+function pvTheoryParams() {
+  const p = pvInputs(), F = STATE.fr || {}, src = [];
+  const I = F.identity || {}, cap = F.details && F.details.storage && F.details.storage.capacity_wh;
+  if (I.pv_power_w) { p.kwp = I.pv_power_w / 1000; src.push(`<b>${fmt(p.kwp, 2)} kWp</b> laut Wechselrichter`); }
+  else src.push(`${fmt(p.kwp, 1)} kWp aus dem Planer`);
+  if (cap) { p.batt = cap / 1000; src.push(`Batterie <b>${fmt(p.batt, 1)} kWh</b>`); }
+  else if (p.batt > 0) src.push(`Batterie ${fmt(p.batt, 1)} kWh aus dem Planer`);
+  const sCfg = pvStrCfg(), sK = pvStrKwp(sCfg, STATE.pv && STATE.pv.strings, F);
+  if (sK && sCfg[0].az && sCfg[1].az) {
+    p.spec = (sK.k[0] * PV_AZ_SPEC[sCfg[0].az] + sK.k[1] * PV_AZ_SPEC[sCfg[1].az]) / (sK.k[0] + sK.k[1]);
+    src.push(`<b>${fmt(p.spec, 0)} kWh/kWp</b> aus der Ausrichtung der Strings`);
+  } else src.push(`<b>${fmt(p.spec, 0)} kWh/kWp</b> aus dem Planer (Ausrichtung)`);
+  return { p, src };
+}
+function pvTheoryRows() {
+  const R = STATE.pvYear; if (!R || R.empty || !R.has_meter) return null;
+  const { p, src } = pvTheoryParams();
+  const T = simulatePv(p);
+  const wx = {}; ((STATE.pvwxYear && STATE.pvwxYear.daily) || []).forEach(w => { wx[w.day] = w; });
+  const rows = (R.monthly || []).map(m => {
+    const y = +m.month.slice(0, 4), mo = +m.month.slice(5, 7) - 1, dim = new Date(y, mo + 1, 0).getDate();
+    const days = (R.daily || []).filter(d => d.day.startsWith(m.month));
+    // the theory is a whole average month: count it only for the time that was measured
+    const covPv = Math.min(1, (m.pv_days != null ? m.pv_days : m.days) / dim);
+    const covLoad = Math.min(1, days.reduce((a, d) => a + Math.min(24, d.cov_h || 0), 0) / 24 / dim);
+    const t = T.monthly[mo];
+    const th = { pv: t.pv * covPv, direct: t.direct * covPv, batt: t.batt * covPv, feed: t.feed * covPv,
+      load: t.load * covLoad, grid: t.grid * covLoad };
+    th.self = Math.max(0, th.load - th.grid);
+    th.autarky = t.load > 0 ? t.self / t.load : null;
+    const pr = { pv: m.pv_kwh || 0, direct: m.direct_kwh || 0, batt: (m.ch_pv_kwh != null ? m.ch_pv_kwh : m.ch_kwh) || 0,
+      feed: m.exp_kwh || 0, load: m.load_kwh || 0, grid: m.imp_kwh || 0, autarky: m.autarky };
+    pr.self = Math.max(0, pr.load - pr.grid);
+    const ws = days.map(d => wx[d.day]).filter(w => w && w.sun_h != null);
+    const sunDay = ws.length ? ws.reduce((a, w) => a + w.sun_h, 0) / ws.length : null;
+    return { month: m.month, mo, label: MON[mo] + ' ' + m.month.slice(2, 4), dim, nDays: m.days, covPv, covLoad, th, pr,
+      sunDay, sunTyp: TYPICAL_SUN_H[mo], wxDays: ws.length };
+  }).filter(x => x.covLoad > 0.01);
+  return { rows, src, p };
+}
+function pvTheoryChart(rows) {
+  const h = 210, pad = 26, top = 12, base = h - 22, n = rows.length || 1;
+  const max = Math.max(0.0001, ...rows.map(r => Math.max(r.th.pv, r.pr.pv, r.th.load, r.pr.load)));
+  const sc = niceScale(max), M = sc.max;
+  const gw = (CW - pad * 2) / n, bw = Math.max(3, Math.min(26, gw * 0.19)), gap = Math.max(1, bw * 0.15);
+  const stack = (x, segs, op) => {
+    let y = base, out = '';
+    segs.forEach(([v, col]) => {
+      if (!(v > 0)) return; const bh = v / M * (base - top); y -= bh;
+      // theory: pale with a dashed outline, practice: solid
+      out += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" fill="${col}"` +
+        (op ? ` fill-opacity="${op}" stroke="${col}" stroke-width="1" stroke-dasharray="2.5 2"` : '') + '/>';
+    });
+    return out;
+  };
+  let bars = '', labels = '';
+  rows.forEach((r, i) => {
+    const gx = pad + i * gw + (gw - (4 * bw + 2 * gap + bw * 0.8)) / 2;
+    const x = [gx, gx + bw + gap, gx + 2 * bw + gap + bw * 0.8, gx + 3 * bw + 2 * gap + bw * 0.8];
+    bars += stack(x[0], [[r.th.direct, PVC.direct], [r.th.batt, PVC.batt], [r.th.feed, PVC.feed]], 0.22);
+    bars += stack(x[1], [[r.pr.direct, PVC.direct], [r.pr.batt, PVC.batt], [r.pr.feed, PVC.feed]]);
+    bars += stack(x[2], [[r.th.self, PVC.direct], [r.th.grid, '#ff6b8a']], 0.22);
+    bars += stack(x[3], [[r.pr.self, PVC.direct], [r.pr.grid, '#ff6b8a']]);
+    labels += `<text class="axis" x="${(gx + 2 * bw + gap).toFixed(1)}" y="${h - 8}" text-anchor="middle">${esc(MON[r.mo])}</text>`;
+  });
+  const k = v => fmt(v, v < 10 ? 1 : 0) + ' kWh';
+  const tips = rows.map(r => `<b>${esc(r.label)}</b>${r.covLoad < 0.97 ? ` · ${fmt(r.covLoad * r.dim, 0)} von ${r.dim} Tagen erfasst` : ''}` +
+    `<div class="note" style="margin-top:2px">PV: Theorie <b>${k(r.th.pv)}</b> · Praxis <b>${k(r.pr.pv)}</b>` +
+    ` · Verbrauch: Theorie <b>${k(r.th.load)}</b> · Praxis <b>${k(r.pr.load)}</b>` +
+    ` · Autarkie: ${r.th.autarky != null ? fmt(r.th.autarky * 100, 0) + ' %' : '–'} → ${r.pr.autarky != null ? fmt(r.pr.autarky * 100, 0) + ' %' : '–'}</div>`);
+  return svg(h, gridLines(h, top, base, pad, M, { step: sc.step, unit: 'kWh' }) + bars + labels, { kind: 'bar', pad, n, h, tips });
+}
+function renderPvTheory() {
+  const card = $('pv-tp-card'); if (!card) return;
+  const F = STATE.fr;
+  if (!F || !F.connected) { card.hidden = true; return; }
+  card.hidden = false;
+  if (!STATE.pvYear || Date.now() - (STATE.pvYearAt || 0) > 10 * 60000) {
+    if (!_pvYearBusy) loadPvYear();
+    if (!STATE.pvYear) { $('pv-tp-chart').innerHTML = '<div class="note">Lade die Monatswerte deiner Anlage …</div>'; return; }
+  }
+  const D = pvTheoryRows();
+  const ids = ['pv-tp-chart', 'pv-tp-legend', 'pv-tp-table', 'pv-tp-note', 'pv-tp-basis'];
+  if (!D || !D.rows.length) {
+    ids.forEach(id => { const e = $(id); if (e) e.innerHTML = ''; });
+    $('pv-tp-chart').innerHTML = '<div class="note">Noch keine Monatswerte mit Smart Meter – der Vergleich erscheint, sobald die Bridge einen Tag gemessen hat.</div>';
+    return;
+  }
+  const rows = D.rows, last = rows[rows.length - 1];
+  $('pv-tp-head').innerHTML = `<span style="color:var(--muted)">${rows.length} Monat${rows.length > 1 ? 'e' : ''}</span>`;
+  $('pv-tp-basis').innerHTML = `<b>Theorie</b> = der PV-Planer mit den Daten deiner Anlage: ${D.src.join(' · ')} · Verbrauch wie im Planer ` +
+    `(Haushalt + Wärmepumpe${D.p.evAnnual > 0 ? ' + E-Auto' : ''}) – ein Durchschnittsjahr. <b>Praxis</b> = gemessen (Wechselrichter + Smart Meter). ` +
+    'Angefangene Monate zählen in der Theorie nur anteilig.';
+  $('pv-tp-chart').innerHTML = pvTheoryChart(rows);
+  $('pv-tp-legend').innerHTML = legendHtml([
+    { label: 'PV direkt genutzt / Verbrauch selbst gedeckt', color: PVC.direct }, { label: 'PV in die Batterie', color: PVC.batt },
+    { label: 'PV eingespeist', color: PVC.feed }, { label: 'Verbrauch aus dem Netz', color: '#ff6b8a' }]) +
+    '<div class="it" style="color:var(--muted)">je Monat vier Balken: PV Theorie · PV Praxis · Verbrauch Theorie · Verbrauch Praxis – ' +
+    'Theorie blass und gestrichelt, Praxis kräftig</div>';
+  const k = v => fmt(v, v < 10 ? 1 : 0);
+  const dev = (pv, tv) => {
+    if (!(tv > 0.05)) return '';
+    const d = pv / tv - 1, col = Math.abs(d) <= 0.15 ? '#4be0b0' : '#ffb64d';
+    return `<br><small style="color:${col}">${d >= 0 ? '+' : '−'}${fmt(Math.abs(d) * 100, 0)} %</small>`;
+  };
+  const pc = v => v != null ? fmt(v * 100, 0) + '\u00a0%' : '–';
+  $('pv-tp-table').innerHTML = '<table class="pvt"><tr><th>Monat</th><th>PV kWh<br><small>Theorie → Praxis</small></th>' +
+    '<th>Verbrauch kWh</th><th>Netz kWh</th><th>Autarkie</th></tr>' + rows.slice().reverse().map(r =>
+      `<tr><td>${esc(r.label)}${r.covLoad < 0.97 ? `<br><small style="color:var(--muted)">${fmt(r.covLoad * r.dim, 0)} von ${r.dim} Tagen</small>` : ''}</td>` +
+      `<td>${k(r.th.pv)}\u00a0→ <b>${k(r.pr.pv)}</b>${dev(r.pr.pv, r.th.pv)}</td>` +
+      `<td>${k(r.th.load)}\u00a0→ <b>${k(r.pr.load)}</b>${dev(r.pr.load, r.th.load)}</td>` +
+      `<td>${k(r.th.grid)}\u00a0→ <b>${k(r.pr.grid)}</b></td>` +
+      `<td>${pc(r.th.autarky)}\u00a0→ <b>${pc(r.pr.autarky)}</b></td></tr>`).join('') + '</table>';
+  // what the latest month says
+  const L = last, notes = [];
+  const dPv = L.th.pv > 0.5 ? L.pr.pv / L.th.pv - 1 : null;
+  const sunR = L.sunDay != null && L.sunTyp ? L.sunDay / L.sunTyp : null;
+  const sunTxt = L.sunDay != null ? ` (${fmt(L.sunDay, 1)} h Sonne pro Tag, im Mittel sind es im ${MON[L.mo]} ~${fmt(L.sunTyp, 1)} h)` : '';
+  if (dPv != null) {
+    if (dPv < -0.15 && sunR != null && sunR < 0.85) notes.push(`☁️ <b>${MON[L.mo]}: ${fmt(Math.abs(dPv) * 100, 0)} % weniger PV als in der Theorie</b> – es war trüber als üblich${sunTxt}. Das erklärt den Unterschied.`);
+    else if (dPv < -0.15) notes.push(`🔎 <b>${MON[L.mo]}: ${fmt(Math.abs(dPv) * 100, 0)} % weniger PV als in der Theorie</b>${sunR != null ? ', obwohl die Sonne normal schien' + sunTxt : sunTxt}. ` +
+      'Mögliche Gründe: Verschattung oder Schnee, eine andere Ausrichtung als im Planer (Strings im PV-Tab beschreiben) – oder der Monat ist erst kurz erfasst.');
+    else if (dPv > 0.15) notes.push(`☀️ <b>${MON[L.mo]}: ${fmt(dPv * 100, 0)} % mehr PV als in der Theorie</b>${sunR != null && sunR > 1.15 ? ' – sonniger als üblich' + sunTxt : sunTxt}.`);
+    else notes.push(`✓ <b>${MON[L.mo]}: PV im Rahmen der Theorie</b> (${dPv >= 0 ? '+' : '−'}${fmt(Math.abs(dPv) * 100, 0)} %)${sunTxt}.`);
+  }
+  const dL = L.th.load > 0.5 ? L.pr.load / L.th.load - 1 : null;
+  if (dL != null && Math.abs(dL) > 0.2)
+    notes.push(`⚡ <b>Verbrauch ${dL > 0 ? 'höher' : 'niedriger'} als im Planer</b> (${dL >= 0 ? '+' : '−'}${fmt(Math.abs(dL) * 100, 0)} %) – ` +
+      'der Planer rechnet mit deinem eingetragenen Haushaltsstrom und dem Wärmepumpen-Modell. Passt du sie an, stimmen auch Autarkie und Ersparnis der Planung besser.');
+  if (L.covLoad < 0.5) notes.push(`<span style="color:var(--muted)">Der ${MON[L.mo]} ist erst zu ${fmt(L.covLoad * 100, 0)} % erfasst – einzelne Tage schwanken stark, aussagekräftig wird der Vergleich über ganze Monate.</span>`);
+  $('pv-tp-note').innerHTML = notes.join('<br>');
 }
 
 /* ---- PV tab: weather (Open-Meteo via the bridge) ---------------------------- */

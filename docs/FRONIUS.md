@@ -23,6 +23,16 @@ Was du danach siehst:
   Balkens und eine Zusammenfassung (Sonnenstunden, Bewölkung, sonnige/wechselhafte/trübe Tage,
   sonnigster und trübster Tag mit ihrem Ertrag).
 * **Zeitraum „Heute“** im Verlauf: dieselben Kennzahlen für heute, die Balken je Stunde.
+* **PV-Planer → 🔬 Theorie vs. Praxis** (unter „PV-Nutzung pro Monat“): je Monat, was der Planer für
+  deine Anlage erwartet, neben dem, was sie gemessen gemacht hat – vier Balken pro Monat (PV
+  Theorie/Praxis aufgeteilt in direkt genutzt, in die Batterie, eingespeist; Verbrauch
+  Theorie/Praxis aufgeteilt in selbst gedeckt und Netzbezug) und eine Tabelle mit Abweichungen
+  bei PV, Verbrauch, Netzbezug und Autarkie. Die Theorie rechnet mit der installierten Leistung
+  und der Batterie laut Wechselrichter, der Ausrichtung der Strings (wenn eingetragen, sonst der
+  des Planers) und dem Verbrauch laut Planer, für ein Durchschnittsjahr; angefangene Monate nur
+  anteilig. Darunter eine Einordnung des letzten Monats: weniger PV bei trübem Wetter (Vergleich
+  der Sonnenstunden mit dem Mittel für den Monat) ist normal, bei normaler Sonne lohnt ein Blick
+  auf Verschattung und Ausrichtung; weicht der Verbrauch stark ab, sollte der Planer angepasst werden.
 * **Tab PV → 🧵 String-Vergleich:** die beiden MPP-Tracker (Strings) nebeneinander – jetzt, heute
   als Kurven, je Tag, je kWp, wann sie erzeugen, mit Bewertung (siehe unten).
 * **Tab PV → 🔎 Plausibilitätsprüfung:** passen die gespeicherten Zahlen zueinander? (siehe unten)
