@@ -169,6 +169,11 @@
   table.pvt{width:100%; border-collapse:collapse; font-size:12.5px}
   table.pvt td, table.pvt th{padding:5px 4px; text-align:right; border-bottom:1px solid var(--line)}
   table.pvt th{color:var(--muted); font-weight:600} table.pvt td:first-child, table.pvt th:first-child{text-align:left}
+  /* addresses in the home network: hidden until "anzeigen" (see ipTag) */
+  .ipm .ipdots{letter-spacing:.5px; color:var(--muted)}
+  .ipm a, a.iptog-in{color:var(--accent); font-size:.86em; font-weight:500; text-decoration:none; white-space:nowrap}
+  a.iptog-in{margin-left:6px}
+  input.ipsec.hid:not(:focus):not(:placeholder-shown){-webkit-text-security:disc; text-security:disc}
   /* verdict lists (string comparison, plausibility check) */
   .vlist{display:flex; flex-direction:column; gap:9px}
   .vrow{display:flex; gap:10px; align-items:flex-start; font-size:13px; line-height:1.45}
@@ -296,6 +301,28 @@
   .kf-sub{fill:var(--k-sub); font-size:8px}
   @media (prefers-reduced-motion:reduce){#kiosk-flow .kf-dot{display:none}
     #kiosk-flow line[style*="drop-shadow"] animate{display:none}}
+  /* Heute: kumulierte Werte (Autarkie-Ring + Kacheln) */
+  #kiosk-today:not(:empty){margin:16px 0; background:var(--k-card); border:.5px solid var(--k-sep);
+    border-radius:22px; padding:16px 18px; box-shadow:var(--k-shadow)}
+  .kt-head{display:flex; justify-content:space-between; align-items:baseline; gap:10px; margin-bottom:10px}
+  .kt-cmp{font-size:13px; color:var(--k-sub); white-space:nowrap}
+  .kt-body{display:flex; flex-wrap:wrap; gap:16px 20px; align-items:center}
+  .kt-ring{flex:0 0 136px; width:136px; height:136px; margin:0 auto; display:block}
+  .kt-pct{fill:var(--k-ink); font-size:25px; font-weight:800; letter-spacing:-1px}
+  .kt-rl{fill:var(--k-sub); font-size:10px; font-weight:700; letter-spacing:.08em; text-transform:uppercase}
+  .kt-grid{flex:1 1 300px; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px}
+  @media (min-width:700px){.kt-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+  /* wide screens (wall iPad landscape): energy flow and "Heute" side by side */
+  @media (min-width:1000px){
+    #kiosk-energy.two{display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); column-gap:16px; align-items:start}
+    #kiosk-energy.two .kt-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  .kt-t{display:flex; gap:10px; align-items:center; background:var(--k-card2); border-radius:16px; padding:10px 12px; min-width:0}
+  .kt-ic{font-size:22px; flex:0 0 auto; line-height:1}
+  .kt-t > div{min-width:0}
+  .kt-t b{display:block; font-size:20px; font-weight:750; letter-spacing:-.4px; line-height:1.15; white-space:nowrap}
+  .kt-t small{display:block; font-size:12px; color:var(--k-sub); line-height:1.3; margin-top:2px}
+  .kt-foot{margin-top:12px; font-size:13px; color:var(--k-sub); line-height:1.55}
+  .kt-foot b{color:var(--k-ink)}
   /* Top-Verbraucher jetzt */
   #kiosk-loads:not(:empty){margin:16px 0; background:var(--k-card); border:.5px solid var(--k-sep);
     border-radius:22px; padding:16px 18px; box-shadow:var(--k-shadow);
@@ -1637,8 +1664,8 @@
       <button class="btn sec" id="discover" style="margin-top:0">🔎 Controller automatisch finden</button>
       <div class="note" id="discover-note" style="margin:8px 0 4px"></div>
 
-      <label>IP-Adresse des Controllers II</label>
-      <input id="shc-ip" inputmode="decimal" placeholder="z. B. 192.168.1.50"
+      <label>IP-Adresse des Controllers II <a href="#" class="iptog-in" data-for="shc-ip">anzeigen</a></label>
+      <input id="shc-ip" class="ipsec hid" inputmode="decimal" placeholder="z. B. 192.168.1.50"
              autocomplete="off" autocapitalize="off" spellcheck="false">
       <label style="margin-top:10px; display:block">Systempasswort (aus der Ersteinrichtung)</label>
       <input id="shc-pw" type="password" placeholder="Systempasswort" autocomplete="off">
@@ -1695,8 +1722,8 @@
         Die IP findest du in der Geräteliste deines Routers oder in der Fronius-App.<br>
         3. Hier <b>„Im Netz suchen"</b> tippen oder die IP eintragen → <b>Verbinden</b>.
       </div>
-      <label>IP-Adresse des Wechselrichters</label>
-      <input id="fr-host" autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="url"
+      <label>IP-Adresse des Wechselrichters <a href="#" class="iptog-in" data-for="fr-host">anzeigen</a></label>
+      <input id="fr-host" class="ipsec hid" autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="url"
              placeholder="z. B. 192.168.2.50">
       <div style="display:flex; gap:8px; flex-wrap:wrap">
         <button class="btn sec" id="fr-find" style="flex:1; min-width:140px">🔍 Im Netz suchen</button>
@@ -1965,8 +1992,8 @@
         Token &amp; Adresse bleiben <b>lokal</b> auf der Bridge (in <code>config.json</code>).
       </div>
       <div class="grid2">
-        <div><label>Home-Assistant-Adresse</label>
-          <input id="ha-url" autocomplete="off" autocapitalize="off" spellcheck="false"
+        <div><label>Home-Assistant-Adresse <a href="#" class="iptog-in" data-for="ha-url">anzeigen</a></label>
+          <input id="ha-url" class="ipsec hid" autocomplete="off" autocapitalize="off" spellcheck="false"
                  placeholder="http://homeassistant.local:8123"></div>
         <div><label>Zugangs-Token</label>
           <input id="ha-token" type="password" autocomplete="off" autocapitalize="off" spellcheck="false"
@@ -2095,7 +2122,10 @@
   <div id="kiosk-banner"></div>
   <div id="kiosk-cal"></div>
   <div id="kiosk-school"></div>
-  <div id="kiosk-flow"></div>
+  <div id="kiosk-energy">
+    <div id="kiosk-flow"></div>
+    <div id="kiosk-today"></div>
+  </div>
   <div id="kiosk-loads"></div>
   <div id="kiosk-rooms"></div>
   <div id="kiosk-vent" class="k-sub"></div>

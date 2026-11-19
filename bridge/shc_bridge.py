@@ -8560,9 +8560,21 @@ def compute_pv_money(store: "Store", price: float, feedin: float, now: int | Non
                           if out["load_kwh"] > 0.05 else None)
         return out
     daily = r.get("daily") or []
+    d0 = datetime.fromtimestamp(now)
+    yday = (d0 - timedelta(days=1)).strftime("%Y-%m-%d")
+    week = {(d0 - timedelta(days=k)).strftime("%Y-%m-%d") for k in range(7)}
+    yd = [d for d in daily if d["day"] == yday]
+    # records only from (nearly) complete days – not the afternoon of connecting
+    full = [d for d in daily if d["day"] != today and (d.get("pv_cov") or 0.0) >= 0.9]
+    best = max(full, key=lambda d: d.get("pv_kwh") or 0.0) if full else None
+    besta = max((d for d in full if d.get("autarky") is not None), key=lambda d: d["autarky"], default=None)
     return {"today": agg([d for d in daily if d["day"] == today]),
+            "yesterday": agg(yd) if yd else None,
+            "week": agg([d for d in daily if d["day"] in week]),
             "month": agg([d for d in daily if d["day"].startswith(month)]),
             "total": agg(daily), "since": first, "price": price, "feedin": feedin,
+            "best_pv": {"day": best["day"], "pv_kwh": best["pv_kwh"]} if best and best.get("pv_kwh") else None,
+            "best_autarky": {"day": besta["day"], "autarky": besta["autarky"]} if besta else None,
             "capped": days >= 400}
 
 

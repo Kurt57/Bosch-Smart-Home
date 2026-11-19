@@ -94,8 +94,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v203';   // short tag shown always-on in the header
-const APP_VERSION = 'v203 · 2026-11-19 · PV geprüft und erweitert: Neue Karte „🧵 String-Vergleich“ im Tab PV – beide Strings jetzt (Leistung, Spannung, Strom, Anteil), heute als Kurven (umschaltbar auf je kWp), Tages-/Monatswerte, Tabelle mit kWh je kWp, Spitze, „erzeugt im Mittel um“ (Ost früher, West später) und Spannung im Betrieb, dazu eine Bewertung: String liefert nichts, Summe = PV, gleiche Tageszeit/Ausrichtung, Vergleich je kWp, Trend des Verhältnisses, Spannungssprung (Modul/Bypass-Diode). Name, Module, kWp und Ausrichtung je String lassen sich eintragen; sonst schätzt die App die kWp aus den Spannungen. Neue Karte „🔎 Plausibilitätsprüfung“: Datenlage, Strings = PV, Energiebilanz mit Umwandlungsverlusten, Zählerstände gegen Messwerte, Batterie-Wirkungsgrad, Zähler des Wechselrichters (E-Total), Spitzenleistung. Behoben: Strings werden nach Tracker-Nummer gespeichert (ein leerer Platz verschiebt MPP 2 nicht mehr auf MPP 1), die String-Spannungen werden mitgespeichert; die Monatserwartung zählt einen angefangenen Tag nur mit den erfassten Sonnenstunden (und nutzt die Ausrichtung der Strings, wenn eingetragen); „Woher kam dein Strom?“ zeigt Netzbezug für die Batterie nicht mehr als Hausverbrauch; die erste Viertelstunde nach dem Verbinden fehlte bei Zeiträumen über 31 Tage im Zählerstand. ' +
+const APP_BUILD = 'v204';   // short tag shown always-on in the header
+const APP_VERSION = 'v204 · 2026-11-19 · Wohn-Dashboard: neue Kachel „Heute“ mit Autarkie-Ring (Anteil des Verbrauchs, der nicht aus dem Netz kam; daneben gestern zum Vergleich) und den Tageswerten Sonne (mit „selbst genutzt“), verbraucht (mit Wärmepumpe und deren Sonnenanteil), aus dem Netz/eingespeist, gespart, Batterie (jetzt und heute min–max) und vermiedenes CO₂; darunter 7 Tage, Monat, seit Anschluss und der beste Sonnentag. Auf breiten Bildschirmen (iPad quer) steht sie neben dem Energiefluss. Die Geldbilanz steht jetzt dort statt im Banner – das Banner erscheint nur noch, wenn es etwas zu tun gibt. IP-Adressen im Heimnetz sind verdeckt, bis man „anzeigen“ antippt (PV-Gerätekarte, Setup, Fehlermeldungen, Eingabefelder; der Rohdaten-Text lässt die Adresse weg). ' +
+  'v203 · 2026-11-19 · PV geprüft und erweitert: Neue Karte „🧵 String-Vergleich“ im Tab PV – beide Strings jetzt (Leistung, Spannung, Strom, Anteil), heute als Kurven (umschaltbar auf je kWp), Tages-/Monatswerte, Tabelle mit kWh je kWp, Spitze, „erzeugt im Mittel um“ (Ost früher, West später) und Spannung im Betrieb, dazu eine Bewertung: String liefert nichts, Summe = PV, gleiche Tageszeit/Ausrichtung, Vergleich je kWp, Trend des Verhältnisses, Spannungssprung (Modul/Bypass-Diode). Name, Module, kWp und Ausrichtung je String lassen sich eintragen; sonst schätzt die App die kWp aus den Spannungen. Neue Karte „🔎 Plausibilitätsprüfung“: Datenlage, Strings = PV, Energiebilanz mit Umwandlungsverlusten, Zählerstände gegen Messwerte, Batterie-Wirkungsgrad, Zähler des Wechselrichters (E-Total), Spitzenleistung. Behoben: Strings werden nach Tracker-Nummer gespeichert (ein leerer Platz verschiebt MPP 2 nicht mehr auf MPP 1), die String-Spannungen werden mitgespeichert; die Monatserwartung zählt einen angefangenen Tag nur mit den erfassten Sonnenstunden (und nutzt die Ausrichtung der Strings, wenn eingetragen); „Woher kam dein Strom?“ zeigt Netzbezug für die Batterie nicht mehr als Hausverbrauch; die erste Viertelstunde nach dem Verbinden fehlte bei Zeiträumen über 31 Tage im Zählerstand. ' +
   'v202 · 2026-11-19 · HomeCom-/AEG-Anmeldung geht nicht mehr verloren: Ursache war eine zweite Bridge (z. B. update-macos.command, während die alte noch lief) – sie erneuerte den einmal gültigen Bosch-Token und beendete sich erst danach; die alte arbeitete mit dem verbrauchten Token weiter, Bosch sperrte die Anmeldung. Jetzt: nur eine Bridge pro Konfiguration (die zweite beendet sich vorher mit Hinweis), Port zuerst belegen, Start-/Update-Skripte beenden die alte Bridge sauber, beim Beenden und beim Neustart nach Updates wird eine laufende Token-Erneuerung abgewartet, config.json wird atomar geschrieben, der Demo-Modus fasst echte Zugänge nicht an. Einmal im Setup neu verbinden. ' +
   'v201 · 2026-11-18 · Stundenplan im Wohn-Dashboard: Setup → „🎒 Stundenplan“ (eine Zeile je Stunde: Zeit | Mo | Di | Mi | Do | Fr, „-“ = frei, mit Vorschau). Das Dashboard zeigt den heutigen bzw. nächsten Schultag mit laufender Stunde und Schulschluss; Hinweise „Morgen Sport – Sportsachen einpacken“ (ab 16 Uhr), „Heute Sport“ am Morgen und „Schule aus um …“ 30 Minuten vorher. Feiertage in NRW werden erkannt, Ferien über einen ganztägigen Kalendertermin mit „Ferien“/„schulfrei“. Der Plan liegt wie die übrigen Einstellungen in der Bridge. ' +
   'v200 · 2026-11-18 · Setup → „🖥️ Wohn-Dashboard“: einstellbar, ab wie vielen Sekunden der Fenster-Hinweis blinkt (Standard 600 s = 10 min, zum Testen z. B. 1 s) und wie viele Abende vorher der Tonnen-Hinweis erscheint (Standard 1; bei 2 z. B. „Übermorgen: Papiertonne“ ab 16 Uhr). Gilt für alle Geräte – ein laufendes Dashboard übernimmt die Werte innerhalb einer Minute. Bei offenem Fenster schaut das Dashboard alle 20 s nach (sonst jede Minute); kurze Zeiten stehen als Sekunden da. ' +
@@ -300,6 +301,41 @@ const kwh = (n, d = 1) => fmt(n, d) + ' kWh';
 const eur = (n, d = 2) => fmt(n, d) + ' ' + STATE.cur;
 function money(n) { if (n == null) return '–'; return (n >= 100 ? fmt(n, 0) : fmt(n, 2)) + ' ' + STATE.cur; }
 function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+/* ---- addresses in the home network: hidden until "anzeigen" is tapped ------
+   (screenshots get shared). Revealed ones stay visible until the page reloads. */
+const _ipShown = new Set();
+const IP_RX = /\b(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?\b/g;
+function ipTag(host) {
+  if (!host) return '';
+  const h = String(host), on = _ipShown.has(h);
+  return `<span class="ipm${on ? ' on' : ''}">${on ? `<b>${esc(h)}</b>` : '<span class="ipdots">•••.•••.•.••</span>'} ` +
+    `<a href="#" class="iptog" data-ip="${esc(h)}">${on ? 'verbergen' : 'anzeigen'}</a></span>`;
+}
+// free text (error messages …): every IPv4 address in it hidden the same way
+function escIp(text) {
+  const t = String(text == null ? '' : text);
+  let out = '', last = 0;
+  t.replace(IP_RX, (m, off) => { out += esc(t.slice(last, off)) + ipTag(m); last = off + m.length; return m; });
+  return out + esc(t.slice(last));
+}
+document.addEventListener('click', e => {
+  const a = e.target && e.target.closest && e.target.closest('.iptog, .iptog-in');
+  if (!a) return;
+  e.preventDefault(); e.stopPropagation();
+  if (a.classList.contains('iptog-in')) {               // an input field with an address
+    const inp = $(a.dataset.for); if (!inp) return;
+    const hid = inp.classList.toggle('hid');
+    a.textContent = hid ? 'anzeigen' : 'verbergen';
+    return;
+  }
+  const ip = a.dataset.ip;
+  if (_ipShown.has(ip)) _ipShown.delete(ip); else _ipShown.add(ip);
+  document.querySelectorAll('.iptog').forEach(x => {
+    if (x.dataset.ip !== ip) return;
+    const w = x.closest('.ipm'); if (w) w.outerHTML = ipTag(ip);
+  });
+}, true);
 
 /* ---------------------------------------------------------- info tooltips */
 const INFO = {
@@ -1359,11 +1395,11 @@ async function loadAll() {
       setMode('err');
       const when = STATE.coreTs ? new Date(STATE.coreTs).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
       const el = $('data-stand'); if (el) { el.hidden = false; el.textContent = 'Bridge nicht erreichbar · letzter Stand' + (when ? ' ' + when : ''); }
-      $('conn-note').innerHTML = 'Keine Bridge erreichbar (' + esc(e.message) + '). Angezeigt wird der <b>zuletzt geladene Stand</b>.';
+      $('conn-note').innerHTML = 'Keine Bridge erreichbar (' + escIp(e.message) + '). Angezeigt wird der <b>zuletzt geladene Stand</b>.';
       return;
     }
     $('conn-note').innerHTML =
-      'Keine Bridge erreichbar (' + esc(e.message) + '). Es werden <b>Demo-Daten</b> gezeigt. ' +
+      'Keine Bridge erreichbar (' + escIp(e.message) + '). Es werden <b>Demo-Daten</b> gezeigt. ' +
       'Trage im Setup die Adresse deiner Bridge ein oder öffne diese Seite direkt von der Bridge.';
     applyDemo('err');
   }
@@ -2758,7 +2794,7 @@ async function fetchSwitches(force) {
   try {
     const r = await api('/api/switches');
     if (r && r.ok) { _switches = r.switches || []; _switches._demo = !!r.demo; renderSwitchList(); }
-    else if (force && body) { $('ov-switch-card').hidden = false; body.innerHTML = `<div class="note">⚠︎ ${esc((r && r.error) || 'Konnte Geräte nicht laden.')}</div>`; }
+    else if (force && body) { $('ov-switch-card').hidden = false; body.innerHTML = `<div class="note">⚠︎ ${escIp((r && r.error) || 'Konnte Geräte nicht laden.')}</div>`; }
     else { const c = $('ov-switch-card'); if (c) c.hidden = true; }     // stay quiet on the overview
   } catch (e) {
     const c = $('ov-switch-card');
@@ -2791,7 +2827,7 @@ async function doSwitch(id, on, name) {
       const s = (_switches || []).find(x => x.id === id); if (s) s.state = r.state;
       renderSwitchList();
       if (note) note.innerHTML = `✅ „${esc(name)}" ist jetzt <b>${r.state === 'ON' ? 'AN' : 'AUS'}</b>.`;
-    } else if (note) note.innerHTML = '⚠︎ ' + esc((r && r.error) || 'Schalten fehlgeschlagen.');
+    } else if (note) note.innerHTML = '⚠︎ ' + escIp((r && r.error) || 'Schalten fehlgeschlagen.');
   } catch (e) { if (note) note.textContent = 'Fehler: ' + e.message + ' – Seite von der Bridge geöffnet?'; }
 }
 function renderSwitches() { fetchSwitches(false); }
@@ -2930,10 +2966,73 @@ function kioskWashAdvice() {
         : '🔴 Strom gerade teuer – große Verbraucher besser später laufen lassen.',
       sub: spot.sub + (pv && pv.surplusKw > 0 ? ` · ☀️ etwas PV (${ca}${fmt(pv.surplusKw, 1)} kW)` : '') };
   }
-  // 3) otherwise: what the PV system has earned (no filler text without one)
-  const pm = kioskPvMoney();
+  // 3) otherwise: what the PV system has earned (no filler text without one) –
+  // unless the "Heute" panel below already shows it
+  const pm = kioskTodayData() ? null : kioskPvMoney();
   if (pm) return pm;
   return null;
+}
+
+/* ---- dashboard: cumulative values of the day (autarky ring + tiles) -------- */
+function kioskTodayData() {
+  const F = STATE.fr, d = F && F.connected && F.today && F.today.today;
+  return d && d.load_kwh != null ? d : null;
+}
+// PV energy of today × the grid's CO₂ intensity in that hour (the same model as
+// in the Börse tab) – what the grid did not have to produce
+function kioskCo2Kg(F) {
+  const C = STATE.carbon || demoCarbon(), mo = new Date().getMonth();
+  const g = C.month_hour_g && C.month_hour_g[mo];
+  const ser = (F.today && F.today.series) || [];
+  if (g && ser.some(p => p.pv_w > 0)) {
+    let kg = 0;
+    ser.forEach(p => { kg += Math.max(0, p.pv_w || 0) * 0.25 / 1000 * (g[new Date(p.t * 1000).getHours()] || 0) / 1000; });
+    return kg;
+  }
+  const avg = (C.month_avg_g && C.month_avg_g[mo]) || 380;
+  return ((F.today.today && F.today.today.pv_kwh) || 0) * avg / 1000;
+}
+function kioskRing(frac, label) {
+  const r = 50, c = 2 * Math.PI * r, f = frac == null ? 0 : Math.max(0, Math.min(1, frac));
+  return `<svg viewBox="0 0 120 120" class="kt-ring" role="img" aria-label="${esc(label)} ${frac == null ? '–' : fmt(f * 100, 0) + ' %'}">` +
+    `<circle cx="60" cy="60" r="${r}" fill="none" stroke="var(--k-card2)" stroke-width="12"/>` +
+    (f >= 0.005 ? `<circle cx="60" cy="60" r="${r}" fill="none" stroke="var(--kb-green)" stroke-width="12" stroke-linecap="round" ` +
+      `stroke-dasharray="${(c * f).toFixed(1)} ${c.toFixed(1)}" transform="rotate(-90 60 60)"/>` : '') +
+    `<text x="60" y="64" text-anchor="middle" class="kt-pct">${frac == null ? '–' : fmt(f * 100, 0) + ' %'}</text>` +
+    `<text x="60" y="82" text-anchor="middle" class="kt-rl">${esc(label)}</text></svg>`;
+}
+function renderKioskToday() {
+  const el = $('kiosk-today'); if (!el) return;
+  const F = STATE.fr, d = kioskTodayData();
+  const wrap = $('kiosk-energy'); if (wrap) wrap.classList.toggle('two', !!d);
+  if (!d) { el.innerHTML = ''; return; }
+  const m = F.money || {}, L = F.live || {};
+  const kw = v => fmt(v || 0, (v || 0) < 10 ? 1 : 0) + '\u00a0kWh';
+  const tile = (ic, val, lbl, sub) => `<div class="kt-t"><span class="kt-ic">${ic}</span><div><b>${val}</b>` +
+    `<small>${lbl}${sub ? ' · ' + sub : ''}</small></div></div>`;
+  const tiles = [
+    tile('☀️', kw(d.pv_kwh), 'Sonne', d.self_rate != null && d.pv_kwh >= 0.1 ? `${fmt(d.self_rate * 100, 0)}\u00a0% selbst genutzt` : ''),
+    tile('🏠', kw(d.load_kwh), 'verbraucht', d.hp_kwh != null && d.hp_kwh >= 0.1
+      ? `Wärmepumpe ${kw(d.hp_kwh)}${d.hp_sun_share != null ? `, ${fmt(d.hp_sun_share * 100, 0)}\u00a0% Sonne` : ''}` : ''),
+    tile('🔌', kw(d.imp_kwh), 'aus dem Netz', (d.exp_kwh || 0) >= 0.05 ? `${kw(d.exp_kwh)} eingespeist` : ''),
+    tile('💶', eur(d.saved_eur || 0), 'gespart', (d.feed_eur || 0) >= 0.005 ? `davon ${eur(d.feed_eur)} Einspeisung` : ''),
+  ];
+  const soc = L.soc != null ? L.soc : null;
+  if (soc != null) tiles.push(tile('🔋', fmt(soc, 0) + ' %', 'Batterie', d.soc_min != null ? `heute\u00a0${fmt(d.soc_min, 0)}–${fmt(Math.max(d.soc_max, soc), 0)}\u00a0%` : ''));
+  const co2 = kioskCo2Kg(F);
+  if (co2 >= 0.05) tiles.push(tile('🌱', '≈ ' + fmt(co2, co2 < 10 ? 1 : 0) + ' kg', 'CO₂ vermieden', ''));
+  const foot = [];
+  const y = m.yesterday, wk = m.week, mo = m.month, tot = m.total;
+  if (wk && wk.days > 1 && wk.autarky != null) foot.push(`7 Tage <b>${fmt(wk.autarky * 100, 0)} %</b> autark · ${eur(wk.saved_eur)} gespart`);
+  if (mo && mo.days > (wk ? wk.days : 1) && mo.autarky != null) foot.push(`Monat <b>${fmt(mo.autarky * 100, 0)} %</b> · ${eur(mo.saved_eur)}`);
+  if (tot && m.since && tot.days > ((mo && mo.days) || 0))
+    foot.push(`seit ${new Date(m.since * 1000).toLocaleDateString('de-DE', { day: 'numeric', month: 'numeric', year: '2-digit' })} ${eur(tot.saved_eur)}`);
+  if (m.best_pv) foot.push(`bester Sonnentag ${dayLabel(m.best_pv.day)} mit ${kw(m.best_pv.pv_kwh)}`);
+  el.innerHTML = `<div class="kt-head"><span class="kl-title" style="margin:0">Heute</span>` +
+    (y && y.autarky != null ? `<span class="kt-cmp">gestern ${fmt(y.autarky * 100, 0)} % autark</span>` : '') + '</div>' +
+    `<div class="kt-body">${kioskRing(d.autarky, 'autark')}<div class="kt-grid">${tiles.join('')}</div></div>` +
+    (foot.length ? `<div class="kt-foot">${foot.join(' · ')}</div>` : '') +
+    (F.demo ? '<div class="kt-foot">Demo-Anlage (simuliert)</div>' : '');
 }
 // The PV system's money: own consumption not bought from the grid + feed-in
 // paid – today, this month, since it was connected (bridge: /api/fronius money).
@@ -3439,6 +3538,7 @@ function paintKiosk() {
   try { renderKioskCal(); } catch (e) { console.error(e); }
   try { renderKioskSchool(); } catch (e) { console.error(e); }
   try { renderEnergyFlow(); } catch (e) { console.error(e); }
+  try { renderKioskToday(); } catch (e) { console.error(e); }
   try { renderKioskLoads(); } catch (e) {}
   const og = $('kiosk-out');
   const hp = (_hdData && _hdData.kpis) || {};
@@ -5037,7 +5137,7 @@ async function readDeviceCurve() {
         `Trag die zwei Punkte oben von Hand ein. ` +
         (cands ? `<details style="margin-top:6px"><summary style="cursor:pointer;color:var(--accent)">Gefundene Kandidaten (zum Weitergeben)</summary>${cands}</details>` : '');
     } else {
-      if (el) el.innerHTML = '⚠︎ ' + esc((r && r.error) || 'Nicht gelesen.') + ' Trag die zwei Punkte oben von Hand ein.';
+      if (el) el.innerHTML = '⚠︎ ' + escIp((r && r.error) || 'Nicht gelesen.') + ' Trag die zwei Punkte oben von Hand ein.';
     }
   } catch (e) {
     if (el) el.innerHTML = 'Nur möglich, wenn die Seite von der Bridge geöffnet ist. Trag die Werte oben von Hand ein.';
@@ -5762,7 +5862,7 @@ async function fetchHpControls(force) {
       _hpControls = r.controls; _hpControls._demo = !!r.demo;
       card.hidden = false; renderHpControlList(_hpControls);
     } else if (body) {
-      body.innerHTML = `<div class="note">${esc((r && r.error) || 'Keine steuerbaren Werte gefunden. Ist die Wärmepumpe im Setup verbunden?')}</div>`;
+      body.innerHTML = `<div class="note">${escIp((r && r.error) || 'Keine steuerbaren Werte gefunden. Ist die Wärmepumpe im Setup verbunden?')}</div>`;
     }
   } catch (e) {
     if (body) body.innerHTML = '<div class="note">Nur möglich, wenn die Seite von der Bridge geöffnet ist.</div>';
@@ -5870,11 +5970,11 @@ async function doHpWrite(i) {
   try {
     const r = await postJSON('/api/homecom/write', { path: c.path, value, confirm: true });
     if (r && r.ok) {
-      if (note) note.innerHTML = '✅ ' + esc(r.message || 'Gesetzt.');
+      if (note) note.innerHTML = '✅ ' + escIp(r.message || 'Gesetzt.');
       c.value = r.value;                       // reflect new value locally
       renderHpControlList(_hpControls);
     } else if (note) {
-      note.innerHTML = '⚠︎ ' + esc((r && r.error) || 'Fehlgeschlagen.') + ((r && r.detail) ? `<br><small>${esc(r.detail)}</small>` : '');
+      note.innerHTML = '⚠︎ ' + escIp((r && r.error) || 'Fehlgeschlagen.') + ((r && r.detail) ? `<br><small>${escIp(r.detail)}</small>` : '');
     }
   } catch (e) { if (note) note.textContent = 'Fehler: ' + e.message; }
 }
@@ -9987,8 +10087,8 @@ async function doHomecomConnect() {
   btn.disabled = true; note.textContent = 'Verbinde mit HomeCom …';
   try {
     const r = await postJSON('/api/homecom/connect', { code });
-    if (r.ok) { note.innerHTML = '✅ ' + esc(r.message || 'Verbunden.'); setTimeout(loadAll, 1500); }
-    else note.innerHTML = '⚠︎ ' + esc(r.error || 'Verbindung fehlgeschlagen.');
+    if (r.ok) { note.innerHTML = '✅ ' + escIp(r.message || 'Verbunden.'); setTimeout(loadAll, 1500); }
+    else note.innerHTML = '⚠︎ ' + escIp(r.error || 'Verbindung fehlgeschlagen.');
   } catch (e) { note.textContent = 'Fehler: ' + e.message + ' – Seite von der Bridge geöffnet?'; }
   btn.disabled = false;
 }
@@ -10003,10 +10103,10 @@ async function doAegConnect() {
   try {
     const r = await postJSON('/api/electrolux/connect', { api_key, refresh_token, access_token });
     if (r.ok) {
-      note.innerHTML = '✅ ' + esc(r.message || 'Verbunden.');
+      note.innerHTML = '✅ ' + escIp(r.message || 'Verbunden.');
       $('aeg-refresh').value = ''; $('aeg-access').value = '';   // don't leave tokens on screen
       setTimeout(loadAll, 1500);
-    } else note.innerHTML = '⚠︎ ' + esc(r.error || 'Verbindung fehlgeschlagen.');
+    } else note.innerHTML = '⚠︎ ' + escIp(r.error || 'Verbindung fehlgeschlagen.');
   } catch (e) { note.textContent = 'Fehler: ' + e.message + ' – Seite von der Bridge geöffnet?'; }
   btn.disabled = false;
 }
@@ -10017,7 +10117,7 @@ async function doAegDisconnect() {
   if (btn) btn.disabled = true; if (note) note.textContent = 'Deaktiviere …';
   try {
     const r = await postJSON('/api/electrolux/disconnect', {});
-    if (note) note.innerHTML = r && r.ok ? '✅ ' + esc(r.message || 'Deaktiviert.') : '⚠︎ ' + esc((r && r.error) || 'Fehlgeschlagen.');
+    if (note) note.innerHTML = r && r.ok ? '✅ ' + escIp(r.message || 'Deaktiviert.') : '⚠︎ ' + escIp((r && r.error) || 'Fehlgeschlagen.');
     setTimeout(loadAll, 1200);
   } catch (e) { if (note) note.textContent = 'Fehler: ' + e.message + ' – Seite von der Bridge geöffnet?'; }
   if (btn) btn.disabled = false;
@@ -10033,10 +10133,10 @@ async function doHaConnect() {
     const r = await postJSON('/api/ha/connect', { url, token, entities });
     if (r.ok) {
       const n = (r.entities || []).length;
-      note.innerHTML = '✅ ' + esc(r.message || 'Verbunden.') + (n ? ` (${n} Sensor(en))` : '');
+      note.innerHTML = '✅ ' + escIp(r.message || 'Verbunden.') + (n ? ` (${n} Sensor(en))` : '');
       $('ha-token').value = '';                     // don't leave the token on screen
       setTimeout(loadAll, 1200);
-    } else note.innerHTML = '⚠︎ ' + esc(r.error || 'Verbindung fehlgeschlagen.');
+    } else note.innerHTML = '⚠︎ ' + escIp(r.error || 'Verbindung fehlgeschlagen.');
   } catch (e) { note.textContent = 'Fehler: ' + e.message + ' – Seite von der Bridge geöffnet?'; }
   btn.disabled = false;
 }
@@ -10049,10 +10149,10 @@ async function doTibberConnect() {
   try {
     const r = await postJSON('/api/tibber/connect', { token });
     if (r.ok) {
-      note.innerHTML = '✅ ' + esc(r.message || 'Verbunden.');
+      note.innerHTML = '✅ ' + escIp(r.message || 'Verbunden.');
       $('tibber-token').value = '';                 // don't leave the token on screen
       setTimeout(loadAll, 1200);
-    } else note.innerHTML = '⚠︎ ' + esc(r.error || 'Verbindung fehlgeschlagen.');
+    } else note.innerHTML = '⚠︎ ' + escIp(r.error || 'Verbindung fehlgeschlagen.');
   } catch (e) { note.textContent = 'Fehler: ' + e.message + ' – Seite von der Bridge geöffnet?'; }
   btn.disabled = false;
 }
@@ -10405,10 +10505,10 @@ async function doHpRefresh() {
   try {
     const r = await postJSON('/api/homecom/refresh', {});
     if (r && r.ok) {
-      if (note) note.innerHTML = '✓ ' + esc(r.message || 'Nachgeladen.');
+      if (note) note.innerHTML = '✓ ' + escIp(r.message || 'Nachgeladen.');
       setTimeout(loadAll, 600);
     } else if (note) {
-      note.innerHTML = '⚠︎ ' + esc((r && r.error) || 'Konnte nicht nachladen.');
+      note.innerHTML = '⚠︎ ' + escIp((r && r.error) || 'Konnte nicht nachladen.');
     }
   } catch (e) {
     if (note) note.textContent = 'Nur möglich, wenn die Seite von der Bridge geöffnet ist.';
@@ -10429,10 +10529,10 @@ async function doHpImport(ev) {
     note.textContent = `Sende ${res.rows.length} Zeilen an die Bridge …`;
     const r = await postJSON('/api/homecom/import', { rows: res.rows });
     if (r.ok) {
-      note.innerHTML = '✅ ' + esc(r.message) + ` Gesamt: <b>${r.total_days}</b> Tage, <b>${r.total_months}</b> Monate` +
+      note.innerHTML = '✅ ' + escIp(r.message) + ` Gesamt: <b>${r.total_days}</b> Tage, <b>${r.total_months}</b> Monate` +
         (r.total_hours ? `, <b>${r.total_hours}</b> Stunden` : '') + '.';
       setTimeout(loadAll, 800);
-    } else note.innerHTML = '⚠︎ ' + esc(r.error || 'Import fehlgeschlagen.');
+    } else note.innerHTML = '⚠︎ ' + escIp(r.error || 'Import fehlgeschlagen.');
   } catch (e) { note.textContent = 'Fehler: ' + e.message + ' – Seite von der Bridge geöffnet?'; }
   inp.value = '';
 }
@@ -10443,8 +10543,8 @@ async function doHpImportClear() {
   note.textContent = 'Lösche importierte Historie …';
   try {
     const r = await postJSON('/api/homecom/import/clear', {});
-    if (r.ok) { note.innerHTML = '✅ ' + esc(r.message || 'Importierte Historie gelöscht.'); setTimeout(loadAll, 800); }
-    else note.innerHTML = '⚠︎ ' + esc(r.error || 'Löschen fehlgeschlagen.');
+    if (r.ok) { note.innerHTML = '✅ ' + escIp(r.message || 'Importierte Historie gelöscht.'); setTimeout(loadAll, 800); }
+    else note.innerHTML = '⚠︎ ' + escIp(r.error || 'Löschen fehlgeschlagen.');
   } catch (e) { note.textContent = 'Fehler: ' + e.message + ' – Seite von der Bridge geöffnet?'; }
 }
 
@@ -10467,7 +10567,7 @@ async function doExport() {
     const lines = (await blob.text()).split('\n').filter(Boolean).length - 1;
     note.innerHTML = `✅ <b>${name}</b> geladen (${Math.max(0, lines)} Tage).`;
   } catch (e) {
-    note.innerHTML = '⚠︎ Export nur möglich, wenn die Seite von der <b>Bridge</b> geladen ist (' + esc(e.message) + ').';
+    note.innerHTML = '⚠︎ Export nur möglich, wenn die Seite von der <b>Bridge</b> geladen ist (' + escIp(e.message) + ').';
   }
 }
 
@@ -10481,14 +10581,14 @@ async function bridgeUpdate(note, btns) {
   try {
     const r = await postJSON('/api/update', {});
     if (r.ok && r.changed) {
-      if (note) note.innerHTML = '✅ ' + esc(r.message);
+      if (note) note.innerHTML = '✅ ' + escIp(r.message);
       setTimeout(hardRefresh, 6000);   // bridge re-execs → reload fresh code
       return;                          // keep buttons disabled while restarting
     } else if (r.ok) {
-      if (note) note.innerHTML = 'ℹ️ ' + esc(r.message || 'Bereits aktuell.');
+      if (note) note.innerHTML = 'ℹ️ ' + escIp(r.message || 'Bereits aktuell.');
       const b = $('update-banner'); if (b) b.hidden = true;   // nothing to do
     } else {
-      if (note) note.innerHTML = '⚠︎ ' + esc(r.error || 'Update fehlgeschlagen.') +
+      if (note) note.innerHTML = '⚠︎ ' + escIp(r.error || 'Update fehlgeschlagen.') +
         (r.output ? `<br><small>${esc(r.output)}</small>` : '');
     }
   } catch (e) {
@@ -10522,9 +10622,9 @@ async function doDiscover() {
     const r = await api('/api/discover');
     if (r.suggested) {
       $('shc-ip').value = r.suggested;
-      note.innerHTML = `Gefunden: <b>${esc(r.candidates.join(', '))}</b> – oben übernommen. Passt das nicht, IP manuell eintragen.`;
+      note.innerHTML = `Gefunden: ${r.candidates.map(ipTag).join(', ')} – oben übernommen. Passt das nicht, IP manuell eintragen.`;
     } else {
-      note.innerHTML = `Nichts gefunden im Bereich ${esc(r.scanned)}. IP bitte manuell eintragen.`;
+      note.innerHTML = 'Nichts gefunden im Netz der Bridge. IP bitte manuell eintragen.';
     }
   } catch (e) { note.textContent = 'Automatische Suche geht nur, wenn die Seite von der Bridge geöffnet ist.'; }
 }
@@ -10542,11 +10642,11 @@ async function doPair() {
       poll_interval: parseInt($('shc-interval').value, 10) || 30,
     });
     if (r.ok) {
-      note.innerHTML = '✅ ' + (r.message || 'Erfolgreich gekoppelt.');
+      note.innerHTML = '✅ ' + escIp(r.message || 'Erfolgreich gekoppelt.');
       STATE.demo = false; localStorage.setItem(LS.demo, '0');
       setTimeout(loadAll, 1400);
     } else {
-      note.innerHTML = '⚠︎ ' + esc(r.error || 'Kopplung fehlgeschlagen.') + (r.detail ? '<br><small>' + esc(r.detail) + '</small>' : '');
+      note.innerHTML = '⚠︎ ' + escIp(r.error || 'Kopplung fehlgeschlagen.') + (r.detail ? '<br><small>' + escIp(r.detail) + '</small>' : '');
     }
   } catch (e) { note.textContent = 'Fehler: ' + e.message + ' – ist die Seite von der Bridge geöffnet?'; }
   btn.disabled = false;
@@ -11914,7 +12014,7 @@ function pvTodayKpis(T, L, MNY) {
 }
 
 function pvHint(L, F) {
-  if (!L) return F && F.error ? `⚠︎ ${esc(F.error)}` : '';
+  if (!L) return F && F.error ? `⚠︎ ${escIp(F.error)}` : '';
   if (!L.has_meter) return 'Ohne <b>Smart Meter</b> sieht der Wechselrichter nur die <b>Erzeugung</b> – Verbrauch, Einspeisung und Autarkie lassen sich dann nicht zeigen.';
   const P = pvFlowParts(L);
   if (P.gridBatt > 100) return `🔋 Die Batterie lädt gerade <b>aus dem Netz</b> (${kwOrW(P.gridBatt)})` +
@@ -11994,7 +12094,7 @@ function renderFlow() {
   card.hidden = false;
   $('ov-flow-head').innerHTML = pvStatusTag(F);
   $('ov-flow').innerHTML = F.live ? pvFlowSvg(F.live, hpLiveW())
-    : `<div class="note">${F.error ? '⚠︎ ' + esc(F.error) : 'Warte auf die erste Messung des Wechselrichters …'}</div>`;
+    : `<div class="note">${F.error ? '⚠︎ ' + escIp(F.error) : 'Warte auf die erste Messung des Wechselrichters …'}</div>`;
   $('ov-flow-kpi').innerHTML = pvTodayKpis(F.today, F.live, F.money);
   $('ov-flow-note').innerHTML = pvHint(F.live, F);
 }
@@ -12010,7 +12110,7 @@ function renderPvReal() {
   }
   $('pvr-head').innerHTML = pvStatusTag(F);
   $('pvr-flow').innerHTML = F.live ? pvFlowSvg(F.live, hpLiveW())
-    : `<div class="note">${F.error ? '⚠︎ ' + esc(F.error) : 'Warte auf die erste Messung des Wechselrichters …'}</div>`;
+    : `<div class="note">${F.error ? '⚠︎ ' + escIp(F.error) : 'Warte auf die erste Messung des Wechselrichters …'}</div>`;
   $('pvr-today').innerHTML = pvTodayKpis(F.today, F.live, F.money);
   const ser = (F.today && F.today.series) || [];
   $('pvr-day').innerHTML = ser.length ? pvRealDayChart(ser) : '<div class="note">Der Tagesverlauf füllt sich ab der ersten gespeicherten Minute.</div>';
@@ -12155,7 +12255,7 @@ function renderPvDevices() {
     inv.uac_v != null ? statusRow('Netzspannung · Frequenz', fmt(inv.uac_v, 1) + ' V · ' + fmt(inv.fac_hz, 2) + ' Hz') : '',
     inv.total_wh != null ? statusRow('AC-Abgabe seit Inbetriebnahme ' + sub('Zähler E-Total'), kwh(inv.total_wh / 1000, inv.total_wh < 100000 ? 1 : 0)) : '',
     L.mode_de ? statusRow('Betriebsart', esc(L.mode_de)) : '',
-    F.host ? statusRow('Adresse', esc(F.host)) : '',
+    F.host ? statusRow('Adresse', ipTag(F.host)) : '',
   ].join('');
   const st = inv.strings || [];
   if (st.length) {
@@ -12207,7 +12307,7 @@ function renderPvDevices() {
     h += H('♨️ Ohmpilot') + statusRow('Leistung', kwOrW(o.p_w)) + (o.temp_c != null ? statusRow('Temperatur', fmt(o.temp_c, 1) + ' °C') : '');
   });
   const errs = Object.entries(D.errors || {});
-  if (errs.length) h += `<div class="note" style="margin-top:8px">Nicht lesbar: ${errs.map(([k, v]) => esc(k) + ' – ' + esc(v)).join('; ')}</div>`;
+  if (errs.length) h += `<div class="note" style="margin-top:8px">Nicht lesbar: ${errs.map(([k, v]) => esc(k) + ' – ' + escIp(v)).join('; ')}</div>`;
   if (I.pv_power_w) {
     const plan = parseFloat(($('pv-kwp') || {}).value) || 0;
     const real = Math.round(I.pv_power_w / 100) / 10;
@@ -12687,13 +12787,13 @@ function renderFroniusSetup() {
   let msg;
   if (h.mode === 'demo') {
     msg = '◆ <b>Demo-Modus</b>: gezeigt wird eine Beispiel-Anlage (9,9 kWp, 9,5-kWh-Batterie, Smart Meter). ' +
-      (h.fronius_host ? `Eingetragen für den Normalbetrieb: <b>${esc(h.fronius_host)}</b>.` : 'Eine hier eingetragene Adresse gilt im Normalbetrieb.');
+      (h.fronius_host ? `Eingetragen für den Normalbetrieb: ${ipTag(h.fronius_host)}.` : 'Eine hier eingetragene Adresse gilt im Normalbetrieb.');
   } else if (h.fronius_available === false) {
     msg = 'Das Fronius-Modul fehlt in der Bridge (<code>bridge/fronius.py</code>) – bitte die Bridge aktualisieren.';
   } else if (h.fronius_connected) {
     const I = (F && F.identity) || {};
-    msg = F && F.ok ? `✅ Verbunden mit <b>${esc(I.name || 'Fronius')}</b> (${esc(h.fronius_host)}) · ${pvStatusTag(F)}`
-      : `⚠︎ Eingetragen: <b>${esc(h.fronius_host)}</b> – ${esc((F && F.error) || h.fronius_error || 'noch keine Antwort')}`;
+    msg = F && F.ok ? `✅ Verbunden mit <b>${esc(I.name || 'Fronius')}</b> (${ipTag(h.fronius_host)}) · ${pvStatusTag(F)}`
+      : `⚠︎ Eingetragen: ${ipTag(h.fronius_host)} – ${escIp((F && F.error) || h.fronius_error || 'noch keine Antwort')}`;
   } else {
     msg = 'Noch kein Wechselrichter verbunden.';
   }
@@ -12732,7 +12832,7 @@ async function frRefreshHealth() {
 // default): how to switch it on, incl. the login the owner usually lacks.
 function frApiOffHelp(host) {
   const ok = /^[\w.\-:\[\]]+$/.test(host || '');
-  const link = ok ? `<a href="http://${esc(host)}/" target="_blank" rel="noopener">Weboberfläche öffnen (${esc(host)}) ↗</a>`
+  const link = ok ? `<a href="http://${esc(host)}/" target="_blank" rel="noopener">Weboberfläche des Wechselrichters öffnen ↗</a>`
     : 'Weboberfläche öffnen (IP des Wechselrichters im Browser)';
   return '<div class="note fr-help" style="line-height:1.6; margin-top:8px; padding:10px 12px; border-radius:10px; background:var(--card2)">' +
     '<b>So schaltest du die Solar API ein (einmalig):</b><br>' +
@@ -12758,16 +12858,17 @@ async function frFind() {
     const r = await api('/api/fronius/discover');
     if (!r || !r.ok) { if (note) note.textContent = (r && r.error) || 'Suche nicht möglich.'; return; }
     if (!r.found.length) {
-      if (note) note.innerHTML = `Kein Fronius im Netz ${esc(r.subnet || '')} gefunden. Ist der Wechselrichter eingeschaltet und im selben Netz wie die Bridge? ` +
+      if (note) note.innerHTML = 'Kein Fronius im Netz der Bridge gefunden. Ist der Wechselrichter eingeschaltet und im selben Netz wie die Bridge? ' +
         'Sonst seine IP im Router nachsehen (Liste der verbundenen Geräte) und oben eintragen.';
       return;
     }
     if (note) note.textContent = r.found.length === 1 ? 'Gefunden – antippen zum Verbinden:' : `${r.found.length} Geräte gefunden – antippen zum Verbinden:`;
     const off = r.found.find(f => !f.solar_api);
     if (out) out.innerHTML = r.found.map(f => `<button class="btn sec" data-fr-host="${esc(f.host)}" style="text-align:left; margin-top:6px">` +
-      `${f.solar_api ? '☀️' : '⚠︎'} <b>${esc(f.host)}</b> · ${esc(f.name || f.type || 'Fronius')}` +
+      `${f.solar_api ? '☀️' : '⚠︎'} <b>${esc(f.name || f.type || 'Fronius')}</b>` +
       (f.pv_power_w ? ` · ${fmt(f.pv_power_w / 1000, 1)} kWp` : '') +
-      (f.note ? `<br><small style="color:var(--muted)">${esc(f.note)}</small>` : '') + '</button>').join('') +
+      (f.note ? `<br><small style="color:var(--muted)">${esc(f.note).replace(IP_RX, '•••.•••.•.••')}</small>` : '') + '</button>' +
+      `<div class="note" style="margin:2px 0 0 4px">Adresse ${ipTag(f.host)}</div>`).join('') +
       (off ? frApiOffHelp(off.host) : '');
   } catch (e) {
     if (note) note.textContent = 'Suche nur möglich, wenn die Seite von der Bridge geöffnet ist.';
@@ -12798,10 +12899,10 @@ async function frConnect(host) {
     } else if (note && r && r.api_off) {
       // reachable Fronius, Solar API switched off: say that plainly + how to fix
       const fo = $('fr-found'); if (fo) fo.innerHTML = '';
-      note.innerHTML = `⚠︎ <b>${esc(r.host || host)}</b> ist ein Fronius-Wechselrichter, aber seine <b>Solar API ist noch ausgeschaltet</b>.` +
-        frApiOffHelp(r.host || host) + `<small style="color:var(--muted)">Technisch: ${esc(r.error || '')}</small>`;
+      note.innerHTML = `⚠︎ Unter ${ipTag(r.host || host)} antwortet ein Fronius-Wechselrichter, aber seine <b>Solar API ist noch ausgeschaltet</b>.` +
+        frApiOffHelp(r.host || host) + `<small style="color:var(--muted)">Technisch: ${escIp(r.error || '')}</small>`;
     } else if (note) {
-      note.innerHTML = `❌ ${esc((r && r.error) || 'Verbindung fehlgeschlagen.')}` + (r && r.hint ? `<br>💡 ${esc(r.hint)}` : '');
+      note.innerHTML = `❌ ${escIp((r && r.error) || 'Verbindung fehlgeschlagen.')}` + (r && r.hint ? `<br>💡 ${esc(r.hint)}` : '');
     }
   } catch (e) {
     if (note) note.textContent = 'Verbinden nur möglich, wenn die Seite von der Bridge geöffnet ist.';
@@ -12829,7 +12930,7 @@ async function frProbe() {
     if (!r || r.ok === false) txt = 'Fehler: ' + ((r && r.error) || 'keine Antwort');
     else if (r.note) txt = r.note;
     else {
-      txt = `Fronius ${r.host} · ${new Date((r.ts || 0) * 1000).toLocaleString('de-DE')}\n`;
+      txt = `Fronius · ${new Date((r.ts || 0) * 1000).toLocaleString('de-DE')} (Adresse ausgelassen)\n`;
       (r.endpoints || []).forEach(e => {
         txt += `\n### ${e.path}\n` + (e.error ? 'Fehler: ' + e.error : `HTTP ${e.status} · ${e.ms} ms\n`);
         if (e.body != null) { try { txt += JSON.stringify(JSON.parse(e.body), null, 1); } catch (err) { txt += e.body; } }
@@ -12990,7 +13091,7 @@ async function calSave() {
     const res = (r && r.results) || [];
     if (note) note.innerHTML = res.map(x => x.ok
       ? `✅ <b>${esc(x.name)}</b>: ${x.events_7d} Termine in den nächsten 7 Tagen (${x.events_total} Einträge insgesamt)`
-      : `❌ <code>${esc(x.url)}</code>: ${esc(x.error || 'nicht lesbar')}`).join('<br>') || esc((r && r.error) || 'Nicht gespeichert.');
+      : `❌ <code>${esc(x.url)}</code>: ${esc(x.error || 'nicht lesbar')}`).join('<br>') || escIp((r && r.error) || 'Nicht gespeichert.');
     if (r && r.ok) { if (ta) ta.value = ''; _kioskCal = null; }
   } catch (e) {
     if (note) note.textContent = 'Speichern nur möglich, wenn die Seite von der Bridge geöffnet ist.';
@@ -13078,7 +13179,7 @@ async function renderAwbSetup() {
     const clr = $('awb-clear');
     if (r && r.available === false) st.textContent = 'Das AWB-Modul fehlt in der Bridge (bridge/awb_koeln.py) – bitte die Bridge aktualisieren.';
     else if (r && r.configured) st.innerHTML = `✅ <b>${esc(r.label || 'Adresse eingetragen')}</b>` +
-      (r.error ? `<br>⚠︎ ${esc(r.error)}` : '') + (r.next && r.next.length ? `<br>Nächste Abholungen: ${awbNextHtml(r.next)}` : '');
+      (r.error ? `<br>⚠︎ ${escIp(r.error)}` : '') + (r.next && r.next.length ? `<br>Nächste Abholungen: ${awbNextHtml(r.next)}` : '');
     else st.textContent = 'Noch keine Adresse eingetragen.';
     if (clr) clr.hidden = !(r && r.configured);
   } catch (e) { st.textContent = 'Nur möglich, wenn die Seite von der Bridge geöffnet ist.'; }

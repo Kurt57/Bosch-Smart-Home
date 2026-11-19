@@ -13,11 +13,18 @@ Adresse öffnen (z. B. `http://<bridge>:8090/#dash`) und zum Homescreen hinzufü
   * 📅 Termin in der nächsten Stunde, 🗑️ Mülltonnen am Vorabend (ab 16 Uhr) und am Morgen.
   * 🔋 Batterie lädt aus dem Netz, ☀️/♨️ PV-Anlage oder Wärmepumpe ohne aktuelle Werte,
     ⚡ sehr hoher Verbrauch.
-* **Banner:** PV-Überschuss jetzt nutzen bzw. Börsenstrom günstig/teuer; sonst die Geldbilanz der
-  PV-Anlage (heute, Monat, seit Anschluss). Ohne Aussage kein Banner.
+* **Banner:** nur wenn es etwas zu tun gibt – PV-Überschuss jetzt nutzen bzw. Börsenstrom
+  günstig/teuer. Die Geldbilanz der PV-Anlage steht in „Heute“ (siehe unten).
 * **Termine:** heute, morgen und die nächsten Tage aus deinen Kalendern und der Müllabfuhr.
 * **Energiefluss:** Sonne, Batterie, Haus, Netz – gemessen vom Wechselrichter – und vom Haus aus
   Linien zu den größten Verbrauchern (Wärmepumpe, Geräte, nicht einzeln gemessener Rest).
+* **Heute** (mit PV-Anlage und Smart Meter): ein Ring mit der **Autarkie** – dem Anteil deines
+  Verbrauchs, der nicht aus dem Netz kam – und daneben der Wert von gestern. Kacheln: **Sonne**
+  (kWh, wie viel davon selbst genutzt), **verbraucht** (mit Wärmepumpe und ihrem Sonnenanteil),
+  **aus dem Netz** (und eingespeist), **gespart** (€, davon Einspeisung), **Batterie** (jetzt und
+  heute min–max) und **CO₂ vermieden** (Sonnenstrom × CO₂-Gehalt des Netzstroms in derselben
+  Stunde, dasselbe Modell wie im Tab Börse – eine Schätzung). Darunter 7 Tage, Monat, seit
+  Anschluss und der beste Sonnentag. Auf breiten Bildschirmen (iPad quer) neben dem Energiefluss.
 * **Räume:** Temperatur, Soll, Fenster, Luft.
 
 **Einstellungen:** Setup → **🖥️ Wohn-Dashboard** – ab wie vielen **Sekunden** der Fenster-Hinweis
