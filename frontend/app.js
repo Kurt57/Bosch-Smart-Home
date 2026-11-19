@@ -3814,7 +3814,7 @@ function h2HouseSvg() {
   return `<svg viewBox="0 0 392 366" role="img" aria-label="Haus mit Energiefluss">${defs}${g}</svg>`;
 }
 // the 270° gauge (open at the bottom right like a speedometer)
-function h2Gauge(frac, txt) {
+function h2Gauge(frac, txt, cap) {
   const r = 50, cx = 60, cy = 60, a0 = 135, sweep = 270;
   const pt = a => [cx + r * Math.cos(a * Math.PI / 180), cy + r * Math.sin(a * Math.PI / 180)];
   const arc = (from, to) => { const p0 = pt(from), p1 = pt(to), large = to - from > 180 ? 1 : 0;
@@ -3822,7 +3822,8 @@ function h2Gauge(frac, txt) {
   const f = frac == null ? 0 : Math.max(0, Math.min(1, frac));
   return `<svg viewBox="0 0 120 120" class="h2-gauge"><path d="${arc(a0, a0 + sweep)}" fill="none" stroke="#d8dce0" stroke-width="7" stroke-linecap="round"/>` +
     (f > 0.004 ? `<path d="${arc(a0, a0 + sweep * f)}" fill="none" stroke="#2bb39a" stroke-width="7" stroke-linecap="round"/>` : '') +
-    `<text x="60" y="68" text-anchor="middle" class="h2-gv">${txt}</text></svg>`;
+    `<text x="60" y="${cap ? 64 : 68}" text-anchor="middle" class="h2-gv">${txt}</text>` +
+    (cap ? `<text x="60" y="82" text-anchor="middle" class="h2-gc">${cap}</text>` : '') + '</svg>';
 }
 const H2_IC = {
   pv: '<svg viewBox="0 0 24 24" width="22" height="22"><path d="M13 2 4 14h7l-1 8 9-12h-7z" fill="currentColor"/></svg>',
@@ -3839,21 +3840,21 @@ function h2Daily() {
     const pv = L ? Math.max(0, L.pv_w || 0) : null;
     title = pv != null && pv > 25 ? 'Solar erzeugt' : 'Solar ruht';
     sub = pv != null && pv > 25 ? `gerade ${kwOrW(pv)} · heute ${fmt((d && d.pv_kwh) || 0, 2)} kWh` : `heute ${fmt((d && d.pv_kwh) || 0, 2)} kWh`;
-    gauge = h2Gauge(d && d.self_rate, d && d.self_rate != null ? `${fmt(d.self_rate * 100, 1)}<tspan class="h2-gu">%</tspan>` : '–');
+    gauge = h2Gauge(d && d.self_rate, d && d.self_rate != null ? `${fmt(d.self_rate * 100, 1)}<tspan class="h2-gu">%</tspan>` : '–', 'Eigenverbrauch');
     a = ['Selbst genutzt', k(d && d.self_kwh)];
     b = ['Eingespeist', k(d && d.exp_kwh)];
   } else if (_h2Tab === 'grid') {
     const gw = L && L.grid_w != null ? L.grid_w : null;
     title = gw == null ? 'Stromnetz' : gw > 25 ? 'Netzbezug' : gw < -25 ? 'Einspeisung' : 'Netz ausgeglichen';
-    sub = (gw != null && Math.abs(gw) > 25 ? `gerade ${kwOrW(Math.abs(gw))} · ` : '') + `Autarkie heute ${d && d.autarky != null ? fmt(d.autarky * 100, 0) + ' %' : '–'}`;
-    gauge = h2Gauge(d && d.autarky, d && d.autarky != null ? `${fmt(d.autarky * 100, 1)}<tspan class="h2-gu">%</tspan>` : '–');
+    sub = gw == null ? 'keine Netzwerte' : Math.abs(gw) > 25 ? `gerade ${kwOrW(Math.abs(gw))}` : 'gerade kein Bezug und keine Einspeisung';
+    gauge = h2Gauge(d && d.autarky, d && d.autarky != null ? `${fmt(d.autarky * 100, 1)}<tspan class="h2-gu">%</tspan>` : '–', 'Autarkie heute');
     a = ['Bezogen', k(d && d.imp_kwh)];
     b = ['Eingespeist', k(d && d.exp_kwh)];
   } else {
     const bw = L && L.batt_w != null ? L.batt_w : null, soc = L && L.soc != null ? L.soc : null;
     title = bw == null ? 'Batterie' : bw < -25 ? 'Batterie lädt' : bw > 25 ? 'Batterie entlädt' : 'Batterie Standby';
     sub = soc != null && cap ? `Verbleibende Energie ${fmt(soc / 100 * cap / 1000, 2)} kWh` : (soc != null ? `Ladestand ${fmt(soc, 1)} %` : 'keine Batteriedaten');
-    gauge = h2Gauge(soc != null ? soc / 100 : null, soc != null ? `${fmt(soc, 1)}<tspan class="h2-gu">%</tspan>` : '–');
+    gauge = h2Gauge(soc != null ? soc / 100 : null, soc != null ? `${fmt(soc, 1)}<tspan class="h2-gu">%</tspan>` : '–', 'Ladestand');
     a = ['Aufgeladen', k(d && d.ch_kwh)];
     b = ['Entladen', k(d && d.dis_kwh)];
   }
