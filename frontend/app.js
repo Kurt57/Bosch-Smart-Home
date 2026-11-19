@@ -94,8 +94,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v204';   // short tag shown always-on in the header
-const APP_VERSION = 'v204 · 2026-11-19 · Wohn-Dashboard: neue Kachel „Heute“ mit Autarkie-Ring (Anteil des Verbrauchs, der nicht aus dem Netz kam; daneben gestern zum Vergleich) und den Tageswerten Sonne (mit „selbst genutzt“), verbraucht (mit Wärmepumpe und deren Sonnenanteil), aus dem Netz/eingespeist, gespart, Batterie (jetzt und heute min–max) und vermiedenes CO₂; darunter 7 Tage, Monat, seit Anschluss und der beste Sonnentag. Auf breiten Bildschirmen (iPad quer) steht sie neben dem Energiefluss. Die Geldbilanz steht jetzt dort statt im Banner – das Banner erscheint nur noch, wenn es etwas zu tun gibt. IP-Adressen im Heimnetz sind verdeckt, bis man „anzeigen“ antippt (PV-Gerätekarte, Setup, Fehlermeldungen, Eingabefelder; der Rohdaten-Text lässt die Adresse weg). ' +
+const APP_BUILD = 'v205';   // short tag shown always-on in the header
+const APP_VERSION = 'v205 · 2026-11-19 · Profil → „Lastspitzen & Dimensionierung“ mit dem Smart Meter: statt der Summe der einzeln gemessenen Steckdosen + Wärmepumpe (und einer Schätzung für den Rest) rechnet die Karte mit dem gemessenen Verbrauch des ganzen Hauses – Lastdauerlinie und Kennwerte aus den Minutenmitteln, die Spitzen aus den 15-s-Abfragen (die Bridge speichert dafür je Minute den höchsten Wert von Verbrauch und Netzbezug). Neu: höchster Netzbezug, höchste Batterie-Abgabe und bei jeder Top-Spitze, wie viel aus Netz, Batterie und Sonne kam. Aufschlüsselung je Gerät und Verbrauch je Stunde zeigen den Rest als gemessene Differenz statt Schätzung. Stufen bis 15 kW für den ganzen Haushalt. ' +
+  'v204 · 2026-11-19 · Wohn-Dashboard: neue Kachel „Heute“ mit Autarkie-Ring (Anteil des Verbrauchs, der nicht aus dem Netz kam; daneben gestern zum Vergleich) und den Tageswerten Sonne (mit „selbst genutzt“), verbraucht (mit Wärmepumpe und deren Sonnenanteil), aus dem Netz/eingespeist, gespart, Batterie (jetzt und heute min–max) und vermiedenes CO₂; darunter 7 Tage, Monat, seit Anschluss und der beste Sonnentag. Auf breiten Bildschirmen (iPad quer) steht sie neben dem Energiefluss. Die Geldbilanz steht jetzt dort statt im Banner – das Banner erscheint nur noch, wenn es etwas zu tun gibt. IP-Adressen im Heimnetz sind verdeckt, bis man „anzeigen“ antippt (PV-Gerätekarte, Setup, Fehlermeldungen, Eingabefelder; der Rohdaten-Text lässt die Adresse weg). ' +
   'v203 · 2026-11-19 · PV geprüft und erweitert: Neue Karte „🧵 String-Vergleich“ im Tab PV – beide Strings jetzt (Leistung, Spannung, Strom, Anteil), heute als Kurven (umschaltbar auf je kWp), Tages-/Monatswerte, Tabelle mit kWh je kWp, Spitze, „erzeugt im Mittel um“ (Ost früher, West später) und Spannung im Betrieb, dazu eine Bewertung: String liefert nichts, Summe = PV, gleiche Tageszeit/Ausrichtung, Vergleich je kWp, Trend des Verhältnisses, Spannungssprung (Modul/Bypass-Diode). Name, Module, kWp und Ausrichtung je String lassen sich eintragen; sonst schätzt die App die kWp aus den Spannungen. Neue Karte „🔎 Plausibilitätsprüfung“: Datenlage, Strings = PV, Energiebilanz mit Umwandlungsverlusten, Zählerstände gegen Messwerte, Batterie-Wirkungsgrad, Zähler des Wechselrichters (E-Total), Spitzenleistung. Behoben: Strings werden nach Tracker-Nummer gespeichert (ein leerer Platz verschiebt MPP 2 nicht mehr auf MPP 1), die String-Spannungen werden mitgespeichert; die Monatserwartung zählt einen angefangenen Tag nur mit den erfassten Sonnenstunden (und nutzt die Ausrichtung der Strings, wenn eingetragen); „Woher kam dein Strom?“ zeigt Netzbezug für die Batterie nicht mehr als Hausverbrauch; die erste Viertelstunde nach dem Verbinden fehlte bei Zeiträumen über 31 Tage im Zählerstand. ' +
   'v202 · 2026-11-19 · HomeCom-/AEG-Anmeldung geht nicht mehr verloren: Ursache war eine zweite Bridge (z. B. update-macos.command, während die alte noch lief) – sie erneuerte den einmal gültigen Bosch-Token und beendete sich erst danach; die alte arbeitete mit dem verbrauchten Token weiter, Bosch sperrte die Anmeldung. Jetzt: nur eine Bridge pro Konfiguration (die zweite beendet sich vorher mit Hinweis), Port zuerst belegen, Start-/Update-Skripte beenden die alte Bridge sauber, beim Beenden und beim Neustart nach Updates wird eine laufende Token-Erneuerung abgewartet, config.json wird atomar geschrieben, der Demo-Modus fasst echte Zugänge nicht an. Einmal im Setup neu verbinden. ' +
   'v201 · 2026-11-18 · Stundenplan im Wohn-Dashboard: Setup → „🎒 Stundenplan“ (eine Zeile je Stunde: Zeit | Mo | Di | Mi | Do | Fr, „-“ = frei, mit Vorschau). Das Dashboard zeigt den heutigen bzw. nächsten Schultag mit laufender Stunde und Schulschluss; Hinweise „Morgen Sport – Sportsachen einpacken“ (ab 16 Uhr), „Heute Sport“ am Morgen und „Schule aus um …“ 30 Minuten vorher. Feiertage in NRW werden erkannt, Ferien über einen ganztägigen Kalendertermin mit „Ferien“/„schulfrei“. Der Plan liegt wie die übrigen Einstellungen in der Bridge. ' +
@@ -407,7 +408,9 @@ const INFO = {
     'Die <b>Lastdauerlinie</b> sagt, für wie viel <b>% der Zeit</b> die Leistung über einem Wert lag – die roten Linien markieren gängige Größen (800/1200/2000 W). Darunter die <b>Top-10-Spitzen</b> mit Höhe (W), Dauer und Zeitpunkt. ' +
     'So siehst du: die <b>Dauerlast</b> ist meist niedrig, nur kurze Spitzen (Wärmepumpen-Start, Küche) treiben die nötige Leistung hoch – und wie oft/lange die überhaupt vorkommen. ' +
     'Sobald du <b>Zählerstände</b> (Setup) hinterlegst, wird auf den <b>ganzen Haushalt</b> hochgerechnet: der ungemessene Rest wird nach dem Rhythmus deiner Messungen über die Stunden verteilt, dazu gibt es eine <b>Aufschlüsselung je Gerät</b> und den <b>Verbrauch je Stunde</b>. ' +
-    '<b>Ehrlich:</b> ohne Zähler zählt nur die Summe der <b>gemessenen</b> Steckdosen + Wärmepumpe (ungemessene Großverbraucher wie Herd/Wasserkocher fehlen dann).',
+    '<b>Ehrlich:</b> ohne Zähler zählt nur die Summe der <b>gemessenen</b> Steckdosen + Wärmepumpe (ungemessene Großverbraucher wie Herd/Wasserkocher fehlen dann). ' +
+    'Mit einem <b>Smart Meter</b> (PV-Anlage von Fronius) rechnet die Karte mit dem <b>gemessenen Verbrauch des ganzen Hauses</b> – Minutenmittel, Spitzen aus den 15-s-Abfragen – ' +
+    'und zeigt bei jeder Spitze, wie viel aus Netz, Batterie und Sonne kam.',
   balkon: () => 'Simuliert ein <b>Balkonkraftwerk/Steckersolar</b> mit <b>800 W</b> Einspeisegrenze (bis dahin darfst du selbst installieren). ' +
     'Du gibst <b>Module (kWp)</b> und <b>Speicher (kWh)</b> ein (z. B. Anker Solarbank). Die Simulation rechnet gegen dein <b>gemessenes Verbrauchsprofil</b>: ' +
     'Tagsüber deckt die PV direkt die Last, der Überschuss <b>über 800 W</b> lädt den Speicher, der ihn abends wieder als ≤800 W abgibt – so werden die ' +
@@ -7746,15 +7749,15 @@ function lpBreakRow(x, maxShare) {
     `<div class="bar" style="height:7px;margin-top:5px"><i style="width:${w.toFixed(0)}%;background:${c}"></i></div></div>`;
 }
 // meter-anchored hourly distribution: measured (hell) + verteilter Rest (dunkel)
-function lpHourChart(hd) {
+function lpHourChart(hd, sm) {
   const rows = hd.map(p => ({
     label: (p.hour % 3 === 0) ? String(p.hour) : '',
     full: String(p.hour).padStart(2, '0') + ':00 Uhr',
     values: { meas: p.measured_w, rest: Math.max(0, p.w - p.measured_w) },
   }));
   return stackedBar(rows, [
-    { key: 'meas', color: COL.sh, label: 'gemessen' },
-    { key: 'rest', color: '#9aa4b2', label: 'ungemessener Rest' },
+    { key: 'meas', color: COL.sh, label: sm ? 'Geräte + Wärmepumpe (einzeln gemessen)' : 'gemessen' },
+    { key: 'rest', color: '#9aa4b2', label: sm ? 'übriger Verbrauch (Smart Meter)' : 'ungemessener Rest' },
   ], { unit: 'W', h: 200 });
 }
 function paintLoadPeaks(r) {
@@ -7766,16 +7769,34 @@ function paintLoadPeaks(r) {
     [brkWrap, hrsWrap].forEach(e => { if (e) e.hidden = true; }); if (head) head.innerHTML = ''; return;
   }
   const whole = r.basis === 'meter' && r.meter;
-  if (head) head.innerHTML = `<span style="color:var(--muted)">${r.hours} h · ${whole ? '🏠 Ganzhaus' : r.sources + ' Quellen'}</span>`;
+  const sm = r.basis === 'smartmeter' && r.sm;               // measured whole house (Fronius smart meter)
+  const W = v => fmt(v, 0) + ' W';
+  const when = ts => new Date(ts * 1000).toLocaleString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  if (head) head.innerHTML = `<span style="color:var(--muted)">${fmt(r.hours, r.hours < 100 ? 1 : 0)} h · ${sm ? '⚡ Smart Meter' : whole ? '🏠 Ganzhaus' : r.sources + ' Quellen'}</span>`;
   const kpi = (v, l) => `<div class="kpi sm"><div class="v">${v}</div><div class="l">${l}</div></div>`;
-  if (kpis) kpis.innerHTML = kpi(fmt(r.peak_w, 0) + ' W', 'Spitze') + kpi(fmt(r.p99_w, 0) + ' W', '99-%-Spitze') +
-    kpi(fmt(r.p95_w, 0) + ' W', '95-%-Dauerlast') + kpi(fmt(r.p50_w, 0) + ' W', 'Median');
-  if (basis) basis.innerHTML = whole
-    ? `🏠 <b>Ganzhaus</b> aus deinem Zähler: Ø <b>${kwh(r.meter.daily_kwh, 1)}/Tag</b> · davon direkt gemessen <b>${fmt(r.meter.coverage, 0)} %</b> (Steckdosen + WP), der Rest wird hochgerechnet.`
-    : `<span style="color:var(--muted)">Nur <b>gemessene</b> Steckdosen + Wärmepumpe – ohne Zählerstand ist das nicht die echte Hausspitze. Trag im Setup ein paar <b>Zählerstände</b> ein, dann rechne ich auf den ganzen Haushalt hoch.</span>`;
+  if (kpis) kpis.innerHTML = kpi(W(r.peak_w), sm && sm.has_peaks ? 'Spitze (15 s)' : 'Spitze') + kpi(W(r.p99_w), '99-%-Spitze') +
+    kpi(W(r.p95_w), '95-%-Dauerlast') + kpi(W(r.p50_w), 'Median') +
+    (sm && sm.grid_peak_w ? kpi(W(sm.grid_peak_w), 'höchster Netzbezug') : '') +
+    (sm && sm.batt_max_w ? kpi(W(sm.batt_max_w), 'höchste Batterie-Abgabe') : '');
+  if (basis) basis.innerHTML = sm
+    ? `⚡ <b>Ganzes Haus, gemessen</b> vom Smart Meter am Netzanschluss: Verbrauch = Netzbezug + Sonne + Batterie − Einspeisung, ` +
+      `alle 15 s abgefragt, je Minute gemittelt${sm.has_peaks ? ', die Spitzen aus den einzelnen 15-s-Werten' : ''}. ` +
+      `Daten seit ${new Date(sm.since * 1000).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}` +
+      (sm.covered_days < r.days - 0.5 ? ` – für den gewählten Zeitraum liegen erst <b>${fmt(sm.covered_days, 1)} Tage</b> vor` : '') +
+      ` · Ø <b>${kwh(sm.daily_kwh, 1)}/Tag</b>${sm.coverage != null ? `, davon einzeln gemessen ${fmt(sm.coverage, 0)} % (Geräte + Wärmepumpe)` : ''}.`
+    : whole
+      ? `🏠 <b>Ganzhaus</b> aus deinem Zähler: Ø <b>${kwh(r.meter.daily_kwh, 1)}/Tag</b> · davon direkt gemessen <b>${fmt(r.meter.coverage, 0)} %</b> (Steckdosen + WP), der Rest wird hochgerechnet.`
+      : `<span style="color:var(--muted)">Nur <b>gemessene</b> Steckdosen + Wärmepumpe – ohne Zählerstand ist das nicht die echte Hausspitze. Trag im Setup ein paar <b>Zählerstände</b> ein, dann rechne ich auf den ganzen Haushalt hoch.</span>`;
+  const bn = $('pf-lp-break-note'), hn = $('pf-lp-hours-note');
+  if (bn) bn.innerHTML = sm
+    ? 'Der gemessene <b>Hausverbrauch</b> aufgeteilt: Geräte mit eigener Messung und die Wärmepumpe real, der <b>Rest</b> (Herd, Licht, Kleingeräte …) ist die Differenz zum Smart Meter – ebenfalls gemessen, nicht geschätzt.'
+    : 'Dein <b>Zählerverbrauch</b> aufgeteilt: gemessene Geräte real, der <b>ungemessene Rest</b> (Herd, Licht, Kleingeräte …) als eigener Posten.';
+  if (hn) hn.innerHTML = sm
+    ? 'Durchschnittliche Leistung je Uhrzeit laut Smart Meter. Hell: Geräte mit eigener Messung + Wärmepumpe, grau: der übrige Verbrauch – beides gemessen.'
+    : 'Dein Zähler-Tagesverbrauch auf die Stunden verteilt – nach dem <b>Rhythmus</b> deiner gemessenen Geräte. Der helle Teil ist gemessen, der dunkle der verteilte Rest.';
   // per-device breakdown (whole-house only)
   if (brkWrap && brk) {
-    if (whole && r.breakdown && r.breakdown.length) {
+    if ((whole || sm) && r.breakdown && r.breakdown.length) {
       const maxShare = Math.max(...r.breakdown.map(x => x.share || 0), 1);
       brk.innerHTML = r.breakdown.map(x => lpBreakRow(x, maxShare)).join('');
       brkWrap.hidden = false;
@@ -7783,8 +7804,8 @@ function paintLoadPeaks(r) {
   }
   // meter-anchored hourly distribution (whole-house only)
   if (hrsWrap && hrs) {
-    if (whole && r.hour_dist && r.hour_dist.length === 24) {
-      hrs.innerHTML = `<div style="touch-action:none">${lpHourChart(r.hour_dist)}</div>`;
+    if ((whole || sm) && r.hour_dist && r.hour_dist.length === 24) {
+      hrs.innerHTML = `<div style="touch-action:none">${lpHourChart(r.hour_dist, !!sm)}</div>`;
       hrsWrap.hidden = false;
     } else hrsWrap.hidden = true;
   }
@@ -7795,18 +7816,36 @@ function paintLoadPeaks(r) {
     `<span style="white-space:nowrap"><b>${fmt(100 - L.pct_above, 0)}%</b> der Zeit gedeckt <span style="color:var(--muted)">· darüber ${fmt(L.hours_above, 1)} h</span></span></div>`).join('');
   if (evEl) {
     const dur = s => { s = Math.round(s); return s < 90 ? s + ' s' : s < 5400 ? Math.round(s / 60) + ' min' : (s / 3600).toFixed(1) + ' h'; };
-    const when = ts => new Date(ts * 1000).toLocaleString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
     const maxP = (r.events[0] && r.events[0].peak_w) || 1;
+    // where the power of a peak came from (smart meter): grid / battery / sun
+    const src = e => {
+      if (e.grid_share == null) return '';
+      const g = e.grid_share, b = e.batt_share || 0, s_ = Math.max(0, 1 - g - b);
+      return `<div style="font-size:11px;color:var(--muted);margin-top:3px">` +
+        [`${fmt(g * 100, 0)} % aus dem Netz`, b >= 0.05 ? `${fmt(b * 100, 0)} % Batterie` : '', s_ >= 0.05 ? `${fmt(s_ * 100, 0)} % Sonne` : '']
+          .filter(Boolean).join(' · ') + '</div>';
+    };
     evEl.innerHTML = r.events.length ? r.events.map((e, i) =>
       `<div style="padding:7px 0;border-bottom:1px solid var(--line)">` +
       `<div style="display:flex;justify-content:space-between;gap:8px;font-size:13px"><b>${i + 1}. ${fmt(e.peak_w, 0)} W</b>` +
       `<span style="color:var(--muted)">${dur(e.dur_s)} · ${esc(when(e.start))}</span></div>` +
-      `<div class="bar" style="height:6px;margin-top:5px"><i style="width:${Math.max(5, e.peak_w / maxP * 100)}%;background:${COL.hp}"></i></div></div>`).join('')
+      `<div class="bar" style="height:6px;margin-top:5px"><i style="width:${Math.max(5, e.peak_w / maxP * 100)}%;background:${COL.hp}"></i></div>` +
+      src(e) + '</div>').join('')
       : '<div class="note">Keine ausgeprägten Spitzen im Zeitraum.</div>';
   }
   const whole2 = r.basis === 'meter' && r.meter;
   const l800 = (r.levels || []).find(L => L.w === 800);
-  if (note) note.innerHTML = (l800
+  if (note && sm) {
+    const gridEv = (r.events || []).filter(e => e.grid_share != null);
+    const gShare = gridEv.length ? gridEv.reduce((a, e) => a + e.grid_share, 0) / gridEv.length : null;
+    note.innerHTML = `Für die <b>Dauerlast</b> reichen ~<b>${W(r.p95_w)}</b> (95 % der Zeit darunter); die höchste Spitze war <b>${W(r.peak_w)}</b>` +
+      (r.peak_ts ? ` (${esc(when(r.peak_ts))})` : '') + '. ' +
+      (sm.batt_max_w ? `Die Batterie gab höchstens <b>${W(sm.batt_max_w)}</b> ab; was darüber hinausgeht – oder anfällt, wenn sie leer ist –, kommt aus dem Netz. ` : '') +
+      (gShare != null ? `Bei den ${gridEv.length} größten Spitzen kam im Schnitt <b>${fmt(gShare * 100, 0)} %</b> aus dem Netz. ` : '') +
+      (sm.grid_peak_w ? `Höchster Netzbezug: <b>${W(sm.grid_peak_w)}</b>${sm.grid_peak_ts ? ` (${esc(when(sm.grid_peak_ts))})` : ''}. ` : '') +
+      `<span style="color:var(--muted)">Die Lastdauerlinie nutzt die Minutenmittel – sehr kurze Spitzen (Anlaufströme unter einer Sekunde) sieht keine 15-s-Abfrage.` +
+      (sm.covered_days < 7 ? ' Für eine Aussage über Wochen und Jahreszeiten braucht es mehr Tage – besonders Winterabende mit Wärmepumpe und Kochen sind wichtig.' : '') + '</span>';
+  } else if (note) note.innerHTML = (l800
     ? `Eine Anlage mit <b>800 W</b> Ausgangsleistung deckt <b>${fmt(100 - l800.pct_above, 0)}%</b> deiner Zeit; die Spitzen darüber dauern zusammen nur <b>${fmt(l800.hours_above, 1)} h</b> im Zeitraum. ` : '') +
     `Für die <b>Dauerlast</b> reichen ~<b>${fmt(r.p95_w, 0)} W</b> (95 % der Zeit darunter), die kurzen Lastspitzen bestimmen die Größe. ` +
     (whole2

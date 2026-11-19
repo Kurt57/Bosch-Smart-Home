@@ -1090,11 +1090,12 @@ class Store:
                 " ts INTEGER PRIMARY KEY, n INTEGER,"
                 " pv_w REAL, grid_w REAL, load_w REAL, batt_w REAL, soc REAL, inv_w REAL,"
                 " e_total_wh REAL, imp_wh REAL, exp_wh REAL, mpp1_w REAL, mpp2_w REAL,"
-                " mpp1_v REAL, mpp2_v REAL)"
+                " mpp1_v REAL, mpp2_v REAL, load_max_w REAL, grid_max_w REAL)"
             )
             pvcols = [r[1] for r in self.conn.execute("PRAGMA table_info(pv_samples)")]
-            # string voltages (v203): compare the strings and spot a lost module
-            for col in ("mpp1_v", "mpp2_v"):
+            # string voltages (v203): compare the strings and spot a lost module;
+            # the highest 15-s reading of the minute (v205): real load peaks
+            for col in ("mpp1_v", "mpp2_v", "load_max_w", "grid_max_w"):
                 if col not in pvcols:
                     self.conn.execute(f"ALTER TABLE pv_samples ADD COLUMN {col} REAL")
             # hardware product catalog (PV inverters / batteries / all-in-one),
@@ -1108,7 +1109,8 @@ class Store:
 
     # -- PV system (Fronius) --------------------------------------------- #
     PV_COLS = ("ts", "n", "pv_w", "grid_w", "load_w", "batt_w", "soc", "inv_w",
-               "e_total_wh", "imp_wh", "exp_wh", "mpp1_w", "mpp2_w", "mpp1_v", "mpp2_v")
+               "e_total_wh", "imp_wh", "exp_wh", "mpp1_w", "mpp2_w", "mpp1_v", "mpp2_v",
+               "load_max_w", "grid_max_w")
     # extra columns of pv_rows_bucketed (after the PV_COLS ones)
     PV_BUCKET_EXTRA = ("imp_w", "exp_w", "ch_w", "dis_w", "gch_w", "vw1", "wv1", "vw2", "wv2",
                        "inv_pos_w", "mpp1_max", "mpp2_max", "pv_max")
@@ -1154,7 +1156,7 @@ class Store:
             cur = self.conn.execute(
                 "SELECT MAX(ts), COUNT(*), AVG(pv_w), AVG(grid_w), AVG(load_w), AVG(batt_w), AVG(soc),"
                 " AVG(inv_w), MAX(e_total_wh), MAX(imp_wh), MAX(exp_wh), AVG(mpp1_w), AVG(mpp2_w),"
-                " AVG(mpp1_v), AVG(mpp2_v),"
+                " AVG(mpp1_v), AVG(mpp2_v), MAX(load_max_w), MAX(grid_max_w),"
                 " AVG(MAX(grid_w, 0)), AVG(MAX(-grid_w, 0)), AVG(MAX(-batt_w, 0)), AVG(MAX(batt_w, 0)),"
                 " AVG(CASE WHEN batt_w < 0 AND grid_w > load_w THEN MIN(grid_w - load_w, -batt_w * 1.25)"
                 " ELSE 0 END),"
@@ -2361,6 +2363,145 @@ def compute_dhw_impact(store: "Store", days: float = 14, hp_live: dict | None = 
     }
 
 
+LP_LEVELS = (600, 800, 1200, 2000, 3600, 5000, 8000, 10000, 15000)
+LP_SM_MIN_S = 6 * 3600          # smart-meter data needed in the window to use it
+
+
+def _load_peaks_smartmeter(store: "Store", days: float, since: int, now: int, sources: dict) -> dict | None:
+    """Load peaks from the whole-house consumption the Fronius smart meter
+    measures (minute means of the 15-s readings, plus the highest reading of
+    each minute for the peaks). The measured plugs + heat pump are matched to
+    the same minutes, so the per-device breakdown and the hourly split show
+    the real rest instead of an estimate. Also: where the peaks came from
+    (grid / battery / sun) and the highest grid import and battery output."""
+    I = _PV_I
+    raw = [r for r in store.pv_rows(since, now + 1) if r[I["load_w"]] is not None]
+    if len(raw) < 2:
+        return None
+    ts = [r[0] for r in raw]
+    diffs = sorted(b - a for a, b in zip(ts, ts[1:]) if b > a)
+    step = diffs[len(diffs) // 2] if diffs else PV_STORE_EVERY
+    cap = max(90.0, 2.5 * step)
+    rows, prev = [], None
+    for r in raw:
+        dt = r[0] - prev if prev is not None else step
+        prev = r[0]
+        dur = dt if 0 < dt <= cap else step          # after a gap: the row stands for one step
+        load = max(0.0, r[I["load_w"]])
+        lmax = r[I["load_max_w"]]
+        rows.append({"ts": r[0], "dur": float(dur), "gap": not (0 < dt <= cap), "load": load,
+                     "peak": max(load, lmax if lmax is not None else load),
+                     "grid": r[I["grid_w"]], "gmax": r[I["grid_max_w"]], "batt": r[I["batt_w"]],
+                     "pv": r[I["pv_w"]]})
+    total_s = sum(x["dur"] for x in rows)
+    if total_s < LP_SM_MIN_S:
+        return None
+    # time-weighted percentiles of the minute means
+    srt = sorted(rows, key=lambda x: -x["load"])
+    vals = [x["load"] for x in srt]
+    cum, acc = [], 0.0
+    for x in srt:
+        acc += x["dur"]
+        cum.append(acc)
+
+    def pct(fr):                                   # power exceeded fr of the time
+        k = bisect.bisect_left(cum, fr * total_s)
+        return round(vals[min(k, len(vals) - 1)], 0)
+    pk_row = max(rows, key=lambda x: x["peak"])
+    peak_w = round(pk_row["peak"], 0)
+    ldc = [{"frac": round(i / 100.0, 2), "w": pct(i / 100.0)} for i in range(101)]
+    levels = []
+    for lv in LP_LEVELS:
+        if lv > peak_w + 1:
+            continue
+        above = sum(x["dur"] for x in rows if x["load"] > lv)
+        levels.append({"w": lv, "pct_above": round(above / total_s * 100.0, 1),
+                       "hours_above": round(above / 3600.0, 2)})
+    # peaks: contiguous minutes above a threshold, with where the power came from
+    thr = max(pct(0.08), 300.0)
+    events, i, n = [], 0, len(rows)
+    while i < n:
+        if rows[i]["load"] > thr:
+            j = i
+            while j + 1 < n and rows[j + 1]["load"] > thr and not rows[j + 1]["gap"]:
+                j += 1
+            seg = rows[i:j + 1]
+            e_load = sum(x["load"] * x["dur"] for x in seg)
+            e_grid = sum(max(0.0, x["grid"] or 0.0) * x["dur"] for x in seg if x["grid"] is not None)
+            e_batt = sum(max(0.0, x["batt"] or 0.0) * x["dur"] for x in seg if x["batt"] is not None)
+            pk = max(seg, key=lambda x: x["peak"])
+            events.append({"peak_w": round(pk["peak"], 0), "start": int(seg[0]["ts"] - seg[0]["dur"]),
+                           "dur_s": int(sum(x["dur"] for x in seg)),
+                           "grid_share": round(min(1.0, e_grid / e_load), 2) if e_load > 0 else None,
+                           "batt_share": round(min(1.0, e_batt / e_load), 2) if e_load > 0 else None})
+            i = j + 1
+        else:
+            i += 1
+    events.sort(key=lambda e: -e["peak_w"])
+    # the plugs + heat pump on the same minutes → real breakdown and hourly split
+    maxstale = 15 * 60
+    ptrs = {k: 0 for k in sources}
+    src_e = {k: 0.0 for k in sources}
+    hs_tot, hs_meas, hs_dur = [0.0] * 24, [0.0] * 24, [0.0] * 24
+    for x in rows:
+        t, d = x["ts"], x["dur"]
+        tm = t - d / 2.0                           # middle of the minute
+        meas = 0.0
+        for k, arr in sources.items():
+            p = ptrs[k]
+            while p + 1 < len(arr) and arr[p + 1][0] <= tm:
+                p += 1
+            ptrs[k] = p
+            ts_k, pw_k = arr[p]
+            if ts_k <= tm and tm - ts_k <= maxstale:
+                meas += pw_k
+                src_e[k] += pw_k * d / 3600.0
+        h = min(23, max(0, int((tm - _day_of(int(tm))[0]) // 3600)))     # local hour (cached day bounds)
+        hs_tot[h] += x["load"] * d
+        hs_meas[h] += min(meas, x["load"]) * d
+        hs_dur[h] += d
+    total_kwh = sum(x["load"] * x["dur"] for x in rows) / 3.6e6
+    measured_kwh = sum(src_e.values()) / 1000.0
+    rest_kwh = max(0.0, total_kwh - measured_kwh)
+    hour_dist = ([{"hour": h, "w": round(hs_tot[h] / hs_dur[h], 0) if hs_dur[h] else 0,
+                   "measured_w": round(hs_meas[h] / hs_dur[h], 0) if hs_dur[h] else 0} for h in range(24)]
+                 if sum(1 for v in hs_dur if v > 0) >= 12 else None)
+    breakdown = None
+    if sources:
+        names = {dev["id"]: dev.get("custom_name") or dev.get("name") or dev["id"] for dev in store.devices()}
+        bd = [{"name": "Wärmepumpe" if k == "__hp" else names.get(k, k), "kwh": round(e / 1000.0, 3), "measured": True}
+              for k, e in src_e.items() if e > 0.5]
+        bd.sort(key=lambda x: -x["kwh"])
+        if rest_kwh > 0.01:
+            bd.append({"name": "Rest (nicht einzeln gemessen)", "kwh": round(rest_kwh, 3), "measured": False})
+        tot = sum(x["kwh"] for x in bd) or 1.0
+        for x in bd:
+            x["share"] = round(x["kwh"] / tot * 100.0, 1)
+        breakdown = bd
+    gp = [(max(x["gmax"] if x["gmax"] is not None else -1e9, x["grid"] if x["grid"] is not None else -1e9), x["ts"])
+          for x in rows if x["grid"] is not None or x["gmax"] is not None]
+    gpk = max(gp) if gp else None
+    bt = [(x["batt"], x["ts"]) for x in rows if x["batt"] is not None]
+    bmax = max(bt) if bt else None
+    first = rows[0]["ts"] - rows[0]["dur"]
+    return {"ok": True, "days": days, "bin_s": step, "n": n, "hours": round(total_s / 3600.0, 1),
+            "sources": len(sources), "peak_w": peak_w, "peak_ts": int(pk_row["ts"]),
+            "peak_mean_w": round(max(vals), 0), "p99_w": pct(0.01), "p95_w": pct(0.05), "p50_w": pct(0.5),
+            "ldc": ldc, "levels": levels, "events": events[:10], "basis": "smartmeter",
+            "sm": {"since": int(first), "span_days": round((rows[-1]["ts"] - first) / 86400.0, 1),
+                   "covered_days": round(total_s / 86400.0, 1),
+                   "window_days": days, "kwh": round(total_kwh, 2), "daily_kwh": round(total_kwh / (total_s / 86400.0), 2),
+                   "measured_kwh": round(measured_kwh, 2), "rest_kwh": round(rest_kwh, 2),
+                   "coverage": round(measured_kwh / total_kwh * 100.0, 1) if total_kwh > 0 else None,
+                   "grid_peak_w": round(gpk[0], 0) if gpk and gpk[0] > 0 else None,
+                   "grid_peak_ts": int(gpk[1]) if gpk and gpk[0] > 0 else None,
+                   "batt_max_w": round(bmax[0], 0) if bmax and bmax[0] > 25 else None,
+                   "batt_max_ts": int(bmax[1]) if bmax and bmax[0] > 25 else None,
+                   "has_peaks": any(x["peak"] > x["load"] + 1 for x in rows)},
+            "meter": None, "breakdown": breakdown, "hour_dist": hour_dist,
+            "measured_kwh": round(measured_kwh, 3)}
+
+
 def compute_load_peaks(store: "Store", days: float = 7, hp_live: dict | None = None) -> dict:
     """Load over time on a common grid, for load-management awareness: the
     biggest power peaks with their duration, a load-duration curve, and how much
@@ -2391,6 +2532,15 @@ def compute_load_peaks(store: "Store", days: float = 7, hp_live: dict | None = N
         sources["__hp"] = hp
     for k in sources:
         sources[k].sort()
+    # a smart meter (Fronius) measures the whole house – far better than
+    # summing the plugs and estimating the rest
+    try:
+        sm = _load_peaks_smartmeter(store, days, since, now, sources)
+    except Exception as exc:               # never lose the card over it
+        print(f"[loadpeaks] smart meter: {exc}", file=sys.stderr)
+        sm = None
+    if sm:
+        return sm
     if not sources:
         return {"ok": True, "n": 0, "sources": 0}
 
@@ -2482,7 +2632,7 @@ def compute_load_peaks(store: "Store", days: float = 7, hp_live: dict | None = N
     ldc = [{"frac": round(i / 100.0, 2), "w": round(srt[min(n - 1, int(i / 100.0 * (n - 1)))], 0)}
            for i in range(101)]
     levels = []
-    for lv in (600, 800, 1200, 2000, 3600, 5000):
+    for lv in LP_LEVELS:
         if lv > peak_w + 1:
             continue
         cnt = sum(1 for v in total if v > lv)
@@ -7875,6 +8025,10 @@ class FroniusPoller(threading.Thread):
         for k in ("soc", "e_total_wh"):              # last value wins
             if flow.get(k) is not None:
                 self._acc[k] = [flow[k], 1]
+        for k, mk in (("load_w", "load_max_w"), ("grid_w", "grid_max_w")):   # highest reading of the minute
+            v = flow.get(k)
+            if v is not None and (mk not in self._acc or v > self._acc[mk][0]):
+                self._acc[mk] = [v, 1]
 
     def _store_row(self, now: float):
         if not self._n:
@@ -7886,6 +8040,9 @@ class FroniusPoller(threading.Thread):
         for k in ("soc", "e_total_wh"):
             a = self._acc.get(k)
             row[k] = a[0] if a else None
+        for k in ("load_max_w", "grid_max_w"):
+            a = self._acc.get(k)
+            row[k] = round(a[0], 1) if a else None
         det = self.state.get("details") or {}
         if det and now - (det.get("ts") or 0) <= 2 * PV_DETAILS_EVERY:
             gm = next((m for m in det.get("meters") or [] if m.get("location") == "grid"), None)

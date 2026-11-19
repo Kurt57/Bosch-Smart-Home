@@ -18,6 +18,15 @@ Was du danach siehst:
 * **Tab PV → 🧵 String-Vergleich:** die beiden MPP-Tracker (Strings) nebeneinander – jetzt, heute
   als Kurven, je Tag, je kWp, wann sie erzeugen, mit Bewertung (siehe unten).
 * **Tab PV → 🔎 Plausibilitätsprüfung:** passen die gespeicherten Zahlen zueinander? (siehe unten)
+* **Profil → ⚡ Lastspitzen & Dimensionierung:** mit Smart Meter der **gemessene Verbrauch des
+  ganzen Hauses** statt der Summe der einzeln gemessenen Steckdosen plus Schätzung: Lastdauerlinie
+  und Kennwerte aus den Minutenmitteln, die Spitzen aus den einzelnen 15-s-Abfragen (die Bridge
+  speichert je Minute auch den höchsten Wert), der höchste Netzbezug und die höchste
+  Batterie-Abgabe, bei jeder Top-Spitze der Anteil aus Netz, Batterie und Sonne. Die
+  Aufschlüsselung je Gerät und der Verbrauch je Stunde zeigen den Rest (Herd, Licht …) als
+  gemessene Differenz zum Smart Meter. Gilt für die Zeit, für die Smart-Meter-Daten vorliegen
+  (mindestens 6 Stunden im Zeitraum, sonst wie bisher). Anlaufströme unter einer Sekunde erfasst
+  keine 15-s-Abfrage.
 * **Wärmepumpe → Live:** wie viel des Stroms gerade von der Sonne kommt.
 * **Wohn-Dashboard (`…/#dash`):** Energiefluss und Empfehlung mit den **gemessenen** Werten
   (alle 10 Sekunden), vom Haus aus Linien zu den größten Verbrauchern (Wärmepumpe, einzeln
