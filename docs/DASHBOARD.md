@@ -1,4 +1,4 @@
-# Wohn-Dashboard (`…/#dash`)
+# Wohn-Dashboard (`…/#dash`) und Haus-Dashboard (`…/#dash2`)
 
 Vollbild-Ansicht für ein Wand-iPad oder ein altes Tablet: die App mit `#dash` am Ende der
 Adresse öffnen (z. B. `http://<bridge>:8090/#dash`) und zum Homescreen hinzufügen.
@@ -32,6 +32,35 @@ Adresse öffnen (z. B. `http://<bridge>:8090/#dash`) und zum Homescreen hinzufü
 blinkt (Standard 600 s; zum Testen z. B. 1 s) und wie viele **Abende vorher** der Tonnen-Hinweis
 erscheint (Standard 1). Gilt für alle Geräte; ein laufendes Dashboard übernimmt die Werte innerhalb
 einer Minute. Ist ein Fenster offen, schaut das Dashboard alle 20 Sekunden nach.
+
+Auf Handy-Breite rutschen Außentemperatur und „aktualisiert“ in eine zweite Zeile, damit die
+Knöpfe oben (Zuhause/Abwesend, Hell/Dunkel, ✕) im Bild bleiben.
+
+## Haus-Dashboard (`…/#dash2`)
+
+Die zweite Dashboard-Seite zeigt die PV-Anlage als **Haus-Grafik** (eigene Zeichnung): Dach mit
+Modulen, Wechselrichter und Batterie an der Hauswand, Garage mit Auto und Wallbox, Wärmepumpe und
+der Hausanschluss am Mast. Hell, im Stil einer Hersteller-App. Öffnen: `…/#dash2`, Setup →
+**🏡 Haus-Dashboard**, oder im Wohn-Dashboard nach links wischen bzw. unten auf den zweiten Punkt
+tippen (zurück: nach rechts wischen oder der erste Punkt).
+
+* **Kopf:** „Zuhause“ mit Status – grün **Normal**, wenn der Wechselrichter aktuelle Werte liefert
+  (höchstens 2 Minuten alt), sonst orange. Der Haus-Blitz-Knopf zeigt den **Notstrom-Status**
+  (GEN24 `BackupMode`; wird er nicht gemeldet, steht das dabei), „…“ führt zum Wohn-Dashboard, zur
+  PV-Auswertung oder zurück in die App.
+* **Werte am Haus** (gemessen vom Wechselrichter und Smart Meter, alle 10 Sekunden):
+  **Solar** (PV-Leistung), **Andere Lasten** (Hausverbrauch ohne Wallbox), **Batterie** (Lade- bzw.
+  Entladeleistung und Ladestand; orange unter 15 %), **Stromnetz** (Bezug oder Einspeisung) und
+  **Wallbox**. Die Leitungen zeigen mit laufenden Strichen, wohin der Strom gerade fließt.
+* **Wallbox:** Der Wechselrichter misst keine Wallbox. Die Karte zeigt einen Wert nur, wenn ein
+  gemessenes Gerät in der App „Wallbox“, „Ladestation“, „Ladepunkt“ oder „E-Auto“ heißt (Name in
+  der Geräteliste); sonst steht dort „keine Messung“ statt erfundener 0 W.
+* **Tägliche Energie:** drei Reiter – ⚡ **Solar** (heute erzeugt, Ring = Eigenverbrauchsquote,
+  selbst genutzt/eingespeist), 🔋 **Batterie** (lädt/entlädt/Standby, verbleibende Energie =
+  Ladestand × Kapazität laut Wechselrichter, Ring = Ladestand, heute auf- und entladen) und
+  **Netz** (Bezug/Einspeisung jetzt, Ring = Autarkie heute, bezogen/eingespeist). Das
+  Balken-Symbol öffnet die PV-Auswertung, ein Tipp auf „Solar ›“ ebenfalls.
+* Ohne verbundene PV-Anlage stehen überall Striche und ein Hinweis aufs Setup.
 
 ## Stundenplan
 

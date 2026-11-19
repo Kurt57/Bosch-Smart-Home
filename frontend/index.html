@@ -294,8 +294,80 @@
   .kroom .kr-temp{font-size:38px; font-weight:800; line-height:1.05; margin:3px 0; letter-spacing:-1.5px}
   .kroom .kr-set{font-size:13px; color:var(--k-sub)}
   .kroom .kr-tags{margin-top:9px; display:flex; flex-wrap:wrap; gap:6px; font-size:12px; letter-spacing:0}
-  .kroom .kr-tags span{background:var(--k-card2); border-radius:999px; padding:3px 9px; white-space:nowrap; font-weight:500}
+  .kroom .kr-tags span{background:var(--k-card2); border-radius:11px; padding:3px 9px; font-weight:500; max-width:100%}
   #kiosk-vent{margin-top:16px}
+  /* Dashboard 2 (#dash2): das Haus mit den Live-Werten, hell wie ein Foto */
+  #house2{position:fixed; inset:0; z-index:200; overflow-y:auto; -webkit-overflow-scrolling:touch;
+    background:linear-gradient(180deg,#f6f7f8 0%,#edeff1 55%,#e7e9ec 100%); color:#1c1c1e;
+    padding:calc(10px + var(--safe-t)) 16px calc(16px + var(--safe-b)); font-feature-settings:"tnum" 1;
+    font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",Arial,sans-serif; letter-spacing:-.01em}
+  #h2-top{display:flex; align-items:center; gap:8px; max-width:1120px; margin:0 auto; position:relative; padding-top:4px}
+  .h2-site{margin-right:auto; display:flex; flex-direction:column; gap:2px; min-width:0}
+  .h2-site b{font-size:21px; font-weight:700; letter-spacing:-.02em}
+  #h2-status{font-size:13px; color:#23946a; display:flex; align-items:center; gap:6px}
+  #h2-status::before{content:""; width:8px; height:8px; border-radius:50%; background:#34c47c; flex:none}
+  #h2-status.bad{color:#b86e00} #h2-status.bad::before{background:#ff9f0a}
+  #h2-top button{width:40px; height:40px; flex:none; border-radius:50%; border:none; cursor:pointer; display:grid; place-items:center;
+    background:rgba(255,255,255,.8); color:#1c1c1e; box-shadow:0 1px 3px rgba(0,0,0,.07)}
+  #h2-top #h2-backup.on{background:#fff1da; color:#b86e00}
+  #h2-pop{position:absolute; right:0; top:48px; z-index:3; min-width:220px; padding:6px; border-radius:14px;
+    background:#fff; box-shadow:0 12px 34px rgba(0,0,0,.16)}
+  #h2-pop a{display:block; padding:11px 12px; border-radius:10px; color:#1c1c1e; text-decoration:none; font-size:15px}
+  #h2-pop a:active,#h2-pop a:hover{background:#f1f2f4}
+  #h2-msg{max-width:1120px; margin:10px auto 0; padding:11px 14px; border-radius:14px; background:#fff;
+    font-size:14px; line-height:1.45; box-shadow:0 1px 3px rgba(0,0,0,.06)}
+  #h2-main{max-width:1120px; margin:0 auto}
+  #h2-house svg{display:block; width:100%; max-width:540px; height:auto; margin:6px auto 0}
+  .h2-lbl rect{fill:#fff; filter:drop-shadow(0 1px 2.5px rgba(0,0,0,.09))}
+  .h2-lbl.tap{cursor:pointer}
+  .h2-v{font-size:17px; font-weight:700; fill:#1c1c1e} .h2-u{font-size:12px; font-weight:600}
+  .h2-n{font-size:12.5px; fill:#6e6e73} .h2-x{font-size:12.5px; font-weight:600}
+  .h2-wire{fill:none; stroke:#bcc5cf; stroke-width:1.6; stroke-linejoin:round}
+  .h2-flow{fill:none; stroke:#3d7fd0; stroke-width:2; stroke-dasharray:4 7; stroke-linecap:round; stroke-linejoin:round;
+    animation:h2f 1s linear infinite}
+  .h2-flow.rev{animation-direction:reverse}
+  @keyframes h2f{to{stroke-dashoffset:-11}}
+  @media (prefers-reduced-motion:reduce){.h2-flow{animation:none}}
+  .h2-head{display:flex; align-items:center; justify-content:space-between; margin:8px 2px 10px}
+  .h2-head h3{margin:0; font-size:19px; font-weight:700}
+  .h2-head a{display:grid; place-items:center; width:38px; height:38px; border-radius:12px; color:#1c1c1e}
+  .h2-card{background:#fff; border-radius:20px; padding:14px 16px 16px;
+    box-shadow:0 1px 3px rgba(0,0,0,.05), 0 8px 24px rgba(0,0,0,.04)}
+  .h2-tabs{display:flex; gap:8px; margin-bottom:8px}
+  .h2-tabs button{width:50px; height:36px; border-radius:10px; border:none; cursor:pointer; display:grid; place-items:center;
+    background:#f1f2f4; color:#8e8e93}
+  .h2-tabs button.on{background:#e2f5f0; color:#1f9e85}
+  .h2-row{display:flex; align-items:center; justify-content:space-between; gap:10px}
+  .h2-title{font-size:18px; font-weight:700}
+  .h2-sub{font-size:13.5px; color:#6e6e73; margin-top:5px; line-height:1.4}
+  .h2-gauge{width:116px; height:116px; flex:none}
+  .h2-gv{font-size:21px; font-weight:700; fill:#1c1c1e} .h2-gu{font-size:12px; font-weight:600}
+  .h2-stats{display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:4px}
+  .h2-stats > div{background:#f5f6f8; border-radius:12px; padding:10px 12px}
+  .h2-stats small{display:block; font-size:12.5px; color:#6e6e73; margin-bottom:3px}
+  .h2-stats b{font-size:21px; font-weight:700} .h2-stats span{font-size:12.5px; color:#6e6e73}
+  .h2-foot{font-size:12px; color:#8e8e93; margin:10px 4px 0}
+  .dash-dots{display:flex; justify-content:center; align-items:center; gap:8px; margin:18px 0 2px}
+  .dash-dots > *{display:block; width:8px; height:8px; border-radius:4px; background:#c3c7cd}
+  .dash-dots a{position:relative} .dash-dots a::after{content:""; position:absolute; inset:-12px}
+  .dash-dots .on{width:20px; background:#1c1c1e}
+  #kiosk .dash-dots > *{background:var(--k-faint)} #kiosk .dash-dots .on{background:var(--k-ink)}
+  @media (min-width:900px){
+    #h2-main{display:grid; grid-template-columns:minmax(0,1.5fr) minmax(320px,1fr); column-gap:32px; align-items:center}
+    #h2-house svg{max-width:760px}
+    #h2-side{max-width:480px}
+    .h2-site b{font-size:25px} #h2-status{font-size:14px}
+  }
+  @media (min-width:600px) and (max-width:899px){ #h2-house svg{max-width:680px} #h2-side{max-width:560px; margin:0 auto} }
+  /* Wohn-Dashboard auf Handy-Breite: Außentemperatur/Stand in eine zweite Zeile, damit ✕ im Bild bleibt */
+  @media (max-width:560px){
+    #kiosk-top{flex-wrap:wrap; row-gap:4px}
+    #kiosk-top > div:first-child{flex:1 1 0; min-width:0}
+    #kiosk-clock{font-size:42px; letter-spacing:-1.5px}
+    #kiosk-top > div:nth-child(2){order:9; flex:1 0 100%; text-align:left !important; display:flex; flex-wrap:wrap; column-gap:10px}
+    #kiosk-top > div:nth-child(2) .k-sub{margin-top:0}
+    #kiosk-away{padding:0 12px; font-size:13px}
+  }
   /* Energiefluss-Animation */
   #kiosk-flow:not(:empty){margin:16px 0; background:var(--k-card); border:.5px solid var(--k-sep);
     border-radius:22px; padding:14px 10px 6px; box-shadow:var(--k-shadow);
@@ -1657,7 +1729,11 @@
       <div class="note" style="margin-bottom:10px">Vollbild-Ansicht für ein <b>Wand-iPad</b> o. Ä.: Räume auf einen Blick,
         Lüften-Hinweise und „jetzt waschen?“ (Börse/PV). Tipp: auf dem iPad als Lesezeichen auf
         <b>…/#dash</b> speichern und zum Homescreen hinzufügen – dann startet es direkt im Dashboard.</div>
-      <button class="btn" id="open-kiosk" style="width:auto;padding:10px 18px">📺 Dashboard öffnen</button>
+      <div style="display:flex; flex-wrap:wrap; gap:8px">
+        <button class="btn" id="open-kiosk" style="width:auto;padding:10px 18px">📺 Dashboard öffnen</button>
+        <button class="btn sec" id="open-house" style="width:auto;padding:10px 18px">🏡 Haus-Dashboard</button>
+      </div>
+      <div class="note" style="margin-top:8px">Das <b>Haus-Dashboard</b> (…/#dash2) zeigt die PV-Anlage als Haus-Grafik mit den Live-Werten und der Tagesenergie. Zwischen beiden Dashboards wischen oder unten auf die Punkte tippen.</div>
     </div>
     <div class="card">
       <h2>Status</h2>
@@ -2158,6 +2234,32 @@
   <div id="kiosk-loads"></div>
   <div id="kiosk-rooms"></div>
   <div id="kiosk-vent" class="k-sub"></div>
+  <div class="dash-dots"><span class="on" aria-label="Wohn-Dashboard"></span><a href="#dash2" aria-label="Haus-Dashboard"></a></div>
+</div>
+
+<!-- DASHBOARD 2 (#dash2): das Haus als Bild mit den Live-Werten -------------->
+<div id="house2" hidden>
+  <div id="h2-top">
+    <div class="h2-site"><b>Zuhause</b><span id="h2-status">–</span></div>
+    <button id="h2-backup" aria-label="Notstrom-Status"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 11 12 3l9 8M5.5 9v11.5h13V9"/><path d="M12.8 10.5 10 15h4l-2.8 4.5" stroke-linecap="round"/></svg></button>
+    <button id="h2-more" aria-label="Menü"><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><circle cx="5" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="19" cy="12" r="1.9"/></svg></button>
+    <div id="h2-pop" hidden>
+      <a href="#dash" data-h2go="dash">📺 Wohn-Dashboard</a>
+      <a href="#pv" data-h2go="pv">☀️ PV-Auswertung</a>
+      <a href="#" data-h2go="app">← Zur App</a>
+    </div>
+  </div>
+  <div id="h2-msg" hidden></div>
+  <div id="h2-main">
+    <div id="h2-house"></div>
+    <div id="h2-side">
+      <div class="h2-head"><h3>Tägliche Energie</h3>
+        <a href="#pv" data-h2go="pv" aria-label="PV-Auswertung öffnen"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M4 20h16M7 16v-4M12 16V7M17 16v-6"/></svg></a></div>
+      <div id="h2-card" class="h2-card"></div>
+      <div id="h2-foot" class="h2-foot"></div>
+    </div>
+  </div>
+  <div class="dash-dots"><a href="#dash" data-h2go="dash" aria-label="Wohn-Dashboard"></a><span class="on" aria-label="Haus-Dashboard"></span></div>
 </div>
 
 <div id="toast" hidden></div>

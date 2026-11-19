@@ -94,8 +94,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v207';   // short tag shown always-on in the header
-const APP_VERSION = 'v207 · 2026-11-19 · PV-Planer: neue Karte „🔬 Theorie vs. Praxis“ unter „PV-Nutzung pro Monat“ – je Monat, was der Planer für deine Anlage erwartet (mit kWp und Batterie laut Wechselrichter, Ausrichtung der Strings, Verbrauch laut Planer), neben dem gemessenen Ergebnis: vier Balken (PV Theorie/Praxis, Verbrauch Theorie/Praxis; Theorie gestrichelt), Tabelle mit Abweichungen bei PV, Verbrauch, Netzbezug und Autarkie, angefangene Monate anteilig, und eine Einordnung mit den Sonnenstunden des Monats gegenüber dem langjährigen Mittel. ' +
+const APP_BUILD = 'v208';   // short tag shown always-on in the header
+const APP_VERSION = 'v208 · 2026-11-19 · Zweites Dashboard „Haus“ (…/#dash2): die PV-Anlage als selbst gezeichnete Haus-Grafik – Dach mit Modulen, Wechselrichter und Batterie an der Wand, Garage mit Auto und Wallbox, Wärmepumpe, Netzanschluss am Mast – mit den gemessenen Werten alle 10 s: Solar, Andere Lasten (Haus ohne Wallbox), Batterie (Leistung und Ladestand), Stromnetz (Bezug/Einspeisung) und Wallbox (nur wenn ein gemessenes Gerät so heißt, sonst „keine Messung“). Laufende Striche zeigen die Flussrichtung. Darunter „Tägliche Energie“ mit drei Reitern: Solar (Eigenverbrauchsquote), Batterie (Ladestand, verbleibende kWh, heute auf-/entladen) und Netz (Autarkie, bezogen/eingespeist). Status „Normal“ nur bei aktuellen Wechselrichter-Werten, Notstrom-Status per Knopf. Zwischen beiden Dashboards wischen oder die Punkte unten antippen; im Setup neuer Knopf „Haus-Dashboard“. Wohn-Dashboard auf dem Handy: die Knöpfe oben (u. a. ✕) bleiben im Bild, lange Raum-Hinweise brechen um statt über den Rand zu laufen. ' +
+  'v207 · 2026-11-19 · PV-Planer: neue Karte „🔬 Theorie vs. Praxis“ unter „PV-Nutzung pro Monat“ – je Monat, was der Planer für deine Anlage erwartet (mit kWp und Batterie laut Wechselrichter, Ausrichtung der Strings, Verbrauch laut Planer), neben dem gemessenen Ergebnis: vier Balken (PV Theorie/Praxis, Verbrauch Theorie/Praxis; Theorie gestrichelt), Tabelle mit Abweichungen bei PV, Verbrauch, Netzbezug und Autarkie, angefangene Monate anteilig, und eine Einordnung mit den Sonnenstunden des Monats gegenüber dem langjährigen Mittel. ' +
   'v206 · 2026-11-19 · PV-Tab mit Wetter: drei Kacheln heute/morgen/übermorgen mit Wetterart (sonnig, heiter, wechselhaft, trüb, Regen/Schnee), Sonnenstunden von den Stunden Tageslicht, Bewölkung, Temperatur und erwartetem Ertrag – aus der Einstrahlung und dem, was deine Anlage an den letzten Tagen daraus gemacht hat. Im Verlauf die Sonnenstunden je Tag direkt unter den PV-Balken, das Wetter im Tooltip und eine Zusammenfassung (sonnigster/trübster Tag mit Ertrag). Neuer Zeitraum „Heute“ mit Balken je Stunde. Wetter: Open-Meteo (Modell für deinen Standort); fehlt der Standort, fragt die App nach dem Ort. Wohn-Dashboard: Termine und Stundenplan stehen auf breiten Bildschirmen nebeneinander. ' +
   'v205 · 2026-11-19 · Profil → „Lastspitzen & Dimensionierung“ mit dem Smart Meter: statt der Summe der einzeln gemessenen Steckdosen + Wärmepumpe (und einer Schätzung für den Rest) rechnet die Karte mit dem gemessenen Verbrauch des ganzen Hauses – Lastdauerlinie und Kennwerte aus den Minutenmitteln, die Spitzen aus den 15-s-Abfragen (die Bridge speichert dafür je Minute den höchsten Wert von Verbrauch und Netzbezug). Neu: höchster Netzbezug, höchste Batterie-Abgabe und bei jeder Top-Spitze, wie viel aus Netz, Batterie und Sonne kam. Aufschlüsselung je Gerät und Verbrauch je Stunde zeigen den Rest als gemessene Differenz statt Schätzung. Stufen bis 15 kW für den ganzen Haushalt. ' +
   'v204 · 2026-11-19 · Wohn-Dashboard: neue Kachel „Heute“ mit Autarkie-Ring (Anteil des Verbrauchs, der nicht aus dem Netz kam; daneben gestern zum Vergleich) und den Tageswerten Sonne (mit „selbst genutzt“), verbraucht (mit Wärmepumpe und deren Sonnenanteil), aus dem Netz/eingespeist, gespart, Batterie (jetzt und heute min–max) und vermiedenes CO₂; darunter 7 Tage, Monat, seit Anschluss und der beste Sonnentag. Auf breiten Bildschirmen (iPad quer) steht sie neben dem Energiefluss. Die Geldbilanz steht jetzt dort statt im Banner – das Banner erscheint nur noch, wenn es etwas zu tun gibt. IP-Adressen im Heimnetz sind verdeckt, bis man „anzeigen“ antippt (PV-Gerätekarte, Setup, Fehlermeldungen, Eingabefelder; der Rohdaten-Text lässt die Adresse weg). ' +
@@ -3632,6 +3633,7 @@ function applyKioskTheme(t) {
 }
 function openKiosk() {
   const k = $('kiosk'); if (!k) return;
+  if (houseOpen()) closeHouse();
   k.hidden = false;
   applyKioskTheme(kioskTheme());
   try { if (location.hash !== '#dash') history.replaceState(null, '', '#dash'); } catch (e) {}
@@ -3645,6 +3647,315 @@ function closeKiosk() {
   clearTimeout(_kioskWinT); _kioskWinT = null;
   try { const m = document.querySelector('meta[name="theme-color"]'); if (m) m.setAttribute('content', '#0b1220'); } catch (e) {}
   try { if (location.hash === '#dash') history.replaceState(null, '', location.pathname + location.search); } catch (e) {}
+}
+/* ---- Dashboard 2 (#dash2): the house as a picture with the live values ---- */
+// Isometric drawing (own artwork): roof with modules, room with lamp, garage with
+// car and wallbox, heat pump, inverter, battery and the grid line. Values from
+// the inverter/smart meter (every 10 s); the wallbox only when a measured device
+// is called like one – otherwise it says so instead of inventing 0 W.
+let _h2T = null, _h2Tab = 'batt', _h2Live = null;
+function houseOpen() { const h = $('house2'); return !!(h && !h.hidden); }
+const H2 = { s: 21, ox: 196, oy: 148 };
+const h2p = (x, y, z) => [H2.ox + (x - y) * 0.866 * H2.s, H2.oy + (x + y) * 0.5 * H2.s - z * H2.s];
+const h2pts = pts => pts.map(p => h2p(p[0], p[1], p[2]).map(v => v.toFixed(1)).join(',')).join(' ');
+const h2poly = (pts, fill, ex) => `<polygon points="${h2pts(pts)}" fill="${fill}"${ex || ''}/>`;
+const h2path = pts => pts.map((p, i) => (i ? 'L' : 'M') + h2p(p[0], p[1], p[2]).map(v => v.toFixed(1)).join(' ')).join(' ');
+// a box: the three faces a viewer from the front-left-top sees
+function h2box(x0, x1, y0, y1, z0, z1, c) {
+  return h2poly([[x1, y0, z0], [x1, y1, z0], [x1, y1, z1], [x1, y0, z1]], c.r) +          // right (x = x1)
+    h2poly([[x0, y1, z0], [x1, y1, z0], [x1, y1, z1], [x0, y1, z1]], c.f) +                // front (y = y1)
+    h2poly([[x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]], c.t);                 // top
+}
+function h2Wallbox() {
+  const re = /wallbox|wall-box|ladestation|ladepunkt|ladebox|e-?auto|elektroauto/i;
+  const devs = (_h2Live && _h2Live.devices) || (STATE.data && STATE.data.live && STATE.data.live.devices) || [];
+  const d = devs.find(x => re.test((x.custom_name || '') + ' ' + (x.name || '')));
+  return d ? { w: Math.max(0, d.power_w || 0), name: d.custom_name || d.name } : null;
+}
+function h2W(w) {
+  if (w == null || !isFinite(w)) return ['–', ''];
+  const a = Math.abs(w);
+  return a >= 10000 ? [fmt(a / 1000, 1), 'kW'] : [fmt(a, 0), 'W'];
+}
+// a label card: value + unit, name (+ chevron), optional extra line
+function h2Label(x, y, w, val, name, extra, extraCol, chevron, key) {
+  const [v, u] = h2W(val);
+  const hgt = extra ? 66 : 50;
+  return `<g class="h2-lbl${chevron ? ' tap' : ''}" data-h2k="${key}"><rect x="${x}" y="${y}" width="${w}" height="${hgt}" rx="8"/>` +
+    `<text x="${x + 9}" y="${y + 21}" class="h2-v">${v}<tspan class="h2-u" dx="3">${u}</tspan></text>` +
+    `<text x="${x + 9}" y="${y + 40}" class="h2-n">${esc(name)}${chevron ? ' ›' : ''}</text>` +
+    (extra ? `<text x="${x + 9}" y="${y + 58}" class="h2-x" style="fill:${extraCol || '#2aa58a'}">${esc(extra)}</text>` : '') + '</g>';
+}
+function h2HouseSvg() {
+  const F = STATE.fr || {}, L = (F.connected && frLiveNow()) || null;
+  const pv = L ? Math.max(0, L.pv_w || 0) : null, load = L && L.load_w != null ? Math.max(0, L.load_w) : null;
+  const grid = L && L.grid_w != null ? L.grid_w : null, batt = L && L.batt_w != null ? L.batt_w : null;
+  const soc = L && L.soc != null ? L.soc : null;
+  const wb = h2Wallbox(), wbW = wb ? wb.w : null;
+  const other = load != null ? Math.max(0, load - (wbW || 0)) : null;
+  const inv = L ? (pv || 0) + (batt || 0) : 0;                  // DC → AC side of the inverter (± battery)
+  const on = v => v != null && Math.abs(v) > 25;
+  const W = { r: '#e2e6ea', f: '#f5f6f7', t: '#fbfbfc' };       // wall colours (right, front, top)
+  let g = '';
+  // ground
+  g += h2poly([[-3.2, -0.8, 0], [12.2, -0.8, 0], [12.2, 10.4, 0], [-3.2, 10.4, 0]], 'url(#h2ground)');
+  // roof, left plane (behind the gable)
+  g += h2poly([[3, -0.3, 6.6], [3, 5.3, 6.6], [-0.4, 5.3, 3.75], [-0.4, -0.3, 3.75]], '#eceef1');
+  // main house: right wall + gable wall
+  g += h2poly([[6, 0, 0], [6, 5, 0], [6, 5, 4], [6, 0, 4]], W.r);
+  g += h2poly([[0, 5, 0], [6, 5, 0], [6, 5, 4], [3, 5, 6.6], [0, 5, 4]], W.f);
+  // room behind the big window: back wall, sill, side, table, lamp
+  g += h2poly([[0.7, 4.5, 2.95], [3.5, 4.5, 2.95], [3.5, 4.5, 4.35], [0.7, 4.5, 4.35]], '#f3e3c2');
+  g += h2poly([[0.7, 5, 2.95], [3.5, 5, 2.95], [3.5, 4.5, 2.95], [0.7, 4.5, 2.95]], '#e7d3ab');
+  g += h2poly([[0.7, 5, 2.95], [0.7, 4.5, 2.95], [0.7, 4.5, 4.35], [0.7, 5, 4.35]], '#e9d8b5');
+  g += h2poly([[1.3, 4.55, 3.35], [2.9, 4.55, 3.35], [2.9, 4.85, 3.35], [1.3, 4.85, 3.35]], '#d9c39a');
+  g += `<path d="${h2path([[1.45, 4.85, 3.35], [1.45, 4.85, 2.97]])} ${h2path([[2.75, 4.85, 3.35], [2.75, 4.85, 2.97]])}" stroke="#c7ae80" stroke-width="1.2"/>`;
+  const lp = h2p(2.1, 4.75, 3.72), lt = h2p(2.1, 4.75, 4.35);
+  g += `<circle cx="${lp[0].toFixed(1)}" cy="${(lp[1] + 4).toFixed(1)}" r="16" fill="url(#h2glow)"/>` +
+    `<line x1="${lt[0].toFixed(1)}" y1="${lt[1].toFixed(1)}" x2="${lp[0].toFixed(1)}" y2="${lp[1].toFixed(1)}" stroke="#8a7a5c" stroke-width="0.8"/>` +
+    `<path d="M${(lp[0] - 6).toFixed(1)} ${(lp[1] + 6).toFixed(1)} L${lp[0].toFixed(1)} ${(lp[1] - 1).toFixed(1)} L${(lp[0] + 6).toFixed(1)} ${(lp[1] + 6).toFixed(1)} Z" fill="#fff6dc" stroke="#d8c79e" stroke-width="0.6"/>`;
+  // window frame
+  g += `<polygon points="${h2pts([[0.7, 5, 2.95], [3.5, 5, 2.95], [3.5, 5, 4.35], [0.7, 5, 4.35]])}" fill="none" stroke="#ffffff" stroke-width="2.2"/>`;
+  // tall window on the right wall
+  g += h2poly([[6.01, 0.7, 0.6], [6.01, 1.9, 0.6], [6.01, 1.9, 3.4], [6.01, 0.7, 3.4]], '#cfd8e0', ' stroke="#ffffff" stroke-width="1.6"');
+  g += `<path d="${h2path([[6.01, 1.3, 0.6], [6.01, 1.3, 3.4]])}" stroke="#ffffff" stroke-width="1.2"/>`;
+  // roof, right plane with the modules
+  g += h2poly([[3, -0.3, 6.6], [3, 5.3, 6.6], [6.4, 5.3, 3.75], [6.4, -0.3, 3.75]], '#dde1e5');
+  const R = (u, y) => [3 + 3.4 * u, y, 6.6 - 2.85 * u];
+  [[0.15, 2.45], [2.75, 5.05]].forEach(([y0, y1]) => {
+    g += h2poly([R(0.08, y0), R(0.08, y1), R(0.92, y1), R(0.92, y0)], 'url(#h2pv)', ' stroke="#3f4d61" stroke-width="0.6"');
+    let ln = '';
+    for (let k = 1; k < 4; k++) { const y = y0 + (y1 - y0) * k / 4; ln += h2path([R(0.08, y), R(0.92, y)]) + ' '; }
+    for (let k = 1; k < 3; k++) { const u = 0.08 + 0.84 * k / 3; ln += h2path([R(u, y0), R(u, y1)]) + ' '; }
+    g += `<path d="${ln}" stroke="#8798b0" stroke-width="0.5" fill="none" opacity=".8"/>`;
+  });
+  // gable edge of the roof
+  g += h2poly([[-0.4, 5.3, 3.75], [3, 5.3, 6.6], [6.4, 5.3, 3.75], [6.4, 5.3, 3.47], [3, 5.3, 6.3], [-0.4, 5.3, 3.47]], '#fbfcfc', ' stroke="#e3e6e9" stroke-width="0.6"');
+  // inverter on the right wall, battery below it
+  g += h2box(6, 6.24, 3.0, 4.0, 2.1, 2.9, { r: '#f7f8f8', f: '#e8eaed', t: '#fdfdfd' });
+  g += h2poly([[6.25, 3.25, 2.5], [6.25, 3.6, 2.5], [6.25, 3.6, 2.62], [6.25, 3.25, 2.62]], '#3a3f45');
+  g += h2box(6.15, 6.85, 2.9, 4.2, 0, 1.6, { r: '#f3f4f5', f: '#e6e8eb', t: '#fbfbfb' });
+  const socC = soc == null ? '#c9cdd2' : soc < 15 ? '#f0a35e' : '#5fcf9f';
+  g += h2poly([[6.86, 3.0, 0.12], [6.86, 4.1, 0.12], [6.86, 4.1, 0.26], [6.86, 3.0, 0.26]], socC);
+  // heat pump (outdoor unit) on the left
+  g += h2box(-1.9, -0.5, 6.5, 7.3, 0, 1.25, { r: '#e3e6e9', f: '#f2f3f4', t: '#fafbfb' });
+  let fan = '';
+  for (let k = 0; k < 24; k++) { const t = k / 24 * 2 * Math.PI; fan += (k ? ' ' : '') + h2p(-1.4 + 0.42 * Math.cos(t), 7.31, 0.62 + 0.42 * Math.sin(t)).map(v => v.toFixed(1)).join(','); }
+  g += `<polygon points="${fan}" fill="#3e4348"/>`;
+  const hub = h2p(-1.4, 7.31, 0.62);
+  g += `<circle cx="${hub[0].toFixed(1)}" cy="${hub[1].toFixed(1)}" r="2.2" fill="#9aa1a8"/>`;
+  g += `<path d="${[-0.85, -0.75, -0.65].map(x => h2path([[x, 7.31, 0.25], [x, 7.31, 1.0]])).join(' ')}" stroke="#c4c9ce" stroke-width="0.8"/>`;
+  // garage: inside first, then the car, then the walls around the door
+  g += h2poly([[0.8, 5.2, 0], [4.2, 5.2, 0], [4.2, 8.6, 0], [0.8, 8.6, 0]], '#b4bac1');
+  g += h2poly([[0.8, 5.2, 0], [0.8, 8.6, 0], [0.8, 8.6, 2.2], [0.8, 5.2, 2.2]], '#c6cbd1');
+  g += h2poly([[0.8, 5.2, 0], [4.2, 5.2, 0], [4.2, 5.2, 2.2], [0.8, 5.2, 2.2]], '#d2d6db');
+  // the car
+  g += h2poly([[3.7, 5.8, 0.3], [3.7, 8.45, 0.3], [3.7, 8.45, 0.95], [3.7, 5.8, 0.95]], '#e6e9ec');
+  g += h2poly([[1.95, 8.45, 0.3], [3.7, 8.45, 0.3], [3.7, 8.45, 0.95], [1.95, 8.45, 0.95]], '#f8f9fa');
+  g += h2poly([[1.95, 7.85, 0.95], [3.7, 7.85, 0.95], [3.7, 8.45, 0.95], [1.95, 8.45, 0.95]], '#ffffff');
+  g += h2poly([[1.95, 5.8, 0.95], [3.7, 5.8, 0.95], [3.7, 6.35, 0.95], [1.95, 6.35, 0.95]], '#ffffff');
+  g += h2poly([[3.55, 6.35, 0.95], [3.55, 7.85, 0.95], [3.55, 7.3, 1.52], [3.55, 6.55, 1.52]], '#7c8999');
+  g += h2poly([[2.1, 7.85, 0.95], [3.55, 7.85, 0.95], [3.55, 7.3, 1.52], [2.1, 7.3, 1.52]], '#6c7988');
+  g += h2poly([[2.1, 6.55, 1.52], [3.55, 6.55, 1.52], [3.55, 7.3, 1.52], [2.1, 7.3, 1.52]], '#f4f5f6');
+  [6.35, 7.95].forEach(y => { const c = h2p(3.71, y, 0.3); g += `<ellipse cx="${c[0].toFixed(1)}" cy="${c[1].toFixed(1)}" rx="5" ry="6.2" fill="#3b4046"/><ellipse cx="${c[0].toFixed(1)}" cy="${c[1].toFixed(1)}" rx="2.2" ry="2.8" fill="#9ca3aa"/>`; });
+  g += h2poly([[2.1, 8.46, 0.62], [2.5, 8.46, 0.62], [2.5, 8.46, 0.78], [2.1, 8.46, 0.78]], '#fff5cf') +
+    h2poly([[3.15, 8.46, 0.62], [3.55, 8.46, 0.62], [3.55, 8.46, 0.78], [3.15, 8.46, 0.78]], '#fff5cf');
+  // garage walls and roof
+  g += h2poly([[4.4, 5, 0], [4.4, 8.6, 0], [4.4, 8.6, 2.6], [4.4, 5, 2.6]], W.r);
+  g += h2poly([[0.6, 8.6, 0], [1.5, 8.6, 0], [1.5, 8.6, 2.6], [0.6, 8.6, 2.6]], W.f);
+  g += h2poly([[4.1, 8.6, 0], [4.4, 8.6, 0], [4.4, 8.6, 2.6], [4.1, 8.6, 2.6]], W.f);
+  g += h2poly([[1.5, 8.6, 2.15], [4.1, 8.6, 2.15], [4.1, 8.6, 2.6], [1.5, 8.6, 2.6]], W.f);
+  g += h2poly([[0.6, 5, 2.6], [4.4, 5, 2.6], [4.4, 8.6, 2.6], [0.6, 8.6, 2.6]], W.t);
+  // wallbox with its cable to the car
+  g += h2box(0.82, 1.28, 8.6, 8.76, 0.9, 1.65, { r: '#e3e6e9', f: '#fbfbfb', t: '#ffffff' });
+  g += h2poly([[0.95, 8.77, 1.3], [1.15, 8.77, 1.3], [1.15, 8.77, 1.5], [0.95, 8.77, 1.5]], '#2f3338');
+  const c0 = h2p(1.05, 8.77, 0.9), c1 = h2p(1.6, 9.3, 0.02), c2 = h2p(2.2, 8.46, 0.55);
+  g += `<path d="M${c0[0].toFixed(1)} ${c0[1].toFixed(1)} Q${c1[0].toFixed(1)} ${(c1[1] + 6).toFixed(1)} ${c2[0].toFixed(1)} ${c2[1].toFixed(1)}" fill="none" stroke="#2f3338" stroke-width="1.3"/>`;
+  // wiring: modules → inverter, inverter ↔ battery, inverter → junction,
+  // junction → room, junction ↔ grid, junction → wallbox
+  const WIRE = {
+    pv: [[6.13, 3.5, 3.98], [6.02, 3.5, 2.92]],
+    batt: [[6.12, 3.5, 2.1], [6.5, 3.5, 1.62]],
+    inv: [[6.0, 3.95, 2.62], [6.0, 5.0, 2.62], [4.8, 5.0, 2.62]],
+    house: [[4.8, 5.0, 2.62], [2.1, 5.0, 2.62], [2.1, 5.0, 2.95]],
+    grid: [[4.8, 5.0, 2.62], [4.8, 5.0, 0.02], [4.8, 6.9, 0.02], [11, 6.9, 0.02]],
+    wb: [[2.1, 5.0, 2.62], [1.05, 5.0, 2.62], [1.05, 8.6, 2.62], [1.05, 8.62, 1.66]],
+  };
+  Object.values(WIRE).forEach(w => { g += `<path d="${h2path(w)}" class="h2-wire"/>`; });
+  // moving dashes where power flows (direction = the way the power goes)
+  const flow = (k, rev) => `<path d="${h2path(WIRE[k])}" class="h2-flow${rev ? ' rev' : ''}"/>`;
+  if (on(pv)) g += flow('pv');
+  if (on(batt)) g += flow('batt', batt > 0);                    // + = the battery delivers
+  if (on(inv)) g += flow('inv', inv < 0);
+  if (on(other)) g += flow('house');
+  if (on(grid)) g += flow('grid', grid > 0);                    // + = import: from the grid to the house
+  if (on(wbW)) g += flow('wb');
+  // the grid: a small pole where the line ends
+  const pb = h2p(11, 6.9, 0), pt = h2p(11, 6.9, 3.4);
+  g += `<line x1="${pb[0].toFixed(1)}" y1="${pb[1].toFixed(1)}" x2="${pt[0].toFixed(1)}" y2="${pt[1].toFixed(1)}" stroke="#9aa4ae" stroke-width="2.4" stroke-linecap="round"/>`;
+  [[3.1, 0.62], [2.55, 0.42]].forEach(([z, half]) => {
+    const a = h2p(11, 6.9 - half, z), b = h2p(11, 6.9 + half, z);
+    g += `<line x1="${a[0].toFixed(1)}" y1="${a[1].toFixed(1)}" x2="${b[0].toFixed(1)}" y2="${b[1].toFixed(1)}" stroke="#9aa4ae" stroke-width="1.8" stroke-linecap="round"/>` +
+      `<circle cx="${a[0].toFixed(1)}" cy="${(a[1] - 2).toFixed(1)}" r="1.6" fill="#c7cdd3"/><circle cx="${b[0].toFixed(1)}" cy="${(b[1] - 2).toFixed(1)}" r="1.6" fill="#c7cdd3"/>`;
+  });
+  const jn = h2p(4.8, 5.0, 2.62);
+  g += `<circle cx="${jn[0].toFixed(1)}" cy="${jn[1].toFixed(1)}" r="4" fill="#ffffff" stroke="#4f78a6" stroke-width="2"/>`;
+  // labels
+  g += h2Label(298, 24, 92, pv, 'Solar', null, null, true, 'pv');
+  g += h2Label(6, 42, 120, other, 'Andere Lasten', null, null, false, 'load');
+  g += h2Label(278, 174, 106, batt != null ? Math.abs(batt) : null, 'Batterie', soc != null ? fmt(soc, 1) + ' %' : null, socC === '#f0a35e' ? '#d9822b' : '#2aa58a', true, 'batt');
+  g += h2Label(290, 282, 100, grid != null ? Math.abs(grid) : null, 'Stromnetz', grid != null && Math.abs(grid) > 25 ? (grid > 0 ? 'Bezug' : 'Einspeisung') : null, '#7a828b', false, 'grid');
+  g += h2Label(6, 288, 112, wbW, 'Wallbox', wb ? null : 'keine Messung', '#9aa1a8', !!wb, 'wb');
+  const defs = '<defs>' +
+    '<linearGradient id="h2pv" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#6c7d96"/><stop offset=".55" stop-color="#4c5c74"/><stop offset="1" stop-color="#5d6f88"/></linearGradient>' +
+    '<radialGradient id="h2glow"><stop offset="0" stop-color="#fff3c4" stop-opacity=".95"/><stop offset="1" stop-color="#fff3c4" stop-opacity="0"/></radialGradient>' +
+    '<radialGradient id="h2ground" cx=".5" cy=".5" r=".36"><stop offset="0" stop-color="#d2d7dd" stop-opacity=".95"/><stop offset=".65" stop-color="#dce0e5" stop-opacity=".6"/><stop offset="1" stop-color="#e6e9ec" stop-opacity="0"/></radialGradient>' +
+    '</defs>';
+  return `<svg viewBox="0 0 392 366" role="img" aria-label="Haus mit Energiefluss">${defs}${g}</svg>`;
+}
+// the 270° gauge (open at the bottom right like a speedometer)
+function h2Gauge(frac, txt) {
+  const r = 50, cx = 60, cy = 60, a0 = 135, sweep = 270;
+  const pt = a => [cx + r * Math.cos(a * Math.PI / 180), cy + r * Math.sin(a * Math.PI / 180)];
+  const arc = (from, to) => { const p0 = pt(from), p1 = pt(to), large = to - from > 180 ? 1 : 0;
+    return `M${p0[0].toFixed(1)} ${p0[1].toFixed(1)} A${r} ${r} 0 ${large} 1 ${p1[0].toFixed(1)} ${p1[1].toFixed(1)}`; };
+  const f = frac == null ? 0 : Math.max(0, Math.min(1, frac));
+  return `<svg viewBox="0 0 120 120" class="h2-gauge"><path d="${arc(a0, a0 + sweep)}" fill="none" stroke="#d8dce0" stroke-width="7" stroke-linecap="round"/>` +
+    (f > 0.004 ? `<path d="${arc(a0, a0 + sweep * f)}" fill="none" stroke="#2bb39a" stroke-width="7" stroke-linecap="round"/>` : '') +
+    `<text x="60" y="68" text-anchor="middle" class="h2-gv">${txt}</text></svg>`;
+}
+const H2_IC = {
+  pv: '<svg viewBox="0 0 24 24" width="22" height="22"><path d="M13 2 4 14h7l-1 8 9-12h-7z" fill="currentColor"/></svg>',
+  batt: '<svg viewBox="0 0 24 24" width="22" height="22"><rect x="6" y="4" width="12" height="17" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><rect x="9" y="2" width="6" height="3" rx="1" fill="currentColor"/><rect x="8.5" y="13" width="7" height="5.5" fill="currentColor"/></svg>',
+  grid: '<svg viewBox="0 0 24 24" width="22" height="22"><path d="M12 2 7 22M12 2l5 20M8.5 8h7M7.6 13h8.8M6 22h12M9 4.5h6" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>',
+};
+function h2Daily() {
+  const F = STATE.fr || {}, L = (F.connected && frLiveNow()) || null, d = F.today && F.today.today;
+  const cap = F.details && F.details.storage && F.details.storage.capacity_wh;
+  const k = v => v == null ? '–' : fmt(v, 2);
+  const tabs = ['pv', 'batt', 'grid'].map(t => `<button data-h2tab="${t}" class="${_h2Tab === t ? 'on' : ''}" aria-label="${t === 'pv' ? 'Solar' : t === 'batt' ? 'Batterie' : 'Netz'}">${H2_IC[t]}</button>`).join('');
+  let title, sub, gauge, a, b;
+  if (_h2Tab === 'pv') {
+    const pv = L ? Math.max(0, L.pv_w || 0) : null;
+    title = pv != null && pv > 25 ? 'Solar erzeugt' : 'Solar ruht';
+    sub = pv != null && pv > 25 ? `gerade ${kwOrW(pv)} · heute ${fmt((d && d.pv_kwh) || 0, 2)} kWh` : `heute ${fmt((d && d.pv_kwh) || 0, 2)} kWh`;
+    gauge = h2Gauge(d && d.self_rate, d && d.self_rate != null ? `${fmt(d.self_rate * 100, 1)}<tspan class="h2-gu">%</tspan>` : '–');
+    a = ['Selbst genutzt', k(d && d.self_kwh)];
+    b = ['Eingespeist', k(d && d.exp_kwh)];
+  } else if (_h2Tab === 'grid') {
+    const gw = L && L.grid_w != null ? L.grid_w : null;
+    title = gw == null ? 'Stromnetz' : gw > 25 ? 'Netzbezug' : gw < -25 ? 'Einspeisung' : 'Netz ausgeglichen';
+    sub = (gw != null && Math.abs(gw) > 25 ? `gerade ${kwOrW(Math.abs(gw))} · ` : '') + `Autarkie heute ${d && d.autarky != null ? fmt(d.autarky * 100, 0) + ' %' : '–'}`;
+    gauge = h2Gauge(d && d.autarky, d && d.autarky != null ? `${fmt(d.autarky * 100, 1)}<tspan class="h2-gu">%</tspan>` : '–');
+    a = ['Bezogen', k(d && d.imp_kwh)];
+    b = ['Eingespeist', k(d && d.exp_kwh)];
+  } else {
+    const bw = L && L.batt_w != null ? L.batt_w : null, soc = L && L.soc != null ? L.soc : null;
+    title = bw == null ? 'Batterie' : bw < -25 ? 'Batterie lädt' : bw > 25 ? 'Batterie entlädt' : 'Batterie Standby';
+    sub = soc != null && cap ? `Verbleibende Energie ${fmt(soc / 100 * cap / 1000, 2)} kWh` : (soc != null ? `Ladestand ${fmt(soc, 1)} %` : 'keine Batteriedaten');
+    gauge = h2Gauge(soc != null ? soc / 100 : null, soc != null ? `${fmt(soc, 1)}<tspan class="h2-gu">%</tspan>` : '–');
+    a = ['Aufgeladen', k(d && d.ch_kwh)];
+    b = ['Entladen', k(d && d.dis_kwh)];
+  }
+  return `<div class="h2-tabs">${tabs}</div>` +
+    `<div class="h2-row"><div><div class="h2-title">${esc(title)}</div><div class="h2-sub">${esc(sub)}</div></div>${gauge}</div>` +
+    `<div class="h2-stats"><div><small>${a[0]}</small><b>${a[1]}</b> <span>kWh</span></div><div><small>${b[0]}</small><b>${b[1]}</b> <span>kWh</span></div></div>`;
+}
+function paintHouse() {
+  if (!houseOpen()) return;
+  const F = STATE.fr || {}, live = F.connected && frLiveNow();
+  const st = $('h2-status');
+  if (st) {
+    st.textContent = !F.connected ? 'Keine PV-Anlage verbunden' : live ? (F.demo ? 'Normal · Demo-Anlage' : 'Normal') : 'Wechselrichter ohne aktuelle Werte';
+    st.classList.toggle('bad', !live);
+  }
+  const bk = $('h2-backup'); if (bk) bk.classList.toggle('on', !!(live && live.backup_mode));
+  const hs = $('h2-house'); if (hs) hs.innerHTML = h2HouseSvg();
+  const c = $('h2-card'); if (c) c.innerHTML = h2Daily();
+  const ft = $('h2-foot');
+  if (ft) ft.textContent = live && F.last_poll
+    ? `Stand ${new Date(F.last_poll * 1000).toLocaleTimeString('de-DE')} · aktualisiert alle 10 s` + (F.demo ? ' · simulierte Werte' : '')
+    : (F.connected ? 'Der Wechselrichter liefert gerade keine Werte.' : 'PV-Anlage im Setup verbinden, dann stehen hier die Live-Werte.');
+}
+function h2Msg(html) {
+  const m = $('h2-msg'); if (!m) return;
+  m.innerHTML = html; m.hidden = false;
+  clearTimeout(h2Msg._t); h2Msg._t = setTimeout(() => { m.hidden = true; }, 5000);
+}
+async function h2LoadData() {
+  try { const a = await api('/api/analytics?days=2'); if (a && a.live) _h2Live = a.live; } catch (e) { /* wallbox optional */ }
+  try { await loadFronius(true); } catch (e) {}
+  paintHouse();
+}
+function openHouse() {
+  const h = $('house2'); if (!h) return;
+  if (kioskOpen()) closeKiosk();
+  h.hidden = false;
+  try { const m = document.querySelector('meta[name="theme-color"]'); if (m) m.setAttribute('content', '#f5f6f7'); } catch (e) {}
+  try { if (location.hash !== '#dash2') history.replaceState(null, '', '#dash2'); } catch (e) {}
+  paintHouse(); h2LoadData();
+  clearInterval(_h2T); _h2T = setInterval(h2LoadData, 60000);
+}
+function closeHouse(to) {
+  const h = $('house2'); if (h) h.hidden = true;
+  clearInterval(_h2T); _h2T = null;
+  const pop = $('h2-pop'); if (pop) pop.hidden = true;
+  try { const m = document.querySelector('meta[name="theme-color"]'); if (m) m.setAttribute('content', '#0b1220'); } catch (e) {}
+  try { if (location.hash === '#dash2') history.replaceState(null, '', location.pathname + location.search); } catch (e) {}
+  if (to === 'dash') openKiosk();
+  else if (to && document.getElementById('v-' + to)) switchView(to);
+}
+// a horizontal swipe flips between the two dashboards (not when it starts in
+// something that scrolls sideways itself)
+function h2Swipe(root, dir, go) {
+  let x0 = null, y0 = 0;
+  root.addEventListener('touchstart', e => {
+    x0 = null;
+    if (e.touches.length !== 1) return;
+    for (let el = e.target; el && el !== root; el = el.parentElement) if (el.scrollWidth > el.clientWidth + 4) return;
+    x0 = e.touches[0].clientX; y0 = e.touches[0].clientY;
+  }, { passive: true });
+  root.addEventListener('touchend', e => {
+    if (x0 == null) return;
+    const t = e.changedTouches[0], dx = t.clientX - x0, dy = t.clientY - y0;
+    x0 = null;
+    if (Math.abs(dx) > 80 && Math.abs(dy) < 50 && Math.sign(dx) === dir) go();
+  }, { passive: true });
+}
+function initHouse() {
+  const h = $('house2'); if (!h) return;
+  h.addEventListener('click', e => {
+    const t = e.target.closest('[data-h2tab]');
+    if (t) { _h2Tab = t.dataset.h2tab; const c = $('h2-card'); if (c) c.innerHTML = h2Daily(); return; }
+    const go = e.target.closest('[data-h2go]');
+    if (go) { e.preventDefault(); closeHouse(go.dataset.h2go); return; }
+    const lb = e.target.closest('.h2-lbl.tap');
+    if (lb) {
+      const k = lb.dataset.h2k;
+      if (k === 'pv') closeHouse('pv');
+      else if (k === 'wb') closeHouse('today');
+      else if (k === 'batt') { _h2Tab = 'batt'; const c = $('h2-card'); if (c) { c.innerHTML = h2Daily(); c.scrollIntoView({ behavior: 'smooth', block: 'center' }); } }
+      return;
+    }
+    if (e.target.closest('#h2-more')) { const pop = $('h2-pop'); if (pop) pop.hidden = !pop.hidden; return; }
+    if (e.target.closest('#h2-backup')) {
+      const L = frLiveNow();
+      h2Msg(!L ? 'Notstrom-Status unbekannt – der Wechselrichter liefert gerade keine Werte.'
+        : L.backup_mode ? '🔌 <b>Notstrom aktiv</b> – das Haus läuft gerade ohne Stromnetz, aus PV und Batterie.'
+        : L.backup_mode === false ? '🏠 <b>Netzbetrieb</b> – kein Notstrom aktiv.'
+        : 'Der Wechselrichter meldet keinen Notstrom-Status.');
+      return;
+    }
+    const pop = $('h2-pop'); if (pop && !pop.hidden && !e.target.closest('#h2-pop')) pop.hidden = true;
+  });
+  const ob = $('open-house'); if (ob) ob.addEventListener('click', openHouse);
+  h2Swipe(h, 1, () => closeHouse('dash'));                       // → Wohn-Dashboard
+  const k = $('kiosk'); if (k) h2Swipe(k, -1, openHouse);        // Wohn-Dashboard → Haus
+  window.addEventListener('hashchange', () => {
+    if (location.hash === '#dash2') openHouse();
+    else if (houseOpen()) closeHouse();
+  });
+  if (location.hash === '#dash2') setTimeout(openHouse, 300);
 }
 async function renderHeatingDiag(force) {
   const card = $('hd-card'); if (!card) return;
@@ -11068,6 +11379,7 @@ function init() {
   });
   window.addEventListener('hashchange', () => { if (location.hash === '#dash') openKiosk(); });
   if (location.hash === '#dash') setTimeout(openKiosk, 300);
+  initHouse();                                   // Dashboard 2 (#dash2)
   // device heating-curve points (read off the heat pump), stored locally
   [['hc-p20', 'hc_dev_p20'], ['hc-pm10', 'hc_dev_pm10']].forEach(([id, key]) => {
     const el = $(id); if (!el) return;
@@ -13208,6 +13520,7 @@ async function loadFronius(force) {
   paintViews(['renderFlow', 'renderPvReal', 'renderFroniusSetup', 'renderHeatpump', 'paintNowLine', 'renderDarkLoad']
     .concat(reOv ? ['renderOverview'] : []));
   if (kioskOpen()) { try { paintKiosk(); } catch (e) {} }
+  if (houseOpen()) { try { paintHouse(); } catch (e) {} }
 }
 
 async function frRefreshHealth() {
@@ -13402,11 +13715,11 @@ function initPvReal() {
     fcp.textContent = ok ? '✅ Kopiert' : 'Bitte Text markieren und kopieren';
     setTimeout(() => { fcp.textContent = '📋 Kopieren'; }, 2500);
   });
-  // live values every 10 s while the Übersicht, the PV tab or the dashboard is on screen
+  // live values every 10 s while the Übersicht, the PV tab or one of the dashboards is on screen
   setInterval(() => {
     const h = STATE.health;
     if (!h || !h.fronius_connected || document.visibilityState !== 'visible') return;
-    if (kioskOpen() || ['overview', 'pv'].includes(activeView())) loadFronius();
+    if (kioskOpen() || houseOpen() || ['overview', 'pv'].includes(activeView())) loadFronius();
   }, 10000);
 }
 
