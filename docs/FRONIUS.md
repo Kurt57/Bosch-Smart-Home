@@ -15,6 +15,14 @@ Was du danach siehst:
   zur **Erwartung** aus dem PV-Planer/PVGIS sowie **Wechselrichter, Strings, Batterie und
   Smart Meter** im Detail (Strings, Batterie mit Spannung/Strom/Temperatur/Modus, Smart Meter je
   Phase mit Leistung, Strom, Spannung und cos φ). Der PV-Planer bleibt darunter für Erweiterungen.
+* **Tab PV → Wetter:** unter den Zahlen von heute drei Kacheln – heute, morgen, übermorgen – mit
+  Wetterart (sonnig, heiter, wechselhaft, trüb; Regen/Schnee), **Sonnenstunden** von den Stunden
+  Tageslicht, **Bewölkung**, Temperatur und dem **erwarteten Ertrag** (siehe „Wie gerechnet
+  wird“). Im Verlauf („Erzeugung & Verbrauch“) unter den PV-Balken die **Sonnenstunden je Tag**
+  (bzw. je Stunde bei „Heute“, je Monat beim Jahr) genau darunter, das Wetter im Tooltip jedes
+  Balkens und eine Zusammenfassung (Sonnenstunden, Bewölkung, sonnige/wechselhafte/trübe Tage,
+  sonnigster und trübster Tag mit ihrem Ertrag).
+* **Zeitraum „Heute“** im Verlauf: dieselben Kennzahlen für heute, die Balken je Stunde.
 * **Tab PV → 🧵 String-Vergleich:** die beiden MPP-Tracker (Strings) nebeneinander – jetzt, heute
   als Kurven, je Tag, je kWp, wann sie erzeugen, mit Bewertung (siehe unten).
 * **Tab PV → 🔎 Plausibilitätsprüfung:** passen die gespeicherten Zahlen zueinander? (siehe unten)
@@ -110,6 +118,15 @@ nach einem Neustart verbindet sich die Bridge von selbst wieder.
   Südost/Südwest 950, Ost/West 840, Nordost/Nordwest 680, Nord 600, flach 870 kWh/kWp,
   gewichtet mit den kWp der Strings), sonst aus dem PV-Planer bzw. PVGIS. Das Wetter schwankt
   von Jahr zu Jahr um etwa ±15 %.
+
+* **Wetter** kommt von **Open-Meteo** (kostenlos, ohne Konto): ein Wettermodell für deinen
+  Standort, keine Messstation in deinem Garten. Den Standort nimmt die App aus dem PV-Planer;
+  fehlt er, fragt sie nach dem Ort (Suche über Open-Meteo). Die Bridge holt höchstens stündlich
+  die letzten 92 Tage und die nächsten Tage und speichert jeden Tag – so wächst die Wetter-Historie
+  mit. **Sonnenstunden** = Zeit mit direkter Sonne (WMO-Definition), **Bewölkung** = Mittel der
+  hellen Stunden. **Erwarteter Ertrag** = Einstrahlung des Tages × was deine Anlage an den letzten
+  (bis zu 30) vollständig erfassten Tagen aus der Einstrahlung gemacht hat – so steckt deine
+  Ausrichtung, Verschattung und Anlagengröße schon drin; eine Schätzung, ab 3 Tagen.
 
 ## Strings vergleichen (🧵 String-Vergleich)
 

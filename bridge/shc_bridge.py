@@ -1083,6 +1083,12 @@ class Store:
             self.conn.execute(
                 "CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY, value TEXT)"
             )
+            # weather per local day (Open-Meteo) for the PV views – kept, so the
+            # history grows beyond the 92 days the service returns
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS weather_day(day TEXT PRIMARY KEY, lat REAL, lon REAL,"
+                " data TEXT, ts INTEGER)"
+            )
             # PV system (Fronius): one row per minute – the mean of the live
             # readings in that minute, plus the counters at its end
             self.conn.execute(
@@ -1563,6 +1569,31 @@ class Store:
     def product_delete(self, pid: str):
         with self.lock, self.conn:
             self.conn.execute("DELETE FROM products WHERE id=?", (str(pid),))
+
+    # -- weather per day (PV views) -------------------------------------- #
+    def wx_put(self, rows: list[dict], lat: float, lon: float):
+        now = int(time.time())
+        with self.lock, self.conn:
+            self.conn.executemany(
+                "INSERT INTO weather_day(day,lat,lon,data,ts) VALUES(?,?,?,?,?)"
+                " ON CONFLICT(day) DO UPDATE SET lat=excluded.lat, lon=excluded.lon,"
+                " data=excluded.data, ts=excluded.ts",
+                [(r["day"], lat, lon, json.dumps(r, separators=(",", ":")), now) for r in rows if r.get("day")])
+
+    def wx_days(self, first_day: str, last_day: str, lat: float, lon: float) -> list[dict]:
+        """Stored days in [first, last] for (about) this location – another
+        location (moved, typo fixed) does not mix in."""
+        with self.lock:
+            cur = self.conn.execute(
+                "SELECT data FROM weather_day WHERE day>=? AND day<=? AND ABS(lat-?)<0.05 AND ABS(lon-?)<0.05"
+                " ORDER BY day", (first_day, last_day, lat, lon))
+            out = []
+            for r in cur.fetchall():
+                try:
+                    out.append(json.loads(r["data"]))
+                except ValueError:
+                    pass
+            return out
 
     # -- generic key/value app state ------------------------------------- #
     def kv_get(self, key: str):
@@ -8819,6 +8850,129 @@ def awb_load(ctx, force: bool = False) -> dict | None:
     return ent
 
 
+WX_MAX_AGE = 3600              # s – weather for the PV views is fetched at most hourly
+WX_RETRY = 600                 # s – after a failed fetch
+
+
+def pv_weather_load(ctx, lat: float, lon: float, force: bool = False) -> dict:
+    """Fetch the daily weather (92 days back, 3 ahead) for the location at most
+    once an hour, store the days, keep today's hours in memory."""
+    key, now = (round(lat, 2), round(lon, 2)), time.time()
+    with ctx._cal_lock:
+        ent = ctx.wx_cache
+        if ent and ent.get("key") == key and not force and \
+                now - ent["ts"] < (WX_MAX_AGE if not ent.get("error") else WX_RETRY):
+            return ent
+    try:
+        r = weather.fetch_days(lat, lon, past_days=92, forecast_days=3)
+        ctx.store.wx_put(r["daily"], lat, lon)
+        ent = {"key": key, "ts": now, "hourly": r["hourly"], "error": None, "ok_ts": now}
+    except Exception as exc:
+        old = ctx.wx_cache if ctx.wx_cache.get("key") == key else {}
+        ent = {"key": key, "ts": now, "hourly": old.get("hourly") or [], "error": str(exc), "ok_ts": old.get("ok_ts")}
+    with ctx._cal_lock:
+        ctx.wx_cache = ent
+    return ent
+
+
+def _wx_hours_today(hourly: list, now: int) -> list:
+    """Today's weather per clock hour h (h:00–h+1:00): Open-Meteo stamps a value
+    at the END of its hour."""
+    d0, d1, _day = _day_of(now)
+    out = {}
+    for r in hourly:
+        start = r["ts"] - 3600
+        if d0 <= start < d1:
+            out[int((start - d0) // 3600)] = {k: r.get(k) for k in ("ghi", "cloud", "sun_min", "temp", "code")}
+    return [dict(h=h, **out[h]) for h in sorted(out) if 0 <= h < 24]
+
+
+def demo_pv_weather(now: int, days: int) -> dict:
+    """Weather that fits the demo installation (same cloud model as its PV)."""
+    lat = math.radians(51.0)
+    d0 = datetime.fromtimestamp(now).replace(hour=0, minute=0, second=0, microsecond=0)
+    daily, hours = [], []
+    for k in range(-days + 1, 3):
+        day = d0 + timedelta(days=k)
+        lt = day.timetuple()
+        decl = math.radians(23.44) * math.sin(2 * math.pi * (284 + lt.tm_yday) / 365.0)
+        dl = 24.0 / math.pi * math.acos(max(-1.0, min(1.0, -math.tan(lat) * math.tan(decl))))
+        cs, sun, rad, n = 0.0, 0.0, 0.0, 0
+        for hh in range(24):
+            ts = int((day + timedelta(hours=hh, minutes=30)).timestamp())
+            p = _demo_pv_w(ts)                       # DC power of the 9.9 kWp demo array
+            c = _demo_cloud(ts, time.localtime(ts))
+            if p > 0:
+                cs += c
+                n += 1
+                sun += max(0.0, min(1.0, (c - 0.3) / 0.6))
+            g = p / (DEMO_PV_KWP * 0.86)              # ≈ irradiance on the modules, W/m²
+            rad += g / 1000.0
+            if k == 0:
+                hours.append({"h": hh, "ghi": round(g), "cloud": round(100 * (1 - c)) if p > 0 else None,
+                              "sun_min": round(60 * max(0.0, min(1.0, (c - 0.3) / 0.6))) if p > 0 else 0,
+                              "temp": round(6 + 4 * math.sin((hh - 9) / 24 * 2 * math.pi), 1),
+                              "code": 0 if c > 0.9 else 2 if c > 0.55 else 3})
+        cm = cs / n if n else 0.5
+        daily.append({"day": day.strftime("%Y-%m-%d"), "code": 0 if cm > 0.88 else 1 if cm > 0.75 else 2 if cm > 0.5 else 3,
+                      "tmax": round(9 + 3 * math.cos(k / 3.0), 1), "tmin": round(2 + 2 * math.sin(k / 4.0), 1),
+                      "sun_h": round(dl * (sun / n if n else 0), 2), "daylight_h": round(dl, 2),
+                      "rain_mm": 0.0 if cm > 0.4 else 2.4, "snow_cm": 0.0, "rad_kwh": round(rad, 3),
+                      "cloud": round(100 * (1 - cm))})
+    return {"daily": daily, "hours": hours}
+
+
+def compute_pv_weather(ctx, lat: float | None, lon: float | None, days: int = 30, force: bool = False) -> dict:
+    """Weather of the last `days` days, today (also per hour) and the next two
+    days for the PV views."""
+    now = int(time.time())
+    days = max(1, min(400, int(days)))
+    base = {"ok": True, "ts": now, "source": "Open-Meteo", "days": days}
+    if ctx.mode == "demo":
+        dm = demo_pv_weather(now, max(days, 30))
+        out = {**base, "demo": True, "hours": dm["hours"], "calib": _pv_weather_calib(ctx, dm["daily"], now)}
+        first = (datetime.fromtimestamp(now) - timedelta(days=days - 1)).strftime("%Y-%m-%d")
+        out["daily"] = [d for d in dm["daily"] if d["day"] >= first]
+        return out
+    if not weather:
+        return {**base, "ok": False, "error": "Wetter-Modul fehlt (bridge/weather.py)."}
+    if lat is None or lon is None:
+        return {**base, "ok": False, "need_location": True,
+                "error": "Für das Wetter fehlt der Standort."}
+    ent = pv_weather_load(ctx, lat, lon, force=force)
+    d0 = datetime.fromtimestamp(now)
+    first = (d0 - timedelta(days=days - 1)).strftime("%Y-%m-%d")
+    last = (d0 + timedelta(days=2)).strftime("%Y-%m-%d")
+    daily = ctx.store.wx_days(first, last, lat, lon)
+    cal_first = (d0 - timedelta(days=29)).strftime("%Y-%m-%d")
+    cal_days = daily if days >= 30 else ctx.store.wx_days(cal_first, last, lat, lon)
+    return {**base, "demo": False, "daily": daily,
+            "hours": _wx_hours_today(ent.get("hourly") or [], now),
+            "calib": _pv_weather_calib(ctx, cal_days, now),
+            "error": ent.get("error"), "fetched": int(ent.get("ok_ts") or 0) or None}
+
+
+def _pv_weather_calib(ctx, wx_days: list, now: int) -> dict | None:
+    """How much the installation made of the sun so far: PV kWh per kWh/m² of
+    horizontal irradiation, over the complete days of the last 30 – multiplied
+    with a forecast day's irradiation it gives that day's expected yield."""
+    try:
+        pv = ctx.calc_get(("pvcal", 30), 600, lambda: compute_pv(ctx.store, 30))
+    except Exception:
+        return None
+    if not pv or pv.get("empty"):
+        return None
+    today = _day_of(now)[2]
+    wx = {d["day"]: d for d in wx_days if d.get("rad_kwh")}
+    pairs = [(d["pv_kwh"], wx[d["day"]]["rad_kwh"]) for d in pv.get("daily") or []
+             if d["day"] != today and (d.get("pv_cov") or 0) >= 0.9 and d["day"] in wx
+             and wx[d["day"]]["rad_kwh"] >= 0.1]
+    if len(pairs) < 3:
+        return {"f": None, "days": len(pairs)}
+    rad = sum(r for _p, r in pairs)
+    return {"f": round(sum(p for p, _r in pairs) / rad, 2) if rad > 0 else None, "days": len(pairs)}
+
+
 def compute_calendar(ctx, days: int = 7, force: bool = False) -> dict:
     """Events of all configured calendars from today 00:00 for `days` days."""
     now = int(time.time())
@@ -8966,6 +9120,7 @@ class Runtime:
         self.fr_state = {}              # latest PV snapshot (live flow, details, identity)
         self.cal_cache = {}             # calendar url -> {"ts", "cal", "error"}
         self.awb_cache = {}             # AWB Köln: {"key", "ts", "dates", "error"}
+        self.wx_cache = {}              # weather for the PV views: {"key", "ts", "hourly", "error"}
         self._cal_lock = threading.Lock()
         # heavy-analytics result cache: these process every raw sample in
         # Python, so recomputing them on every request/refresh is slow. Cache
@@ -11098,6 +11253,29 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json(self.ctx.calc_get(
                     ("pv", pdays, price, feedin), 60,
                     lambda: compute_pv(self.store, pdays, price, feedin)))
+            if path == "/api/pvweather":
+                def fq(name):
+                    try:
+                        v = float(qs.get(name, [""])[0])
+                        return v if math.isfinite(v) else None
+                    except ValueError:
+                        return None
+                try:
+                    wdays = max(1, min(400, int(qs.get("days", ["30"])[0])))
+                except ValueError:
+                    wdays = 30
+                lat_, lon_ = fq("lat"), fq("lon")
+                return self._send_json(compute_pv_weather(self.ctx, lat_, lon_, wdays, force="force" in qs))
+            if path == "/api/geocode":
+                name = (qs.get("name", [""])[0] or "").strip()
+                if len(name) < 2:
+                    return self._send_json({"ok": False, "error": "Bitte mindestens 2 Buchstaben eingeben."})
+                if not weather:
+                    return self._send_json({"ok": False, "error": "Wetter-Modul fehlt (bridge/weather.py)."})
+                try:
+                    return self._send_json({"ok": True, "places": weather.geocode(name)})
+                except Exception as exc:
+                    return self._send_json({"ok": False, "error": f"Ortssuche nicht erreichbar ({exc})."})
             if path == "/api/fronius/discover":
                 return self._send_json(self._fronius_discover(qs))
             if path == "/api/fronius/probe":

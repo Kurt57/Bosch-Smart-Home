@@ -94,8 +94,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v205';   // short tag shown always-on in the header
-const APP_VERSION = 'v205 · 2026-11-19 · Profil → „Lastspitzen & Dimensionierung“ mit dem Smart Meter: statt der Summe der einzeln gemessenen Steckdosen + Wärmepumpe (und einer Schätzung für den Rest) rechnet die Karte mit dem gemessenen Verbrauch des ganzen Hauses – Lastdauerlinie und Kennwerte aus den Minutenmitteln, die Spitzen aus den 15-s-Abfragen (die Bridge speichert dafür je Minute den höchsten Wert von Verbrauch und Netzbezug). Neu: höchster Netzbezug, höchste Batterie-Abgabe und bei jeder Top-Spitze, wie viel aus Netz, Batterie und Sonne kam. Aufschlüsselung je Gerät und Verbrauch je Stunde zeigen den Rest als gemessene Differenz statt Schätzung. Stufen bis 15 kW für den ganzen Haushalt. ' +
+const APP_BUILD = 'v206';   // short tag shown always-on in the header
+const APP_VERSION = 'v206 · 2026-11-19 · PV-Tab mit Wetter: drei Kacheln heute/morgen/übermorgen mit Wetterart (sonnig, heiter, wechselhaft, trüb, Regen/Schnee), Sonnenstunden von den Stunden Tageslicht, Bewölkung, Temperatur und erwartetem Ertrag – aus der Einstrahlung und dem, was deine Anlage an den letzten Tagen daraus gemacht hat. Im Verlauf die Sonnenstunden je Tag direkt unter den PV-Balken, das Wetter im Tooltip und eine Zusammenfassung (sonnigster/trübster Tag mit Ertrag). Neuer Zeitraum „Heute“ mit Balken je Stunde. Wetter: Open-Meteo (Modell für deinen Standort); fehlt der Standort, fragt die App nach dem Ort. Wohn-Dashboard: Termine und Stundenplan stehen auf breiten Bildschirmen nebeneinander. ' +
+  'v205 · 2026-11-19 · Profil → „Lastspitzen & Dimensionierung“ mit dem Smart Meter: statt der Summe der einzeln gemessenen Steckdosen + Wärmepumpe (und einer Schätzung für den Rest) rechnet die Karte mit dem gemessenen Verbrauch des ganzen Hauses – Lastdauerlinie und Kennwerte aus den Minutenmitteln, die Spitzen aus den 15-s-Abfragen (die Bridge speichert dafür je Minute den höchsten Wert von Verbrauch und Netzbezug). Neu: höchster Netzbezug, höchste Batterie-Abgabe und bei jeder Top-Spitze, wie viel aus Netz, Batterie und Sonne kam. Aufschlüsselung je Gerät und Verbrauch je Stunde zeigen den Rest als gemessene Differenz statt Schätzung. Stufen bis 15 kW für den ganzen Haushalt. ' +
   'v204 · 2026-11-19 · Wohn-Dashboard: neue Kachel „Heute“ mit Autarkie-Ring (Anteil des Verbrauchs, der nicht aus dem Netz kam; daneben gestern zum Vergleich) und den Tageswerten Sonne (mit „selbst genutzt“), verbraucht (mit Wärmepumpe und deren Sonnenanteil), aus dem Netz/eingespeist, gespart, Batterie (jetzt und heute min–max) und vermiedenes CO₂; darunter 7 Tage, Monat, seit Anschluss und der beste Sonnentag. Auf breiten Bildschirmen (iPad quer) steht sie neben dem Energiefluss. Die Geldbilanz steht jetzt dort statt im Banner – das Banner erscheint nur noch, wenn es etwas zu tun gibt. IP-Adressen im Heimnetz sind verdeckt, bis man „anzeigen“ antippt (PV-Gerätekarte, Setup, Fehlermeldungen, Eingabefelder; der Rohdaten-Text lässt die Adresse weg). ' +
   'v203 · 2026-11-19 · PV geprüft und erweitert: Neue Karte „🧵 String-Vergleich“ im Tab PV – beide Strings jetzt (Leistung, Spannung, Strom, Anteil), heute als Kurven (umschaltbar auf je kWp), Tages-/Monatswerte, Tabelle mit kWh je kWp, Spitze, „erzeugt im Mittel um“ (Ost früher, West später) und Spannung im Betrieb, dazu eine Bewertung: String liefert nichts, Summe = PV, gleiche Tageszeit/Ausrichtung, Vergleich je kWp, Trend des Verhältnisses, Spannungssprung (Modul/Bypass-Diode). Name, Module, kWp und Ausrichtung je String lassen sich eintragen; sonst schätzt die App die kWp aus den Spannungen. Neue Karte „🔎 Plausibilitätsprüfung“: Datenlage, Strings = PV, Energiebilanz mit Umwandlungsverlusten, Zählerstände gegen Messwerte, Batterie-Wirkungsgrad, Zähler des Wechselrichters (E-Total), Spitzenleistung. Behoben: Strings werden nach Tracker-Nummer gespeichert (ein leerer Platz verschiebt MPP 2 nicht mehr auf MPP 1), die String-Spannungen werden mitgespeichert; die Monatserwartung zählt einen angefangenen Tag nur mit den erfassten Sonnenstunden (und nutzt die Ausrichtung der Strings, wenn eingetragen); „Woher kam dein Strom?“ zeigt Netzbezug für die Batterie nicht mehr als Hausverbrauch; die erste Viertelstunde nach dem Verbinden fehlte bei Zeiträumen über 31 Tage im Zählerstand. ' +
   'v202 · 2026-11-19 · HomeCom-/AEG-Anmeldung geht nicht mehr verloren: Ursache war eine zweite Bridge (z. B. update-macos.command, während die alte noch lief) – sie erneuerte den einmal gültigen Bosch-Token und beendete sich erst danach; die alte arbeitete mit dem verbrauchten Token weiter, Bosch sperrte die Anmeldung. Jetzt: nur eine Bridge pro Konfiguration (die zweite beendet sich vorher mit Hinweis), Port zuerst belegen, Start-/Update-Skripte beenden die alte Bridge sauber, beim Beenden und beim Neustart nach Updates wird eine laufende Token-Erneuerung abgewartet, config.json wird atomar geschrieben, der Demo-Modus fasst echte Zugänge nicht an. Einmal im Setup neu verbinden. ' +
@@ -3540,6 +3541,10 @@ function paintKiosk() {
   try { renderKioskAlerts(); } catch (e) { console.error(e); }
   try { renderKioskCal(); } catch (e) { console.error(e); }
   try { renderKioskSchool(); } catch (e) { console.error(e); }
+  try {          // both there → side by side on wide screens
+    const cs = $('kiosk-cs'), c = $('kiosk-cal'), sc = $('kiosk-school');
+    if (cs && c && sc) cs.classList.toggle('two', !!(c.innerHTML.trim() && sc.innerHTML.trim()));
+  } catch (e) { /* layout only */ }
   try { renderEnergyFlow(); } catch (e) { console.error(e); }
   try { renderKioskToday(); } catch (e) { console.error(e); }
   try { renderKioskLoads(); } catch (e) {}
@@ -12162,8 +12167,86 @@ function renderPvReal() {
     since ? `Gespeichert seit ${new Date(since * 1000).toLocaleDateString('de-DE')} (Minutenwerte; ${F.demo ? 'Demo-Daten' : 'der Wechselrichter selbst liefert keine abrufbare Historie'}).` : ''].filter(Boolean).join('<br>');
   renderPvDevices();
   renderPvStrings();
+  if (!STATE.pvwx || Date.now() - (STATE.pvwxAt || 0) > 30 * 60000) loadPvWeather();
+  else paintPvWeather();
   if (!STATE.pv || STATE.pv.days !== STATE.pvDays || Date.now() - (STATE.pvAt || 0) > 120000) loadPvHist();
   else paintPvHist();
+}
+
+/* ---- PV tab: weather (Open-Meteo via the bridge) ---------------------------- */
+let _wxBusy = false;
+async function loadPvWeather(force) {
+  const loc = getLatLon(), demo = STATE.health && STATE.health.mode === 'demo';
+  STATE.pvwxAt = Date.now();
+  if (!loc && !demo) { STATE.pvwx = { ok: false, need_location: true, days: 0 }; paintPvWeather(); return; }
+  if (_wxBusy) return;
+  _wxBusy = true;
+  try {
+    const days = Math.max(30, STATE.pvDays || 30);
+    const r = await api(`/api/pvweather?days=${days}` + (loc ? `&lat=${loc.lat}&lon=${loc.lon}` : '') + (force === 'fetch' ? '&force=1' : ''));
+    if (r) STATE.pvwx = r;
+  } catch (e) { /* keep the last weather */ }
+  finally { _wxBusy = false; }
+  paintPvWeather();
+  if (STATE.pv) paintPvHist();
+}
+// expected yield of a day: its irradiation × what the system made of the sun so far
+function wxExpected(w) {
+  const c = STATE.pvwx && STATE.pvwx.calib;
+  return c && c.f && w && w.rad_kwh != null ? c.f * w.rad_kwh : null;
+}
+function paintPvWeather() {
+  const el = $('pvr-wx'); if (!el) return;
+  const W = STATE.pvwx;
+  if (!W) { el.innerHTML = ''; return; }
+  if (W.need_location) { el.innerHTML = wxLocForm(); return; }
+  if (W.ok === false) { el.innerHTML = `<div class="note">🌤️ Wetter: ${escIp(W.error || 'nicht verfügbar')}</div>`; return; }
+  const today = _hpdDateStr(new Date());
+  const ds = W.daily || [], i0 = ds.findIndex(d => d.day === today);
+  if (i0 < 0) { el.innerHTML = W.error ? `<div class="note">🌤️ Wetter gerade nicht erreichbar (${escIp(W.error)}).</div>` : ''; return; }
+  const F = STATE.fr || {}, td = F.today && F.today.today;
+  const name = k => k === 0 ? 'Heute' : k === 1 ? 'Morgen' : new Date(ds[i0 + k].day + 'T12:00').toLocaleDateString('de-DE', { weekday: 'long' });
+  const chips = [0, 1, 2].filter(k => ds[i0 + k]).map(k => {
+    const w = ds[i0 + k], kd = wxKind(w), ex = wxExpected(w);
+    return `<div class="wxc"><div class="wxh">${name(k)}</div><div class="wxi">${kd ? kd.ic : '🌡️'}</div><b>${kd ? esc(kd.txt) : '–'}</b>` +
+      `<small>${w.sun_h != null ? fmt(w.sun_h, 1) + '\u00a0h Sonne' : ''}${w.daylight_h ? ` von ${fmt(w.daylight_h, 1)}\u00a0h` : ''}</small>` +
+      (w.cloud != null ? `<small>Bewölkung ${fmt(w.cloud, 0)}\u00a0%</small>` : '') +
+      (w.tmin != null ? `<small>${fmt(w.tmin, 0)}–${fmt(w.tmax, 0)}\u00a0°C</small>` : '') +
+      (ex != null ? `<small class="wxe">≈\u00a0${fmt(ex, ex < 10 ? 1 : 0)}\u00a0kWh</small>` +
+        (k === 0 && td ? `<small>bisher ${fmt(td.pv_kwh, 1)}\u00a0kWh</small>` : '') : '') + '</div>';
+  });
+  const c = W.calib;
+  el.innerHTML = `<div class="wxrow">${chips.join('')}</div>` +
+    `<div class="note" style="margin-top:6px">Wetter: ${W.demo ? 'Demo' : 'Open-Meteo, Wettermodell für deinen Standort'}` +
+    (c && c.f ? ` · ≈ kWh = Einstrahlung des Tages × was deine Anlage an den letzten ${c.days} vollständigen Tagen daraus gemacht hat (${fmt(c.f, 1)} kWh je kWh/m²) – eine Schätzung` :
+      ` · Ertragsschätzung ab 3 vollständigen Tagen mit Wetter (bisher ${c ? c.days : 0})`) +
+    (W.error ? ` · ⚠︎ letzte Abfrage fehlgeschlagen` : '') +
+    (W.demo ? '' : ' · <a href="#" data-wx-change="1" style="color:var(--accent)">Standort ändern</a>') + '</div>';
+}
+function wxLocForm(msg) {
+  return '<div class="note">🌤️ Für Wetter, Sonnenstunden und Ertragsschätzung fehlt dein <b>Standort</b>. Ort eingeben:</div>' +
+    '<div style="display:flex;gap:8px;margin-top:6px"><input id="wx-q" placeholder="z. B. Köln" autocomplete="off" style="flex:1;margin:0">' +
+    '<button class="btn sec" id="wx-find" style="width:auto;margin:0;padding:8px 14px">Suchen</button></div>' +
+    `<div id="wx-res" style="margin-top:6px">${msg || ''}</div>` +
+    '<div class="note" style="margin-top:4px">Der Standort steht nur in den App-Einstellungen und geht an Open-Meteo, um das Wetter abzufragen.</div>';
+}
+async function wxFind() {
+  const q = $('wx-q'), out = $('wx-res'); if (!q || !out) return;
+  const name = q.value.trim();
+  if (name.length < 2) { out.innerHTML = '<div class="note">Bitte mindestens 2 Buchstaben eingeben.</div>'; return; }
+  out.innerHTML = '<div class="note">Suche …</div>';
+  try {
+    const r = await api('/api/geocode?name=' + encodeURIComponent(name));
+    if (!r || !r.ok) { out.innerHTML = `<div class="note">⚠︎ ${escIp((r && r.error) || 'Ortssuche fehlgeschlagen.')}</div>`; return; }
+    out.innerHTML = r.places.length ? r.places.map(p => `<button class="btn sec" data-wx-lat="${p.lat}" data-wx-lon="${p.lon}" ` +
+      `style="text-align:left;margin-top:6px">📍 <b>${esc(p.name)}</b> <small style="color:var(--muted)">${esc([p.region, p.country].filter(Boolean).join(', '))}</small></button>`).join('')
+      : '<div class="note">Nichts gefunden – anders schreiben oder einen größeren Ort in der Nähe nehmen.</div>';
+  } catch (e) { out.innerHTML = '<div class="note">Nur möglich, wenn die Seite von der Bridge geöffnet ist.</div>'; }
+}
+function wxSetLocation(lat, lon) {
+  try { localStorage.setItem(PV_LS.lat, String(lat)); localStorage.setItem(PV_LS.lon, String(lon)); } catch (e) {}
+  const a = $('pv-lat'), b = $('pv-lon'); if (a) a.value = lat; if (b) b.value = lon;
+  STATE.pvwx = null; loadPvWeather('fetch');
 }
 
 async function loadPvHist(force) {
@@ -12177,6 +12260,95 @@ async function loadPvHist(force) {
   finally { _pvBusy = false; }
   if (_pvAgain) { _pvAgain = false; return loadPvHist(true); }
   paintPvHist();
+}
+
+// today per hour, from the 15-min values: where the sun went and where the
+// power came from (charging from the grid is not counted as sun)
+function pvHourItems(R) {
+  const H = Array.from({ length: 24 }, (_, h) => ({ h, pv_kwh: 0, exp_kwh: 0, imp_kwh: 0, load_kwh: 0, ch_pv_kwh: 0, direct_kwh: 0 }));
+  (R.series || []).forEach(p => {
+    const x = H[new Date(p.t * 1000).getHours()], f = 0.25 / 1000;
+    const pv = Math.max(0, p.pv_w || 0) * f, grid = (p.grid_w || 0) * f, load = Math.max(0, p.load_w || 0) * f;
+    const exp = Math.max(0, -grid), imp = Math.max(0, grid), ch = Math.max(0, -(p.batt_w || 0)) * f;
+    const gch = p.grid_w != null && p.load_w != null && grid > load ? Math.min(grid - load, ch * 1.25) : 0;
+    const chPv = Math.max(0, ch - gch);
+    x.pv_kwh += pv; x.exp_kwh += exp; x.imp_kwh += imp; x.load_kwh += load; x.ch_pv_kwh += chPv;
+    x.direct_kwh += Math.max(0, pv - exp - chPv);
+  });
+  const hh = h => String(h).padStart(2, '0') + ':00';
+  return H.map(x => Object.assign(x, { label: x.h % 3 === 0 ? String(x.h) : '', full: `${hh(x.h)}–${hh((x.h + 1) % 24)}` }));
+}
+// how sunny a day was: by the share of daylight with sunshine (better for PV
+// than the day's dominant weather code), plus snow/rain worth knowing
+function wxKind(w) {
+  if (!w) return null;
+  const r = w.sun_h != null && w.daylight_h > 0 ? w.sun_h / w.daylight_h : null;
+  let ic, txt;
+  if (r == null) { ic = '🌡️'; txt = 'keine Sonnendaten'; }
+  else if (r >= 0.6) { ic = '☀️'; txt = 'sonnig'; }
+  else if (r >= 0.35) { ic = '🌤️'; txt = 'heiter'; }
+  else if (r >= 0.12) { ic = '⛅'; txt = 'wechselhaft'; }
+  else { ic = '☁️'; txt = 'trüb'; }
+  const extra = (w.snow_cm || 0) >= 0.5 ? 'Schnee' : (w.rain_mm || 0) >= 1 ? 'Regen' : (w.code === 45 || w.code === 48) ? 'Nebel' : '';
+  if ((w.snow_cm || 0) >= 0.5) ic = '🌨️'; else if (extra === 'Regen' && r != null && r < 0.35) ic = '🌧️';
+  return { ic, txt: txt + (extra ? ', ' + extra : ''), r, cls: r == null ? 'na' : r >= 0.6 ? 'sun' : r >= 0.12 ? 'mix' : 'dull' };
+}
+// plain text (the chart tooltips escape their title)
+function wxDayTip(w) {
+  const k = wxKind(w); if (!k) return '';
+  return ` — ${k.ic} ${k.txt}${w.sun_h != null ? ', ' + fmt(w.sun_h, 1) + ' h Sonne' : ''}` +
+    (w.cloud != null ? `, Bewölkung ${fmt(w.cloud, 0)} %` : '') + (w.tmin != null ? `, ${fmt(w.tmin, 0)}–${fmt(w.tmax, 0)} °C` : '');
+}
+function wxHourTip(w) {
+  if (!w) return '';
+  return ` — ☀️ ${fmt(w.sun_min || 0, 0)} min Sonne` + (w.cloud != null ? `, Bewölkung ${fmt(w.cloud, 0)} %` : '') +
+    (w.temp != null ? `, ${fmt(w.temp, 0)} °C` : '');
+}
+// sunshine per bar (same bars as "Wohin ging der Sonnenstrom?", so they line up)
+function paintPvSun(R, items, wxBy, wxH, useMonths, oneDay) {
+  const wrap = $('pvr-sun-wrap'); if (!wrap) return;
+  const W = STATE.pvwx;
+  if (!W || W.ok === false || !(W.daily || []).length) { wrap.hidden = true; return; }
+  let rows, unit = 'h', with_ = 0;
+  if (oneDay) {
+    unit = 'min';
+    rows = items.map(x => { const w = wxH[x.h]; if (w) with_++;
+      const day = w && (w.ghi || 0) > 0 ? 60 : 0, sun = w ? Math.min(day || 60, w.sun_min || 0) : 0;
+      return { label: x.label, full: x.full, values: { sun, rest: Math.max(0, day - sun) } }; });
+  } else if (useMonths) {
+    rows = items.map(m => { const ds = Object.values(wxBy).filter(w => w.day.startsWith(m.month)); if (ds.length) with_++;
+      const sun = ds.reduce((a, w) => a + (w.sun_h || 0), 0), dl = ds.reduce((a, w) => a + (w.daylight_h || 0), 0);
+      return { label: m.label, full: m.full + (ds.length ? ` · Wetter von ${ds.length} Tagen` : ' · keine Wetterdaten'), values: { sun, rest: Math.max(0, dl - sun) } }; });
+  } else {
+    rows = items.map(d => { const w = wxBy[d.day]; if (w) with_++;
+      return { label: d.label, full: d.full, values: { sun: w ? w.sun_h || 0 : 0, rest: w ? Math.max(0, (w.daylight_h || 0) - (w.sun_h || 0)) : 0 } }; });
+  }
+  if (!with_) { wrap.hidden = true; return; }
+  wrap.hidden = false;
+  $('pvr-sun-h').textContent = oneDay ? '☀️ Sonne je Stunde laut Wetterdienst' : '☀️ Sonnenstunden laut Wetterdienst';
+  const ser = [{ key: 'sun', color: '#f6b93b', label: 'Sonne' }, { key: 'rest', color: '#3a4766', label: 'Tageslicht ohne Sonne' }];
+  $('pvr-sun').innerHTML = stackedBar(rows, ser, { h: 120, unit });
+  $('pvr-sun-legend').innerHTML = legendHtml(ser.map(x => ({ label: x.label, color: x.color })));
+  // summary for the range: sunshine, cloud cover, kinds of days, best and worst day
+  const ds = oneDay ? [] : (R.daily || []).map(d => ({ d, w: wxBy[d.day] })).filter(x => x.w && x.w.sun_h != null);
+  let txt = '';
+  if (oneDay) {
+    const w = wxBy[_hpdDateStr(new Date())], k = wxKind(w);
+    if (k) txt = `${k.ic} Heute ${k.txt}: ${fmt(w.sun_h, 1)} von ${fmt(w.daylight_h, 1)} h Tageslicht mit Sonne` +
+      (w.cloud != null ? `, Bewölkung Ø ${fmt(w.cloud, 0)} %` : '') + ' (für den ganzen Tag, inkl. Vorhersage).';
+  } else if (ds.length) {
+    const sun = ds.reduce((a, x) => a + x.w.sun_h, 0), cl = ds.filter(x => x.w.cloud != null);
+    const kinds = { sun: 0, mix: 0, dull: 0 }; ds.forEach(x => { const k = wxKind(x.w); if (k && kinds[k.cls] != null) kinds[k.cls]++; });
+    const full = ds.filter(x => (x.d.pv_cov == null || x.d.pv_cov >= 0.9));
+    const best = full.length ? full.reduce((a, x) => x.w.sun_h > a.w.sun_h ? x : a) : null;
+    const worst = full.length ? full.reduce((a, x) => x.w.sun_h < a.w.sun_h ? x : a) : null;
+    txt = `Im Zeitraum <b>${fmt(sun, 0)} Sonnenstunden</b> (Ø ${fmt(sun / ds.length, 1)} h/Tag)` +
+      (cl.length ? `, Bewölkung Ø ${fmt(cl.reduce((a, x) => a + x.w.cloud, 0) / cl.length, 0)} %` : '') +
+      ` · ☀️ ${kinds.sun} sonnige, ⛅ ${kinds.mix} wechselhafte, ☁️ ${kinds.dull} trübe Tage.` +
+      (best && worst && best !== worst ? ` Sonnigster Tag ${dayLabel(best.d.day)} (${fmt(best.w.sun_h, 1)} h) → <b>${kwh(best.d.pv_kwh, 1)}</b>, ` +
+        `trübster ${dayLabel(worst.d.day)} (${fmt(worst.w.sun_h, 1)} h) → <b>${kwh(worst.d.pv_kwh, 1)}</b>.` : '');
+  }
+  $('pvr-sun-note').innerHTML = txt + ` <span style="color:var(--muted)">Quelle: ${W.demo ? 'Demo-Wetter' : 'Open-Meteo (Wettermodell für deinen Standort, keine Messstation)'}.</span>`;
 }
 
 function paintPvHist() {
@@ -12194,16 +12366,22 @@ function paintPvHist() {
   const tile = (v, l) => `<div><b>${v}</b><small>${l}</small></div>`;
   let k = tile(kwh(T.pv_kwh, T.pv_kwh < 100 ? 1 : 0), 'PV-Erzeugung');
   if (meter) k += tile(pctOf(T.self_rate), 'Eigenverbrauch') + tile(pctOf(T.autarky), 'Autarkie') + tile(money(T.saved_eur), 'gespart') +
-    tile(kwh(T.exp_kwh, 0), 'eingespeist') + tile(kwh(T.imp_kwh, 0), 'Netzbezug');
+    tile(kwh(T.exp_kwh, T.exp_kwh < 10 ? 1 : 0), 'eingespeist') + tile(kwh(T.imp_kwh, T.imp_kwh < 10 ? 1 : 0), 'Netzbezug');
   if (T.hp_sun_share != null) k += tile(pctOf(T.hp_sun_share), 'WP-Strom von der Sonne');
-  if (T.dis_kwh != null && cap) k += tile(fmt(T.dis_kwh / (cap / 1000), 0), 'Batterie-Vollzyklen');
+  if (T.dis_kwh != null && cap) { const cy = T.dis_kwh / (cap / 1000); k += tile(fmt(cy, cy < 10 ? 1 : 0), 'Batterie-Vollzyklen'); }
   kp.innerHTML = `<div class="pvk">${k}</div>`;
   const first = R.daily.length ? R.daily[0].day : null, last = R.daily.length ? R.daily[R.daily.length - 1].day : null;
-  $('pvr-hist-head').innerHTML = first ? `<span style="color:var(--muted)">${dayLabel(first)}–${dayLabel(last)}</span>` : '';
-  // daily bars (monthly for the year view)
+  const oneDay = R.days === 1;
+  $('pvr-hist-head').innerHTML = first ? `<span style="color:var(--muted)">${oneDay ? 'heute' : dayLabel(first) + '–' + dayLabel(last)}</span>` : '';
+  // bars per day – per hour for "Heute", per month for the year view – with
+  // the weather of that day/hour in the tooltip
   const useMonths = R.days > 120;
-  const items = useMonths ? R.monthly.map(m => Object.assign({}, m, { label: MON[+m.month.slice(5, 7) - 1], full: MON[+m.month.slice(5, 7) - 1] + ' ' + m.month.slice(0, 4) }))
-    : R.daily.map(d => Object.assign({}, d, { label: dayLabel(d.day).slice(0, 3), full: longDay(d.day) + (d.gap_h > 0.5 ? ` · ⚠︎ ${fmt(d.gap_h, 1)} h Datenlücke` : '') }));
+  const wxBy = {}; ((STATE.pvwx && STATE.pvwx.daily) || []).forEach(w => { wxBy[w.day] = w; });
+  const wxH = {}; ((STATE.pvwx && STATE.pvwx.hours) || []).forEach(w => { wxH[w.h] = w; });
+  const items = oneDay ? pvHourItems(R).map(x => Object.assign(x, { full: x.full + wxHourTip(wxH[x.h]) }))
+    : useMonths ? R.monthly.map(m => Object.assign({}, m, { label: MON[+m.month.slice(5, 7) - 1], full: MON[+m.month.slice(5, 7) - 1] + ' ' + m.month.slice(0, 4) }))
+    : R.daily.map(d => Object.assign({}, d, { label: dayLabel(d.day).slice(0, 3),
+        full: longDay(d.day) + (d.gap_h > 0.5 ? ` · ⚠︎ ${fmt(d.gap_h, 1)} h Datenlücke` : '') + wxDayTip(wxBy[d.day]) }));
   const unit = 'kWh';
   if (meter) {
     const sDst = [{ key: 'direct', color: COL.pv, label: 'direkt verbraucht' }]
@@ -12224,6 +12402,10 @@ function paintPvHist() {
     $('pvr-src').innerHTML = '<div class="note">Ohne Smart Meter keine Aufteilung nach Netz und eigenem Strom.</div>';
     $('pvr-src-legend').innerHTML = '';
   }
+  paintPvSun(R, items, wxBy, wxH, useMonths, oneDay);
+  // "Heute": the hourly bars above already are the day; no typical day, no months
+  // (style, not the hidden attribute: .legend sets its own display)
+  ['pvr-typ-h', 'pvr-typ', 'pvr-typ-legend', 'pvr-months'].forEach(id => { const e = $(id); if (e) e.style.display = oneDay ? 'none' : ''; });
   const hr = R.hourly || [];
   $('pvr-typ').innerHTML = hr.length === 24 ? pvDayChart(hr.map(x => (x.pv_w || 0) / 1000), hr.map(x => (x.load_w || 0) / 1000), { nice: true, unit: 'kW' }) : '';
   $('pvr-typ-legend').innerHTML = legendHtml([{ label: 'PV (kW, Ø je Stunde)', color: COL.heat }]
@@ -12265,7 +12447,7 @@ function paintPvHist() {
       `(Strompreis aus dem Setup, Vergütung aus dem PV-Planer – <a href="#" data-pvr-feed="1" style="color:var(--accent)">ändern</a>).` : '',
     meter ? 'Bezug und Einspeisung stammen aus den <b>Zählerständen des Smart Meters</b> (exakt); Tage mit Datenlücke aus den Messwerten.' : '',
     gaps ? `⚠︎ ${gaps} Tag(e) mit Datenlücke (Bridge oder Wechselrichter nicht erreichbar) – deren Werte sind unvollständig.` : '',
-    showExp ? `<b>Erwartung</b> = ${fmt(spec, 0)} kWh/kWp (` +
+    showExp && !oneDay ? `<b>Erwartung</b> = ${fmt(spec, 0)} kWh/kWp (` +
       (fromStr ? 'aus der Ausrichtung der Strings: ' + [0, 1].map(i => `${PV_AZ_LABEL[sCfg[i].az]} ${fmt(sK.k[i], 1)} kWp × ${PV_AZ_SPEC[sCfg[i].az]}`).join(', ')
         : 'Planer' + ($('pv-orient') && $('pv-orient').selectedOptions[0] && $('pv-orient').selectedOptions[0].dataset.pvgis ? ', PVGIS' : '')) +
       `) × ${fmt(kwpReal, 2)} kWp × Monatsanteil, auf die erfassten Sonnenstunden gerechnet (ein angefangener Tag zählt anteilig) – das Wetter schwankt von Jahr zu Jahr um ±15 %.` : '',
@@ -12504,7 +12686,7 @@ function pvStrTable(R, cfg, K) {
   const u = [S.mpp1_u, S.mpp2_u], pk = [S.mpp1_peak_w, S.mpp2_peak_w], tc = [S.mpp1_tc, S.mpp2_tc];
   const sm = t => ` <small style="color:var(--muted)">${t}</small>`;
   const row = (lbl, f) => `<tr><td>${lbl}</td>${[0, 1].map(i => `<td>${f(i)}</td>`).join('')}</tr>`;
-  let h = `<table class="pvt"><tr><th>${R.days > 120 ? 'Zeitraum' : R.days + ' Tage'}</th>` +
+  let h = `<table class="pvt"><tr><th>${R.days > 120 ? 'Zeitraum' : R.days === 1 ? 'Heute' : R.days + ' Tage'}</th>` +
     [0, 1].map(i => `<th style="color:${STR_COL[i]}">${pvStrLabel(i, cfg)}</th>`).join('') + '</tr>';
   if (cfg[0].az || cfg[1].az) h += row('Ausrichtung', i => cfg[i].az ? PV_AZ_LABEL[cfg[i].az] : '–');
   if (cfg[0].mods || cfg[1].mods) h += row('Module', i => cfg[i].mods || '–');
@@ -12671,9 +12853,11 @@ function renderPvStrings() {
   $('pvr-str-day-legend').innerHTML = hasSer ? legendHtml([0, 1].map(i => ({ label: 'String ' + (i + 1) + (cfg[i].name ? ' · ' + cfg[i].name : ''), color: STR_COL[i] }))) : '';
   const hd = $('pvr-str-head');
   if (S && R.daily && R.daily.length) {
+    const one = R.days === 1;                // today: the curves above already show it
+    ['pvr-str-daily-h', 'pvr-str-daily', 'pvr-str-daily-legend'].forEach(id => { const e = $(id); if (e) e.style.display = one ? 'none' : ''; });
     $('pvr-str-daily-h').textContent = R.days > 120 ? 'Monatswerte im Zeitraum' : 'Tageswerte im Zeitraum';
-    $('pvr-str-daily').innerHTML = pvStrDaily(R, norm, K);
-    $('pvr-str-daily-legend').innerHTML = legendHtml([0, 1].map(i => ({ label: 'String ' + (i + 1) + (norm ? ' (kWh je kWp)' : ' (kWh)'), color: STR_COL[i] })));
+    $('pvr-str-daily').innerHTML = one ? '' : pvStrDaily(R, norm, K);
+    $('pvr-str-daily-legend').innerHTML = one ? '' : legendHtml([0, 1].map(i => ({ label: 'String ' + (i + 1) + (norm ? ' (kWh je kWp)' : ' (kWh)'), color: STR_COL[i] })));
     $('pvr-str-table').innerHTML = pvStrTable(R, cfg, K);
     const V = pvStrVerdicts(R, F, cfg, K);
     $('pvr-str-verdict').innerHTML = verdictHtml(V);
@@ -12995,7 +13179,7 @@ function copyText(txt) {
 }
 
 function initPvReal() {
-  try { const d = parseInt(localStorage.getItem(PVR_DAYS_KEY), 10); STATE.pvDays = [7, 30, 90, 365].includes(d) ? d : 30; } catch (e) { STATE.pvDays = 30; }
+  try { const d = parseInt(localStorage.getItem(PVR_DAYS_KEY), 10); STATE.pvDays = [1, 7, 30, 90, 365].includes(d) ? d : 30; } catch (e) { STATE.pvDays = 30; }
   const pr = $('pvr-range');
   if (pr) {
     [...pr.querySelectorAll('button[data-d]')].forEach(x => x.classList.toggle('on', +x.dataset.d === STATE.pvDays));
@@ -13005,7 +13189,18 @@ function initPvReal() {
       try { localStorage.setItem(PVR_DAYS_KEY, String(STATE.pvDays)); } catch (err) {}
       [...pr.querySelectorAll('button[data-d]')].forEach(x => x.classList.toggle('on', x === btn));
       loadPvHist(true);
+      if (STATE.pvwx && STATE.pvwx.days < STATE.pvDays) loadPvWeather(true);     // weather for the longer range
     });
+  }
+  const pc = $('pvr-card');
+  if (pc) {
+    pc.addEventListener('click', e => {
+      if (e.target.closest('#wx-find')) { e.preventDefault(); wxFind(); return; }
+      const b = e.target.closest('[data-wx-lat]');
+      if (b) { e.preventDefault(); wxSetLocation(+b.dataset.wxLat, +b.dataset.wxLon); return; }
+      if (e.target.closest('[data-wx-change]')) { e.preventDefault(); const el = $('pvr-wx'); if (el) el.innerHTML = wxLocForm(); }
+    });
+    pc.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.id === 'wx-q') { e.preventDefault(); wxFind(); } });
   }
   const ns = $('pvr-str-norm');
   if (ns) ns.addEventListener('click', e => {

@@ -15,7 +15,8 @@ Adresse öffnen (z. B. `http://<bridge>:8090/#dash`) und zum Homescreen hinzufü
     ⚡ sehr hoher Verbrauch.
 * **Banner:** nur wenn es etwas zu tun gibt – PV-Überschuss jetzt nutzen bzw. Börsenstrom
   günstig/teuer. Die Geldbilanz der PV-Anlage steht in „Heute“ (siehe unten).
-* **Termine:** heute, morgen und die nächsten Tage aus deinen Kalendern und der Müllabfuhr.
+* **Termine:** heute, morgen und die nächsten Tage aus deinen Kalendern und der Müllabfuhr. Auf
+  breiten Bildschirmen (ab etwa 760 Pixel, z. B. iPad) stehen Termine und Stundenplan nebeneinander.
 * **Energiefluss:** Sonne, Batterie, Haus, Netz – gemessen vom Wechselrichter – und vom Haus aus
   Linien zu den größten Verbrauchern (Wärmepumpe, Geräte, nicht einzeln gemessener Rest).
 * **Heute** (mit PV-Anlage und Smart Meter): ein Ring mit der **Autarkie** – dem Anteil deines

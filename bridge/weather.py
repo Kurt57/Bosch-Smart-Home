@@ -64,6 +64,111 @@ def fetch(lat: float, lon: float, days: int = 2, timeout: float = 20.0) -> dict:
     return {"hourly": out, "tz": data.get("timezone", "auto"), "utc_offset": off}
 
 
+# --------------------------------------------------------------------------- #
+# Weather of the past days + the next ones, for the PV views: sunshine hours,
+# cloud cover, irradiance, weather type per day (and per hour for today)
+# --------------------------------------------------------------------------- #
+DAILY_VARS = ("weather_code,temperature_2m_max,temperature_2m_min,sunshine_duration,daylight_duration,"
+              "precipitation_sum,snowfall_sum,shortwave_radiation_sum")
+HOURLY_VARS = "shortwave_radiation,cloud_cover,sunshine_duration,temperature_2m,weather_code"
+
+
+def _get_json(host: str, path: str, timeout: float) -> dict:
+    conn = http.client.HTTPSConnection(host, 443, timeout=timeout, context=_CTX)
+    try:
+        conn.request("GET", path, headers={"Accept": "application/json",
+                                           "User-Agent": "BoschHomeEnergyBridge/1.0"})
+        resp = conn.getresponse()
+        raw = resp.read(8 * 1024 * 1024)
+        if resp.status != 200:
+            raise RuntimeError(f"Open-Meteo HTTP {resp.status}")
+        return json.loads(raw)
+    finally:
+        conn.close()
+
+
+def fetch_days(lat: float, lon: float, past_days: int = 92, forecast_days: int = 3,
+               timeout: float = 25.0) -> dict:
+    """Daily weather from `past_days` ago up to `forecast_days` ahead (Open-Meteo
+    model data for the location – not a station): {"daily": [{"day", "code",
+    "tmax", "tmin", "sun_h", "daylight_h", "rain_mm", "snow_cm", "rad_kwh",
+    "cloud"}], "hourly": [{"ts", "ghi", "cloud", "sun_min", "temp", "code"}]}.
+    Hourly values describe the PRECEDING hour (Open-Meteo convention): the row
+    with ts = 12:00 is 11:00–12:00. "cloud" per day = mean cloud cover of the
+    daylight hours; "rad_kwh" = global horizontal irradiation in kWh/m²."""
+    q = (f"?latitude={round(float(lat), 4)}&longitude={round(float(lon), 4)}"
+         f"&daily={DAILY_VARS}&hourly={HOURLY_VARS}"
+         f"&past_days={max(0, min(92, int(past_days)))}&forecast_days={max(1, min(16, int(forecast_days)))}"
+         f"&timezone=auto")
+    data = _get_json(API_HOST, API_PATH + q, timeout)
+    h = data.get("hourly") or {}
+    hourly = []
+    for i, t in enumerate(h.get("time") or []):
+        try:
+            ts = int(time.mktime(time.strptime(t, "%Y-%m-%dT%H:%M")))
+        except (ValueError, OverflowError, TypeError):
+            continue
+        sun = _f(h.get("sunshine_duration") or [], i, None)
+        hourly.append({"ts": ts, "ghi": _f(h.get("shortwave_radiation") or [], i, None),
+                       "cloud": _f(h.get("cloud_cover") or [], i, None),
+                       "sun_min": round(sun / 60.0, 1) if sun is not None else None,
+                       "temp": _f(h.get("temperature_2m") or [], i, None),
+                       "code": _i(h.get("weather_code") or [], i)})
+    # mean cloud cover while the sun is up, per local day (of the hour's start)
+    cl: dict = {}
+    for r in hourly:
+        if r["cloud"] is None or not (r["ghi"] or 0) > 5:
+            continue
+        day = time.strftime("%Y-%m-%d", time.localtime(r["ts"] - 3600))
+        a = cl.setdefault(day, [0.0, 0])
+        a[0] += r["cloud"]
+        a[1] += 1
+    d = data.get("daily") or {}
+    daily = []
+    for i, day in enumerate(d.get("time") or []):
+        sun = _f(d.get("sunshine_duration") or [], i, None)
+        dl = _f(d.get("daylight_duration") or [], i, None)
+        rad = _f(d.get("shortwave_radiation_sum") or [], i, None)
+        c = cl.get(day)
+        daily.append({"day": day, "code": _i(d.get("weather_code") or [], i),
+                      "tmax": _f(d.get("temperature_2m_max") or [], i, None),
+                      "tmin": _f(d.get("temperature_2m_min") or [], i, None),
+                      "sun_h": round(sun / 3600.0, 2) if sun is not None else None,
+                      "daylight_h": round(dl / 3600.0, 2) if dl is not None else None,
+                      "rain_mm": _f(d.get("precipitation_sum") or [], i, None),
+                      "snow_cm": _f(d.get("snowfall_sum") or [], i, None),
+                      "rad_kwh": round(rad / 3.6, 3) if rad is not None else None,       # MJ/m² → kWh/m²
+                      "cloud": round(c[0] / c[1]) if c and c[1] else None})
+    return {"daily": daily, "hourly": hourly, "tz": data.get("timezone", "auto"),
+            "utc_offset": int(data.get("utc_offset_seconds", 0) or 0)}
+
+
+def geocode(name: str, timeout: float = 15.0) -> list:
+    """Places matching a name (Open-Meteo geocoding): [{"name", "region",
+    "country", "lat", "lon"}] – to set the location without GPS."""
+    import urllib.parse
+    q = "?" + urllib.parse.urlencode({"name": (name or "").strip()[:80], "count": 6,
+                                      "language": "de", "format": "json"})
+    data = _get_json("geocoding-api.open-meteo.com", "/v1/search" + q, timeout)
+    out = []
+    for r in data.get("results") or []:
+        try:
+            out.append({"name": r.get("name") or "", "region": r.get("admin1") or "",
+                        "country": r.get("country") or "", "lat": round(float(r["latitude"]), 4),
+                        "lon": round(float(r["longitude"]), 4)})
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out
+
+
+def _i(seq, i):
+    try:
+        v = seq[i]
+        return int(v) if v is not None else None
+    except (IndexError, TypeError, ValueError):
+        return None
+
+
 def _f(seq, i, default):
     try:
         v = seq[i]
