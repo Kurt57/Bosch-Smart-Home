@@ -153,6 +153,43 @@ Startskripte (`start-macos.command`, `update-macos.command`, …) nehmen ein sol
 
 ---
 
+## Warmwasser-Speicher & Legionellen
+
+Tab **Wärme → 🚿 Warmwasser**, Karte **🛁 Warmwasser-Speicher** (darunter, umgezogen aus
+„Abgleich“: **Warmwasser kostet Komfort**). Grundlage: Bei jeder Abfrage der Wärmepumpe
+(Standard alle 5 Minuten) schreibt die Bridge die **Speichertemperatur** (`dhwCircuits/dhw1/actualTemp`),
+den **Sollwert** (`currentSetpoint`) und den **Betrieb** (`heatSources/actualHeatDemand`:
+Heizen/Warmwasser) mit. Alles ist am **Speicherfühler** gemessen – oben im Speicher ist es etwas
+wärmer, unten am Kaltwasser-Eintritt kälter.
+
+* **Ladungen:** jede Warmwasser-Ladung mit Temperatur am Start (= tatsächliche
+  Einschalttemperatur) und am Ende, Dauer und Heizpause. Wird eine Ladung unterbrochen
+  (z. B. maximale Ladezeit erreicht, die Heizung kommt kurz dran) und geht innerhalb von
+  90 Minuten weiter, zählt sie als **eine** – so werden die „3-Stunden-Programme“ sichtbar.
+  Lange Ladungen bekommen ihre Gründe dazu: *unterbrochen*, *währenddessen gezapft*,
+  *kalt draußen*, *die letzten 2 °C dauerten lange*, *Soll nicht erreicht*, *langer Anlauf*.
+* **Minuten pro Grad:** wie viel Zeit jedes Grad beim Aufheizen kostet (der erste
+  Anstieg einer Ladung zählt zur Anlaufzeit). Je heißer der Speicher, desto langsamer –
+  daran sieht man, was die letzten Grad bis zum Soll kosten.
+* **Entladen:** wie lange ein voller Speicher hält, der **Ruheverlust** (langsames Fallen
+  ohne Zapfen; über ~0,8 °C/h deutet auf eine dauernd laufende Zirkulation oder schlechte
+  Dämmung) und die **Zapfungen** (Fühler fällt schneller als 3 °C/h) nach Uhrzeit.
+* **Legionellen:** höchster Wert, Stunden pro Tag unter 45 °C bzw. 50 °C, und ob eine
+  Aufheizung auf **60 °C** (thermische Desinfektion) vorkam (Fühler ≥ 59 °C oder Soll ≥ 60 °C).
+* **Was wäre wenn:** andere Start-/Stopptemperaturen, gerechnet mit den gemessenen
+  Minuten je Grad und den Grad, die der Speicher am Tag verliert (Ladungen/Tag =
+  Grad pro Tag ÷ Schaltdifferenz; das Modell wird so skaliert, dass die heutige
+  Einstellung die gemessene Dauer trifft). Eine **Schätzung**: kleinere Schaltdifferenz =
+  kürzere, dafür häufigere Ladungen; die Warmwasser-Zeit pro Tag bleibt etwa gleich.
+
+**Zur Einordnung:** Legionellen vermehren sich vor allem zwischen 25 und 45 °C, ab etwa
+50 °C kaum noch; bei 55 °C sterben sie langsam ab (Stunden), bei 60 °C in Minuten. Das
+DVGW-Arbeitsblatt W 551 empfiehlt für Ein- und Zweifamilienhäuser 60 °C am Speicher und, ihn
+nie dauerhaft unter 50 °C zu betreiben; eine Prüfpflicht gibt es im selbst genutzten
+Einfamilienhaus nicht. Mit Wärmepumpe üblich: im Alltag 50–55 °C und 1× pro Woche 60 °C.
+Start-/Stopptemperatur (bzw. Schaltdifferenz), maximale Ladezeit und thermische Desinfektion
+stehen bei Bosch meist im Fachmann-Menü des Reglers.
+
 ## Technischer Hintergrund
 
 * Login: SingleKey ID OAuth 2.0 (Authorization Code + PKCE),
@@ -177,6 +214,8 @@ Startskripte (`start-macos.command`, `update-macos.command`, …) nehmen ein sol
   1-kWh-Schritte) werden viele Läufe zusammengerechnet. Der Wert gilt für das
   Wasser durch die Wärmepumpe – mit Pufferspeicher oder hydraulischer Weiche
   fließt in den Heizkreisen eine andere Menge. Ergebnis: `/api/heatpump/flow`.
+* **Warmwasser-Speicher:** `/api/heatpump/dhwtank?days=14` (Ladungen, Minuten je Grad,
+  Entladen, Sollwerte, Legionellen-Kennzahlen, Szenarien) aus `dhw_log` + `hp_samples`.
 * Umgesetzt in `bridge/homecom.py` – **ohne Zusatzpakete** (nur Standardbibliothek).
   Grundlage der Endpunkte: das Community-Projekt
   [`serbanb11/homecom_alt`](https://github.com/serbanb11/homecom_alt).

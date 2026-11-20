@@ -2394,6 +2394,484 @@ def compute_dhw_impact(store: "Store", days: float = 14, hp_live: dict | None = 
     }
 
 
+# --------------------------------------------------------------------------- #
+# Hot-water tank: how fast it empties and refills (the tank sensor, read with
+# every heat-pump poll), what another target would change, and the legionella
+# view. All temperatures are the tank SENSOR's – the top of the tank is a bit
+# warmer, the bottom (cold-water inlet) colder.
+# --------------------------------------------------------------------------- #
+DHW_GROW_HI = 45.0        # legionella multiply mainly between 25 and 45 °C
+DHW_MIN_OP = 50.0         # DVGW W 551: don't run a tank permanently below 50 °C
+DHW_KILL = 55.0           # from here they die off – slowly (hours)
+DHW_DISINFECT = 59.0      # a reading this high = a thermal-disinfection run (60 °C+)
+DHW_DRAW_KH = 3.0         # the sensor falling faster than this = hot water drawn
+DHW_RESUME_S = 90 * 60    # a charge cut off and resumed within this = one charge
+DHW_SETTLE_S = 20 * 60    # after a charge the sensor still moves (mixing)
+DHW_SCENARIOS = (("stop52", None, 52.0), ("stop50", None, 50.0),
+                 ("s46_50", 46.0, 50.0), ("s47_52", 47.0, 52.0))
+
+
+def _is_dhw_mode(m) -> bool:
+    m = (m or "").lower()
+    return "dhw" in m or "water" in m or "ww" in m or "warm" in m
+
+
+def compute_dhw_tank(store: "Store", days: float = 14, now: int | None = None) -> dict:
+    """The hot-water tank, measured: every charge (the heat pump in DHW mode)
+    with the tank temperature at its start and end, how long it took and why
+    long ones were long (cut off and resumed, water drawn meanwhile, cold air,
+    the slow last degrees); the minutes each degree takes; how fast the tank
+    cools between charges (standby loss vs. draws, by hour); the setpoints the
+    heat pump used; the legionella view (time below 45/50 °C, highest
+    temperature, a 60 °C run seen or not); and what a different start/stop
+    temperature would change – estimated from these measurements."""
+    now = int(now or time.time())
+    days = max(2.0, min(60.0, float(days)))
+    since = int(now - days * 86400)
+    pre = since - 6 * 3600                      # a charge already running at `since`
+    trows = [(int(r["ts"]), float(r["temp"]), r.get("setpoint")) for r in store.dhw_log_since(pre)]
+    trows = [r for r in trows if -5.0 < r[1] < 95.0]
+    n_win = sum(1 for r in trows if r[0] >= since)
+    if n_win < 36:                              # < ~3 h of readings
+        return {"ok": True, "n": 0, "reason": "no_tank", "days": days, "n_tank": n_win}
+    tts = [r[0] for r in trows]
+    tv = [r[1] for r in trows]
+    diffs = sorted(b - a for a, b in zip(tts, tts[1:]) if b > a)
+    step = diffs[len(diffs) // 2] if diffs else 300
+    gap = max(900.0, 2.5 * step)
+    first_ts = max(since, next(t for t in tts if t >= since))
+    span_d = max(0.5, (now - first_ts) / 86400.0)
+
+    hp = sorted((s for s in store.hp_samples_since(pre) if s.get("ts")), key=lambda s: s["ts"])
+    n = len(hp)
+
+    def tslice(a, b):
+        return bisect.bisect_left(tts, a), bisect.bisect_right(tts, b)
+
+    # ---- DHW runs: contiguous DHW samples (one odd sample does not split) ---- #
+    runs, i = [], 0
+    while i < n:
+        if _is_dhw_mode(hp[i].get("mode")):
+            j = i
+            while j + 1 < n and _is_dhw_mode(hp[j + 1].get("mode")) and hp[j + 1]["ts"] - hp[j]["ts"] <= gap:
+                j += 1
+            if runs and hp[i]["ts"] - hp[runs[-1][1]]["ts"] <= max(2 * step, 600) + 1:
+                runs[-1][1] = j
+            else:
+                runs.append([i, j])
+            i = j + 1
+        else:
+            i += 1
+
+    def edge(k, side):
+        t = hp[k]["ts"]
+        nb = k - 1 if side < 0 else k + 1
+        if 0 <= nb < n and abs(hp[nb]["ts"] - t) <= gap:
+            return (t + hp[nb]["ts"]) / 2.0
+        return t + side * step / 2.0
+
+    bands_t, bands_k, bands_n = {}, {}, {}      # per 1-K band: minutes, K covered, runs
+    R = []
+    for i0, i1 in runs:
+        st, en = edge(i0, -1), edge(i1, +1)
+        running = i1 == n - 1 and now - hp[i1]["ts"] <= gap
+        if running:
+            en = float(hp[i1]["ts"])
+        lo, hi = tslice(st - step, hp[i0]["ts"] + step)
+        t_start = min(tv[lo:hi]) if hi > lo else None
+        lo, hi = tslice(hp[i1]["ts"] - step, en + 2 * step)
+        t_end = max(tv[lo:hi]) if hi > lo else None
+        lo, hi = tslice(st, en + step)
+        sps = [float(trows[k][2]) for k in range(lo, hi) if trows[k][2] is not None]
+        set_ = _median(sps) if sps else None
+        outs = [float(hp[k]["outdoor_c"]) for k in range(i0, i1 + 1) if hp[k].get("outdoor_c") is not None]
+        # inside the run: where the time went (rising per band / standing / drawn)
+        a = max(0, bisect.bisect_right(tts, st) - 1)
+        b = bisect.bisect_right(tts, en + step)
+        draw_k = stall = 0.0
+        lag = None
+        rising = False          # the first rising step still holds part of the start-up
+        mybands = {}
+        for k in range(a, min(b, len(tts)) - 1):
+            ta, tb = tts[k], tts[k + 1]
+            if tb - ta > gap or tb <= st:
+                continue
+            dt = (min(tb, en) - max(ta, st)) / 60.0
+            if dt <= 0:
+                continue
+            dT = tv[k + 1] - tv[k]
+            if dT > 0.05 and not rising:
+                rising = True
+                stall += dt
+            elif dT > 0.05:
+                Ta, Tb = tv[k], tv[k + 1]
+                for band in range(math.floor(Ta), math.floor(Tb - 1e-9) + 1):
+                    ov = min(Tb, band + 1) - max(Ta, band)
+                    if ov > 0:
+                        mybands[band] = mybands.get(band, [0.0, 0.0])
+                        mybands[band][0] += dt * ov / dT
+                        mybands[band][1] += ov
+            else:
+                stall += dt
+                if dT < -0.15:
+                    draw_k += -dT
+            if lag is None and t_start is not None and tv[k + 1] >= t_start + 0.3:
+                lag = max(0.0, (tb - st) / 60.0)
+        el = th = 0.0
+        has_e = has_h = False
+        for k in range(max(1, i0), i1 + 1):
+            p, c = hp[k - 1], hp[k]
+            if c["ts"] - p["ts"] > gap:
+                continue
+            if p.get("energy_kwh") is not None and c.get("energy_kwh") is not None and 0 <= c["energy_kwh"] - p["energy_kwh"] < 5:
+                el += c["energy_kwh"] - p["energy_kwh"]
+                has_e = True
+            if p.get("heat_kwh") is not None and c.get("heat_kwh") is not None and 0 <= c["heat_kwh"] - p["heat_kwh"] < 15:
+                th += c["heat_kwh"] - p["heat_kwh"]
+                has_h = True
+        if not running and st >= since:
+            for band, (m, kk) in mybands.items():
+                bands_t[band] = bands_t.get(band, 0.0) + m
+                bands_k[band] = bands_k.get(band, 0.0) + kk
+                if kk >= 0.3:
+                    bands_n[band] = bands_n.get(band, 0) + 1
+        R.append({"st": st, "en": en, "running": running, "t_start": t_start, "t_end": t_end, "set": set_,
+                  "out": (sum(outs) / len(outs)) if outs else None, "draw_k": draw_k, "stall": stall,
+                  "lag": lag, "bands": mybands, "el": el if has_e else None, "th": th if has_h else None,
+                  "reached": (t_end >= set_ - 1.0) if (t_end is not None and set_ is not None) else None})
+
+    # ---- episodes: a charge cut off and resumed soon after counts as one ---- #
+    E = []
+    for r in R:
+        p = E[-1] if E else None
+        if (p and not p["running"] and r["st"] - p["en"] <= DHW_RESUME_S
+                and (p["reached"] is False or (p["reached"] is None and r["st"] - p["en"] <= 1800))):
+            p["runs"].append(r)
+            p["break_s"] += r["st"] - p["en"]
+            p.update(en=r["en"], running=r["running"], t_end=r["t_end"], reached=r["reached"],
+                     set=r["set"] if r["set"] is not None else p["set"])
+        else:
+            E.append({"st": r["st"], "en": r["en"], "running": r["running"], "runs": [r], "break_s": 0.0,
+                      "t_start": r["t_start"], "t_end": r["t_end"], "set": r["set"], "reached": r["reached"]})
+    outs_all = [r["out"] for r in R if r["out"] is not None]
+    out_med = _median(outs_all) if outs_all else None
+    eps = []
+    for e in E:
+        rs = e["runs"]
+        dhw_min = sum(r["en"] - r["st"] for r in rs) / 60.0
+        ob = [r["out"] for r in rs if r["out"] is not None]
+        out = sum(ob) / len(ob) if ob else None
+        top = None
+        if e["set"] is not None:
+            top = sum(m for r in rs for band, (m, _k) in r["bands"].items() if band >= e["set"] - 2.0)
+        ep = {"start": int(e["st"]), "end": int(e["en"]), "running": e["running"],
+              "dur_min": round((e["en"] - e["st"]) / 60.0), "dhw_min": round(dhw_min),
+              "break_min": round(e["break_s"] / 60.0), "n_runs": len(rs),
+              "longest_min": round(max(r["en"] - r["st"] for r in rs) / 60.0),
+              "t_start": round(e["t_start"], 1) if e["t_start"] is not None else None,
+              "t_end": round(e["t_end"], 1) if e["t_end"] is not None else None,
+              "set": round(e["set"], 1) if e["set"] is not None else None,
+              "reached": e["reached"], "outdoor": round(out, 1) if out is not None else None,
+              "draw_k": round(sum(r["draw_k"] for r in rs), 1),
+              "stall_min": round(sum(r["stall"] for r in rs)),
+              "lag_min": round(rs[0]["lag"]) if rs[0]["lag"] is not None else None,
+              "top_min": round(top) if top is not None else None,
+              "el_kwh": round(sum(r["el"] for r in rs), 2) if all(r["el"] is not None for r in rs) else None,
+              "th_kwh": round(sum(r["th"] for r in rs), 2) if all(r["th"] is not None for r in rs) else None}
+        why = []
+        if not e["running"]:
+            if len(rs) >= 2:
+                why.append("cut")
+            if ep["draw_k"] >= 1.0:
+                why.append("draw")
+            if out is not None and (out <= 2.0 or (out_med is not None and out <= out_med - 4.0)):
+                why.append("cold")
+            if top is not None and top >= 25:            # the last 2 K alone took ≥ 25 min
+                why.append("top")
+            if e["reached"] is False:
+                why.append("short")
+            if ep["lag_min"] is not None and ep["lag_min"] >= 15:
+                why.append("lag")
+        ep["why"] = why
+        eps.append(ep)
+    done = [e for e in eps if not e["running"] and e["start"] >= since]
+
+    # ---- minutes per degree while charging ---------------------------------- #
+    mpk = {b: bands_t[b] / bands_k[b] for b in bands_k
+           if bands_k[b] >= 1.0 and bands_n.get(b, 0) >= 2}
+
+    def mpk_at(k):
+        known = sorted(mpk)
+        if not known:
+            return None, True
+        if k in mpk:
+            return mpk[k], False
+        if k > known[-1]:                       # hotter than ever measured: slower still
+            return mpk[known[-1]] * 1.12 ** (k - known[-1]), True
+        if k < known[0]:
+            return mpk[known[0]], True
+        lo_ = max(x for x in known if x < k)
+        hi_ = min(x for x in known if x > k)
+        return mpk[lo_] + (mpk[hi_] - mpk[lo_]) * (k - lo_) / (hi_ - lo_), False
+
+    def charge_minutes(S, T):
+        tot, ex = 0.0, False
+        for band in range(math.floor(S), math.ceil(T)):
+            ov = min(T, band + 1) - max(S, band)
+            if ov <= 0:
+                continue
+            m, x = mpk_at(band)
+            if m is None:
+                return None, True
+            tot += m * ov
+            ex = ex or x
+        return tot, ex
+
+    starts = [e["t_start"] for e in done if e["t_start"] is not None]
+    sets = [e["set"] for e in done if e["set"] is not None]
+    ends = [e["t_end"] for e in done if e["t_end"] is not None and e["reached"] is not False]
+    S0 = _median(starts) if starts else None
+    set0 = _median(sets) if sets else (_median(ends) if ends else None)
+    over = []                                   # start-up + standing time per charge
+    for e in done:
+        if e["t_start"] is not None and e["t_end"] is not None and e["t_end"] > e["t_start"]:
+            cm, _x = charge_minutes(e["t_start"], e["t_end"])
+            if cm is not None:
+                over.append(max(0.0, e["dhw_min"] - cm))
+    overhead = _median(over) if over else 0.0
+    # the per-degree model is scaled so that today's setting reproduces the
+    # measured median charge (draws, defrosts … are in the measurement)
+    meas = _median([e["dhw_min"] for e in done]) if done else None
+    calib = 1.0
+    if meas and S0 is not None and set0 is not None and set0 > S0 and mpk:
+        bm, _x = charge_minutes(S0, set0)
+        if bm:
+            calib = max(0.7, min(1.4, meas / (overhead + bm)))
+
+    curve = []
+    if S0 is not None and set0 is not None and set0 > S0 and mpk:
+        acc, t = overhead, S0
+        curve.append({"t": round(S0, 1), "min": round(acc * calib)})
+        for band in range(math.floor(S0) + 1, math.ceil(set0) + 1):
+            tt = min(float(band), set0)
+            m, _x = charge_minutes(t, tt)
+            if m is None:
+                break
+            acc += m
+            t = tt
+            curve.append({"t": round(tt, 1), "min": round(acc * calib)})
+
+    # ---- between charges: standby loss vs. draws ---------------------------- #
+    in_ch = [False] * len(tts)
+    for r in R:
+        lo, hi = tslice(r["st"], r["en"] + DHW_SETTLE_S)
+        for k in range(lo, hi):
+            in_ch[k] = True
+    sb_dt = sb_dT = nt_dt = nt_dT = 0.0
+    draw_tot = 0.0
+    draws = []                                  # [start, end, K]
+    hr_drop = [0.0] * 24
+    hr_dt = [0.0] * 24
+    dis_h = 0.0
+    for k in range(len(tts) - 1):
+        ta, tb = tts[k], tts[k + 1]
+        if ta < since or in_ch[k] or in_ch[k + 1] or tb - ta > gap or tb <= ta:
+            continue
+        dt_h = (tb - ta) / 3600.0
+        dT = tv[k + 1] - tv[k]
+        hr = time.localtime(ta).tm_hour
+        hr_dt[hr] += dt_h
+        hr_drop[hr] += max(0.0, -dT)
+        dis_h += dt_h
+        if dT / dt_h <= -DHW_DRAW_KH:
+            draw_tot += -dT
+            if draws and ta - draws[-1][1] <= 1200:
+                draws[-1][1] = tb
+                draws[-1][2] += -dT
+            else:
+                draws.append([ta, tb, -dT])
+        else:
+            sb_dt += dt_h
+            sb_dT += dT
+            if hr < 5:
+                nt_dt += dt_h
+                nt_dT += dT
+    draws = [d for d in draws if d[2] >= 0.5]
+    draw_hours = [0.0] * 24
+    for d in draws:
+        draw_hours[time.localtime(d[0]).tm_hour] += d[2]
+    peak = sorted(range(24), key=lambda h: -draw_hours[h])[:3]
+    peak = sorted(h for h in peak if draw_hours[h] > 0)
+    loss_kh = (-sb_dT / sb_dt) if sb_dt >= 3 else None
+    # K the tank loses per day: from what the charges put back (incl. what was
+    # drawn while charging) – robust to gaps; else from the cooling itself
+    k_charges = sum((e["t_end"] - e["t_start"]) + e["draw_k"] for e in done
+                    if e["t_end"] is not None and e["t_start"] is not None)
+    k_day = (k_charges / span_d) if len(done) >= 3 else (
+        ((draw_tot + max(0.0, -sb_dT)) / dis_h * 24.0) if dis_h >= 6 else None)
+    holds = [(b["start"] - a["end"]) / 3600.0 for a, b in zip(eps, eps[1:])
+             if not a["running"] and a["start"] >= since]
+
+    # ---- setpoints the heat pump used --------------------------------------- #
+    sp_by_h = [[] for _ in range(24)]
+    sp_vals = {}
+    for ts_, _t, sp in trows:
+        if ts_ < since or sp is None:
+            continue
+        sp_by_h[time.localtime(ts_).tm_hour].append(float(sp))
+        key = round(float(sp) * 2) / 2.0
+        sp_vals[key] = sp_vals.get(key, 0) + 1
+    n_sp = sum(sp_vals.values())
+    setpoints = {"by_hour": [(_median(v) if v else None) for v in sp_by_h],
+                 "values": [{"t": t, "share": round(c / n_sp, 3)} for t, c in
+                            sorted(sp_vals.items(), key=lambda x: -x[1])] if n_sp else [],
+                 "now": (float(trows[-1][2]) if trows[-1][2] is not None else None)}
+
+    # ---- legionella view: time at temperature (sensor) ---------------------- #
+    w_tot = w45 = w50 = w55 = 0.0
+    per_day = {}
+    t_max = t_max_ts = t_min = None
+    last60 = last55 = None
+    for k in range(len(tts)):
+        if tts[k] < since:
+            continue
+        nxt = tts[k + 1] if k + 1 < len(tts) else now
+        w = min(max(0.0, nxt - tts[k]), gap)
+        T = tv[k]
+        w_tot += w
+        w45 += w if T < DHW_GROW_HI else 0.0
+        w50 += w if T < DHW_MIN_OP else 0.0
+        w55 += w if T >= DHW_KILL else 0.0
+        if t_max is None or T > t_max:
+            t_max, t_max_ts = T, tts[k]
+        t_min = T if t_min is None else min(t_min, T)
+        if T >= DHW_DISINFECT:
+            last60 = tts[k]
+        if T >= DHW_KILL:
+            last55 = tts[k]
+        d = time.strftime("%Y-%m-%d", time.localtime(tts[k]))
+        pd = per_day.setdefault(d, {"day": d, "t_max": T, "t_min": T, "h": 0.0, "h_lt45": 0.0,
+                                    "h_lt50": 0.0, "h_ge55": 0.0, "n": 0, "dhw_min": 0, "longest": 0})
+        pd["t_max"] = max(pd["t_max"], T)
+        pd["t_min"] = min(pd["t_min"], T)
+        pd["h"] += w / 3600.0
+        pd["h_lt45"] += w / 3600.0 if T < DHW_GROW_HI else 0.0
+        pd["h_lt50"] += w / 3600.0 if T < DHW_MIN_OP else 0.0
+        pd["h_ge55"] += w / 3600.0 if T >= DHW_KILL else 0.0
+    for e in eps:
+        d = time.strftime("%Y-%m-%d", time.localtime(e["start"]))
+        if d in per_day:
+            per_day[d]["n"] += 1
+            per_day[d]["dhw_min"] += e["dhw_min"]
+            per_day[d]["longest"] = max(per_day[d]["longest"], e["longest_min"])
+    days_l = []
+    for d in sorted(per_day):
+        pd = per_day[d]
+        days_l.append({k: (round(v, 1) if isinstance(v, float) else v) for k, v in pd.items()})
+    full = [x for x in days_l if x["h"] >= 20]
+    sp_hi = max((v["t"] for v in setpoints["values"]), default=None)
+    legio = {"t_max": round(t_max, 1), "t_max_ts": t_max_ts, "t_min": round(t_min, 1),
+             "share_lt45": round(w45 / w_tot, 3) if w_tot else None,
+             "share_lt50": round(w50 / w_tot, 3) if w_tot else None,
+             "share_ge55": round(w55 / w_tot, 3) if w_tot else None,
+             "h_lt45_day": round(w45 / w_tot * 24, 1) if w_tot else None,
+             "h_lt50_day": round(w50 / w_tot * 24, 1) if w_tot else None,
+             "n_days": len(full), "days_ge55": sum(1 for x in full if x["t_max"] >= DHW_KILL),
+             "days_ge60": sum(1 for x in full if x["t_max"] >= DHW_DISINFECT),
+             "last_ge60": last60, "last_ge55": last55,
+             "disinfection_seen": last60 is not None or (sp_hi is not None and sp_hi >= 60)}
+
+    # ---- what another start/stop temperature would change (estimate) -------- #
+    scen = []
+    if S0 is not None and set0 is not None and set0 - S0 >= 2 and k_day and mpk:
+        def one(key, S, T):
+            cm, ex = charge_minutes(S, T)
+            if cm is None:
+                return None
+            dur = (overhead + cm) * calib
+            per = k_day / (T - S)
+            lt = lambda x: max(0.0, min(1.0, (x - S) / (T - S)))
+            return {"key": key, "start": round(S, 1), "stop": round(T, 1), "dur_min": round(dur),
+                    "per_day": round(per, 1), "h_day": round(per * dur / 60.0, 1),
+                    "share_lt45": round(lt(DHW_GROW_HI), 2), "share_lt50": round(lt(DHW_MIN_OP), 2),
+                    "extrap": ex}
+        s = one("now", S0, set0)
+        if s:
+            s["measured_min"] = round(meas) if meas else None
+            scen.append(s)
+        for key, S, T in DHW_SCENARIOS:
+            S = S0 if S is None else S
+            if T - S < 2 or (abs(T - set0) < 0.6 and abs(S - S0) < 0.6) or (key.startswith("stop") and set0 <= T + 0.5):
+                continue
+            s = one(key, S, T)
+            if s:
+                scen.append(s)
+
+    # ---- the last two days as a curve (for the chart) ----------------------- #
+    c0 = now - 2 * 86400
+    series = [[tts[k], round(tv[k], 1)] for k in range(len(tts)) if tts[k] >= c0]
+    runs48 = [[int(r["st"]), int(r["en"])] for r in R if r["en"] >= c0]
+
+    by_out = []
+    for label, lo_, hi_ in (("unter 3 °C", -99, 3), ("3–8 °C", 3, 8), ("über 8 °C", 8, 99)):
+        es = [e for e in done if e["outdoor"] is not None and lo_ <= e["outdoor"] < hi_]
+        if es:
+            rates = [(e["t_end"] - e["t_start"]) / (e["dhw_min"] / 60.0) for e in es
+                     if e["t_end"] is not None and e["t_start"] is not None and e["dhw_min"] >= 15]
+            by_out.append({"label": label, "n": len(es), "dur_med": round(_median([e["dhw_min"] for e in es])),
+                           "rate_kh": round(_median(rates), 1) if rates else None})
+
+    durs = [e["dur_min"] for e in done]
+    els = [e["el_kwh"] for e in done if e["el_kwh"] is not None]
+    pairs = [(e["el_kwh"], e["th_kwh"]) for e in done if e["el_kwh"] is not None and e["th_kwh"] is not None]
+    p_el, p_th = sum(a for a, _ in pairs), sum(b for _, b in pairs)
+    rates = [(e["t_end"] - e["t_start"]) / (e["dhw_min"] / 60.0) for e in done
+             if e["t_end"] is not None and e["t_start"] is not None and e["dhw_min"] >= 15]
+    pdur = sorted(durs)
+    summary = {
+        "n": len(done), "per_day": round(len(done) / span_d, 1),
+        "dur_med": round(_median(durs)) if durs else None,
+        "dur_avg": round(sum(durs) / len(durs)) if durs else None,
+        "dur_max": max(durs) if durs else None,
+        "dur_p90": pdur[min(len(pdur) - 1, int(0.9 * len(pdur)))] if pdur else None,
+        "pause_max": max((e["longest_min"] for e in done), default=None),
+        "pause_med": round(_median([e["longest_min"] for e in done])) if done else None,
+        "t_start": round(S0, 1) if S0 is not None else None,
+        "t_end": round(_median(ends), 1) if ends else None,
+        "set": round(set0, 1) if set0 is not None else None,
+        "hyst": round(set0 - S0, 1) if (S0 is not None and set0 is not None) else None,
+        "rate_kh": round(_median(rates), 1) if rates else None,
+        "h_day": round(sum(e["dhw_min"] for e in done) / 60.0 / span_d, 1),
+        "el_day": round(sum(els) / len(els) * len(done) / span_d, 1) if len(els) >= max(1, len(done) // 2) else None,
+        "cop": round(p_th / p_el, 2) if p_el > 0.3 else None,
+        "n_cut": sum(1 for e in done if e["n_runs"] >= 2),
+        "n_short": sum(1 for e in done if e["reached"] is False),
+        "n_draw": sum(1 for e in done if e["draw_k"] >= 1.0),
+        "lag_med": round(_median([e["lag_min"] for e in done if e["lag_min"] is not None]))
+        if any(e["lag_min"] is not None for e in done) else None,
+        "overhead_min": round(overhead), "calib": round(calib, 2),
+        "out_med": round(out_med, 1) if out_med is not None else None,
+    }
+    discharge = {"k_day": round(k_day, 1) if k_day else None,
+                 "loss_kh": round(loss_kh, 2) if loss_kh is not None else None,
+                 "loss_night_kh": round(-nt_dT / nt_dt, 2) if nt_dt >= 3 else None,
+                 "draws_day": round(len(draws) / span_d, 1), "draw_k_day": round(draw_tot / span_d, 1),
+                 "by_hour": [round(hr_drop[h] / hr_dt[h], 2) if hr_dt[h] >= 0.5 else None for h in range(24)],
+                 "draw_by_hour": [round(x / span_d, 2) for x in draw_hours], "peak_hours": peak,
+                 "hold_h_med": round(_median(holds), 1) if holds else None,
+                 "hold_h_max": round(max(holds), 1) if holds else None}
+    midnight = int(time.mktime(time.localtime(now)[:3] + (0, 0, 0, 0, 0, -1)))
+    return {"ok": True, "days": days, "span_d": round(span_d, 1), "step_s": int(step), "n": len(done),
+            "n_runs": len(R), "summary": summary,
+            "bands": [{"t": b, "min_k": round(mpk[b], 1), "k": round(bands_k[b], 1), "n": bands_n.get(b, 0)}
+                      for b in sorted(mpk)],
+            "curve": curve, "by_outdoor": by_out, "discharge": discharge, "setpoints": setpoints,
+            "legio": legio, "days_list": days_l[-21:], "scenarios": scen,
+            "episodes": eps[-14:], "today": [e for e in eps if e["end"] >= midnight or e["running"]],
+            "series": series, "runs48": runs48, "now": now,
+            "tank_now": {"ts": tts[-1], "t": round(tv[-1], 1)}}
+
+
 LP_LEVELS = (600, 800, 1200, 2000, 3600, 5000, 8000, 10000, 15000)
 LP_SM_MIN_S = 6 * 3600          # smart-meter data needed in the window to use it
 
@@ -7508,29 +7986,116 @@ def _demo_power(dev_id: str, dt: datetime, away: bool) -> float:
 
 
 DEMO_HP_GW = "demo-hp"
+DEMO_DHW_START = 44.0      # demo: the tank is recharged when the sensor reads this …
+DEMO_DHW_STOP = 53.0       # … up to this (matches temperatureLevels/high in _demo_controls)
+DEMO_DHW_CAP_MIN = 120     # demo: a charge is cut after 2 h, the heating gets 30 min, then it resumes
+DEMO_TANK_WH_K = 190 * 1.163   # demo 190-l tank: Wh per K
+_DEMO_TANK: dict = {}      # day → (slots, end state); deterministic, built on demand
+
+
+def _demo_outdoor(dt: datetime) -> float:
+    """Demo outdoor temperature: season (coldest mid-Jan) + day/night swing."""
+    doy = dt.timetuple().tm_yday
+    h = dt.hour + dt.minute / 60.0
+    seasonal = 9.0 - 12.0 * math.cos((doy - 20) / 365.0 * 2 * math.pi)
+    return round(seasonal + 4.0 * math.sin((h - 14) / 24.0 * 2 * math.pi), 1)
+
+
+def _demo_draws(day) -> list[tuple]:
+    """Hot water drawn on a demo day: (hour, minutes, K at the tank sensor) –
+    showers in the morning, the kitchen at noon, a bath some evenings."""
+    doy = day.timetuple().tm_yday
+    f = lambda k: 0.85 + 0.3 * ((math.sin(doy * 12.9898 + k * 78.233) * 43758.5453) % 1.0)
+    if day.weekday() >= 5:
+        plan = [(8.6, 9, 2.6 * f(1)), (9.1, 8, 2.3 * f(2)), (13.0, 3, 0.6 * f(3)), (19.4, 12, 3.4 * f(4))]
+    else:
+        plan = [(6.55, 8, 2.6 * f(1)), (6.95, 8, 2.2 * f(2)), (12.3, 3, 0.5 * f(3)),
+                (18.1, 4, 0.7 * f(4)), (20.6, 9, 2.8 * f(5))]
+    if doy % 4 == 0:
+        plan.append((19.6, 14, 4.2 * f(6)))                       # a bath
+    return plan
+
+
+def _demo_tank_sim(day, st: dict) -> tuple[list, dict]:
+    """One demo day of the hot-water tank in 1-min steps → 5-min slots of
+    (tank °C, charging?, K/h). Charges by hysteresis (start/stop), slower the
+    hotter the tank and the colder the air, cut after DEMO_DHW_CAP_MIN."""
+    t0 = datetime.combine(day, datetime.min.time())
+    m0 = int(t0.timestamp())
+    m1 = int((t0 + timedelta(days=1)).timestamp())
+    plan = [(h * 60.0, h * 60.0 + mins, k / mins) for h, mins, k in _demo_draws(day)]
+    T, on, run, brk, lag = st["T"], st["on"], st["run"], st["brk"], st["lag"]
+    slots = []
+    rate = 0.0
+    for i in range((m1 - m0) // 60):
+        if i % 5 == 0:
+            slots.append((round(T, 2), on, round(rate, 2)))
+        if brk > 0:
+            brk -= 1
+            if brk == 0 and T < DEMO_DHW_STOP:
+                on, run, lag = True, 0, 6
+        elif not on and T <= DEMO_DHW_START:
+            on, run, lag = True, 0, 6
+        elif on and T >= DEMO_DHW_STOP:
+            on = False
+        elif on and run >= DEMO_DHW_CAP_MIN:
+            on, brk = False, 30
+        mm = i % 1440
+        T -= sum(k for a, b, k in plan if a <= mm < b)
+        T -= 0.40 * (T - 20.0) / 30.0 / 60.0                       # standby loss ~0.4 K/h
+        rate = 0.0
+        if on:
+            run += 1
+            if lag > 0:
+                lag -= 1
+            else:
+                out = _demo_outdoor(datetime.fromtimestamp(m0 + i * 60))
+                rate = max(1.0, 0.62 * (61.5 - T) * (0.78 + 0.018 * out))
+                T += rate / 60.0
+    return slots, {"T": T, "on": on, "run": run, "brk": brk, "lag": lag}
+
+
+def _demo_tank_at(ts: float) -> tuple[float, bool, float]:
+    """(tank °C, charging?, K/h) of the demo tank at ts. Each day continues
+    from the previous one; without it, the tank is warmed up from 3 days
+    earlier (it forgets where it started within a day)."""
+    dt = datetime.fromtimestamp(ts)
+    day = dt.date()
+    hit = _DEMO_TANK.get(day)
+    if hit is None:
+        d = day
+        while (d - timedelta(days=1)) not in _DEMO_TANK and (day - d).days < 3:
+            d -= timedelta(days=1)
+        prev = _DEMO_TANK.get(d - timedelta(days=1))
+        st = dict(prev[1]) if prev else {"T": 50.0, "on": False, "run": 0, "brk": 0, "lag": 0}
+        while d <= day:
+            _DEMO_TANK[d] = _demo_tank_sim(d, st)
+            st = dict(_DEMO_TANK[d][1])
+            d += timedelta(days=1)
+        hit = _DEMO_TANK[day]
+    slots = hit[0]
+    k = int((ts - datetime.combine(day, datetime.min.time()).timestamp()) // 300)
+    return slots[max(0, min(len(slots) - 1, k))]
 
 
 def _demo_hp(dt: datetime) -> dict:
     """Plausible heat-pump operating point for the demo (Compress-style).
 
     Returns instantaneous electrical/thermal power (W), outdoor temp, modulation
-    and mode. Space heating scales with cold; hot water spikes morning/evening.
+    and mode. Space heating scales with cold; hot water runs whenever the demo
+    tank (_demo_tank_at) has cooled to its start temperature.
     """
-    doy = dt.timetuple().tm_yday
     h = dt.hour + dt.minute / 60.0
-    # seasonal outdoor temperature (coldest ~ mid-Jan, warmest ~ mid-Jul)
-    seasonal = 9.0 - 12.0 * math.cos((doy - 20) / 365.0 * 2 * math.pi)
-    daily = 4.0 * math.sin((h - 14) / 24.0 * 2 * math.pi)
-    outdoor = round(seasonal + daily, 1)
+    outdoor = _demo_outdoor(dt)
 
-    # hot-water charge windows; the morning charge runs longer on some days
-    # (higher demand / weekly legionella run) so charge durations vary
-    morn_end = 7.75 if (doy % 3 == 0) else 7.0
-    dhw = (6.0 <= h <= morn_end) or (18.5 <= h <= 19.5)
+    # hot water: when the demo tank (hysteresis, showers, standby loss) asks for it
+    tank_t, dhw, dhw_kh = _demo_tank_at(dt.timestamp())
     defrost = heater = False
     if dhw:
-        comp_elec, mode = 1500.0, "dhw"
-        cop = max(1.8, min(3.6, 2.0 + 0.07 * outdoor))  # warmer air = better COP
+        mode = "dhw"
+        # warmer air and a cooler tank = better COP; the heat matches the tank's rise
+        cop = max(1.6, min(3.6, (2.3 + 0.06 * outdoor) * (1.0 - 0.012 * (tank_t - 44.0))))
+        comp_elec = max(250.0, dhw_kh * DEMO_TANK_WH_K / cop) if dhw_kh > 0 else 250.0
     elif outdoor < 16.0:                                # space heating
         mode = "ch"
         minute_of_day = dt.hour * 60 + dt.minute
@@ -7700,7 +8265,7 @@ def _demo_climate() -> list[dict]:
 DEMO_ROOMS = [("Wohnzimmer", 21.8, 22.0, 1.0), ("Schlafzimmer", 19.2, 19.0, 0.6),
               ("Bad", 23.0, 24.0, 1.2), ("Küche", 21.2, 21.0, 1.0),
               ("Arbeitszimmer", 20.0, 21.0, 0.8)]
-DEMO_DHW_SET = 53.0                # demo hot-water setpoint (matches _demo_controls)
+DEMO_DHW_SET = DEMO_DHW_STOP       # demo hot-water setpoint (matches _demo_controls)
 
 
 def seed_demo(store: Store, days: int = 90):
@@ -7745,7 +8310,6 @@ def seed_demo(store: Store, days: int = 90):
     # finer than the device grid so short defrost cycles (~10 min) are captured
     hp_step = timedelta(minutes=5)
     hp_rows, rt_rows, rl_rows, dhw_rows = [], [], [], []
-    tank = 47.0                    # hot-water tank °C: charges in DHW mode, cools otherwise
     # a few demo rooms at different levels/responsiveness, so the per-room
     # temperature overlay in the day-timeline has distinct, chronologically
     # varying curves: (name, base °C, setpoint, responsiveness to the house swing)
@@ -7772,8 +8336,7 @@ def seed_demo(store: Store, days: int = 90):
         indoor += 0.04 * math.sin(t.timestamp() / 611.0)   # small sensor wiggle
         ts = int(t.timestamp())
         rt_rows.append((ts, round(indoor, 1), setp))
-        tank = min(DEMO_DHW_SET, tank + 0.65) if op["mode"] == "dhw" else max(40.0, tank - 0.045)
-        dhw_rows.append((ts, round(tank, 1), DEMO_DHW_SET))
+        dhw_rows.append((ts, round(_demo_tank_at(ts)[0], 1), DEMO_DHW_SET))
         swing = indoor - 21.5                              # the house's live deviation
         for k, (nm, rbase, rsp, resp) in enumerate(demo_rooms):
             rt = rbase + swing * resp + 0.05 * math.sin(t.timestamp() / (480.0 + 37 * k))
@@ -7835,8 +8398,6 @@ class DemoPoller(threading.Thread):
         e_kwh = hp_latest.get("energy_kwh") or 0.0
         h_kwh = hp_latest.get("heat_kwh") or 0.0
         last_room = 0
-        tank_rows = self.store.dhw_log_since(int(time.time()) - 6 * 3600)
-        tank = tank_rows[-1]["temp"] if tank_rows else 47.0
         while not self._stop.is_set():
             now = datetime.now()
             ts = int(now.timestamp())
@@ -7865,8 +8426,7 @@ class DemoPoller(threading.Thread):
                     rt = rbase + dip * resp + 0.05 * math.sin(ts / (480.0 + 37 * k))
                     rl.append((ts, nm, round(rt, 1), rsp, 90.0 if rt < rsp - 0.2 else 20.0))
                 self.store.room_log_add_bulk(rl)
-                tank = min(DEMO_DHW_SET, tank + 0.65) if op["mode"] == "dhw" else max(40.0, tank - 0.045)
-                self.store.dhw_log_add(ts, round(tank, 1), DEMO_DHW_SET)
+                self.store.dhw_log_add(ts, round(_demo_tank_at(ts)[0], 1), DEMO_DHW_SET)
             if self.hp_state is not None:
                 cop = round(op["heat_w"] / op["elec_w"], 2) if op["elec_w"] > 0 else None
                 self.hp_state.clear()
@@ -11394,6 +11954,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json(self.ctx.calc_get(
                     ("dhwimpact", round(dwd, 2)), 120,
                     lambda: compute_dhw_impact(self.store, dwd, self._hp_live())))
+            if path == "/api/heatpump/dhwtank":
+                try:
+                    dtd = max(2.0, min(60.0, float(qs.get("days", ["14"])[0])))
+                except ValueError:
+                    dtd = 14.0
+                return self._send_json(self.ctx.calc_get(
+                    ("dhwtank", round(dtd, 2)), 120, lambda: compute_dhw_tank(self.store, dtd)))
             if path == "/api/heatpump/day":
                 dts = (qs.get("date", [""])[0] or "").strip()[:10]
                 return self._send_json(self.ctx.calc_get(

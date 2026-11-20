@@ -94,8 +94,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v208';   // short tag shown always-on in the header
-const APP_VERSION = 'v208 · 2026-11-19 · Zweites Dashboard „Haus“ (…/#dash2): die PV-Anlage als selbst gezeichnete Haus-Grafik – Dach mit Modulen, Wechselrichter und Batterie an der Wand, Garage mit Auto und Wallbox, Wärmepumpe, Netzanschluss am Mast – mit den gemessenen Werten alle 10 s: Solar, Andere Lasten (Haus ohne Wallbox), Batterie (Leistung und Ladestand), Stromnetz (Bezug/Einspeisung) und Wallbox (nur wenn ein gemessenes Gerät so heißt, sonst „keine Messung“). Laufende Striche zeigen die Flussrichtung. Darunter „Tägliche Energie“ mit drei Reitern: Solar (Eigenverbrauchsquote), Batterie (Ladestand, verbleibende kWh, heute auf-/entladen) und Netz (Autarkie, bezogen/eingespeist). Status „Normal“ nur bei aktuellen Wechselrichter-Werten, Notstrom-Status per Knopf. Zwischen beiden Dashboards wischen oder die Punkte unten antippen; im Setup neuer Knopf „Haus-Dashboard“. Wohn-Dashboard auf dem Handy: die Knöpfe oben (u. a. ✕) bleiben im Bild, lange Raum-Hinweise brechen um statt über den Rand zu laufen. ' +
+const APP_BUILD = 'v209';   // short tag shown always-on in the header
+const APP_VERSION = 'v209 · 2026-11-20 · Wärme-Tab: neuer Unterreiter „🚿 Warmwasser“ mit der Karte „🛁 Warmwasser-Speicher“ – gemessen am Speicherfühler: jede Ladung mit Start-/Endtemperatur, Dauer und Heizpause; unterbrochene und fortgesetzte Ladungen zählen als eine (so werden 3-Stunden-Programme sichtbar), lange Ladungen mit Grund (Zeitlimit, währenddessen gezapft, kalt draußen, langsame letzte Grad). Dazu: Speicherkurve der letzten 2 Tage, Minuten pro Grad beim Aufheizen, wie lange ein voller Speicher hält, Ruheverlust und Zapfungen nach Uhrzeit, Legionellen-Sicht (Stunden unter 45/50 °C, höchster Wert, 60-°C-Aufheizung gesehen oder nicht) und „Was wäre wenn“ für andere Start-/Stopptemperaturen (Schätzung aus den eigenen Messwerten) mit Empfehlung. „Warmwasser kostet Komfort“ ist mit in den Warmwasser-Reiter gezogen. Demo: realistischerer Speicher (Duschen, Ruheverlust, 2-h-Ladelimit). ' +
+  'v208 · 2026-11-19 · Zweites Dashboard „Haus“ (…/#dash2): die PV-Anlage als selbst gezeichnete Haus-Grafik – Dach mit Modulen, Wechselrichter und Batterie an der Wand, Garage mit Auto und Wallbox, Wärmepumpe, Netzanschluss am Mast – mit den gemessenen Werten alle 10 s: Solar, Andere Lasten (Haus ohne Wallbox), Batterie (Leistung und Ladestand), Stromnetz (Bezug/Einspeisung) und Wallbox (nur wenn ein gemessenes Gerät so heißt, sonst „keine Messung“). Laufende Striche zeigen die Flussrichtung. Darunter „Tägliche Energie“ mit drei Reitern: Solar (Eigenverbrauchsquote), Batterie (Ladestand, verbleibende kWh, heute auf-/entladen) und Netz (Autarkie, bezogen/eingespeist). Status „Normal“ nur bei aktuellen Wechselrichter-Werten, Notstrom-Status per Knopf. Zwischen beiden Dashboards wischen oder die Punkte unten antippen; im Setup neuer Knopf „Haus-Dashboard“. Wohn-Dashboard auf dem Handy: die Knöpfe oben (u. a. ✕) bleiben im Bild, lange Raum-Hinweise brechen um statt über den Rand zu laufen. ' +
   'v207 · 2026-11-19 · PV-Planer: neue Karte „🔬 Theorie vs. Praxis“ unter „PV-Nutzung pro Monat“ – je Monat, was der Planer für deine Anlage erwartet (mit kWp und Batterie laut Wechselrichter, Ausrichtung der Strings, Verbrauch laut Planer), neben dem gemessenen Ergebnis: vier Balken (PV Theorie/Praxis, Verbrauch Theorie/Praxis; Theorie gestrichelt), Tabelle mit Abweichungen bei PV, Verbrauch, Netzbezug und Autarkie, angefangene Monate anteilig, und eine Einordnung mit den Sonnenstunden des Monats gegenüber dem langjährigen Mittel. ' +
   'v206 · 2026-11-19 · PV-Tab mit Wetter: drei Kacheln heute/morgen/übermorgen mit Wetterart (sonnig, heiter, wechselhaft, trüb, Regen/Schnee), Sonnenstunden von den Stunden Tageslicht, Bewölkung, Temperatur und erwartetem Ertrag – aus der Einstrahlung und dem, was deine Anlage an den letzten Tagen daraus gemacht hat. Im Verlauf die Sonnenstunden je Tag direkt unter den PV-Balken, das Wetter im Tooltip und eine Zusammenfassung (sonnigster/trübster Tag mit Ertrag). Neuer Zeitraum „Heute“ mit Balken je Stunde. Wetter: Open-Meteo (Modell für deinen Standort); fehlt der Standort, fragt die App nach dem Ort. Wohn-Dashboard: Termine und Stundenplan stehen auf breiten Bildschirmen nebeneinander. ' +
   'v205 · 2026-11-19 · Profil → „Lastspitzen & Dimensionierung“ mit dem Smart Meter: statt der Summe der einzeln gemessenen Steckdosen + Wärmepumpe (und einer Schätzung für den Rest) rechnet die Karte mit dem gemessenen Verbrauch des ganzen Hauses – Lastdauerlinie und Kennwerte aus den Minutenmitteln, die Spitzen aus den 15-s-Abfragen (die Bridge speichert dafür je Minute den höchsten Wert von Verbrauch und Netzbezug). Neu: höchster Netzbezug, höchste Batterie-Abgabe und bei jeder Top-Spitze, wie viel aus Netz, Batterie und Sonne kam. Aufschlüsselung je Gerät und Verbrauch je Stunde zeigen den Rest als gemessene Differenz statt Schätzung. Stufen bis 15 kW für den ganzen Haushalt. ' +
@@ -438,6 +439,12 @@ const INFO = {
     'wie viel die Innentemperatur vom Wert <b>bei WW-Start</b> bis zum Tiefpunkt <b>fällt</b> – und wie lange es nach dem Heizungs-Neustart dauert, bis dieser <b>Startwert wieder erreicht</b> ist. ' +
     'Die Beispiel-Kurve zeigt eine typische Phase (schattiert = WW-Pause, gestrichelt = Startwert, grün = wieder warm). Darunter die Abhängigkeit von der <b>Außentemperatur</b> und die letzten Phasen. ' +
     '<b>Je kälter draußen, desto größer der Dip.</b> Gegenmittel: WW in Schwachlastzeiten legen, WW-Soll/Hysterese senken oder die Ladedauer begrenzen – dann pausiert die Heizung kürzer.',
+  'dhw-tank': () => 'Der <b>Warmwasser-Speicher</b>, gemessen: Bei jeder Abfrage der Wärmepumpe (meist alle 5 Minuten) schreibt die Bridge die <b>Speichertemperatur</b> ' +
+    '(Fühler), den <b>Sollwert</b> und den <b>Betrieb</b> (Heizen/Warmwasser) mit. Daraus: jede <b>Ladung</b> mit Start- und Endtemperatur und Dauer – und warum lange Ladungen lang waren ' +
+    '(Zeitlimit mit Heizpause dazwischen, während der Ladung gezapft, kalte Luft, die langsamen letzten Grad). <b>Minuten pro Grad</b> zeigt, wie viel Zeit jedes Grad beim Aufheizen kostet. ' +
+    '<b>Entladen</b>: Ruheverlust (langsames Abkühlen ohne Zapfen) und Zapfungen (schnelles Fallen am Fühler, nach Uhrzeit). <b>Legionellen</b>: wie lange der Fühler unter 45/50 °C lag und ob eine ' +
+    'Aufheizung auf 60 °C vorkam. <b>Was wäre wenn</b> rechnet mit diesen Messwerten andere Start-/Stopptemperaturen durch – eine Schätzung. Grenzen: der Fühler misst an einer Stelle (oben ' +
+    'wärmer, unten kälter); Zapfungen während einer Ladung verlängern sie und stecken in den Zeiten mit drin.',
   devtl: () => '<b>Zeitstrahl</b> des Stromverbrauchs je <b>gemessenem Gerät</b>: jeder Balken ein Tag, die <b>Höhe</b> die ' +
     'verbrauchten <b>kWh</b>. „Alle Geräte" stapelt die Geräte farbig übereinander (Top 8 + „übrige"), oder wähle ein ' +
     'einzelnes Gerät. Ein Tippen/Überfahren zeigt die <b>Aufschlüsselung je Tag</b>. Datenquelle sind die von den Modulen ' +
@@ -5792,6 +5799,217 @@ function paintDhwImpact(r) {
   if (_opData) paintOpState(_opData); else renderOpState(false);
 }
 
+// ===== Warmwasser-Speicher: Laden, Entladen, Legionellen ==================== #
+// Everything measured at the tank sensor (HomeCom actualTemp, every heat-pump
+// poll) + the heat pump's DHW mode; the "what if" rows are an estimate from
+// these measurements (minutes per degree, degrees lost per day).
+let _dwtDays = null, _dwtData = {}, _dwtBusy = false;
+function dwtDays() { if (_dwtDays == null) { try { _dwtDays = parseInt(localStorage.getItem('bhe_dwt_days'), 10) || 14; } catch (e) { _dwtDays = 14; } } return _dwtDays; }
+async function renderDhwTank(force) {
+  const card = $('dhwt-card'); if (!card) return;
+  const d = dwtDays();
+  if (_dwtData[d] && !force) { paintDhwTank(_dwtData[d]); return; }
+  if (_dwtBusy) return; _dwtBusy = true;
+  const k = $('dhwt-kpis'); if (k && !_dwtData[d]) k.innerHTML = '<div class="note" style="grid-column:1/-1;padding:10px 0;text-align:center">Lade Speicher-Auswertung …</div>';
+  try { const r = await api('/api/heatpump/dhwtank?days=' + d); _dwtData[d] = r; paintDhwTank(r); }
+  catch (e) { if (k) k.innerHTML = '<div class="note" style="grid-column:1/-1">Nur mit laufender Bridge verfügbar.</div>'; }
+  finally { _dwtBusy = false; }
+}
+const DWT_WHY = {
+  cut: 'nach Zeitlimit unterbrochen, später fortgesetzt',
+  draw: 'währenddessen Warmwasser gezapft',
+  cold: 'kalt draußen',
+  top: 'die letzten 2 °C dauerten lange',
+  short: 'Soll nicht erreicht',
+  lag: 'langer Anlauf',
+};
+const dwtHm = ts => new Date(ts * 1000).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+const dwtDayHm = ts => new Date(ts * 1000).toLocaleString('de-DE', { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+const dwtMin = m => m == null ? '–' : fmtMin(Math.round(m));
+const dwtShort = m => { if (m == null) return '–'; m = Math.round(m); return m < 60 ? `${m} min` : `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')} h`; };
+function dwtWhyChips(e) {
+  const map = {
+    cut: () => `${e.n_runs - 1}× unterbrochen (${fmt(e.break_min, 0)} min Heizen dazwischen)`,
+    draw: () => `währenddessen gezapft (−${fmt(e.draw_k, 1)} °C)`,
+    cold: () => `kalt draußen (${fmt(e.outdoor, 0)} °C)`,
+    top: () => `letzte 2 °C: ${fmt(e.top_min, 0)} min`,
+    short: () => `Soll ${fmt(e.set, 0)} °C nicht erreicht`,
+    lag: () => `Anlauf ${fmt(e.lag_min, 0)} min`,
+  };
+  return (e.why || []).map(w => `<span class="dwt-chip">${esc((map[w] || (() => DWT_WHY[w] || w))())}</span>`).join('');
+}
+// the last two days: tank temperature, DHW charges shaded, 45/50/55/60 °C lines
+function dwtChart(r) {
+  const s = r.series || []; if (s.length < 6) return '<div class="note">Zu wenig Messpunkte für die Kurve.</div>';
+  const h = 230, padL = 30, padR = 8, top = 10, base = h - 24;
+  const t0 = s[0][0], t1 = Math.max(s[s.length - 1][0], t0 + 3600);
+  const temps = s.map(p => p[1]);
+  const lo = Math.floor(Math.min(...temps, 44) - 1), hi = Math.ceil(Math.max(...temps, 55) + 1);
+  const X = ts => padL + (CW - padL - padR) * (ts - t0) / (t1 - t0);
+  const Y = v => top + (1 - (v - lo) / (hi - lo)) * (base - top);
+  let g = '';
+  // legionella growth zone (below 45 °C)
+  g += `<rect x="${padL}" y="${Y(45).toFixed(1)}" width="${CW - padL - padR}" height="${(Y(lo) - Y(45)).toFixed(1)}" fill="#ff6b8a" fill-opacity="0.07"/>`;
+  (r.runs48 || []).forEach(([a, b]) => {
+    const xa = X(Math.max(a, t0)), xb = X(Math.min(b, t1));
+    if (xb > xa) g += `<rect x="${xa.toFixed(1)}" y="${top}" width="${Math.max(1.5, xb - xa).toFixed(1)}" height="${base - top}" fill="${COL.hp}" fill-opacity="0.16"/>`;
+  });
+  [[45, '#ff6b8a', '45'], [50, 'var(--muted)', '50'], [55, COL.heat, '55'], [60, COL.pv, '60']].forEach(([v, c, l]) => {
+    if (v < lo || v > hi) return;
+    g += `<line x1="${padL}" x2="${CW - padR}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}" stroke="${c}" stroke-width="1" stroke-dasharray="3 3" opacity="0.8"/>` +
+      `<text class="axis" x="${padL - 4}" y="${(Y(v) + 3).toFixed(1)}" text-anchor="end" fill="${c}">${l}</text>`;
+  });
+  let line = '', prev = null;
+  s.forEach(p => { line += `${prev != null && p[0] - prev > 1800 ? 'M' : (line ? 'L' : 'M')}${X(p[0]).toFixed(1)} ${Y(p[1]).toFixed(1)} `; prev = p[0]; });
+  g += `<path d="${line.trim()}" fill="none" stroke="${COL.sh}" stroke-width="2" stroke-linejoin="round"/>`;
+  // x ticks: every 6 h on the hour
+  const d0 = new Date(t0 * 1000); d0.setMinutes(0, 0, 0);
+  for (let t = d0.getTime() / 1000; t <= t1; t += 3600) {
+    const hr = new Date(t * 1000).getHours();
+    if (t < t0 || hr % 6) continue;
+    const lbl = hr === 0 ? new Date(t * 1000).toLocaleDateString('de-DE', { weekday: 'short' }) : `${hr}h`;
+    g += `<text class="axis" x="${X(t).toFixed(1)}" y="${h - 7}" text-anchor="middle">${lbl}</text>` +
+      (hr === 0 ? `<line x1="${X(t).toFixed(1)}" x2="${X(t).toFixed(1)}" y1="${top}" y2="${base}" stroke="var(--line)" stroke-width="1"/>` : '');
+  }
+  const inRun = ts => (r.runs48 || []).some(([a, b]) => ts >= a && ts <= b);
+  const step = Math.max(1, Math.round(s.length / 200));
+  const pts = s.filter((_, i) => i % step === 0);
+  const tips = pts.map(p => `<b>${esc(dwtDayHm(p[0]))}</b> · Speicher <b>${fmt(p[1], 1)} °C</b>${inRun(p[0]) ? ' · Warmwasser lädt' : ''}`);
+  return svg(h, g, { kind: 'area', pad: padL, padR, n: pts.length, h, tips });
+}
+// minutes per degree while charging (the slow last degrees stand out)
+function dwtBandsChart(r) {
+  const b = r.bands || []; if (b.length < 3) return '';
+  const mx = Math.max(...b.map(x => x.min_k)), mn = Math.min(...b.map(x => x.min_k));
+  const col = v => { const f = mx > mn ? (v - mn) / (mx - mn) : 0; return f > 0.66 ? '#ff8f5a' : f > 0.33 ? COL.heat : COL.pv; };
+  return barChart(b.map(x => ({ v: x.min_k, label: String(x.t), color: col(x.min_k),
+    tip: `<b>${x.t}–${x.t + 1} °C</b>: <b>${fmt(x.min_k, 1)} min</b> je Grad <span style="color:var(--muted)">(${x.n} Ladungen)</span>` })), { h: 170, unit: 'min' });
+}
+// when hot water is drawn: degrees per hour of the day (average day)
+function dwtDrawChart(r) {
+  const d = (r.discharge || {}).draw_by_hour || []; if (!d.some(v => v > 0)) return '';
+  return barChart(d.map((v, hr) => ({ v, label: hr % 3 ? '' : String(hr), color: COL.sh,
+    tip: `<b>${hr}–${hr + 1} Uhr</b>: im Schnitt <b>${fmt(v, 1)} °C</b> gezapft` })), { h: 150, unit: '°C' });
+}
+// setpoint schedule from the logged currentSetpoint: "53 °C (immer)" / "53 °C 6–22 Uhr, 44 °C sonst"
+function dwtSetText(sp) {
+  const bh = (sp && sp.by_hour) || [];
+  const vals = bh.map(v => v == null ? null : Math.round(v * 2) / 2);
+  const uniq = [...new Set(vals.filter(v => v != null))];
+  if (!uniq.length) return '';
+  if (uniq.length === 1) return `${fmt(uniq[0], uniq[0] % 1 ? 1 : 0)} °C rund um die Uhr`;
+  const segs = [];
+  vals.forEach((v, hr) => { const last = segs[segs.length - 1]; if (last && last.v === v) last.to = hr + 1; else segs.push({ v, from: hr, to: hr + 1 }); });
+  if (segs.length > 1 && segs[0].v === segs[segs.length - 1].v) { const l = segs.pop(); segs[0].from = l.from - 24; }
+  return segs.filter(x => x.v != null).map(x => `${fmt(x.v, x.v % 1 ? 1 : 0)} °C ${(x.from + 24) % 24}–${x.to % 24 || 24} Uhr`).join(', ');
+}
+function paintDhwTank(r) {
+  const ids = ['dhwt-head', 'dhwt-kpis', 'dhwt-today', 'dhwt-chart', 'dhwt-legend', 'dhwt-bands', 'dhwt-bands-note',
+    'dhwt-dis', 'dhwt-legio', 'dhwt-scen', 'dhwt-advice', 'dhwt-note'];
+  const E = {}; ids.forEach(i => { E[i] = $(i); });
+  const set = (k, html) => { if (E[k]) E[k].innerHTML = html; };
+  if (!r || !r.ok || r.reason === 'no_tank') {
+    ids.forEach(k => set(k, ''));
+    set('dhwt-kpis', `<div class="note" style="grid-column:1/-1;padding:10px 0">Noch keine Speicher-Temperaturen. Die Bridge schreibt sie bei jeder Abfrage der Wärmepumpe mit ` +
+      `(HomeCom: Warmwasser-Ist und -Soll) – nach ein paar Stunden erscheint hier die Auswertung, nach ein paar Tagen ist sie aussagekräftig.</div>`);
+    return;
+  }
+  const S = r.summary || {}, D = r.discharge || {}, L = r.legio || {}, tn = r.tank_now || {};
+  set('dhwt-head', `<span style="color:var(--muted)">jetzt ${fmt(tn.t, 1)} °C</span>`);
+  const kpi = (v, l) => `<div class="kpi sm"><div class="v">${v}</div><div class="l">${l}</div></div>`;
+  set('dhwt-kpis', S.n
+    ? kpi(dwtShort(S.dur_med), `Ø Ladung · max ${dwtShort(S.dur_max)}`) +
+      kpi(fmt(S.per_day, 1) + '×', `Ladungen am Tag · ${fmt(S.h_day, 1)} h WW`) +
+      kpi(`${fmt(S.t_start, 0)}→${fmt(S.set != null ? S.set : S.t_end, 0)} °C`, 'Start → Stopp (gemessen)')
+    : kpi('–', 'noch keine Ladung im Zeitraum') + kpi(fmt(tn.t, 1) + ' °C', 'Speicher jetzt') + kpi(L.t_max != null ? fmt(L.t_max, 1) + ' °C' : '–', 'höchster Wert'));
+  // today
+  const today = r.today || [];
+  set('dhwt-today', `<div style="font-weight:600;font-size:13.5px;margin-bottom:4px">Heute</div>` + (today.length ? today.map(e => {
+    if (e.running) return `<div class="dwt-row"><b>läuft seit ${dwtHm(e.start)}</b> (${dwtMin((r.now - e.start) / 60)}) · ` +
+      `${e.t_start != null ? fmt(e.t_start, 1) + ' → ' : ''}jetzt ${fmt(tn.t, 1)} °C${e.set != null ? ` · Ziel ${fmt(e.set, 0)} °C` : ''} · die Heizung pausiert</div>`;
+    return `<div class="dwt-row"><div style="display:flex;justify-content:space-between;gap:8px"><span><b>${dwtHm(e.start)}–${dwtHm(e.end)}</b> · ${dwtMin(e.dur_min)}` +
+      `${e.break_min ? ` <span style="color:var(--muted)">(davon ${dwtMin(e.dhw_min)} Warmwasser)</span>` : ''}</span>` +
+      `<span style="white-space:nowrap">${fmt(e.t_start, 1)} → ${fmt(e.t_end, 1)} °C</span></div>` +
+      (e.why && e.why.length ? `<div style="margin-top:4px">${dwtWhyChips(e)}</div>` : '') + '</div>';
+  }).join('') : '<div class="note">Heute noch keine Warmwasser-Ladung.</div>'));
+  // the two-day curve
+  set('dhwt-chart', `<div style="touch-action:none">${dwtChart(r)}</div>`);
+  set('dhwt-legend', `<div class="it"><span class="sw" style="background:${COL.sh}"></span>Speicher (Fühler)</div>` +
+    `<div class="it"><span class="sw" style="background:${COL.hp};opacity:.35"></span>Warmwasser lädt (Heizung pausiert)</div>` +
+    `<div class="it"><span class="sw" style="background:#ff6b8a;opacity:.3"></span>unter 45 °C</div>`);
+  // charging: minutes per degree
+  const cv = r.curve || [];
+  const at = t => { const p = cv.find(x => x.t >= t - 0.05); return p ? p.min : null; };
+  const set0 = S.set != null ? S.set : S.t_end;
+  let bn = '';
+  if ((r.bands || []).length >= 3) {
+    const marks = [48, 50, 52, set0].filter((t, i, a) => t != null && t > (S.t_start || 0) + 1 && a.indexOf(t) === i && t <= set0 + 0.05);
+    bn = `Typische Ladung ab <b>${fmt(S.t_start, 0)} °C</b>: ` + marks.map(t => `bis ${fmt(t, 0)} °C <b>${dwtMin(at(t))}</b>`).join(' · ') + '. ';
+    const bs = r.bands, first = bs.find(x => x.t >= (S.t_start || 0)), last = bs[bs.length - 1];
+    if (first && last && last.min_k > first.min_k * 1.4)
+      bn += `Das letzte Grad dauert <b>${fmt(last.min_k / first.min_k, 1)}× so lange</b> wie das erste – je heißer der Speicher, desto langsamer (die WP muss heißer fahren, ihr Wirkungsgrad sinkt). `;
+    if ((r.by_outdoor || []).length > 1) bn += 'Je nach Außentemperatur: ' + r.by_outdoor.map(b => `${esc(b.label)} <b>${dwtMin(b.dur_med)}</b> (${b.n}×)`).join(' · ') + '.';
+    set('dhwt-bands', dwtBandsChart(r));
+  } else set('dhwt-bands', '');
+  set('dhwt-bands-note', bn || (S.n ? `Ø Ladung von ${fmt(S.t_start, 0)} auf ${fmt(set0, 0)} °C: ${dwtMin(S.dur_med)} (${fmt(S.rate_kh, 1)} °C pro Stunde).` : ''));
+  // discharging
+  const lossTxt = D.loss_kh == null ? '' : D.loss_kh >= 0.8
+    ? ` – <b style="color:#ffb64d">hoch</b>: läuft eine Zirkulationspumpe dauerhaft, oder ist der Speicher/die Leitung schlecht gedämmt?`
+    : D.loss_kh >= 0.5 ? ' – mittel' : ' – gut gedämmt';
+  set('dhwt-dis', [
+    D.hold_h_med != null ? `Ein voller Speicher hält im Schnitt <b>${fmt(D.hold_h_med, 1)} h</b> bis zur nächsten Ladung (längste Pause ${fmt(D.hold_h_max, 0)} h).` : '',
+    D.loss_kh != null ? `Ohne Zapfen verliert er <b>${fmt(D.loss_kh, 2)} °C pro Stunde</b>${D.loss_night_kh != null ? ` (nachts ${fmt(D.loss_night_kh, 2)})` : ''}${lossTxt}.` : '',
+    D.draw_k_day != null ? `Durch Zapfen (Duschen, Bad, Küche) sinkt er um <b>~${fmt(D.draw_k_day, 1)} °C am Tag</b>${(D.peak_hours || []).length ? `, vor allem um <b>${D.peak_hours.map(h => h + ' Uhr').join(', ')}</b>` : ''}.` : '',
+    D.k_day != null ? `Insgesamt muss die WP <b>~${fmt(D.k_day, 0)} °C am Tag</b> nachheizen.` : '',
+  ].filter(Boolean).join(' ') + (dwtDrawChart(r) ? `<div style="margin-top:10px;font-weight:600;font-size:12.5px;color:var(--fg)">Gezapft je Uhrzeit (°C am Tag)</div>${dwtDrawChart(r)}` : ''));
+  // legionella
+  const seen = L.disinfection_seen, nd = L.n_days || 0;
+  const verdict = seen
+    ? `<div class="dwt-box ok">✅ <b>Eine Aufheizung auf 60 °C ist zu sehen</b>${L.last_ge60 ? ` (zuletzt ${esc(dwtDayHm(L.last_ge60))})` : ''} – das ist der eigentliche Legionellenschutz.</div>`
+    : `<div class="dwt-box warn">⚠︎ <b>In ${nd >= 2 ? nd + ' Tagen' : 'den aufgezeichneten Daten'} kam der Speicher nie über ${fmt(L.t_max, 1)} °C</b> – eine Legionellenschaltung ` +
+      `(1× pro Woche auf 60 °C) ist nicht aktiv oder nicht sichtbar.</div>`;
+  const spt = dwtSetText(r.setpoints);
+  set('dhwt-legio', verdict +
+    `<div class="grid3" style="margin-top:10px">` +
+    kpi(fmt(L.t_max, 1) + ' °C', 'höchster Wert') +
+    kpi(fmt(L.h_lt45_day, 1) + ' h', 'pro Tag unter 45 °C') +
+    kpi(fmt(L.h_lt50_day, 1) + ' h', 'pro Tag unter 50 °C') + '</div>' +
+    (spt ? `<div class="note" style="margin-top:8px">Soll laut Wärmepumpe: <b>${esc(spt)}</b>.</div>` : '') +
+    `<div class="note" style="margin-top:8px">Legionellen vermehren sich vor allem zwischen <b>25 und 45 °C</b>, ab etwa 50 °C kaum noch. Bei <b>55 °C</b> sterben sie langsam ab (Stunden), ` +
+    `bei <b>60 °C</b> in Minuten. Das DVGW-Arbeitsblatt W 551 empfiehlt für Ein- und Zweifamilienhäuser 60 °C am Speicher und, ihn nie dauerhaft unter 50 °C zu betreiben. ` +
+    `Eine Prüfpflicht gibt es im selbst genutzten Einfamilienhaus nicht. Mit Wärmepumpe üblich: im Alltag 50–55 °C und <b>1× pro Woche 60 °C</b> (thermische Desinfektion). ` +
+    `Die Werte hier sind die des Speicherfühlers – oben im Speicher ist es etwas wärmer, unten am Kaltwasser-Eintritt kälter.</div>`);
+  // what if
+  const sc = r.scenarios || [];
+  const NAME = { now: 'jetzt (gemessen)', stop52: 'nur Stopp gesenkt', stop50: 'nur Stopp gesenkt', s46_50: 'nur 4 °C Differenz', s47_52: 'Empfehlung' };
+  const legio = x => x.stop <= 50.5 ? '<span style="color:#ff6b8a">nie über 50 °C</span>'
+    : x.start < 45 ? '<span style="color:#ffb64d">unter 45 °C</span>' : `<span style="color:${COL.pv}">ok</span>`;
+  set('dhwt-scen', sc.length ? `<table class="dwt-tbl"><thead><tr><th>Start → Stopp</th><th>Pause je Ladung</th><th>am Tag</th><th>Hygiene</th></tr></thead><tbody>` +
+    sc.map(x => `<tr${x.key === 'now' ? ' class="now"' : ''}><td><b style="white-space:nowrap">${fmt(x.start, 0)} → ${fmt(x.stop, 0)} °C</b><br><span style="color:var(--muted)">${esc(NAME[x.key] || x.key)}</span></td>` +
+      `<td style="white-space:nowrap"><b>${dwtShort(x.dur_min)}</b>${x.extrap ? ' *' : ''}</td>` +
+      `<td style="white-space:nowrap">${fmt(x.per_day, 1)}×<br><span style="color:var(--muted)">${fmt(x.h_day, 1)} h WW</span></td><td>${legio(x)}</td></tr>`).join('') + '</tbody></table>' +
+    `<div class="note" style="margin-top:6px">Geschätzt aus deinen Messwerten: Minuten je Grad beim Laden und wie viele Grad der Speicher am Tag verliert. „Pause“ = die Zeit, in der die WP nur Warmwasser macht und die Heizung ruht. ` +
+    `Kleinere Schaltdifferenz = kürzere, dafür häufigere Ladungen; die WW-Zeit pro Tag bleibt etwa gleich. Jeder Start kostet etwas Anlaufzeit (gemessen ~${fmt(S.overhead_min, 0)} min). ` +
+    '„ok“ gilt zusammen mit einer wöchentlichen Aufheizung auf 60 °C.' +
+    (sc.some(x => x.extrap) ? ' * über dem gemessenen Bereich hochgerechnet.' : '') + '</div>' : '');
+  // advice from the numbers
+  const adv = [];
+  const now_ = sc.find(x => x.key === 'now'), s4752 = sc.find(x => x.key === 's47_52'), s4650 = sc.find(x => x.key === 's46_50');
+  if (S.n_cut) adv.push(`<b>${S.n_cut} von ${S.n} Ladungen</b> wurden nach einem Zeitlimit unterbrochen, die Heizung kam kurz dran, dann ging es weiter – so entstehen die langen Warmwasser-Programme (bis ${dwtMin(S.dur_max)}).`);
+  if (S.n_draw >= 2) adv.push(`<b>${S.n_draw}×</b> wurde während einer Ladung Warmwasser gezapft – das verlängert sie. Startet die Ladung vor der Dusch-Zeit (Zeitfenster), ist der Speicher dann schon voll.`);
+  if (now_ && s4752 && set0 >= 52.5) adv.push(`Mein Vorschlag: <b>Start 47 °C, Stopp 52 °C</b> – je Ladung ~<b>${dwtMin(s4752.dur_min)}</b> statt ${dwtMin(now_.dur_min)} Heizpause, dafür ${fmt(s4752.per_day, 1)}× statt ${fmt(now_.per_day, 1)}× am Tag; ` +
+    `der Speicher fällt nicht mehr unter 45 °C.`);
+  else if (S.t_start != null && S.t_start < 45) adv.push(`Der Speicher wird erst bei <b>${fmt(S.t_start, 0)} °C</b> nachgeladen – ein Start bei 46–47 °C hält ihn aus dem Bereich, in dem Legionellen wachsen.`);
+  if (s4650) adv.push(`<b>46 → 50 °C</b> würde ich nicht nehmen: der Speicher käme nie über 50 °C, und es gäbe ~${fmt(s4650.per_day, 0)} Ladungen am Tag.`);
+  if (!seen) adv.push(`Dazu <b>1× pro Woche eine Legionellenschaltung auf 60 °C</b> – am besten mittags bei Sonne (PV-Strom), z. B. samstags um 13 Uhr. Damit darfst du im Alltag niedriger fahren.`);
+  adv.push('Warmwasser möglichst <b>mittags</b> laden (Zeitfenster): wärmere Luft = schnellere Ladung und besserer Wirkungsgrad, dazu PV-Strom – und die Heizpause fällt in die warme Tageszeit.');
+  set('dhwt-advice', `<div class="dwt-box tip"><div style="font-weight:700;margin-bottom:6px">💡 Was ich dir empfehle</div><ul style="margin:0;padding-left:18px">${adv.map(a => `<li style="margin:4px 0">${a}</li>`).join('')}</ul>` +
+    `<div class="note" style="margin-top:8px">Wo man das einstellt: Bei Bosch-Wärmepumpen stehen Start- und Stopptemperatur (bzw. die Schaltdifferenz) je Warmwasser-Betriebsart, die maximale Ladezeit und die thermische Desinfektion ` +
+    `(Tag, Uhrzeit, Temperatur) meist im Fachmann-Menü des Reglers; die HomeCom-App zeigt oft nur die Zieltemperaturen. Im Zweifel den Installateur fragen.</div></div>`);
+  set('dhwt-note', `Basis: ${r.n_runs} Warmwasser-Läufe in ${fmt(r.span_d, 0)} Tagen, Speicherfühler alle ${fmt((r.step_s || 300) / 60, 0)} min. ` +
+    `Ladungen, die nach einer Unterbrechung innerhalb von 90 min weitergehen, zählen als eine. Wie stark das Haus während der Heizpausen auskühlt, zeigt die Karte „Warmwasser kostet Komfort“ darunter.`);
+}
+
 // ===== Tagesverlauf Wärmepumpe: chronologische Zustände + Leistung ========= #
 const _HPDN = 200;                          // buckets across the VISIBLE window
 // zoom span for the day view (hours, or 'auto'/'day')
@@ -11019,12 +11237,12 @@ async function doPair() {
 /* Wärme-Tab in sinnvolle Cluster aufgeteilt (Unter-Tabs). Karten werden per
  * data-hs einem Cluster zugeordnet; CSS blendet die nicht-aktiven aus. Alle
  * Renders laufen beim Öffnen des Tabs weiter – die Unter-Tabs sind nur Ansicht. */
-const HEAT_SUBS = ['heizung', 'abgleich', 'effizienz', 'einstellung'];
+const HEAT_SUBS = ['heizung', 'warmwasser', 'abgleich', 'effizienz', 'einstellung'];
 const HEAT_SUB_MAP = {
   'ab-card': 'abgleich', 'abr-card': 'abgleich', 'abd-card': 'abgleich',
   'hp-card': 'heizung', 'hpd-card': 'heizung', 'hpc-card': 'heizung', 'hd-card': 'heizung', 'roomtemp-card': 'heizung', 'hts-card': 'heizung', 'rts-card': 'heizung', 'win-card': 'heizung',
   'hpt-card': 'effizienz',
-  'dhw-card': 'abgleich',
+  'dhwt-card': 'warmwasser', 'dhw-card': 'warmwasser',
   'opt-card': 'abgleich', 'layout-card': 'abgleich',
   'hc-card': 'einstellung', 'hpctl-card': 'einstellung', 'roomsync-card': 'einstellung',
   // everything else in the Wärme view (COP/stats/theory charts) → Effizienz
@@ -11041,7 +11259,8 @@ function assignHeatSubs() {
 // calls at once → slow). Each sub-tab loads lazily the first time it's shown.
 const HEAT_SUB_RENDER = {
   heizung: ['renderHpDay', 'renderHeatingDiag', 'renderRoomTemps', 'renderHeatTimeseries', 'renderRoomTs', 'renderWindows', 'renderHpCompare'],
-  abgleich: ['renderAbgleich', 'renderLayout', 'renderDhwImpact'],
+  warmwasser: ['renderDhwTank', 'renderDhwImpact'],
+  abgleich: ['renderAbgleich', 'renderLayout'],
   effizienz: ['renderHpTrend'],
   einstellung: ['renderHeatingCurve', 'initHpControls', 'renderRoomSync'],
 };
@@ -11212,6 +11431,16 @@ function init() {
   if (htm) htm.addEventListener('change', () => { try { htm.value ? localStorage.setItem('bhe_hp_abgleich', htm.value) : localStorage.removeItem('bhe_hp_abgleich'); } catch (e) {} const d = hptDays(); if (_hptData[d]) paintHpTrend(_hptData[d]); });
   const htmc = $('hpt-mark-clear');
   if (htmc) htmc.addEventListener('click', () => { try { localStorage.removeItem('bhe_hp_abgleich'); } catch (e) {} if ($('hpt-mark')) $('hpt-mark').value = ''; const d = hptDays(); if (_hptData[d]) paintHpTrend(_hptData[d]); });
+  const dwt = $('dhwt-days');
+  if (dwt) {
+    dwt.addEventListener('click', e => {
+      const b = e.target.closest('button'); if (!b) return;
+      _dwtDays = parseInt(b.dataset.dwt, 10); try { localStorage.setItem('bhe_dwt_days', String(_dwtDays)); } catch (err) {}
+      dwt.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+      renderDhwTank();
+    });
+    dwt.querySelectorAll('button').forEach(x => x.classList.toggle('on', parseInt(x.dataset.dwt, 10) === dwtDays()));
+  }
   const dwd = $('dhw-days');
   if (dwd) {
     dwd.addEventListener('click', e => {

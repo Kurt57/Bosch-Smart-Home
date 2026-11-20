@@ -211,6 +211,7 @@
   #heat-subnav{position:sticky; top:var(--hdr-h,64px); z-index:21; background:var(--bg);
     padding-top:8px; box-shadow:0 8px 14px -6px rgba(11,18,32,.55)}
   #v-heatpump.hsa-heizung > .card:not([data-hs="heizung"]),
+  #v-heatpump.hsa-warmwasser > .card:not([data-hs="warmwasser"]),
   #v-heatpump.hsa-abgleich > .card:not([data-hs="abgleich"]),
   #v-heatpump.hsa-effizienz > .card:not([data-hs="effizienz"]),
   #v-heatpump.hsa-einstellung > .card:not([data-hs="einstellung"]){display:none !important}
@@ -369,6 +370,18 @@
     #kiosk-top > div:nth-child(2) .k-sub{margin-top:0}
     #kiosk-away{padding:0 12px; font-size:13px}
   }
+  /* Warmwasser-Speicher */
+  .dwt-row{font-size:12.5px; line-height:1.5; padding:7px 0; border-bottom:1px solid var(--line)}
+  .dwt-chip{display:inline-block; font-size:11px; line-height:1.4; padding:2px 8px; margin:2px 4px 0 0; border-radius:999px;
+    border:1px solid var(--line); background:var(--card2); color:var(--fg)}
+  .dwt-box{border-radius:12px; padding:11px 12px; font-size:13px; line-height:1.55; border:1px solid var(--line)}
+  .dwt-box.ok{border-color:#4be0b0; background:#4be0b014}
+  .dwt-box.warn{border-color:#ffb64d; background:#ffb64d14}
+  .dwt-box.tip{border-color:var(--accent); background:color-mix(in srgb, var(--accent) 8%, transparent)}
+  .dwt-tbl{width:100%; border-collapse:collapse; font-size:12px}
+  .dwt-tbl th{text-align:left; font-weight:600; color:var(--muted); padding:5px 5px; border-bottom:1px solid var(--line); vertical-align:bottom}
+  .dwt-tbl td{padding:6px 5px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.4}
+  .dwt-tbl tr.now td{background:var(--card2)}
   /* Energiefluss-Animation */
   #kiosk-flow:not(:empty){margin:16px 0; background:var(--k-card); border:.5px solid var(--k-sep);
     border-radius:22px; padding:14px 10px 6px; box-shadow:var(--k-shadow);
@@ -681,6 +694,7 @@
   <section class="view" id="v-heatpump">
     <div class="subnav" id="heat-subnav">
       <button data-hs="heizung" class="on">🔥 Heizung</button>
+      <button data-hs="warmwasser">🚿 Warmwasser</button>
       <button data-hs="abgleich">⚖️ Abgleich</button>
       <button data-hs="effizienz">📊 Effizienz</button>
       <button data-hs="einstellung">⚙️ Einstellung</button>
@@ -939,6 +953,31 @@
         <div id="lay-body"></div>
         <div class="note" id="lay-note" style="margin-top:8px"></div>
       </details>
+    </div>
+    <div class="card" id="dhwt-card">
+      <h2><span class="info" data-info="dhw-tank" role="button" aria-label="Info">i</span>🛁 Warmwasser-Speicher <span class="r" id="dhwt-head"></span></h2>
+      <div class="note" style="margin-bottom:10px">Wie schnell der Speicher <b>leer</b> wird, wie lange das <b>Nachladen</b> dauert und was das für <b>Legionellen</b> heißt – gemessen am Speicherfühler bei jeder Abfrage der Wärmepumpe. Solange sie Warmwasser macht, <b>pausiert die Heizung</b>.</div>
+      <div class="seg" id="dhwt-days" style="margin:0 0 12px">
+        <button data-dwt="7">7 T</button>
+        <button data-dwt="14" class="on">14 T</button>
+        <button data-dwt="30">30 T</button>
+      </div>
+      <div class="grid3" id="dhwt-kpis"></div>
+      <div id="dhwt-today" style="margin-top:14px"></div>
+      <h2 style="font-size:15px;margin-top:16px">Speicher in den letzten 2 Tagen</h2>
+      <div id="dhwt-chart"></div>
+      <div class="legend" id="dhwt-legend" style="margin-top:8px"></div>
+      <h2 style="font-size:15px;margin-top:16px">Aufheizen: Minuten pro Grad</h2>
+      <div id="dhwt-bands"></div>
+      <div class="note" id="dhwt-bands-note" style="margin-top:6px"></div>
+      <h2 style="font-size:15px;margin-top:16px">Entladen</h2>
+      <div class="note" id="dhwt-dis" style="line-height:1.6"></div>
+      <h2 style="font-size:15px;margin-top:16px">🦠 Legionellen</h2>
+      <div id="dhwt-legio"></div>
+      <h2 style="font-size:15px;margin-top:16px">Was wäre wenn …</h2>
+      <div id="dhwt-scen"></div>
+      <div id="dhwt-advice" style="margin-top:12px"></div>
+      <div class="note" id="dhwt-note" style="margin-top:10px"></div>
     </div>
     <div class="card" id="dhw-card">
       <h2><span class="info" data-info="dhw-impact" role="button" aria-label="Info">i</span>🚿 Warmwasser kostet Komfort <span class="r" id="dhw-head"></span></h2>
