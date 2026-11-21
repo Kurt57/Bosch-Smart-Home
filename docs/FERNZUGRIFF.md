@@ -9,10 +9,11 @@ Die häufigsten Ursachen:
 | Ursache | Woran man es erkennt | Abhilfe |
 |---|---|---|
 | **Mac im Ruhezustand** | Setup → „📶 Erreichbarkeit“: „Mac … × im Ruhezustand“ | Startskripte halten den Mac wach (siehe unten) |
-| **IP-Adresse des Macs hat gewechselt** | „IP-Adresse … × gewechselt“ | feste IP im Router oder Adresse mit Namen (`…​.local`) |
+| **IP-Adresse des Macs hat gewechselt** | „IP-Adresse … × gewechselt“ | feste IP im Router oder Adresse mit Namen (`….local`) |
 | **Bridge-Fenster geschlossen / Mac neu gestartet** | „vorher unerwartet beendet“ | Startskript als Anmeldeobjekt |
 | **Neustart nach einem Update** | „Start nach Update“ im Protokoll | dauert Sekunden – kurz warten |
 | **iPhone nicht im WLAN** (Mobilfunk) | – | von unterwegs nur per VPN (siehe unten) |
+| **iPhone im Gast-WLAN** | – | Gastnetze sind vom Heimnetz getrennt – ins normale WLAN wechseln |
 | **Safari-Meldung „HTTPS-Only“** beim Neuladen | Safari-Fehlerseite statt App | siehe README, oder HTTPS per Tailscale |
 
 Die Bridge führt dazu ein kleines **Protokoll** (Setup → „📶 Erreichbarkeit & Fernzugriff“): jeden Start
@@ -30,10 +31,12 @@ Ein **zugeklapptes MacBook** schläft trotzdem (außer mit externem Bildschirm).
 ### Feste Adresse
 
 Der Router kann dem Mac nach einer Weile eine neue IP geben – eine Homescreen-App mit der alten Adresse
-findet die Bridge dann nicht mehr. Entweder im Router festlegen (FRITZ!Box: Heimnetz → Netzwerk → Gerät
-bearbeiten → „Diesem Netzwerkgerät immer die gleiche IPv4-Adresse zuweisen“) oder die App über den
-**Namen** des Macs öffnen (`http://<name>.local:8090`, steht in der Karte und beim Start im Terminal) und
-neu zum Home-Bildschirm hinzufügen. Einstellungen kommen dabei automatisch von der Bridge.
+findet die Bridge dann nicht mehr. Am einfachsten, unabhängig vom Router: die App über den **Namen** des
+Macs öffnen (`http://<name>.local:8090`, steht in der Karte und beim Start im Terminal) und neu zum
+Home-Bildschirm hinzufügen – oder Tailscale nutzen, dessen Adresse sich nie ändert. Einstellungen kommen
+dabei automatisch von der Bridge. Manche Router können dem Mac auch immer dieselbe IP geben (FRITZ!Box:
+Heimnetz → Netzwerk → Gerät bearbeiten → „Diesem Netzwerkgerät immer die gleiche IPv4-Adresse zuweisen“);
+bei Telekom-Speedports geht das je nach Modell nicht oder nur eingeschränkt.
 
 ### Automatisch starten
 
@@ -65,9 +68,14 @@ HTTPS-Zertifikate eingeschaltet werden sollen). Dann gibt es `https://<mac-name>
 gültigem Zertifikat – nur im eigenen Tailnet erreichbar. Damit entfällt auch die Safari-Meldung zu HTTP.
 **Kein „Funnel“** einschalten: der macht die Adresse öffentlich.
 
-### Alternative: WireGuard-VPN der FRITZ!Box
+### Alternative: VPN des Routers
 
-Ohne zusätzlichen Dienst: In der FRITZ!Box eine WireGuard-Verbindung für das iPhone anlegen und in der
+**Speedport 7:** Die Telekom hat für den Speedport 7 ein eingebautes WireGuard-VPN angekündigt; in der
+Telekom-Community hieß es zuletzt, ein Termin stehe noch nicht fest. Firmware-Updates kommen beim
+Speedport 7 automatisch – ob das VPN schon da ist, zeigen die Firmware-Hinweise der Telekom bzw. die
+MeinMagenta-App. Bis dahin ist Tailscale der Weg.
+
+**FRITZ!Box:** Ohne zusätzlichen Dienst eine WireGuard-Verbindung für das iPhone anlegen und in der
 WireGuard-App importieren. Das iPhone ist dann „im Heimnetz“, die gewohnte Adresse bleibt. Funktioniert
 nur, wenn die FRITZ!Box von außen erreichbar ist (nicht bei jedem Anschluss, z. B. DS-Lite ohne eigene
 IPv4-Adresse).

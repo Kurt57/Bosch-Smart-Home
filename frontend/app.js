@@ -94,8 +94,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v216';   // short tag shown always-on in the header
-const APP_VERSION = 'v216 · 2026-11-21 · Erreichbarkeit: Die Bridge führt ein Protokoll, warum das iPhone sie nicht erreicht – Starts (und ob der Lauf davor unerwartet endete), Ruhezustand des Macs, Wechsel der IP-Adresse – neu im Setup als „📶 Erreichbarkeit & Fernzugriff“ mit Adressen (IP, Name .local, Tailscale), Zusammenfassung der letzten 14 Tage und konkreten Tipps. Ist die Bridge weg, nennt die App, wann sie zuletzt antwortete, und die häufigen Ursachen. Die Startskripte halten den Mac wach, solange die Bridge läuft (am Netzteil). Sicherheit: Die Bridge nimmt nur noch Verbindungen aus dem Heimnetz, vom Mac selbst und per VPN (Tailscale) an – Anfragen aus dem offenen Internet weist sie ab. Anleitung für den sicheren Fernzugriff per Tailscale oder FRITZ!Box-WireGuard: docs/FERNZUGRIFF.md. ' +
+const APP_BUILD = 'v217';   // short tag shown always-on in the header
+const APP_VERSION = 'v217 · 2026-11-21 · Erreichbarkeit: Tipps passen jetzt auch zu Routern ohne feste IP-Vergabe (z. B. Speedport): Adresse über den Namen des Macs (.local) oder Tailscale; Router-VPN nur, falls vorhanden (FRITZ!Box; beim Speedport 7 angekündigt). Neuer Hinweis: aus dem Gast-WLAN ist die Bridge nicht erreichbar. ' +
+  'v216 · 2026-11-21 · Erreichbarkeit: Die Bridge führt ein Protokoll, warum das iPhone sie nicht erreicht – Starts (und ob der Lauf davor unerwartet endete), Ruhezustand des Macs, Wechsel der IP-Adresse – neu im Setup als „📶 Erreichbarkeit & Fernzugriff“ mit Adressen (IP, Name .local, Tailscale), Zusammenfassung der letzten 14 Tage und konkreten Tipps. Ist die Bridge weg, nennt die App, wann sie zuletzt antwortete, und die häufigen Ursachen. Die Startskripte halten den Mac wach, solange die Bridge läuft (am Netzteil). Sicherheit: Die Bridge nimmt nur noch Verbindungen aus dem Heimnetz, vom Mac selbst und per VPN (Tailscale) an – Anfragen aus dem offenen Internet weist sie ab. Anleitung für den sicheren Fernzugriff per Tailscale oder FRITZ!Box-WireGuard: docs/FERNZUGRIFF.md. ' +
   'v215 · 2026-11-21 · Anlagen-Check: „📏 Und nach Norm?“ – dieselbe Frage wie „Reichen die 7 kW?“ mit den Annahmen der Auslegung statt wie gelebt: Norm-Innentemperaturen (20 °C Wohnen, 24 °C Bad, 15 °C Flur, flächengewichtet), keine Wärmegewinne, Wärmebrücken-Pauschale 0,10 W/m²K, Vorlauf passend zur Norm-Last. Tabelle „wie du lebst / nach Norm“ mit Heizlast, Vorlauf, WP-Leistung, Bivalenzpunkt und Heizstab-Anteil mit dem Wetter des letzten Jahres; Bedarf ohne Heizstab nach VDI 4645 (mit Warmwasser und optionaler EVU-Sperrzeit); was die eigene Raumtemperatur in kW ausmacht. Normaußentemperatur jetzt mit Nachkommastelle (Werte je PLZ nach DIN/TS 12831-1), direkt in der Karte und im Verteiler einstellbar. ' +
   'v214 · 2026-11-21 · Wärme → Effizienz: neue Karte „🩺 Anlagen-Check“ (Troubleshooting). Ordnet den Abstand zum Datenblatt ein (Prüfstand vs. Alltag, Heizen/Warmwasser, nach Außentemperatur, Fraunhofer-Feldtests), zeigt Heizlast gegen Leistung der 7-kW-Außeneinheit (gemessene Tagespunkte, Gebäudemodell aus den U-Werten, Leistungsannahme, Bivalenzpunkt auch mit Warmwasserzeit und Leisemodus), den Heizstab nach Außentemperatur (Einstellung oder zu kleine WP?) und was die Dämmung des größten Verlusts an Heizlast und Vorlauf bringt. Automatische Prüfungen (Heizkurve, Spreizung, Durchfluss, Außenfühler gegen Wetterdienst, Abtauen, Heizstab, Warmwasser, Takten, Raumtemperatur) mit typischen Ursachen getrennt nach Einstellung und Einbau, dazu 14 Punkte „Vor Ort nachsehen“ zum Abhaken (gilt auf allen Geräten). Korrektur: Die Heizlast-Kennlinie rechnete beim CSV-Import mit dem Heizstrom statt der Heizwärme (etwa um den COP zu niedrig) – jetzt Wärme, ein Punkt je Tag; der Abgleich verteilt die Gesamtlast auch auf Räume ohne Auskühl-Messung (nach Fläche). Sanierungskosten für Boden/Kellerdecke nicht mehr halbiert. ' +
   'v213 · 2026-11-21 · Arbeitszahl/Verbesserungs-Check: Warmwasser-Vorlauf jetzt aus dem Rücklauffühler – beim Speicherladen strömt durch ihn das Heizwasser aus der Speicher-Wendel (bei dir ~55 °C), während der gemeldete Vorlauffühler im ruhenden Heizkreis ~30 °C zeigt. Vorlauf = Rücklauf + 5 K; nur ohne brauchbaren Rücklauf weiter Speichertemperatur + 6 K. Die Notiz unter der Tabelle nennt den gemessenen Rücklauf. ' +
@@ -1418,7 +1419,7 @@ function snapLoad() {
 function netOfflineHints() {
   let last = null; try { last = parseInt(localStorage.getItem('bridge_last_ok'), 10) || null; } catch (e) {}
   return '<br>' + (last ? `Zuletzt erreicht: ${new Date(last).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}. ` : '') +
-    'Häufige Ursachen: iPhone nicht im WLAN zu Hause (unterwegs nur per VPN), Mac im Ruhezustand oder ausgeschaltet, ' +
+    'Häufige Ursachen: iPhone nicht im WLAN zu Hause (unterwegs nur per VPN) oder im <b>Gast-WLAN</b> (das sieht den Mac nicht), Mac im Ruhezustand oder ausgeschaltet, ' +
     'Bridge-Fenster geschlossen, IP-Adresse des Macs hat gewechselt, Bridge startet gerade nach einem Update neu (dann in ein paar Sekunden erneut versuchen). ' +
     'Details im Setup unter „📶 Erreichbarkeit“, sobald die Bridge wieder antwortet.';
 }
@@ -15054,7 +15055,8 @@ function netRemoteHelp(ts, port) {
         '<li>Auf dem iPhone die Tailscale-App installieren, mit <b>demselben Konto</b> anmelden.</li>' +
         `<li>Bridge neu starten – hier erscheint dann die Adresse für unterwegs (http://<i>mac-name</i>:${port}).</li>` +
         '<li>Diese Adresse am iPhone in Safari öffnen und „Zum Home-Bildschirm“ hinzufügen.</li></ol>' +
-        'Alternative ohne Zusatzdienst: das <b>WireGuard-VPN der FRITZ!Box</b> (iPhone verbindet sich ins Heimnetz, die gewohnte Adresse bleibt).</div>') +
+        'Alternative ohne Zusatzdienst: das <b>VPN deines Routers</b>, falls er eines hat (FRITZ!Box: WireGuard; beim Speedport 7 hat die Telekom WireGuard angekündigt) – ' +
+        'das iPhone ist dann „im Heimnetz“, die gewohnte Adresse bleibt.</div>') +
     `<div class="note" style="margin-top:6px">Optional HTTPS: <code>tailscale serve --bg ${port}</code> auf dem Mac – dann https://<i>mac-name</i>.<i>tailnet</i>.ts.net, nur im eigenen Tailnet. ` +
     '<b>Kein „Funnel“</b> einschalten – das wäre öffentlich.</div>';
 }
@@ -15096,9 +15098,11 @@ async function renderNetCard() {
   if (!S.sleeps && !S.pauses && !S.ip_changes && !S.unclean) sum += ln('✅', 'Kein Ruhezustand, keine Unterbrechung, kein Adresswechsel erkannt.');
   if (S.sleeps || S.pauses) tips.push('<b>Mac wach halten:</b> Die Startskripte halten ihn ab dieser Version wach, solange die Bridge läuft (am Netzteil). Zusätzlich Systemeinstellungen → Energie: „Automatischen Ruhezustand verhindern, wenn der Bildschirm aus ist“ einschalten. Ein zugeklapptes MacBook schläft trotzdem.');
   if (S.unclean) tips.push('<b>Unerwartet beendet</b> heißt: Terminal-Fenster geschlossen, Mac neu gestartet oder abgestürzt. Damit die Bridge nach einem Neustart von selbst läuft: Startskript als Anmeldeobjekt (Systemeinstellungen → Allgemein → Anmeldeobjekte) hinzufügen.');
-  if (S.ip_changes || isIpHost) tips.push(`<b>Feste Adresse:</b> im Router dem Mac immer dieselbe IP geben (FRITZ!Box: Heimnetz → Netzwerk → Gerät bearbeiten → „Immer die gleiche IPv4-Adresse zuweisen“)${N.bonjour ? ' – oder die App über den Namen öffnen (siehe oben) und neu zum Home-Bildschirm hinzufügen' : ''}.`);
+  if (S.ip_changes || isIpHost) tips.push(`<b>Feste Adresse:</b> Unabhängig vom Router klappt es am einfachsten über den <b>Namen</b> des Macs${N.bonjour ? ' (siehe oben)' : ' (….local)'} – ` +
+    'damit die App neu öffnen und zum Home-Bildschirm hinzufügen – oder über Tailscale (dessen Adresse bleibt immer gleich). ' +
+    'Manche Router können dem Mac auch immer dieselbe IP geben (FRITZ!Box: Heimnetz → Netzwerk → „Immer die gleiche IPv4-Adresse zuweisen“); bei Speedports geht das je nach Modell nicht.');
   if (S.updates >= 3) tips.push(`<b>Updates:</b> jedes Update startet die Bridge kurz neu (Sekunden). Bei vielen Updates am Tag kann ein Aufruf genau in diesen Moment fallen.`);
-  tips.push('<b>Unterwegs</b> (Mobilfunk) ist die Bridge ohne VPN nie erreichbar – siehe unten.');
+  tips.push('<b>Unterwegs</b> (Mobilfunk) ist die Bridge ohne VPN nie erreichbar – siehe unten. Auch aus dem <b>Gast-WLAN</b> des Routers nicht: das iPhone muss im normalen Heimnetz sein.');
   h += `<h3 class="chk-h">Letzte ${fmt(r.days, 0)} Tage</h3><ul class="chk-facts">${sum}</ul>` +
     `<div class="note" style="margin-top:6px">${tips.map(t => '💡 ' + t).join('<br>')}</div>`;
   const ev = r.events || [];
