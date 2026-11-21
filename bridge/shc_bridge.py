@@ -103,6 +103,10 @@ try:
     import awb_koeln  # optional waste collection dates of the AWB Köln
 except Exception:  # pragma: no cover - keeps the bridge running without it
     awb_koeln = None
+try:
+    import ytmusic  # optional YouTube Music playlist links for the dashboard (metadata only)
+except Exception:  # pragma: no cover - keeps the bridge running without it
+    ytmusic = None
 
 DEFAULT_FRONTEND = os.path.normpath(os.path.join(HERE, "..", "frontend"))
 DEFAULT_DB = os.path.join(HERE, "energy.db")
@@ -12284,6 +12288,13 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path == "/api/health":
                 return self._send_json(self._health())
+            if path == "/api/music/meta":
+                # a YouTube Music playlist link → canonical app link + title/cover
+                # (public oEmbed; private lists: the user names them). Cached in ytmusic.
+                if ytmusic is None:
+                    return self._send_json({"ok": False, "error": "Modul ytmusic fehlt"})
+                raw = (qs.get("url", [""])[0] or "")[:600]
+                return self._send_json(ytmusic.playlist_meta(raw))
             if path == "/api/bridge/uptime":
                 try:
                     upd = float(qs.get("days", ["14"])[0])

@@ -94,8 +94,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v217';   // short tag shown always-on in the header
-const APP_VERSION = 'v217 · 2026-11-21 · Erreichbarkeit: Tipps passen jetzt auch zu Routern ohne feste IP-Vergabe (z. B. Speedport): Adresse über den Namen des Macs (.local) oder Tailscale; Router-VPN nur, falls vorhanden (FRITZ!Box; beim Speedport 7 angekündigt). Neuer Hinweis: aus dem Gast-WLAN ist die Bridge nicht erreichbar. ' +
+const APP_BUILD = 'v218';   // short tag shown always-on in the header
+const APP_VERSION = 'v218 · 2026-11-21 · Wohn-Dashboard: neuer Bereich „🎵 Musik“ mit deinen YouTube-Music-Playlists als Kacheln (Setup → Musik: Playlist-Link einfügen, Titel und Bild holt die Bridge bei öffentlichen Playlists selbst, private benennst du; Reihenfolge und Name änderbar; gilt auf allen Geräten). Antippen öffnet die Playlist in der YouTube-Music-App – HomePod dort per Cast/AirPlay. Optional Ein-Tipp über iOS-Kurzbefehle: HomePod im Dashboard wählen, das Dashboard startet „Musik Wohnzimmer“ o. ä. mit der Playlist. Abspielen/Steuern direkt aus dem Dashboard gibt es nicht – YouTube Music bietet dafür keine Schnittstelle. ' +
+  'v217 · 2026-11-21 · Erreichbarkeit: Tipps passen jetzt auch zu Routern ohne feste IP-Vergabe (z. B. Speedport): Adresse über den Namen des Macs (.local) oder Tailscale; Router-VPN nur, falls vorhanden (FRITZ!Box; beim Speedport 7 angekündigt). Neuer Hinweis: aus dem Gast-WLAN ist die Bridge nicht erreichbar. ' +
   'v216 · 2026-11-21 · Erreichbarkeit: Die Bridge führt ein Protokoll, warum das iPhone sie nicht erreicht – Starts (und ob der Lauf davor unerwartet endete), Ruhezustand des Macs, Wechsel der IP-Adresse – neu im Setup als „📶 Erreichbarkeit & Fernzugriff“ mit Adressen (IP, Name .local, Tailscale), Zusammenfassung der letzten 14 Tage und konkreten Tipps. Ist die Bridge weg, nennt die App, wann sie zuletzt antwortete, und die häufigen Ursachen. Die Startskripte halten den Mac wach, solange die Bridge läuft (am Netzteil). Sicherheit: Die Bridge nimmt nur noch Verbindungen aus dem Heimnetz, vom Mac selbst und per VPN (Tailscale) an – Anfragen aus dem offenen Internet weist sie ab. Anleitung für den sicheren Fernzugriff per Tailscale oder FRITZ!Box-WireGuard: docs/FERNZUGRIFF.md. ' +
   'v215 · 2026-11-21 · Anlagen-Check: „📏 Und nach Norm?“ – dieselbe Frage wie „Reichen die 7 kW?“ mit den Annahmen der Auslegung statt wie gelebt: Norm-Innentemperaturen (20 °C Wohnen, 24 °C Bad, 15 °C Flur, flächengewichtet), keine Wärmegewinne, Wärmebrücken-Pauschale 0,10 W/m²K, Vorlauf passend zur Norm-Last. Tabelle „wie du lebst / nach Norm“ mit Heizlast, Vorlauf, WP-Leistung, Bivalenzpunkt und Heizstab-Anteil mit dem Wetter des letzten Jahres; Bedarf ohne Heizstab nach VDI 4645 (mit Warmwasser und optionaler EVU-Sperrzeit); was die eigene Raumtemperatur in kW ausmacht. Normaußentemperatur jetzt mit Nachkommastelle (Werte je PLZ nach DIN/TS 12831-1), direkt in der Karte und im Verteiler einstellbar. ' +
   'v214 · 2026-11-21 · Wärme → Effizienz: neue Karte „🩺 Anlagen-Check“ (Troubleshooting). Ordnet den Abstand zum Datenblatt ein (Prüfstand vs. Alltag, Heizen/Warmwasser, nach Außentemperatur, Fraunhofer-Feldtests), zeigt Heizlast gegen Leistung der 7-kW-Außeneinheit (gemessene Tagespunkte, Gebäudemodell aus den U-Werten, Leistungsannahme, Bivalenzpunkt auch mit Warmwasserzeit und Leisemodus), den Heizstab nach Außentemperatur (Einstellung oder zu kleine WP?) und was die Dämmung des größten Verlusts an Heizlast und Vorlauf bringt. Automatische Prüfungen (Heizkurve, Spreizung, Durchfluss, Außenfühler gegen Wetterdienst, Abtauen, Heizstab, Warmwasser, Takten, Raumtemperatur) mit typischen Ursachen getrennt nach Einstellung und Einbau, dazu 14 Punkte „Vor Ort nachsehen“ zum Abhaken (gilt auf allen Geräten). Korrektur: Die Heizlast-Kennlinie rechnete beim CSV-Import mit dem Heizstrom statt der Heizwärme (etwa um den COP zu niedrig) – jetzt Wärme, ein Punkt je Tag; der Abgleich verteilt die Gesamtlast auch auf Räume ohne Auskühl-Messung (nach Fläche). Sanierungskosten für Boden/Kellerdecke nicht mehr halbiert. ' +
@@ -3290,7 +3291,7 @@ function kioskSetting(k) {
 async function kioskPullSettings() {
   try {
     const r = await api('/api/settings'), srv = (r && r.settings) || {}, unsent = _unsentGet();
-    ['bhe_kiosk_win_s', 'bhe_kiosk_bin_days', 'bhe_school_plan', 'bhe_school_title'].forEach(k => {
+    ['bhe_kiosk_win_s', 'bhe_kiosk_bin_days', 'bhe_school_plan', 'bhe_school_title', 'bhe_music'].forEach(k => {
       if (srv[k] != null && !(k in unsent)) { try { localStorage.setItem(k, srv[k]); _lastSynced[k] = srv[k]; } catch (e) {} }
     });
   } catch (e) { /* keep the local values */ }
@@ -3532,6 +3533,48 @@ let _kioskCal = null;
 async function kioskLoadCal() {
   try { const r = await api('/api/calendar?days=7'); if (r && r.ok !== false) _kioskCal = r; } catch (e) { /* keep */ }
 }
+// ---- Musik (YouTube Music) im Wohn-Dashboard -------------------------------
+// The playlists the user added in Setup, as tiles. YouTube Music has no API to
+// play or steer music from outside, so a tap hands over: it opens the playlist
+// in the YouTube Music app (choose the HomePod there via Cast/AirPlay), or –
+// when set up – runs an iOS Shortcut per HomePod ("Musik Wohnzimmer") with the
+// playlist link as input. Settings synced as bhe_music; the chosen HomePod is
+// per device (a wall iPad in the living room picks "Wohnzimmer").
+const MUSIC_LS = 'bhe_music', MUSIC_ROOM_LS = 'music_room';
+function musicCfg() {
+  let c = null; try { c = JSON.parse(localStorage.getItem(MUSIC_LS) || 'null'); } catch (e) {}
+  c = c && typeof c === 'object' ? c : {};
+  return { pl: Array.isArray(c.pl) ? c.pl.filter(p => p && p.url) : [], rooms: Array.isArray(c.rooms) ? c.rooms.filter(Boolean) : [],
+    sc: !!c.sc, prefix: typeof c.prefix === 'string' && c.prefix.trim() ? c.prefix : 'Musik ' };
+}
+function musicSave(c) { try { localStorage.setItem(MUSIC_LS, JSON.stringify(c)); } catch (e) {} }
+function musicRoom(c) {
+  let r = null; try { r = localStorage.getItem(MUSIC_ROOM_LS); } catch (e) {}
+  return c.rooms.indexOf(r) >= 0 ? r : (c.rooms[0] || null);
+}
+function musicHref(c, p, room) {
+  if (c.sc && room) return 'shortcuts://run-shortcut?name=' + encodeURIComponent(c.prefix + room) + '&input=text&text=' + encodeURIComponent(p.url);
+  return p.url;
+}
+function musicTile(p, href, cls) {
+  const ext = /^https:/.test(href);
+  const cover = p.thumb ? `<img src="${esc(p.thumb)}" alt="" loading="lazy" referrerpolicy="no-referrer">`
+    : `<span class="km-ph">🎵</span>`;
+  return `<a class="${cls}" href="${esc(href)}"${ext ? ' target="_blank" rel="noopener"' : ''}>` +
+    `<span class="km-cov">${cover}</span><span class="km-t">${esc(p.title || 'Playlist')}</span></a>`;
+}
+function renderKioskMusic() {
+  const el = $('kiosk-music'); if (!el) return;
+  const c = musicCfg();
+  if (!c.pl.length) { el.innerHTML = ''; return; }
+  const room = musicRoom(c), sc = c.sc && room;
+  const chips = c.sc && c.rooms.length ? `<span class="km-rooms">${c.rooms.map(r =>
+    `<button type="button" data-mroom="${esc(r)}" class="${r === room ? 'on' : ''}">${esc(r)}</button>`).join('')}</span>` : '';
+  el.innerHTML = `<div class="kl-title km-head">🎵 Musik${chips}</div>` +
+    `<div class="km-grid">${c.pl.map(p => musicTile(p, musicHref(c, p, room), 'km-pl')).join('')}</div>` +
+    `<div class="k-sub" style="margin-top:8px">${sc ? `Tippen startet den Kurzbefehl „${esc(c.prefix + room)}“ – spielt die Playlist auf dem HomePod.`
+      : 'Tippen öffnet die Playlist in YouTube Music – den HomePod dort über das Cast-/AirPlay-Symbol wählen.'}</div>`;
+}
 function renderKioskCal() {
   const el = $('kiosk-cal'); if (!el) return;
   const C = _kioskCal;
@@ -3595,6 +3638,7 @@ function paintKiosk() {
   try { renderKioskAlerts(); } catch (e) { console.error(e); }
   try { renderKioskCal(); } catch (e) { console.error(e); }
   try { renderKioskSchool(); } catch (e) { console.error(e); }
+  try { renderKioskMusic(); } catch (e) { console.error(e); }
   try {          // both there → side by side on wide screens
     const cs = $('kiosk-cs'), c = $('kiosk-cal'), sc = $('kiosk-school');
     if (cs && c && sc) cs.classList.toggle('two', !!(c.innerHTML.trim() && sc.innerHTML.trim()));
@@ -12448,6 +12492,12 @@ function init() {
     try { localStorage.setItem('bhe_kiosk_away', _kioskAway ? '1' : '0'); } catch (e) {}
     paintKiosk();
   });
+  const km = $('kiosk-music'); if (km) km.addEventListener('click', e => {      // HomePod chips (per device)
+    const r = e.target.closest('[data-mroom]'); if (!r) return;
+    e.preventDefault();
+    try { localStorage.setItem(MUSIC_ROOM_LS, r.dataset.mroom); } catch (err) {}
+    renderKioskMusic();
+  });
   const kt = $('kiosk-theme'); if (kt) kt.addEventListener('click', () => {
     const next = ($('kiosk') && $('kiosk').getAttribute('data-ktheme') === 'light') ? 'dark' : 'light';
     try { localStorage.setItem('kiosk_theme', next); } catch (e) {}
@@ -14943,9 +14993,75 @@ function initSchoolSetup() {
     if (kioskOpen()) { try { paintKiosk(); } catch (e) {} }
   });
 }
+// ---- Setup → Musik im Wohn-Dashboard ------------------------------------------
+function renderMusicSetup() {
+  const list = $('music-list'); if (!list) return;
+  const c = musicCfg();
+  list.innerHTML = c.pl.length ? c.pl.map((p, i) => `<div class="mu-row" data-i="${i}">` +
+      `<span class="mu-cov">${p.thumb ? `<img src="${esc(p.thumb)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : '🎵'}</span>` +
+      `<span class="mu-t"><b>${esc(p.title || 'Playlist')}</b><small>${esc(p.id || '')}</small></span>` +
+      `<span class="mu-act">${i ? `<button type="button" data-mact="up" aria-label="nach oben">↑</button>` : ''}` +
+      `<button type="button" data-mact="ren" aria-label="umbenennen">✎</button><button type="button" data-mact="del" aria-label="entfernen">✕</button></span></div>`).join('')
+    : '<div class="note">Noch keine Playlist.</div>';
+  const rm = $('music-rooms'); if (rm && document.activeElement !== rm) rm.value = c.rooms.join(', ');
+  const sc = $('music-sc'); if (sc) sc.checked = c.sc;
+  const pf = $('music-prefix'); if (pf && document.activeElement !== pf) pf.value = c.prefix;
+  const nm = $('music-sc-names');
+  if (nm) nm.innerHTML = c.rooms.length ? 'Benötigte Kurzbefehle: ' + c.rooms.map(r => `<b>„${esc(c.prefix + r)}“</b>`).join(', ')
+    : 'Trage oben die Namen deiner HomePods bzw. Räume ein.';
+  if (kioskOpen()) { try { renderKioskMusic(); } catch (e) {} }
+}
+async function musicAdd() {
+  const u = $('music-url'), n = $('music-name'), note = $('music-note'), b = $('music-add');
+  const url = (u && u.value || '').trim(), name = (n && n.value || '').trim();
+  if (!url) { if (note) note.innerHTML = 'Bitte zuerst einen Playlist-Link einfügen (YouTube Music → Playlist → Teilen → Link kopieren).'; return; }
+  if (b) b.disabled = true;
+  if (note) note.textContent = 'Prüfe den Link …';
+  let r = null;
+  try { r = await api('/api/music/meta?url=' + encodeURIComponent(url)); } catch (e) { r = null; }
+  if (b) b.disabled = false;
+  if (!r) {                     // bridge unreachable: still accept a clear playlist link
+    const m = url.match(/[?&]list=([A-Za-z0-9_-]{2,80})/);
+    if (!m) { if (note) note.innerHTML = '⚠︎ Bridge nicht erreichbar und kein Playlist-Link erkannt.'; return; }
+    r = { ok: true, id: m[1], url: 'https://music.youtube.com/playlist?list=' + m[1], title: null, thumb: null, meta_error: 'Bridge nicht erreichbar' };
+  }
+  if (!r.ok) { if (note) note.innerHTML = '⚠︎ ' + esc(r.error || 'Kein Playlist-Link.'); return; }
+  const c = musicCfg();
+  if (c.pl.some(p => p.id === r.id)) { if (note) note.innerHTML = 'Diese Playlist ist schon in der Liste.'; return; }
+  c.pl.push({ id: r.id, url: r.url, title: name || r.title || ('Playlist ' + (c.pl.length + 1)), thumb: r.thumb || null });
+  musicSave(c);
+  if (u) u.value = ''; if (n) n.value = '';
+  if (note) note.innerHTML = '✅ Hinzugefügt' + (r.title || name ? '' : ` – Titel unbekannt (${esc(r.meta_error || 'privat')}), mit ✎ umbenennen`) + '.';
+  renderMusicSetup();
+}
+function initMusicSetup() {
+  const b = $('music-add'); if (b) b.addEventListener('click', musicAdd);
+  const u = $('music-url'); if (u) u.addEventListener('keydown', e => { if (e.key === 'Enter') musicAdd(); });
+  const list = $('music-list');
+  if (list) list.addEventListener('click', e => {
+    const a = e.target.closest('button[data-mact]'), row = e.target.closest('.mu-row'); if (!a || !row) return;
+    const c = musicCfg(), i = parseInt(row.dataset.i, 10); if (!c.pl[i]) return;
+    if (a.dataset.mact === 'del') c.pl.splice(i, 1);
+    else if (a.dataset.mact === 'up' && i > 0) { const t = c.pl[i - 1]; c.pl[i - 1] = c.pl[i]; c.pl[i] = t; }
+    else if (a.dataset.mact === 'ren') { const t = prompt('Name der Playlist', c.pl[i].title || ''); if (t == null) return; c.pl[i].title = t.trim() || c.pl[i].title; }
+    musicSave(c); renderMusicSetup();
+  });
+  const save = () => {
+    const c = musicCfg();
+    const rm = $('music-rooms'), sc = $('music-sc'), pf = $('music-prefix');
+    if (rm) c.rooms = rm.value.split(',').map(x => x.trim()).filter(Boolean).slice(0, 12);
+    if (sc) c.sc = sc.checked;
+    if (pf) c.prefix = pf.value.replace(/^\s+/, '') || 'Musik ';
+    musicSave(c); renderMusicSetup();
+  };
+  ['music-rooms', 'music-prefix'].forEach(id => { const e = $(id); if (e) e.addEventListener('change', save); });
+  const sc = $('music-sc'); if (sc) sc.addEventListener('change', save);
+  renderMusicSetup();
+}
 function initCalSetup() {
   initDashSetup();
   initSchoolSetup();
+  initMusicSetup();
   const b = $('cal-save'); if (b) b.addEventListener('click', calSave);
   const c = $('cal-clear'); if (c) c.addEventListener('click', calClear);
   const s = $('awb-search'); if (s) s.addEventListener('click', awbSearch);

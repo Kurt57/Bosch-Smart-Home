@@ -86,6 +86,29 @@ Mehrere Kalender: eine Adresse pro Zeile. Die Adressen stehen nur in `bridge/con
 Kalender alle 15 Minuten (`bridge/calendar_ics.py`, nur lesend; Wiederholungen, Ausnahmen,
 ganztägige Termine und Zeitzonen werden berücksichtigt).
 
+## Musik (YouTube Music)
+
+Setup → **„🎵 Musik im Wohn-Dashboard“**: Playlists per Link hinzufügen (YouTube Music → Playlist →
+Teilen → Link kopieren). Das Dashboard zeigt sie als Kacheln mit Titel und – bei öffentlichen oder nicht
+gelisteten Playlists – Bild (über YouTubes öffentliche oEmbed-Schnittstelle; private Playlists bekommen
+den Namen, den du einträgst). Gilt auf allen Geräten.
+
+* **Antippen** öffnet die Playlist in der **YouTube-Music-App**. Den HomePod wählst du dort über das
+  Cast-/AirPlay-Symbol. Ist YouTube Music mit dem HomePod verbunden (YouTube Music → Einstellungen →
+  Verknüpfte Apps), geht auch „Hey Siri, spiel … auf YouTube Music im Wohnzimmer“.
+* **Ein-Tipp per Kurzbefehl (optional):** HomePod-/Raumnamen eintragen und „Ein-Tipp über iOS-Kurzbefehle“
+  einschalten. Das Dashboard zeigt dann Knöpfe für die HomePods (Auswahl je Gerät gespeichert) und startet
+  beim Antippen den Kurzbefehl „Musik &lt;Raum&gt;“ mit dem Playlist-Link als Eingabe. Der Kurzbefehl
+  (einmal je HomePod anlegen): „URLs öffnen“ (Kurzbefehleingabe) → „Warten“ 3 s → „Wiedergabe/Pause“
+  auf „Wiedergabe“ → „Wiedergabeziel festlegen“ (HomePod). Auf einem echten iPhone ungetestet – startet
+  die Musik nicht, die letzten beiden Schritte tauschen.
+
+**Grenzen:** YouTube Music hat keine offizielle Schnittstelle, über die eine fremde App Musik startet,
+steuert oder HomePods auswählt. Die Musik über die Bridge abzugreifen und selbst an die HomePods zu
+schicken, wäre ein Verstoß gegen YouTubes Bedingungen und in Deutschland das Umgehen einer technischen
+Schutzmaßnahme – das macht die App bewusst nicht. Im „Geführten Zugriff“ (Wand-iPad) darf das Dashboard
+keine anderen Apps öffnen. Technisch: `GET /api/music/meta?url=…` (`bridge/ytmusic.py`).
+
 ## Müllabfuhr (AWB Köln)
 
 Setup → **🗑️ Müllabfuhr (AWB Köln)** → Straße und Hausnummer → „Adresse suchen“ → deine
