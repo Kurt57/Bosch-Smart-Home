@@ -39,6 +39,11 @@ start_bridge() {
   ( cd bridge && exec "$PY" shc_bridge.py serve ) &
   BRIDGE_PID=$!
   echo "Bridge gestartet (PID $BRIDGE_PID)."
+  # Mac wach halten, solange genau diese Bridge laeuft (am Netzteil) – im
+  # Ruhezustand ist sie am iPhone nicht erreichbar. Abschalten: BRIDGE_ALLOW_SLEEP=1
+  if [ -z "$BRIDGE_ALLOW_SLEEP" ] && command -v caffeinate >/dev/null 2>&1; then
+    caffeinate -s -w "$BRIDGE_PID" &
+  fi
 }
 
 # Eine schon laufende Bridge zuerst sauber beenden: zwei gleichzeitig wuerden

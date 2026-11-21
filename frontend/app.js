@@ -94,8 +94,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v215';   // short tag shown always-on in the header
-const APP_VERSION = 'v215 · 2026-11-21 · Anlagen-Check: „📏 Und nach Norm?“ – dieselbe Frage wie „Reichen die 7 kW?“ mit den Annahmen der Auslegung statt wie gelebt: Norm-Innentemperaturen (20 °C Wohnen, 24 °C Bad, 15 °C Flur, flächengewichtet), keine Wärmegewinne, Wärmebrücken-Pauschale 0,10 W/m²K, Vorlauf passend zur Norm-Last. Tabelle „wie du lebst / nach Norm“ mit Heizlast, Vorlauf, WP-Leistung, Bivalenzpunkt und Heizstab-Anteil mit dem Wetter des letzten Jahres; Bedarf ohne Heizstab nach VDI 4645 (mit Warmwasser und optionaler EVU-Sperrzeit); was die eigene Raumtemperatur in kW ausmacht. Normaußentemperatur jetzt mit Nachkommastelle (Werte je PLZ nach DIN/TS 12831-1), direkt in der Karte und im Verteiler einstellbar. ' +
+const APP_BUILD = 'v216';   // short tag shown always-on in the header
+const APP_VERSION = 'v216 · 2026-11-21 · Erreichbarkeit: Die Bridge führt ein Protokoll, warum das iPhone sie nicht erreicht – Starts (und ob der Lauf davor unerwartet endete), Ruhezustand des Macs, Wechsel der IP-Adresse – neu im Setup als „📶 Erreichbarkeit & Fernzugriff“ mit Adressen (IP, Name .local, Tailscale), Zusammenfassung der letzten 14 Tage und konkreten Tipps. Ist die Bridge weg, nennt die App, wann sie zuletzt antwortete, und die häufigen Ursachen. Die Startskripte halten den Mac wach, solange die Bridge läuft (am Netzteil). Sicherheit: Die Bridge nimmt nur noch Verbindungen aus dem Heimnetz, vom Mac selbst und per VPN (Tailscale) an – Anfragen aus dem offenen Internet weist sie ab. Anleitung für den sicheren Fernzugriff per Tailscale oder FRITZ!Box-WireGuard: docs/FERNZUGRIFF.md. ' +
+  'v215 · 2026-11-21 · Anlagen-Check: „📏 Und nach Norm?“ – dieselbe Frage wie „Reichen die 7 kW?“ mit den Annahmen der Auslegung statt wie gelebt: Norm-Innentemperaturen (20 °C Wohnen, 24 °C Bad, 15 °C Flur, flächengewichtet), keine Wärmegewinne, Wärmebrücken-Pauschale 0,10 W/m²K, Vorlauf passend zur Norm-Last. Tabelle „wie du lebst / nach Norm“ mit Heizlast, Vorlauf, WP-Leistung, Bivalenzpunkt und Heizstab-Anteil mit dem Wetter des letzten Jahres; Bedarf ohne Heizstab nach VDI 4645 (mit Warmwasser und optionaler EVU-Sperrzeit); was die eigene Raumtemperatur in kW ausmacht. Normaußentemperatur jetzt mit Nachkommastelle (Werte je PLZ nach DIN/TS 12831-1), direkt in der Karte und im Verteiler einstellbar. ' +
   'v214 · 2026-11-21 · Wärme → Effizienz: neue Karte „🩺 Anlagen-Check“ (Troubleshooting). Ordnet den Abstand zum Datenblatt ein (Prüfstand vs. Alltag, Heizen/Warmwasser, nach Außentemperatur, Fraunhofer-Feldtests), zeigt Heizlast gegen Leistung der 7-kW-Außeneinheit (gemessene Tagespunkte, Gebäudemodell aus den U-Werten, Leistungsannahme, Bivalenzpunkt auch mit Warmwasserzeit und Leisemodus), den Heizstab nach Außentemperatur (Einstellung oder zu kleine WP?) und was die Dämmung des größten Verlusts an Heizlast und Vorlauf bringt. Automatische Prüfungen (Heizkurve, Spreizung, Durchfluss, Außenfühler gegen Wetterdienst, Abtauen, Heizstab, Warmwasser, Takten, Raumtemperatur) mit typischen Ursachen getrennt nach Einstellung und Einbau, dazu 14 Punkte „Vor Ort nachsehen“ zum Abhaken (gilt auf allen Geräten). Korrektur: Die Heizlast-Kennlinie rechnete beim CSV-Import mit dem Heizstrom statt der Heizwärme (etwa um den COP zu niedrig) – jetzt Wärme, ein Punkt je Tag; der Abgleich verteilt die Gesamtlast auch auf Räume ohne Auskühl-Messung (nach Fläche). Sanierungskosten für Boden/Kellerdecke nicht mehr halbiert. ' +
   'v213 · 2026-11-21 · Arbeitszahl/Verbesserungs-Check: Warmwasser-Vorlauf jetzt aus dem Rücklauffühler – beim Speicherladen strömt durch ihn das Heizwasser aus der Speicher-Wendel (bei dir ~55 °C), während der gemeldete Vorlauffühler im ruhenden Heizkreis ~30 °C zeigt. Vorlauf = Rücklauf + 5 K; nur ohne brauchbaren Rücklauf weiter Speichertemperatur + 6 K. Die Notiz unter der Tabelle nennt den gemessenen Rücklauf. ' +
   'v212 · 2026-11-21 · Menü unten und Kopfzeile wieder am Rand: Safari unter iOS 26 lässt die Ansicht nach einer Tastatur (auch der der Adresszeile) manchmal verschoben – dann stand das Menü mitten im Bild und der Titel verschwand oben. Die App misst das jetzt und rückt beides an den sichtbaren Rand zurück; solange eine Eingabe mit Bildschirmtastatur aktiv ist, wird das Menü ausgeblendet. ' +
@@ -449,6 +450,10 @@ const INFO = {
     '(Datenblatt-Modell auf deine gemessene Wärme), Warmwasser <b>mittags</b> statt bei der Außentemperatur, bei der es heute lädt, den <b>Heizstab</b> vermeiden (gemessen), die <b>Raumtemperatur</b> 1 K runter ' +
     '(Faustwert 6 % Heizwärme), dazu Heizen bei milder Luft, Verdichter-Starts und Stillstand. Jahreswerte auf deinen WP-Jahresstrom (HomeCom-Import) bzw. hochgerechnet; Euro mit deinem Strompreis. ' +
     'Schätzungen, nicht einfach addierbar – am besten eine Änderung nach der anderen und 1–2 Wochen später hier vergleichen.',
+  'net': () => 'Die Bridge führt ein kleines <b>Protokoll</b>: jeden Start (und ob der Lauf davor sauber endete), Zeiten, in denen der Mac im <b>Ruhezustand</b> war ' +
+    '(die Bridge merkt, dass ihr Herzschlag ausgesetzt hat; macOS bestätigt die Aufwachzeit), und Wechsel der <b>IP-Adresse</b>. Daraus wird sichtbar, warum das iPhone sie manchmal nicht erreicht. ' +
+    'Für unterwegs ist ein <b>VPN</b> der sichere Weg (z. B. Tailscale oder das WireGuard-VPN der FRITZ!Box): Die Bridge selbst hat kein Passwort und nimmt deshalb nur Verbindungen aus dem ' +
+    'Heimnetz, von diesem Rechner und aus VPN-Adressbereichen an (öffentliche Adressen werden abgewiesen; abschaltbar nur per <code>allow_public_clients</code> in der config.json).',
   'hp-check': () => 'Der <b>Anlagen-Check</b> ist das Troubleshooting zur Wärmepumpe. Oben die Einordnung, ob dein Abstand zum Datenblatt normal ist ' +
     '(Prüfstand nach EN 14511 vs. Alltag, Feldtests des Fraunhofer ISE). Dann <b>Heizlast gegen Leistung</b>: die gemessene Kennlinie (ein Punkt je Tag: mittlere Heizwärme über der Außentemperatur), ' +
     'dein <b>Gebäudemodell</b> aus den U-Werten („🏗️ Theorie vs. Praxis“) und die angenommene Maximalleistung der 7-kW-Außeneinheit (Datenblattpunkt A−7/W35 6,71 kW, kälter und mit mehr Vorlauf weniger). ' +
@@ -1376,7 +1381,10 @@ function applyCoreState(c, health, origin) {
   STATE.coreTs = origin === 'fresh' ? Date.now() : (c.ts || (c.generated_at ? c.generated_at * 1000 : null));
   renderAll();                         // ← first paint happens here (visible tab only)
   showStand(origin === 'fresh' ? null : STATE.coreTs);
-  if (origin === 'fresh') snapSave();
+  if (origin === 'fresh') {
+    snapSave();
+    try { localStorage.setItem('bridge_last_ok', String(Date.now())); } catch (e) {}   // device-local, not synced
+  }
 }
 // small header line while an older state is on screen
 function showStand(ms) {
@@ -1406,6 +1414,14 @@ function snapLoad() {
   return null;
 }
 
+// shown under "Keine Bridge erreichbar": when it last answered and the usual causes
+function netOfflineHints() {
+  let last = null; try { last = parseInt(localStorage.getItem('bridge_last_ok'), 10) || null; } catch (e) {}
+  return '<br>' + (last ? `Zuletzt erreicht: ${new Date(last).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}. ` : '') +
+    'Häufige Ursachen: iPhone nicht im WLAN zu Hause (unterwegs nur per VPN), Mac im Ruhezustand oder ausgeschaltet, ' +
+    'Bridge-Fenster geschlossen, IP-Adresse des Macs hat gewechselt, Bridge startet gerade nach einem Update neu (dann in ein paar Sekunden erneut versuchen). ' +
+    'Details im Setup unter „📶 Erreichbarkeit“, sobald die Bridge wieder antwortet.';
+}
 async function loadAll() {
   if (STATE.demo) return applyDemo('demo');
   try {
@@ -1436,12 +1452,12 @@ async function loadAll() {
       setMode('err');
       const when = STATE.coreTs ? new Date(STATE.coreTs).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
       const el = $('data-stand'); if (el) { el.hidden = false; el.textContent = 'Bridge nicht erreichbar · letzter Stand' + (when ? ' ' + when : ''); }
-      $('conn-note').innerHTML = 'Keine Bridge erreichbar (' + escIp(e.message) + '). Angezeigt wird der <b>zuletzt geladene Stand</b>.';
+      $('conn-note').innerHTML = 'Keine Bridge erreichbar (' + escIp(e.message) + '). Angezeigt wird der <b>zuletzt geladene Stand</b>.' + netOfflineHints();
       return;
     }
     $('conn-note').innerHTML =
       'Keine Bridge erreichbar (' + escIp(e.message) + '). Es werden <b>Demo-Daten</b> gezeigt. ' +
-      'Trage im Setup die Adresse deiner Bridge ein oder öffne diese Seite direkt von der Bridge.';
+      'Trage im Setup die Adresse deiner Bridge ein oder öffne diese Seite direkt von der Bridge.' + netOfflineHints();
     applyDemo('err');
   }
 }
@@ -12083,6 +12099,7 @@ function switchView(v) {
   window.scrollTo({ top: 0, behavior: 'instant' in window ? 'instant' : 'auto' });
   flushView(v);                         // draw what arrived while this tab was hidden
   if (v === 'settings' && typeof renderPerf === 'function') renderPerf();
+  if (v === 'settings' && typeof renderNetCard === 'function') renderNetCard();
   // lazily load ONLY the active Wärme sub-tab when the tab is opened
   if (v === 'heatpump') {
     let sub = 'heizung'; try { sub = localStorage.getItem('bhe_heat_sub') || 'heizung'; } catch (e) {}
@@ -15016,6 +15033,80 @@ function initHpDiag() {
 
 /* ---- Setup → "Startzeit": what this start cost, measured ------------------ */
 let _perfSrv = null, _perfBusy = false;
+// ===== Erreichbarkeit & Fernzugriff ========================================= #
+// Why the phone sometimes cannot reach the bridge – from the bridge's own log
+// (restarts, the Mac asleep, a changed address, an unclean end) – its
+// addresses at home and via a VPN (Tailscale), and plain advice. Addresses
+// stay hidden until tapped (ipTag), like everywhere else in the app.
+const fmtDur = s => s >= 86400 ? fmt(s / 86400, 1) + ' Tage' : s >= 3600 ? fmt(s / 3600, s >= 36000 ? 0 : 1) + ' h' : Math.max(1, Math.round(s / 60)) + ' min';
+const fmtWhen = ts => new Date(ts * 1000).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+function netRemoteHelp(ts, port) {
+  const on = ts && (ts.ip || ts.dns);
+  return `<h3 class="chk-h">🌍 Von unterwegs – sicher per VPN</h3>` +
+    `<div class="note">Die Bridge hat kein Passwort. Sie nimmt deshalb nur Verbindungen aus dem Heimnetz und über ein VPN an – ` +
+    `Anfragen aus dem offenen Internet weist sie ab. <b>Nicht</b> per Portfreigabe im Router öffnen.</div>` +
+    (on ? `<div class="dwt-box ok" style="margin-top:8px">✅ <b>Tailscale läuft auf dem Mac.</b> Von überall erreichbar unter ` +
+        `<b>http://${ipTag((ts.dns || ts.ip) + ':' + port)}</b>${ts.dns && ts.ip ? ` (oder http://${ipTag(ts.ip + ':' + port)})` : ''}. ` +
+        'Auf dem iPhone die Tailscale-App mit demselben Konto anmelden, die Adresse in Safari öffnen und „Zum Home-Bildschirm“ – ' +
+        'die Einstellungen kommen von der Bridge. Diese Adresse funktioniert auch zu Hause, solange Tailscale am iPhone an ist.</div>'
+      : `<div class="dwt-box tip" style="margin-top:8px"><b>Empfehlung: Tailscale</b> (kostenlos für private Nutzung, WireGuard-verschlüsselt, keine Portfreigabe):` +
+        '<ol class="chk-facts" style="margin-top:6px"><li>Auf dem Mac Tailscale installieren und anmelden (Konto mit Zwei-Faktor-Schutz).</li>' +
+        '<li>Auf dem iPhone die Tailscale-App installieren, mit <b>demselben Konto</b> anmelden.</li>' +
+        `<li>Bridge neu starten – hier erscheint dann die Adresse für unterwegs (http://<i>mac-name</i>:${port}).</li>` +
+        '<li>Diese Adresse am iPhone in Safari öffnen und „Zum Home-Bildschirm“ hinzufügen.</li></ol>' +
+        'Alternative ohne Zusatzdienst: das <b>WireGuard-VPN der FRITZ!Box</b> (iPhone verbindet sich ins Heimnetz, die gewohnte Adresse bleibt).</div>') +
+    `<div class="note" style="margin-top:6px">Optional HTTPS: <code>tailscale serve --bg ${port}</code> auf dem Mac – dann https://<i>mac-name</i>.<i>tailnet</i>.ts.net, nur im eigenen Tailnet. ` +
+    '<b>Kein „Funnel“</b> einschalten – das wäre öffentlich.</div>';
+}
+function netEventText(e) {
+  switch (e.kind) {
+    case 'start': return e.unclean ? `🔄 Start – vorher <b>unerwartet beendet</b>${e.last_seen ? ' (zuletzt aktiv ' + fmtWhen(e.last_seen) + ', ' + fmtDur(e.ts - e.last_seen) + ' weg)' : ''}`
+      : e.update_from ? '🔄 Start nach Update' : '🔄 Start';
+    case 'stop': return e.reason === 'restart' ? '⏹ Neustart (Update/Knopf)' : '⏹ Beendet (Fenster geschlossen, Strg+C oder Neustart-Skript)';
+    case 'sleep': return `😴 Mac im Ruhezustand – ${fmtDur(e.s || 0)}`;
+    case 'pause': return `⏸️ Bridge ${fmtDur(e.s || 0)} ohne Lebenszeichen (Ruhezustand oder überlastet)`;
+    case 'ip': return `🔀 IP-Adresse gewechselt: ${ipTag(e.old)} → ${ipTag(e.new)}`;
+    default: return esc(e.kind);
+  }
+}
+async function renderNetCard() {
+  const body = $('net-body'), head = $('net-head'); if (!body) return;
+  if (STATE.demo) { body.innerHTML = '<div class="note">Im Demo-Modus gibt es kein Bridge-Protokoll.</div>' + netRemoteHelp(null, 8090); return; }
+  let r;
+  try { r = await api('/api/bridge/uptime?days=14'); }
+  catch (e) { body.innerHTML = '<div class="note">Die Bridge antwortet gerade nicht – Protokoll nicht verfügbar.</div>' + netRemoteHelp(null, 8090); return; }
+  if (!r || !r.ok) { body.innerHTML = '<div class="note">Diese Bridge-Version kennt das Protokoll noch nicht – bitte aktualisieren.</div>'; return; }
+  const S = r.summary || {}, N = r.net || {}, port = r.port || 8090;
+  const pageHost = location.hostname, isIpHost = /^\d{1,3}(\.\d{1,3}){3}$/.test(pageHost);
+  if (head) head.innerHTML = `<span style="color:var(--muted)">läuft seit ${fmtDur(r.uptime_s)}</span>`;
+  let h = `<div class="devrow"><div class="nm"><b>Im WLAN (IP-Adresse)</b><small>kann sich ändern, wenn der Router neu vergibt</small></div><div class="val">http://${ipTag(N.ip + ':' + port)}</div></div>`;
+  if (N.bonjour) h += `<div class="devrow"><div class="nm"><b>Im WLAN (Name)</b><small>bleibt gleich, auch wenn die IP wechselt</small></div><div class="val">http://${ipTag(N.bonjour + ':' + port)}</div></div>`;
+  const ts = N.tailscale;
+  if (ts && (ts.ip || ts.dns)) h += `<div class="devrow"><div class="nm"><b>Unterwegs (Tailscale)</b><small>mit Tailscale am iPhone</small></div><div class="val">http://${ipTag((ts.dns || ts.ip) + ':' + port)}</div></div>`;
+  h += `<div class="devrow"><div class="nm"><b>Diese App nutzt gerade</b><small>${isIpHost ? 'eine IP-Adresse' : 'einen Namen'}</small></div><div class="val">${ipTag(location.host)}</div></div>`;
+  // the last 14 days in plain words, with what to do
+  const tips = [];
+  const ln = (icon, txt) => `<li>${icon} ${txt}</li>`;
+  let sum = '';
+  sum += ln('🔄', `<b>${S.starts || 0} Starts</b>${S.updates ? ` (davon ${S.updates} nach Updates)` : ''}${S.unclean ? `, <b>${S.unclean}× vorher unerwartet beendet</b>` : ''}` +
+    (S.down_s ? ` – Bridge zusammen ~${fmtDur(S.down_s)} aus` : ''));
+  if (S.sleeps) sum += ln('😴', `<b>Mac ${S.sleeps}× im Ruhezustand</b>, zusammen ${fmtDur(S.sleep_s)} – in der Zeit ist die Bridge weg und misst nichts.`);
+  if (S.pauses) sum += ln('⏸️', `<b>${S.pauses}× ohne Lebenszeichen</b>, zusammen ${fmtDur(S.pause_s)} (Ruhezustand oder überlastet).`);
+  if (S.ip_changes) sum += ln('🔀', `<b>IP-Adresse ${S.ip_changes}× gewechselt</b> – eine App, die die alte Adresse nutzt, findet die Bridge dann nicht mehr.`);
+  if (!S.sleeps && !S.pauses && !S.ip_changes && !S.unclean) sum += ln('✅', 'Kein Ruhezustand, keine Unterbrechung, kein Adresswechsel erkannt.');
+  if (S.sleeps || S.pauses) tips.push('<b>Mac wach halten:</b> Die Startskripte halten ihn ab dieser Version wach, solange die Bridge läuft (am Netzteil). Zusätzlich Systemeinstellungen → Energie: „Automatischen Ruhezustand verhindern, wenn der Bildschirm aus ist“ einschalten. Ein zugeklapptes MacBook schläft trotzdem.');
+  if (S.unclean) tips.push('<b>Unerwartet beendet</b> heißt: Terminal-Fenster geschlossen, Mac neu gestartet oder abgestürzt. Damit die Bridge nach einem Neustart von selbst läuft: Startskript als Anmeldeobjekt (Systemeinstellungen → Allgemein → Anmeldeobjekte) hinzufügen.');
+  if (S.ip_changes || isIpHost) tips.push(`<b>Feste Adresse:</b> im Router dem Mac immer dieselbe IP geben (FRITZ!Box: Heimnetz → Netzwerk → Gerät bearbeiten → „Immer die gleiche IPv4-Adresse zuweisen“)${N.bonjour ? ' – oder die App über den Namen öffnen (siehe oben) und neu zum Home-Bildschirm hinzufügen' : ''}.`);
+  if (S.updates >= 3) tips.push(`<b>Updates:</b> jedes Update startet die Bridge kurz neu (Sekunden). Bei vielen Updates am Tag kann ein Aufruf genau in diesen Moment fallen.`);
+  tips.push('<b>Unterwegs</b> (Mobilfunk) ist die Bridge ohne VPN nie erreichbar – siehe unten.');
+  h += `<h3 class="chk-h">Letzte ${fmt(r.days, 0)} Tage</h3><ul class="chk-facts">${sum}</ul>` +
+    `<div class="note" style="margin-top:6px">${tips.map(t => '💡 ' + t).join('<br>')}</div>`;
+  const ev = r.events || [];
+  if (ev.length) h += `<details class="chk-d" style="margin-top:8px"><summary>Protokoll (${ev.length} Einträge)</summary>` +
+    ev.map(e => `<div class="note" style="margin-top:3px">${fmtWhen(e.ts)} · ${netEventText(e)}</div>`).join('') + '</details>';
+  h += netRemoteHelp(ts, port);
+  body.innerHTML = h;
+}
 async function renderPerf(bench) {
   const body = $('perf-body'), head = $('perf-head'), note = $('perf-note');
   if (!body) return;

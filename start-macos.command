@@ -41,4 +41,10 @@ for c in /Library/Frameworks/Python.framework/Versions/Current/bin/python3 /opt/
 done
 echo "Python: $PY ($("$PY" -c 'import sys,ssl; print(sys.version.split()[0], "·", ssl.OPENSSL_VERSION)' 2>/dev/null))"
 stop_running_bridge
+# Mac wach halten, solange die Bridge laeuft (am Netzteil): im Ruhezustand ist
+# sie am iPhone nicht erreichbar und misst nichts. Abschalten: BRIDGE_ALLOW_SLEEP=1
+if [ -z "$BRIDGE_ALLOW_SLEEP" ] && command -v caffeinate >/dev/null 2>&1; then
+  echo "Der Mac bleibt wach, solange die Bridge laeuft (am Netzteil; Bildschirm darf ausgehen)."
+  exec caffeinate -s "$PY" shc_bridge.py serve
+fi
 exec "$PY" shc_bridge.py serve

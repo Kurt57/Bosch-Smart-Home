@@ -108,7 +108,9 @@ siehe **[docs/SETUP.md](docs/SETUP.md)**.
 * Python 3.9+ (für die Bridge) auf einem Gerät, das dauerhaft läuft
   (Raspberry Pi, NAS, Mac/PC).
 * `openssl` (nur einmalig fürs Erzeugen des Client-Zertifikats).
-* iPhone im gleichen WLAN.
+* iPhone im gleichen WLAN – oder von unterwegs sicher per VPN (Tailscale / FRITZ!Box-WireGuard);
+  warum die Bridge manchmal nicht erreichbar ist und wie Fernzugriff geht:
+  **[docs/FERNZUGRIFF.md](docs/FERNZUGRIFF.md)**.
 
 ## Bekannter Stolperstein: Safari lädt die Seite nicht neu
 

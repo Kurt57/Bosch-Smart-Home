@@ -38,6 +38,7 @@ import bisect
 import gzip
 import hashlib
 import http.client
+import ipaddress
 import json
 import math
 import os
@@ -45,6 +46,7 @@ import re
 import signal
 import socket
 import sqlite3
+import shutil
 import ssl
 import subprocess
 import sys
@@ -163,6 +165,10 @@ def load_config(path: str) -> dict:
         # Auto-update: when > 0, the bridge periodically checks the git remote
         # and, if new commits are available, pulls and restarts itself. 0 = off.
         "auto_update_interval": 0,     # minutes between update checks (0 = off)
+        # The bridge has no login: only the home network, this computer and VPNs
+        # (Tailscale 100.64.0.0/10) may connect. true = also the public internet
+        # (only behind your own reverse proxy with authentication!).
+        "allow_public_clients": False,
     }
     if os.path.exists(path):
         try:
@@ -266,6 +272,11 @@ def _schedule_restart(delay: float = 1.2) -> None:
         except Exception as exc:  # pragma: no cover
             print(f"[update] quiesce: {exc}", file=sys.stderr)
         try:
+            if _RUNTIME is not None:
+                _RUNTIME.store.event_add("stop", {"reason": "restart"})
+        except Exception:
+            pass
+        try:
             os.execv(sys.executable, [sys.executable] + sys.argv)
         except Exception as exc:  # pragma: no cover
             print(f"[update] restart failed: {exc}", file=sys.stderr)
@@ -309,6 +320,7 @@ def auto_update_loop(interval_min: float) -> None:
             ok, changed, log = _git_pull()
             if ok and changed:
                 print(f"[auto-update] pulled update, restarting:\n{log}", file=sys.stderr)
+
                 _schedule_restart()
                 return  # stop the loop; the new process starts its own
             elif not ok:
@@ -1085,6 +1097,12 @@ class Store:
             self.conn.execute(
                 "CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY, value TEXT)"
             )
+            # what made the bridge unreachable: starts/stops, the computer
+            # sleeping, a changed LAN address, a run that ended uncleanly
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS bridge_events(ts INTEGER, kind TEXT, data TEXT)"
+            )
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_bridge_events_ts ON bridge_events(ts)")
             # weather per local day (Open-Meteo) for the PV views – kept, so the
             # history grows beyond the 92 days the service returns
             self.conn.execute(
@@ -1617,6 +1635,41 @@ class Store:
     def kv_del(self, key: str):
         with self.lock, self.conn:
             self.conn.execute("DELETE FROM kv WHERE key=?", (key,))
+
+    # -- reachability log -------------------------------------------------- #
+    def event_add(self, kind: str, data: dict | None = None, ts: int | None = None):
+        with self.lock, self.conn:
+            self.conn.execute("INSERT INTO bridge_events(ts,kind,data) VALUES(?,?,?)",
+                              (int(ts or time.time()), kind, json.dumps(data or {}, separators=(",", ":"))))
+
+    def events_since(self, since_ts: int) -> list[dict]:
+        with self.lock:
+            rows = self.conn.execute("SELECT ts,kind,data FROM bridge_events WHERE ts>=? ORDER BY ts",
+                                     (int(since_ts),)).fetchall()
+        out = []
+        for r in rows:
+            try:
+                d = json.loads(r["data"] or "{}")
+            except ValueError:
+                d = {}
+            out.append({"ts": r["ts"], "kind": r["kind"], **(d if isinstance(d, dict) else {})})
+        return out
+
+    def events_last(self, kind: str | None = None) -> dict | None:
+        with self.lock:
+            r = (self.conn.execute("SELECT ts,kind,data FROM bridge_events WHERE kind=? ORDER BY ts DESC LIMIT 1", (kind,))
+                 if kind else self.conn.execute("SELECT ts,kind,data FROM bridge_events ORDER BY ts DESC LIMIT 1")).fetchone()
+        if not r:
+            return None
+        try:
+            d = json.loads(r["data"] or "{}")
+        except ValueError:
+            d = {}
+        return {"ts": r["ts"], "kind": r["kind"], **(d if isinstance(d, dict) else {})}
+
+    def events_prune(self, keep_days: int = 120):
+        with self.lock, self.conn:
+            self.conn.execute("DELETE FROM bridge_events WHERE ts<?", (int(time.time() - keep_days * 86400),))
 
     # -- day-ahead exchange prices --------------------------------------- #
     def spot_upsert(self, rows: list[tuple]):
@@ -11283,7 +11336,33 @@ class Handler(BaseHTTPRequestHandler):
             rows.append(f"{d};{g(shk)};{g(he)};{g(hh)};{g(total)};{g(cost, 2)}")
         return "\n".join(rows) + "\n"
 
+    _blocked_note: dict = {}
+
+    def _client_ok(self) -> bool:
+        """Only the home network, this computer and VPNs (Tailscale) – a port
+        forwarded from the router must not open the bridge to the internet."""
+        addr = (self.client_address or ("",))[0]
+        if _is_local_client(addr) or self.cfg.get("allow_public_clients"):
+            return True
+        now = time.time()
+        if now - Handler._blocked_note.get(addr, 0) > 3600:
+            if len(Handler._blocked_note) > 500:       # a scan from many addresses: keep it small
+                Handler._blocked_note.clear()
+            Handler._blocked_note[addr] = now
+            print(f"[net] Zugriff aus dem Internet abgewiesen ({addr}) – Fernzugriff bitte per VPN "
+                  f"(z. B. Tailscale); erlauben nur mit \"allow_public_clients\": true in der config.json", file=sys.stderr)
+        body = ("Die Bridge nimmt nur Verbindungen aus dem Heimnetz oder per VPN (z. B. Tailscale) an.\n"
+                .encode("utf-8"))
+        self.send_response(403)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+        return False
+
     def do_GET(self):
+        if not self._client_ok():
+            return
         parsed = urlparse(self.path)
         path = parsed.path
         qs = parse_qs(parsed.query)
@@ -11298,6 +11377,8 @@ class Handler(BaseHTTPRequestHandler):
         return json.loads(raw) if raw else {}
 
     def do_POST(self):
+        if not self._client_ok():
+            return
         parsed = urlparse(self.path)
         if not parsed.path.startswith("/api/"):
             return self.send_error(404)
@@ -12203,6 +12284,14 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path == "/api/health":
                 return self._send_json(self._health())
+            if path == "/api/bridge/uptime":
+                try:
+                    upd = float(qs.get("days", ["14"])[0])
+                except ValueError:
+                    upd = 14.0
+                return self._send_json(compute_bridge_uptime(
+                    self.store, getattr(self.ctx, "started_at", int(time.time())),
+                    self.server.server_address[1], upd))
             if path == "/api/boot":
                 return self._send_json(self._boot(qs))
             if path == "/api/perf":
@@ -13016,6 +13105,199 @@ def local_subnet() -> str:
     return local_ip().rsplit(".", 1)[0]
 
 
+# --------------------------------------------------------------------------- #
+# Reachability: who may connect, under which addresses the bridge is found,
+# and a log of what made it unreachable (restarts, sleep, address changes).
+# --------------------------------------------------------------------------- #
+_LOCAL_NETS = [ipaddress.ip_network(n) for n in (
+    "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",      # home networks
+    "127.0.0.0/8", "169.254.0.0/16",                       # this computer, link-local
+    "100.64.0.0/10",                                       # Tailscale (and other VPNs)
+    "::1/128", "fe80::/10", "fc00::/7")]
+
+
+def _is_local_client(addr: str) -> bool:
+    """True for clients from the home network, this computer or a VPN such as
+    Tailscale – i.e. everything but the public internet. The bridge has no
+    login, so a port forwarded from the router must not open it to everyone."""
+    try:
+        ip = ipaddress.ip_address(str(addr).split("%")[0])
+    except ValueError:
+        return False
+    if ip.version == 6 and ip.ipv4_mapped:
+        ip = ip.ipv4_mapped
+    return any(ip in n for n in _LOCAL_NETS if n.version == ip.version)
+
+
+_net_info_cache: dict = {"ts": 0.0, "data": None}
+
+
+def _git_rev_short() -> str | None:
+    try:
+        r = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=_repo_root(),
+                           capture_output=True, text=True, timeout=3)
+        return r.stdout.strip() or None if r.returncode == 0 else None
+    except Exception:
+        return None
+
+
+def _bonjour_name() -> str | None:
+    """The computer's Bonjour name (macOS: System Settings → General → Sharing →
+    Local hostname) – reachable as <name>.local in the home network even when
+    the router hands out a new IP address."""
+    if sys.platform == "darwin":
+        try:
+            r = subprocess.run(["scutil", "--get", "LocalHostName"], capture_output=True, text=True, timeout=3)
+            n = r.stdout.strip()
+            if r.returncode == 0 and n:
+                return n + ".local"
+        except Exception:
+            pass
+    h = socket.gethostname() or ""
+    return h if h.endswith(".local") else None
+
+
+def _tailscale_info() -> dict | None:
+    """Tailscale on this computer? Its 100.x address (the route to Tailscale's
+    resolver leaves through the tunnel) and, via the CLI, the MagicDNS name."""
+    ip = None
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("100.100.100.100", 53))
+        src = s.getsockname()[0]
+        s.close()
+        if ipaddress.ip_address(src) in ipaddress.ip_network("100.64.0.0/10"):
+            ip = src
+    except (OSError, ValueError):
+        pass
+    dns = None
+    exe = shutil.which("tailscale")
+    if not exe and os.path.exists("/Applications/Tailscale.app/Contents/MacOS/Tailscale"):
+        exe = "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+    if exe:
+        try:
+            r = subprocess.run([exe, "status", "--json"], capture_output=True, text=True, timeout=4)
+            j = json.loads(r.stdout or "{}")
+            me = j.get("Self") or {}
+            dns = (me.get("DNSName") or "").rstrip(".") or None
+            ip = ip or next((x for x in me.get("TailscaleIPs") or [] if "." in x), None)
+        except Exception:
+            pass
+    return {"ip": ip, "dns": dns} if (ip or dns) else None
+
+
+def _net_info() -> dict:
+    """Addresses of the bridge (cached 5 min – the CLI calls cost a moment)."""
+    now = time.time()
+    c = _net_info_cache
+    if c["data"] is None or now - c["ts"] > 300:
+        c["data"] = {"ip": local_ip(), "bonjour": _bonjour_name(), "tailscale": _tailscale_info()}
+        c["ts"] = now
+    return c["data"]
+
+
+def _mac_woke_between(t0: float, t1: float) -> bool | None:
+    """macOS knows when it last woke from sleep (sysctl kern.waketime):
+    True if that falls into the gap, None where this cannot be told."""
+    if sys.platform != "darwin":
+        return None
+    try:
+        r = subprocess.run(["sysctl", "-n", "kern.waketime"], capture_output=True, text=True, timeout=3)
+        m = re.search(r"sec\s*=\s*(\d+)", r.stdout or "")
+        if not m:
+            return None
+        return t0 - 5 <= int(m.group(1)) <= t1 + 5
+    except Exception:
+        return None
+
+
+BRIDGE_HB_S = 60            # heartbeat of the reachability watch
+BRIDGE_GAP_S = 150          # a heartbeat later than this: the bridge was not running
+
+
+class BridgeWatch(threading.Thread):
+    """Notes what makes the bridge unreachable from the phone: the computer
+    sleeping (the heartbeat comes back much later – on macOS confirmed by its
+    wake time), the LAN address changing, and every minute an "alive" mark, so
+    the next start can tell a clean stop from a crash or power cut."""
+
+    def __init__(self, store: "Store"):
+        super().__init__(daemon=True, name="bridge-watch")
+        self.store = store
+        self._stop_ev = threading.Event()
+        self.ip = local_ip()
+
+    def stop(self):
+        self._stop_ev.set()
+
+    def run(self):
+        last = time.time()
+        n = 0
+        while not self._stop_ev.wait(BRIDGE_HB_S):
+            now = time.time()
+            try:
+                if now - last > BRIDGE_GAP_S:
+                    woke = _mac_woke_between(last, now)
+                    self.store.event_add("sleep" if woke else "pause",
+                                         {"from": int(last), "s": int(now - last)}, ts=int(now))
+                self.store.kv_set("bridge_alive", str(int(now)))
+                n += 1
+                if n % 5 == 0:
+                    ip = local_ip()
+                    if ip != self.ip and ip != "127.0.0.1":
+                        self.store.event_add("ip", {"old": self.ip, "new": ip})
+                        self.ip = ip
+                        _net_info_cache["data"] = None
+            except Exception as exc:  # pragma: no cover
+                print(f"[watch] {exc}", file=sys.stderr)
+            last = now
+
+
+def bridge_note_start(store: "Store") -> None:
+    """At start: was the last run ended cleanly? (a 'stop' after its 'start')"""
+    prev = store.events_last()
+    alive = store.kv_get("bridge_alive")
+    data = {"pid": os.getpid(), "rev": _git_rev_short(), "ip": local_ip()}
+    if prev is not None and prev.get("kind") != "stop":
+        data["unclean"] = True
+        data["last_seen"] = int(alive) if alive and alive.isdigit() else prev.get("ts")
+    last_start = store.events_last("start")
+    if last_start and last_start.get("rev") and data["rev"] and last_start["rev"] != data["rev"]:
+        data["update_from"] = last_start["rev"]
+    store.event_add("start", data)
+    store.events_prune()
+
+
+def compute_bridge_uptime(store: "Store", started: int, port: int, days: float = 14) -> dict:
+    """The reachability log in plain numbers for the app."""
+    now = int(time.time())
+    days = max(1.0, min(90.0, float(days)))
+    ev = store.events_since(int(now - days * 86400))
+    starts = [e for e in ev if e["kind"] == "start"]
+    sleeps = [e for e in ev if e["kind"] == "sleep"]
+    pauses = [e for e in ev if e["kind"] == "pause"]
+    ips = [e for e in ev if e["kind"] == "ip"]
+    # downtime between a stop (or the last alive mark) and the next start
+    down, last_end = 0, None
+    for e in ev:
+        if e["kind"] == "stop":
+            last_end = e["ts"]
+        elif e["kind"] == "start":
+            end = e.get("last_seen") if e.get("unclean") else last_end
+            if end and e["ts"] > end:
+                down += e["ts"] - end
+            last_end = None
+    return {"ok": True, "now": now, "days": days, "started": started, "uptime_s": now - started,
+            "port": port, "rev": _git_rev_short(), "net": _net_info(),
+            "summary": {"starts": len(starts),
+                        "updates": sum(1 for e in starts if e.get("update_from")),
+                        "unclean": sum(1 for e in starts if e.get("unclean")),
+                        "sleeps": len(sleeps), "sleep_s": sum(e.get("s", 0) for e in sleeps),
+                        "pauses": len(pauses), "pause_s": sum(e.get("s", 0) for e in pauses),
+                        "ip_changes": len(ips), "down_s": down},
+            "events": list(reversed(ev))[:60]}
+
+
 def _port_open(ip: str, port: int, timeout: float) -> bool:
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -13158,6 +13440,7 @@ def cmd_serve(args, cfg):
 
     ctx = Runtime(store, cfg)
     _RUNTIME = ctx
+    ctx.started_at = int(time.time())
     frontend = args.frontend or DEFAULT_FRONTEND
     try:
         httpd = make_server(args.host, args.port, ctx, frontend)
@@ -13197,6 +13480,15 @@ def cmd_serve(args, cfg):
     if _ensure_auto_update(cfg):
         print(f"  Auto-update: on (alle {int(cfg.get('auto_update_interval', 0))} min)")
 
+    # reachability log: this start (and whether the last run ended cleanly)
+    watch = None
+    try:
+        bridge_note_start(store)
+        watch = BridgeWatch(store)
+        watch.start()
+    except Exception as exc:  # pragma: no cover
+        print(f"[watch] {exc}", file=sys.stderr)
+
     ip_hint = local_ip()
     mode_txt = {"demo": "DEMO", "live": "LIVE (" + cfg.get("shc_ip", "") + ")",
                 "idle": "IDLE – noch nicht gekoppelt, bitte Setup im Browser öffnen"}[ctx.mode]
@@ -13204,7 +13496,16 @@ def cmd_serve(args, cfg):
     print(f"  Mode:        {mode_txt}")
     print(f"  Open on this machine:  http://localhost:{args.port}/")
     print(f"  Open on your iPhone:   http://{ip_hint}:{args.port}/")
-    print("  (iPhone must be on the same Wi-Fi. Press Ctrl+C to stop.)\n")
+    try:
+        ni = _net_info()
+        if ni.get("bonjour"):
+            print(f"  … or by name:          http://{ni['bonjour']}:{args.port}/  (bleibt gleich, wenn die IP wechselt)")
+        ts_ = ni.get("tailscale") or {}
+        if ts_.get("ip") or ts_.get("dns"):
+            print(f"  From anywhere (Tailscale): http://{ts_.get('dns') or ts_.get('ip')}:{args.port}/")
+    except Exception:
+        pass
+    print("  (iPhone must be on the same Wi-Fi – or use a VPN such as Tailscale. Press Ctrl+C to stop.)\n")
     # Terminal closed (SIGHUP) or `kill` (SIGTERM): end like Ctrl+C, so the
     # cleanup below can wait for a token refresh in flight
     def _graceful(signum, frame):
@@ -13224,6 +13525,12 @@ def cmd_serve(args, cfg):
             ctx.quiesce_tokens()
         except Exception as exc:  # pragma: no cover
             print(f"[stop] {exc}", file=sys.stderr)
+        try:
+            if watch is not None:
+                watch.stop()
+            store.event_add("stop", {"reason": "stop"})
+        except Exception:
+            pass
         ctx.stop()
         ctx.stop_fronius()
         httpd.server_close()
