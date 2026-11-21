@@ -2892,6 +2892,7 @@ HP_SPEC_DEFAULT = {"name": "Bosch Compress 6800i AW 7 OR-S",
                    "pts": [(-7.0, 35.0, 2.36), (2.0, 35.0, 4.06), (7.0, 35.0, 4.8)]}
 COP_DC, COP_DE = 4.0, 8.0     # K: condensing above the flow, evaporating below the air
 DHW_FLOW_ABOVE_TANK = 6.0     # K: flow into the tank coil above the tank sensor while charging
+DHW_RETURN_DT = 5.0           # K: flow above the return from the tank coil while charging
 DHW_FLOW_FALLBACK = 50.0      # °C: hot-water flow when neither the sensor nor the tank helps
 
 
@@ -2982,7 +2983,7 @@ def compute_hp_cop_theory(store: "Store", days: float = 30, spec: dict | None = 
 
     def blank():
         return {"e": 0.0, "h": 0.0, "h_ok": 0.0, "e_th": 0.0, "tf": 0.0, "to": 0.0,
-                "e_m2": 0.0, "e_m4": 0.0, "h_est": 0.0}
+                "e_m2": 0.0, "e_m4": 0.0, "h_est": 0.0, "h_ret": 0.0, "h_tank": 0.0, "tr": 0.0, "h_tr": 0.0}
     acc = {k: blank() for k in ("heating", "dhw", "other")}
     bins: dict = {}
     per_day: dict = {}
@@ -3043,12 +3044,20 @@ def compute_hp_cop_theory(store: "Store", days: float = 30, spec: dict | None = 
         flows = [x for x in (p.get("supply_c"), c.get("supply_c")) if x is not None]
         tf = sum(flows) / len(flows) if flows else None
         est = False
+        src = None
         if m == "dhw":
+            rets = [x for x in (p.get("return_c"), c.get("return_c")) if x is not None]
+            rt = sum(rets) / len(rets) if rets else None
             tk = tank_at(c["ts"])
-            if tk is not None and (tf is None or tf < tk + 2.0):
-                tf, est = tk + DHW_FLOW_ABOVE_TANK, True
+            if rt is not None and dh > 0:
+                a["tr"] += rt * dh
+                a["h_tr"] += dh
+            if rt is not None and rt >= 40.0 and (tf is None or rt > tf + 3.0):
+                tf, est, src = rt + DHW_RETURN_DT, True, "ret"
+            elif tk is not None and (tf is None or tf < tk + 2.0):
+                tf, est, src = tk + DHW_FLOW_ABOVE_TANK, True, "tank"
             elif tk is None and (tf is None or tf < 40.0):
-                tf, est = DHW_FLOW_FALLBACK, True
+                tf, est, src = DHW_FLOW_FALLBACK, True, "fixed"
         if m == "heating" and to is not None and to >= 15.0:
             warm_e += de
             warm_h += dh
@@ -3062,6 +3071,10 @@ def compute_hp_cop_theory(store: "Store", days: float = 30, spec: dict | None = 
             a["e_m4"] += dh / cop_th(to, tf - 4.0)
             if est:
                 a["h_est"] += dh
+                if src == "ret":
+                    a["h_ret"] += dh
+                elif src == "tank":
+                    a["h_tank"] += dh
             d["h_ok"] += dh
             d["e_th"] += eth
             if m == "heating":
@@ -3089,6 +3102,9 @@ def compute_hp_cop_theory(store: "Store", days: float = 30, spec: dict | None = 
                 "flow": round(a["tf"] / a["h_ok"], 1) if a["h_ok"] > 0 else None,
                 "out": round(a["to"] / a["h_ok"], 1) if a["h_ok"] > 0 else None,
                 "flow_est": round(a["h_est"] / a["h_ok"], 2) if a["h_ok"] > 0 else None,
+                "flow_src": (("ret" if a["h_ret"] >= a["h_tank"] else "tank") if a["h_est"] > 0.5 * a["h_ok"] else "sensor")
+                if a["h_ok"] > 0 else None,
+                "ret": round(a["tr"] / a["h_tr"], 1) if a["h_tr"] > 0 else None,
                 "cover": round(a["h_ok"] / a["h"], 2) if a["h"] > 0 else None}
     run = {k: sum(acc[m][k] for m in acc) for k in blank()}
     R = cops(run)
@@ -3145,7 +3161,9 @@ def compute_hp_cop_theory(store: "Store", days: float = 30, spec: dict | None = 
         wf, wo = W["tf"] / W["h_ok"], W["to"] / W["h_ok"]
         levers["dhw_temp"] = {"flow": round(wf, 1), "e": round(W["e"], 1),
                               "gain2": gain(W, "e_m2"), "gain4": gain(W, "e_m4"),
-                              "est": round(W["h_est"] / W["h_ok"], 2)}
+                              "est": round(W["h_est"] / W["h_ok"], 2),
+                              "src": "ret" if W["h_ret"] >= W["h_tank"] else "tank",
+                              "ret": round(W["tr"] / W["h_tr"], 1) if W["h_tr"] > 0 else None}
         if len(mid_out) >= 12:
             mo = sum(mid_out) / len(mid_out)
             levers["dhw_midday"] = {"out_dhw": round(wo, 1), "out_mid": round(mo, 1), "e": round(W["e"], 1),
@@ -8428,15 +8446,18 @@ def _demo_hp(dt: datetime) -> dict:
         elec += 2500.0
         heat += 2450.0
     supply = round(28.0 + (heat / 6000.0) * 12.0, 1) if mode != "off" else round(24.0, 1)
+    ret_dhw = None
     if mode == "dhw":
         # like the real CS6800i: the supply sensor sits in the heating circuit and
         # only sees the heating pipe cooling down while the tank charges
         supply = round(29.0 + 0.5 * math.sin(dt.timestamp() / 900.0), 1)
+        ret_dhw = round(tank_t + 3.0, 1)                # … and the return carries the water from the tank coil
     if defrost:
         supply = round(supply - 6.0, 1)                 # flow dips during defrost
     return {"elec_w": round(max(0.0, elec), 1), "heat_w": round(max(0.0, heat), 1),
             "outdoor_c": outdoor, "modulation": modulation, "mode": mode,
-            "supply_c": supply, "return_c": round(supply - (heat / 6000.0) * 5.0, 1),
+            "supply_c": supply,
+            "return_c": ret_dhw if ret_dhw is not None else round(supply - (heat / 6000.0) * 5.0, 1),
             "heater_w": 2500.0 if heater else 0.0}
 
 
