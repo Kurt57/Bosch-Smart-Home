@@ -94,8 +94,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v211';   // short tag shown always-on in the header
-const APP_VERSION = 'v211 · 2026-11-21 · Arbeitszahl: Warmwasser korrigiert – der Vorlauffühler der CS6800i sitzt im Heizkreis und zeigt beim Speicherladen nur ~30 °C; die App rechnet jetzt mit Speichertemperatur + 6 K (markiert mit *). Dadurch war der Datenblatt-Wert fürs Warmwasser zu hoch und „45 % erreicht“ zu schlecht. Neu: „🔧 Verbesserungs-Check“ mit bezifferten Stellschrauben – Vorlauf 2/4 K tiefer, Warmwasser kühler und mittags, Heizstab vermeiden (mit Aufteilung Heizen/Warmwasser), Raumtemperatur, dazu Heizen bei milder Luft, Verdichter-Starts und Stillstand; kWh und € pro Jahr (HomeCom-Import) bzw. pro Monat. Die Bridge speichert jetzt auch den Start-Zähler des Verdichters je Abfrage. Demo: wärmste Stunde nachmittags statt um 20 Uhr. ' +
+const APP_BUILD = 'v212';   // short tag shown always-on in the header
+const APP_VERSION = 'v212 · 2026-11-21 · Menü unten und Kopfzeile wieder am Rand: Safari unter iOS 26 lässt die Ansicht nach einer Tastatur (auch der der Adresszeile) manchmal verschoben – dann stand das Menü mitten im Bild und der Titel verschwand oben. Die App misst das jetzt und rückt beides an den sichtbaren Rand zurück; solange eine Eingabe mit Bildschirmtastatur aktiv ist, wird das Menü ausgeblendet. ' +
+  'v211 · 2026-11-21 · Arbeitszahl: Warmwasser korrigiert – der Vorlauffühler der CS6800i sitzt im Heizkreis und zeigt beim Speicherladen nur ~30 °C; die App rechnet jetzt mit Speichertemperatur + 6 K (markiert mit *). Dadurch war der Datenblatt-Wert fürs Warmwasser zu hoch und „45 % erreicht“ zu schlecht. Neu: „🔧 Verbesserungs-Check“ mit bezifferten Stellschrauben – Vorlauf 2/4 K tiefer, Warmwasser kühler und mittags, Heizstab vermeiden (mit Aufteilung Heizen/Warmwasser), Raumtemperatur, dazu Heizen bei milder Luft, Verdichter-Starts und Stillstand; kWh und € pro Jahr (HomeCom-Import) bzw. pro Monat. Die Bridge speichert jetzt auch den Start-Zähler des Verdichters je Abfrage. Demo: wärmste Stunde nachmittags statt um 20 Uhr. ' +
   'v210 · 2026-11-21 · Wärme → Effizienz: neue Karte „⚖️ Arbeitszahl: Datenblatt vs. Praxis“ für die Bosch Compress 6800i AW 7 OR-S (EN 14511: A−7/W35 2,36 · A2/W35 4,06 · A7/W35 4,8; SCOP 4,58/3,51). Für jede Messung rechnet die App den COP, den die Maschine laut Datenblatt bei genau dieser Außen- und Vorlauftemperatur haben müsste, und stellt ihn der gemessenen Arbeitszahl gegenüber – gesamt, für Heizen und Warmwasser, je Außentemperatur und pro Tag/Monat. Dazu, wohin der Mehrverbrauch geht (Stillstand, Heizstab, Rest wie Abtauen/Takten), Einordnung mit SCOP und Fraunhofer-Feldtests, Hinweise (Heizstab-Anteil, Warmwasser, Vorlauf, Standby). Datenblatt-Werte anpassbar. Die Bridge schreibt jetzt den Heizstab-Zähler je Abfrage mit. Demo: Warmwasser mit realistischem Vorlauf, Heizen näher an einer modernen Wärmepumpe. ' +
   'v209 · 2026-11-20 · Wärme-Tab: neuer Unterreiter „🚿 Warmwasser“ mit der Karte „🛁 Warmwasser-Speicher“ – gemessen am Speicherfühler: jede Ladung mit Start-/Endtemperatur, Dauer und Heizpause; unterbrochene und fortgesetzte Ladungen zählen als eine (so werden 3-Stunden-Programme sichtbar), lange Ladungen mit Grund (Zeitlimit, währenddessen gezapft, kalt draußen, langsame letzte Grad). Dazu: Speicherkurve der letzten 2 Tage, Minuten pro Grad beim Aufheizen, wie lange ein voller Speicher hält, Ruheverlust und Zapfungen nach Uhrzeit, Legionellen-Sicht (Stunden unter 45/50 °C, höchster Wert, 60-°C-Aufheizung gesehen oder nicht) und „Was wäre wenn“ für andere Start-/Stopptemperaturen (Schätzung aus den eigenen Messwerten) mit Empfehlung. „Warmwasser kostet Komfort“ ist mit in den Warmwasser-Reiter gezogen. Demo: realistischerer Speicher (Duschen, Ruheverlust, 2-h-Ladelimit). ' +
   'v208 · 2026-11-19 · Zweites Dashboard „Haus“ (…/#dash2): die PV-Anlage als selbst gezeichnete Haus-Grafik – Dach mit Modulen, Wechselrichter und Batterie an der Wand, Garage mit Auto und Wallbox, Wärmepumpe, Netzanschluss am Mast – mit den gemessenen Werten alle 10 s: Solar, Andere Lasten (Haus ohne Wallbox), Batterie (Leistung und Ladestand), Stromnetz (Bezug/Einspeisung) und Wallbox (nur wenn ein gemessenes Gerät so heißt, sonst „keine Messung“). Laufende Striche zeigen die Flussrichtung. Darunter „Tägliche Energie“ mit drei Reitern: Solar (Eigenverbrauchsquote), Batterie (Ladestand, verbleibende kWh, heute auf-/entladen) und Netz (Autarkie, bezogen/eingespeist). Status „Normal“ nur bei aktuellen Wechselrichter-Werten, Notstrom-Status per Knopf. Zwischen beiden Dashboards wischen oder die Punkte unten antippen; im Setup neuer Knopf „Haus-Dashboard“. Wohn-Dashboard auf dem Handy: die Knöpfe oben (u. a. ✕) bleiben im Bild, lange Raum-Hinweise brechen um statt über den Rand zu laufen. ' +
@@ -3940,6 +3941,45 @@ function h2Swipe(root, dir, go) {
     x0 = null;
     if (Math.abs(dx) > 80 && Math.abs(dy) < 50 && Math.sign(dx) === dir) go();
   }, { passive: true });
+}
+// iOS 26 Safari: after a keyboard (also the address bar's) the visual viewport
+// can stay shifted against the layout viewport – visualViewport.offsetTop stays
+// > 0 although the keyboard is gone. The sticky header then sits above the
+// screen and the fixed bottom menu somewhere in the middle. Measure where they
+// are and pull them back to the visible edges; a no-op wherever the browser
+// behaves (offset 0, menu already at the bottom).
+function initViewportFix() {
+  const vv = window.visualViewport, nav = $('nav'), hdr = document.querySelector('header');
+  if (!vv || !nav) return;
+  let navY = 0, raf = 0, idle = null;
+  const touch = (() => { try { return matchMedia('(pointer: coarse)').matches; } catch (e) { return false; } })();
+  const typing = () => {
+    const a = document.activeElement;
+    return !!a && a !== document.body && (/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) || a.isContentEditable);
+  };
+  const setY = (el, y) => { if (el) el.style.transform = y ? `translateY(${y}px)` : ''; };
+  const place = () => {
+    raf = 0;
+    const kb = touch && typing();                     // on-screen keyboard: the menu would only sit on it
+    nav.style.visibility = kb ? 'hidden' : '';
+    if (kb || vv.scale > 1.01) { navY = 0; setY(nav, 0); setY(hdr, 0); return; }
+    const want = vv.offsetTop + vv.height;            // visible bottom edge (layout px)
+    const nb = nav.getBoundingClientRect().bottom - navY;   // the menu without our nudge
+    const d = Math.round(want - nb);
+    navY = Math.abs(d) > 2 && Math.abs(d) < vv.height * 0.7 ? d : 0;
+    setY(nav, navY);
+    const off = Math.round(vv.offsetTop);
+    setY(hdr, off > 2 && off < vv.height * 0.7 ? off : 0);
+  };
+  const soon = () => { if (!raf) raf = requestAnimationFrame(place); };
+  vv.addEventListener('resize', soon);
+  vv.addEventListener('scroll', soon);
+  window.addEventListener('scroll', () => { clearTimeout(idle); idle = setTimeout(soon, 120); }, { passive: true });
+  document.addEventListener('focusin', soon);
+  document.addEventListener('focusout', () => setTimeout(soon, 350));
+  window.addEventListener('pageshow', soon);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') setTimeout(soon, 300); });
+  soon();
 }
 function initHouse() {
   const h = $('house2'); if (!h) return;
@@ -11884,6 +11924,7 @@ function init() {
   window.addEventListener('hashchange', () => { if (location.hash === '#dash') openKiosk(); });
   if (location.hash === '#dash') setTimeout(openKiosk, 300);
   initHouse();                                   // Dashboard 2 (#dash2)
+  initViewportFix();                             // iOS 26: menu/header back to the visible edges
   // device heating-curve points (read off the heat pump), stored locally
   [['hc-p20', 'hc_dev_p20'], ['hc-pm10', 'hc_dev_pm10']].forEach(([id, key]) => {
     const el = $(id); if (!el) return;
