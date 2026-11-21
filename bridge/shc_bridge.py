@@ -999,7 +999,9 @@ class Store:
             )
             # supply/water temperature per hourly row (for the time-series view)
             hhcols = [r[1] for r in self.conn.execute("PRAGMA table_info(hp_history)")]
-            for col in ("supply_c", "water_c"):
+            # heat_heating_kwh: produced SPACE-HEATING heat (heating_kwh is the
+            # electricity for heating) – what the heat-load signature needs (v214)
+            for col in ("supply_c", "water_c", "heat_heating_kwh"):
                 if col not in hhcols:
                     self.conn.execute(f"ALTER TABLE hp_history ADD COLUMN {col} REAL")
             # heating-curve points from an imported CSV: flow temp vs. outdoor
@@ -1274,17 +1276,19 @@ class Store:
             return [dict(r) for r in cur.fetchall()]
 
     def hp_history_upsert(self, rows: list[tuple]) -> int:
-        """rows: (period,date,elec,heat,heating,water,outdoor,supply,water_temp).
-        Replace on conflict."""
+        """rows: (period,date,elec,heat,heating,water,outdoor,supply,water_temp
+        [,heat_heating]) – heating/water are the ELECTRICITY split, heat_heating
+        the produced space-heating heat. Replace on conflict."""
+        rows = [tuple(r) + (None,) * (10 - len(r)) for r in rows]
         with self.lock, self.conn:
             self.conn.executemany(
                 "INSERT INTO hp_history(period,date,elec_kwh,heat_kwh,heating_kwh,water_kwh,"
-                "outdoor_c,supply_c,water_c)"
-                " VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(period,date) DO UPDATE SET"
+                "outdoor_c,supply_c,water_c,heat_heating_kwh)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(period,date) DO UPDATE SET"
                 " elec_kwh=excluded.elec_kwh, heat_kwh=excluded.heat_kwh,"
                 " heating_kwh=excluded.heating_kwh, water_kwh=excluded.water_kwh,"
                 " outdoor_c=excluded.outdoor_c, supply_c=excluded.supply_c,"
-                " water_c=excluded.water_c", rows)
+                " water_c=excluded.water_c, heat_heating_kwh=excluded.heat_heating_kwh", rows)
         return len(rows)
 
     def hp_history_count(self) -> dict:
@@ -3193,6 +3197,197 @@ def compute_hp_cop_theory(store: "Store", days: float = 30, spec: dict | None = 
             "heater_logged": he_logged, "lifetime": life,
             "counter_step": _counter_step(e_vals[-2000:]),
             "cover": R["cover"]}
+
+# --------------------------------------------------------------------------- #
+# Anlagen-Check: does the installation behave like Bosch intends? The measured
+# heat load against the unit's capacity (bivalent point), the heating curve,
+# spread and flow, the outdoor sensor against the weather service, defrosting.
+# Each item is a symptom with typical mechanical or setting causes – the app
+# can measure symptoms, not look at pipes.
+# --------------------------------------------------------------------------- #
+HP_CAP_DEFAULT = (-7.0, 35.0, 6.71)     # AW 7 OR-S: full-load capacity at A-7/W35 (EN 14511), kW
+
+
+def hp_capacity(t_out: float, t_flow: float, cap=HP_CAP_DEFAULT) -> float:
+    """Rough maximum heating capacity (kW) from the datasheet full-load point:
+    −2 %/K colder air below it, +1 %/K warmer (at most +10 %), −1 %/K per K
+    flow above it. An assumption for the bivalent point – not a datasheet curve."""
+    to0, tf0, q0 = cap
+    f_air = 1.0 + (0.02 if t_out < to0 else 0.01) * (t_out - to0)
+    f_air = max(0.5, min(1.10, f_air))
+    return q0 * f_air * (1.0 - 0.01 * max(0.0, t_flow - tf0))
+
+
+HP_HEATER_BINS = (-5.0, 0.0, 5.0, 10.0)   # outdoor bucket edges for the heater energy
+
+
+def compute_hp_checkup(store: "Store", days: float = 30, design_c: float | None = None,
+                       lat: float | None = None, lon: float | None = None, now: int | None = None) -> dict:
+    """Symptoms the data can show, for the troubleshooting card: heat load vs.
+    capacity (bivalent point, also with hot-water time and a halved night
+    output), heating curve, spread, flow, outdoor sensor vs. weather service,
+    defrost frequency, the electric heater by outdoor temperature. The frontend
+    adds the COP comparison and the building model (U-values) it already has."""
+    now = int(now or time.time())
+    days = max(7.0, min(120.0, float(days)))
+    design_c = DESIGN_OUTDOOR_C if design_c is None else float(design_c)
+    since = int(now - days * 86400)
+    rows = sorted((s for s in store.hp_samples_since(since) if s.get("ts")), key=lambda s: s["ts"])
+    heat_rows = [s for s in rows if (s.get("mode") or "").lower() in ("ch", "heating", "heat")]
+    out = {"ok": True, "days": days, "design_c": design_c, "cap_point": list(HP_CAP_DEFAULT), "n": len(rows)}
+
+    # ---- heating curve: flow temperature against the outdoor temperature ---- #
+    pts = [(s["outdoor_c"], s["supply_c"]) for s in heat_rows
+           if s.get("outdoor_c") is not None and s.get("supply_c") is not None and 15 <= s["supply_c"] <= 70]
+    fc = None
+    if len(pts) >= 30:
+        xs = [x for x, _ in pts]
+        if max(xs) - min(xs) >= 4.0:
+            fit = _linfit(pts)
+            if fit and fit[0] < 0:
+                fc = fit
+    flow_at = (lambda t: fc[0] * t + fc[1]) if fc else (lambda t: None)
+    out["flowcurve"] = ({"slope": round(fc[0], 2), "f0": round(flow_at(0.0), 1), "f10": round(flow_at(10.0), 1),
+                         "f_design": round(flow_at(design_c), 1), "n": len(pts),
+                         "t_min": round(min(x for x, _ in pts), 1), "t_max": round(max(x for x, _ in pts), 1)}
+                        if fc else None)
+
+    # ---- operating time: hot water, electric heater by outdoor temperature -- #
+    gap = _hp_gap_s(rows) if rows else HP_GAP_MIN_S
+    cov_s = dhw_s = 0.0
+    hb = [0.0] * (len(HP_HEATER_BINS) + 1)
+    hm = {"heating": 0.0, "dhw": 0.0, "other": 0.0}
+    he_logged, he_pts = False, []
+    for p, c in zip(rows, rows[1:]):
+        dt = c["ts"] - p["ts"]
+        if dt <= 0 or dt > gap:
+            continue
+        cov_s += dt
+        m = (p.get("mode") or "").lower()
+        if m in ("", "off", "standby", "idle"):
+            m = (c.get("mode") or "").lower()
+        if _is_dhw_mode(m):
+            dhw_s += dt
+        if p.get("eheater_kwh") is None or c.get("eheater_kwh") is None:
+            continue
+        he_logged = True
+        d = c["eheater_kwh"] - p["eheater_kwh"]
+        if d <= 0 or d > 9.0 * dt / 3600.0 + 1.01:      # one coarse counter step is fine, a reset not
+            continue
+        hm["dhw" if _is_dhw_mode(m) else "heating" if m in ("ch", "heating", "heat") else "other"] += d
+        outs = [x for x in (p.get("outdoor_c"), c.get("outdoor_c")) if x is not None]
+        if outs:
+            o = sum(outs) / len(outs)
+            hb[sum(1 for e in HP_HEATER_BINS if o >= e)] += d
+            he_pts.append((o, d))
+    dhw_h = dhw_s / cov_s * 24.0 if cov_s >= 2 * 86400 else None
+
+    # ---- heat load (measured signature) vs. capacity → bivalent point ------- #
+    sig = _energy_signature(store)
+
+    def fl(t):
+        v = flow_at(t)
+        return max(25.0, min(60.0, v)) if v is not None else 40.0
+    cap_at = lambda t: hp_capacity(t, fl(t))
+    q_at = (lambda t: max(0.0, (sig["a"] * t + sig["b"]) / 1000.0)) if sig else None
+
+    def biv(f):
+        """warmest outdoor temperature at which the load still exceeds f × capacity"""
+        tb, t = None, -25.0
+        while t <= 15.0:
+            if q_at(t) > f * cap_at(t):
+                tb = t
+            t += 0.5
+        return tb
+    hl = {"cap_design": round(cap_at(design_c), 2), "flow_design": round(fl(design_c), 1),
+          "flow_src": "curve" if fc else "assumed",
+          "dhw_h": round(dhw_h, 1) if dhw_h is not None else None,
+          "line": [{"t": tt, "q": round(q_at(tt), 2) if q_at else None, "cap": round(cap_at(tt), 2)}
+                   for tt in range(-16, 21, 2)]}
+    if sig:
+        sp_ = sig.get("pts") or []
+        step = max(1, len(sp_) // 160)
+        hl.update({"ua": round(-sig["a"], 1),
+                   "balance_c": round(sig["balance_c"], 1) if sig.get("balance_c") is not None else None,
+                   "reliable": sig.get("reliable"), "src": sig.get("src"), "basis": sig.get("basis"),
+                   "span": sig.get("span"), "n": sig.get("n"),
+                   "q_design": round(q_at(design_c), 2),
+                   "t_biv": biv(1.0),
+                   "t_biv_dhw": biv(1.0 - dhw_h / 24.0) if dhw_h else None,
+                   "t_biv_quiet": biv(0.5),
+                   "pts": [[o, round(w / 1000.0, 2)] for o, w in sp_[::step]]})
+    out["heatload"] = hl
+
+    # ---- the electric heater: where it ran, and whether capacity explains it - #
+    if he_logged:
+        tb = hl.get("t_biv_dhw") if hl.get("t_biv_dhw") is not None else hl.get("t_biv")
+        rel_ = bool(sig and sig.get("reliable"))
+        edges = (None,) + HP_HEATER_BINS + (None,)
+        out["heater"] = {"kwh": round(sum(hm.values()), 1), "by_mode": {k: round(v, 1) for k, v in hm.items()},
+                         "by_out": [{"lo": edges[k], "hi": edges[k + 1], "kwh": round(v, 1)} for k, v in enumerate(hb)],
+                         "t_ref": tb if rel_ else None,
+                         "above_biv": (round(sum(d for o, d in he_pts if tb is None or o > tb + 2.0), 1)
+                                       if rel_ else None)}
+    else:
+        out["heater"] = None
+
+    # ---- spread and flow during heating --------------------------------------- #
+    try:
+        out["spread"] = _central_spread(store)
+    except Exception:
+        out["spread"] = None
+    try:
+        fl_ = compute_flow(store, days=14)
+        sysf = fl_.get("system") or {}
+        out["flow"] = {"l_min": sysf.get("l_min"), "src": sysf.get("src")} if sysf.get("l_min") else None
+    except Exception:
+        out["flow"] = None
+
+    # ---- the heat pump's outdoor sensor against the weather service ---------- #
+    sensor = None
+    if lat is not None and lon is not None:
+        d0 = time.strftime("%Y-%m-%d", time.localtime(since))
+        d1 = time.strftime("%Y-%m-%d", time.localtime(now - 86400))
+        wx = {w["day"]: w for w in store.wx_days(d0, d1, lat, lon)
+              if w.get("day") and w.get("tmax") is not None and w.get("tmin") is not None}
+        by_day: dict = {}
+        for s in rows:
+            if s.get("outdoor_c") is None:
+                continue
+            lt = time.localtime(s["ts"])
+            x = by_day.setdefault(time.strftime("%Y-%m-%d", lt), ([], set()))
+            x[0].append(s["outdoor_c"])
+            x[1].add(lt.tm_hour)
+        diffs, dmin, dmax = [], [], []
+        for d, (vals, hours) in by_day.items():
+            w = wx.get(d)
+            if not w or len(hours) < 20:          # a mostly complete day, whatever the poll interval
+                continue
+            diffs.append(sum(vals) / len(vals) - (w["tmax"] + w["tmin"]) / 2.0)
+            dmin.append(min(vals) - w["tmin"])
+            dmax.append(max(vals) - w["tmax"])
+        if len(diffs) >= 3:
+            sensor = {"n": len(diffs), "mean": round(_median(diffs), 1),
+                      "min": round(_median(dmin), 1), "max": round(_median(dmax), 1)}
+    out["sensor"] = sensor
+
+    # ---- defrosting (derived from the power signature) by outdoor temperature #
+    try:
+        tr = compute_hp_trend(store, days=int(min(30, days)))
+        dd = [d for d in tr.get("daily") or [] if d.get("avg_outdoor") is not None and d.get("defrost_count") is not None]
+        mild = [d for d in dd if d["avg_outdoor"] >= 7.0]
+        cold = [d for d in dd if d["avg_outdoor"] < 7.0]
+        out["defrost"] = ({"days": len(dd), "per_day": round(sum(d["defrost_count"] for d in dd) / len(dd), 1),
+                           "mild_days": len(mild), "cold_days": len(cold),
+                           "mild_per_day": round(sum(d["defrost_count"] for d in mild) / len(mild), 1) if mild else None,
+                           "cold_per_day": round(sum(d["defrost_count"] for d in cold) / len(cold), 1) if cold else None}
+                          if dd else None)
+    except Exception:
+        out["defrost"] = None
+    rooms = [float(r["temp"]) for r in store.room_temp_series(since)]
+    out["indoor"] = round(sum(rooms) / len(rooms), 1) if len(rooms) >= 24 else None
+    return out
+
 
 LP_LEVELS = (600, 800, 1200, 2000, 3600, 5000, 8000, 10000, 15000)
 LP_SM_MIN_S = 6 * 3600          # smart-meter data needed in the window to use it
@@ -6141,19 +6336,105 @@ def _demo_observation() -> dict:
 DESIGN_OUTDOOR_C = -12.0   # typical German norm design outdoor temp (region −10…−16)
 
 
-def _energy_signature(store: "Store") -> dict | None:
-    """Building heat-demand line: average space-heating power (W) vs. outdoor
-    temperature, by least-squares regression. Prefers the clean hourly CSV
-    energy; falls back to live thermal-power samples."""
-    pts = []
+SIG_DAY_MIN_H = 20          # imported hours a day needs to count as one point
+SIG_DAY_MIN_COVER = 0.8     # … share of the day the live counters must cover
+SIG_DAY_MIN_W = 2000.0 / 24  # a heating day: ≥ 2 kWh of space-heating heat
+SIG_DAY_MAX_OUT = 16.0      # warmer days sit on the flat part of the signature
+SIG_DAY_MIN_N = 8           # fewer daily points: fall back to hours / samples
+
+
+def _heating_heat_kwh(r: dict) -> float | None:
+    """Produced SPACE-HEATING heat of an imported CSV row (kWh). heating_kwh and
+    water_kwh are the ELECTRICITY split; imports before v214 carry no
+    heat_heating_kwh, so the row's total heat is split by those electricity
+    shares (exact in hours without hot water, slightly low on mixed days)."""
+    hh = r.get("heat_heating_kwh")
+    if hh is not None:
+        return max(0.0, hh)
+    heat, eh, ew = r.get("heat_kwh"), r.get("heating_kwh"), r.get("water_kwh") or 0.0
+    if heat is None or eh is None:
+        return None
+    return max(0.0, heat * eh / (eh + ew)) if eh > 0 else 0.0
+
+
+def _signature_days(store: "Store", now: int | None = None) -> dict:
+    """One point per day for the energy signature: {day: (mean outdoor °C,
+    mean space-heating heat power W, source)} from the imported CSV hours
+    (summed per day), CSV day rows and the live heat counter (last 60 days).
+    Today is left out – an unfinished day would sit below the line."""
+    now = int(now or time.time())
+    today = time.strftime("%Y-%m-%d", time.localtime(now))
+    pts: dict = {}
+    hrs: dict = {}
     for r in store.hp_history("hour"):
-        heating = r.get("heating_kwh")
-        o = r.get("outdoor_c")
-        if heating is None or o is None or heating <= 0.01:
+        d = str(r.get("date") or "")[:10]
+        hh, o = _heating_heat_kwh(r), r.get("outdoor_c")
+        if len(d) < 10 or hh is None or o is None:
             continue
-        pts.append((o, heating * 1000.0))     # kWh in that hour -> average W
-    src = "csv"
+        x = hrs.setdefault(d, [0.0, 0.0, 0])
+        x[0] += hh
+        x[1] += o
+        x[2] += 1
+    for d, (h, so, nh) in hrs.items():
+        if nh >= SIG_DAY_MIN_H and d != today:
+            pts[d] = (so / nh, h * 1000.0 / nh, "csv")
+    for r in store.hp_history("day"):
+        d = str(r.get("date") or "")[:10]
+        hh, o = _heating_heat_kwh(r), r.get("outdoor_c")
+        if len(d) < 10 or d in pts or d == today or hh is None or o is None:
+            continue
+        pts[d] = (o, hh * 1000.0 / 24.0, "csv")
+    rows = sorted((s for s in store.hp_samples_since(now - 60 * 86400) if s.get("ts")), key=lambda s: s["ts"])
+    if len(rows) > 1:
+        gap = _hp_gap_s(rows)
+        acc: dict = {}
+        for p, c in zip(rows, rows[1:]):
+            dt = c["ts"] - p["ts"]
+            if dt <= 0 or dt > gap or p.get("heat_kwh") is None or c.get("heat_kwh") is None:
+                continue
+            dh = c["heat_kwh"] - p["heat_kwh"]
+            if dh < 0 or dh / (dt / 3600.0) > 80:
+                continue
+            a = acc.setdefault(time.strftime("%Y-%m-%d", time.localtime(c["ts"])), [0.0, 0.0, 0.0, 0.0])
+            a[1] += dt
+            m = (p.get("mode") or "").lower()
+            if m in ("", "off", "standby", "idle"):
+                m = (c.get("mode") or "").lower()
+            if m in ("ch", "heating", "heat"):
+                a[0] += dh
+            outs = [x for x in (p.get("outdoor_c"), c.get("outdoor_c")) if x is not None]
+            if outs:
+                a[2] += sum(outs) / len(outs) * dt
+                a[3] += dt
+        for d, (h, cov, so, no) in acc.items():
+            if d in pts or d == today or cov < SIG_DAY_MIN_COVER * 86400 or no < 0.5 * cov:
+                continue
+            pts[d] = (so / no, h * 1000.0 * 3600.0 / cov, "live")
+    return pts
+
+
+def _energy_signature(store: "Store") -> dict | None:
+    """Building heat-demand line: mean space-heating HEAT power (W) against the
+    outdoor temperature, least squares. First choice the classic daily energy
+    signature (one point per day – the building's inertia, hot-water breaks and
+    cycling average out) from the imported CSV and the live heat counter; with
+    too few days the imported hours, then live thermal-power samples.
+    (Before v214 the CSV branch fitted the heating ELECTRICITY – about the COP
+    too low.)"""
+    days = _signature_days(store)
+    use = [(o, w, src) for o, w, src in days.values() if o < SIG_DAY_MAX_OUT and w >= SIG_DAY_MIN_W]
+    pts = [(o, w) for o, w, _ in use]
+    basis, src = "day", ("csv" if 2 * sum(1 for *_, s_ in use if s_ == "csv") >= len(use) else "live")
+    if len(pts) < SIG_DAY_MIN_N:
+        basis, src = "hour", "csv"
+        pts = []
+        for r in store.hp_history("hour"):
+            hh, o = _heating_heat_kwh(r), r.get("outdoor_c")
+            if hh is None or o is None or hh <= 0.03:
+                continue
+            pts.append((o, hh * 1000.0))     # kWh of heat in that hour -> average W
     if len(pts) < 6:
+        basis, src = "inst", "live"
         pts = []
         for s in store.hp_samples_since(int(time.time()) - 60 * 86400):
             if (s.get("mode") or "").lower() not in ("ch", "heating", "heat"):
@@ -6163,7 +6444,6 @@ def _energy_signature(store: "Store") -> dict | None:
             if w is None or o is None or w <= 50:
                 continue
             pts.append((o, w))
-        src = "live"
     if len(pts) < 6:
         return None
     fit = _linfit(pts)
@@ -6184,10 +6464,12 @@ def _energy_signature(store: "Store") -> dict | None:
     # house load 489 W). Flag those so the heat-load falls back to area-based.
     reliable = (span >= 6.0
                 and balance_c is not None and 5.0 <= balance_c <= 22.0
-                and (rel is None or rel <= 0.7))
-    return {"a": a, "b": b, "n": n, "src": src, "sigma": sigma, "rel": rel,
+                and (rel is None or rel <= (0.5 if basis == "day" else 0.7))
+                and (basis != "day" or n >= 10))
+    return {"a": a, "b": b, "n": n, "src": src, "basis": basis, "sigma": sigma, "rel": rel,
             "span": round(span, 1), "reliable": bool(reliable),
-            "balance_c": balance_c, "mean_w": mean_y}
+            "balance_c": balance_c, "mean_w": mean_y,
+            "pts": [(round(o, 1), round(w)) for o, w in pts] if basis == "day" else None}
 
 
 def _central_spread(store: "Store") -> dict | None:
@@ -6637,8 +6919,17 @@ def compute_heatload(store: "Store", areas: dict | None = None,
 
     covered = [w for w in rooms if w["usable"]]
     sumL = sum((w["area"] / w["tau_h"]) * w["dt"] for w in covered)
+    # Rooms with an area but no cooling-down time τ yet take their share of the
+    # measured total like the covered rooms do per m² (their mean area/τ).
+    # Before v214 the covered rooms got the WHOLE house's load and the others
+    # none – hidden while the CSV signature fitted electricity (~1/COP too low).
+    cov_area = sum(w["area"] for w in covered)
+    mu = (sum(w["area"] / w["tau_h"] for w in covered) / cov_area) if cov_area else None
+    guess_ids = {id(w) for w in rooms
+                 if mu and not w["usable"] and w["area"] and w["dt"] and w["dt"] > 0}
+    sumL_all = sumL + sum(mu * w["area"] * w["dt"] for w in rooms if id(w) in guess_ids)
     can_abs = bool(q_total_design and sumL > 0 and covered)
-    k = (q_total_design / sumL) if can_abs else None
+    k = (q_total_design / sumL_all) if can_abs else None
 
     total_area = sum(w["area"] for w in rooms if w["area"]) or 0.0
     covered_area = sum(w["area"] for w in covered) or 0.0
@@ -6678,6 +6969,14 @@ def compute_heatload(store: "Store", areas: dict | None = None,
             sum_q += q
             base["ua"] = round(ua, 1); base["rel"] = round(rel, 2)
             _flow_row(base, q, band, spec)
+        elif can_abs and id(w) in guess_ids:
+            # calibrated total, split by area (no τ for this room yet)
+            ua = k * mu * w["area"]
+            q = ua * w["dt"]
+            band = q * 0.35
+            sum_q += q
+            base["ua"] = round(ua, 1); base["rel"] = 0.35; base["estimated"] = True
+            _flow_row(base, q, band, q / w["area"], confidence_extra="geschätzt (Fläche, kalibriert)")
         elif area_mode and w["area"] and w["dt"] and w["dt"] > 0:
             # area-based estimate: Q = area × spec_wm2 (independent of τ)
             q = w["area"] * spec_wm2
@@ -6701,12 +7000,13 @@ def compute_heatload(store: "Store", areas: dict | None = None,
     sig_unreliable = bool(sig and not sig.get("reliable"))
     if method == "calibrated":
         insights.append(f"Gesamt-Heizlast bei {design_c:.0f} °C ≈ <b>{round(q_total_design):d} W</b> "
-                        f"(aus der gemessenen Kennlinie, Quelle: {'CSV' if sig['src']=='csv' else 'Live'}). "
+                        f"(aus der gemessenen Kennlinie, Quelle: {'CSV' if sig['src']=='csv' else 'Live'}"
+                        f"{', Tagesmittel aus ' + str(sig['n']) + ' Tagen' if sig.get('basis') == 'day' else ''}). "
                         f"Gebäude-UA ≈ {ua_total:.0f} W/K, Bilanzpunkt ≈ {sig['balance_c']:.1f} °C.")
         if coverage < 0.8:
-            insights.append(f"⚠︎ Nur <b>{round(coverage*100)} %</b> der erfassten Fläche hat Raum-Daten – "
-                            f"die Absolutwerte der abgedeckten Räume sind dadurch eher zu hoch. Trage für alle "
-                            f"beheizten Räume Fläche ein und sammle τ.")
+            insights.append(f"⚠︎ Nur <b>{round(coverage*100)} %</b> der erfassten Fläche hat Auskühl-Messungen (τ) – "
+                            f"die übrigen Räume bekommen ihren Anteil an der gemessenen Gesamtlast nach Fläche "
+                            f"(geschätzt). Fehlt die Fläche eines beheizten Raums, fallen die anderen zu hoch aus.")
         odd = [r["room"] for r in out if r.get("status") == "ok" and not r.get("plausible")]
         if odd:
             insights.append("Unplausible spezifische Last (W/m²) bei: <b>" + ", ".join(odd) +
@@ -6744,7 +7044,7 @@ def compute_heatload(store: "Store", areas: dict | None = None,
         "q_total_design": round(q_total_design) if q_total_design else (round(sum_q) if method == "area" and sum_q else None),
         "ua_total": round(ua_total, 1) if ua_total else None,
         "balance_c": round(sig["balance_c"], 1) if sig and sig.get("balance_c") is not None else None,
-        "signature": ({"src": sig["src"], "n": sig["n"], "reliable": sig.get("reliable"),
+        "signature": ({"src": sig["src"], "basis": sig.get("basis"), "n": sig["n"], "reliable": sig.get("reliable"),
                        "rel": round(sig["rel"], 2) if sig["rel"] else None}
                       if sig else None),
         "coverage": coverage, "sum_q_design": round(sum_q) if sum_q else None,
@@ -11234,12 +11534,12 @@ class Handler(BaseHTTPRequestHandler):
             water_t = f(r.get("water_c"))
             if elec is None and heat is None:
                 continue
-            clean.append((period, date, elec, heat, heating, water, outdoor, supply, water_t))
+            prod_heat = f(r.get("heat_heating_kwh"))
+            clean.append((period, date, elec, heat, heating, water, outdoor, supply, water_t, prod_heat))
             # real heating-curve point: an HOUR with actual space-heating OUTPUT
             # (produced heating heat > 0 – excludes standby & hot-water hours where
             # the flow sensor still reads the hot tank), no hot water, flow+outdoor
             # present. Using produced heat, not the 0.1 kWh standby electricity.
-            prod_heat = f(r.get("heat_heating_kwh"))
             active = (prod_heat or 0) > 0.1 if prod_heat is not None else (heating or 0) > 0.15
             if (period == "hour" and supply is not None and outdoor is not None
                     and supply >= 20 and active and (water or 0) <= 0.05):
@@ -12290,6 +12590,18 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json(self.ctx.calc_get(
                     ("dhwimpact", round(dwd, 2)), 120,
                     lambda: compute_dhw_impact(self.store, dwd, self._hp_live())))
+            if path == "/api/heatpump/checkup":
+                def fq(k):
+                    try:
+                        return float(qs.get(k, [""])[0])
+                    except ValueError:
+                        return None
+                ckd = max(7.0, min(120.0, fq("days") or 30.0))
+                lat_c, lon_c = fq("lat"), fq("lon")
+                dsg = _settings_layout(self._settings_load())["design_c"]
+                return self._send_json(self.ctx.calc_get(
+                    ("checkup", round(ckd, 1), lat_c, lon_c, dsg), 300,
+                    lambda: compute_hp_checkup(self.store, ckd, dsg, lat_c, lon_c)))
             if path == "/api/heatpump/coptheory":
                 try:
                     ctd = max(3.0, min(400.0, float(qs.get("days", ["30"])[0])))

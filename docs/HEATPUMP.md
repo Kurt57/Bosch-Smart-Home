@@ -202,6 +202,41 @@ würden, sortiert nach Wirkung –
 Mit einem HomeCom-Jahresimport stehen kWh und € pro Jahr da, sonst pro Monat beim Wetter des Zeitraums (Preis aus
 dem Setup). Schätzungen, nicht einfach addierbar.
 
+### Anlagen-Check (Troubleshooting)
+
+Karte **🩺 Anlagen-Check** darunter – was die Messwerte über **Einbau und Einstellung** verraten. Die App sieht
+Symptome, keine Rohre; jede Auffälligkeit nennt deshalb typische Ursachen, getrennt nach ⚙️ **Einstellung**
+(Regler/Fachmann-Menü) und 🔧 **Einbau/Mechanik** (Fachbetrieb).
+
+* **Sind ~75 % okay?** Einordnung des Abstands zum Datenblatt (Prüfstand nach EN 14511: Dauerlauf, feste
+  Temperaturen – im Alltag sind 15–30 % Abstand normal, Faustwert), getrennt nach Heizen/Warmwasser, nach
+  Außentemperatur (gleichmäßig = allgemeine Verluste; Einbruch in der Kälte = Abtauen/Heizstab/Leistungsgrenze;
+  schwächer bei milder Luft = Takten), Aufteilung des Mehrverbrauchs (Stillstand, Heizstab, Rest) und Vergleich
+  mit den Feldtests des Fraunhofer ISE (Luft-WP im Bestand: Jahresmittel 3,1 bzw. 3,4).
+* **Reichen die 7 kW?** Heizlast über der Außentemperatur: gemessen (ein Punkt je Tag), dein **Gebäudemodell**
+  aus den U-Werten („🏗️ Theorie vs. Praxis“) und die **angenommene** Maximalleistung der Außeneinheit
+  (Datenblattpunkt A−7/W35 6,71 kW, −2 %/K kälter, −1 %/K je Kelvin Vorlauf über 35 °C – keine Bosch-Kurve).
+  Daraus der **Bivalenzpunkt** (darunter braucht es den Heizstab), auch mit der täglichen Warmwasser-Ladezeit
+  und mit einem Nacht-Leisemodus (−50 %). Der **Heizstab** nach Außentemperatur: läuft er dort, wo die WP allein
+  reichen müsste, ist es eine Einstellung, keine zu kleine WP. Dazu der größte Einzelverlust des Gebäudemodells
+  und was seine Dämmung an Heizlast, Bivalenzpunkt und Vorlauf (Fußbodenheizung, Exponent 1,1) bringt.
+* **Automatische Prüfungen:** Heizkurve/Vorlauf, Spreizung, Durchfluss, Außenfühler gegen den Wetterdienst
+  (Standort aus dem PV-Tab), Abtauen (aus dem Leistungsverlauf geschätzt), Abstand nach Außentemperatur,
+  Heizstab, Warmwasser, Takten, Heizen bei milder Luft, Raumtemperatur, Stillstand.
+* **Vor Ort nachsehen:** 14 Punkte zum Abhaken (✓ passt / ⚠ auffällig, gilt auf allen Geräten) – Aufstellung
+  und Abstände der Außeneinheit, Lamellen, Fundament/Kondensat, Dämmung der Leitungen außen und innen,
+  Leitungslänge/Rohrdurchmesser, Schmutzfänger/Entlüftung/Druck, Puffer/Weiche, Raumregler/Abgleich,
+  Warmwasserspeicher, Außenfühler, Reglereinstellungen, Leisemodus, Wartung/Fehlerspeicher. Punkte, zu denen
+  eine automatische Prüfung passt, sind markiert. Exakte Werte (Mindestabstände, Rohrdimensionen,
+  Mindestdurchfluss) stehen im Bosch-EinbauCheck und in der Installationsanleitung.
+
+**Heizlast-Kennlinie (ab v214):** ein Punkt je Tag – mittlere **Heizwärme** über der mittleren
+Außentemperatur, aus dem HomeCom-CSV (Stunden je Tag summiert, sonst Tageszeilen) und aus den Live-Zählern
+(Tage mit ≥ 80 % Abdeckung). Vorher rechnete der CSV-Zweig mit dem **Heizstrom** statt der Wärme – die
+Heizlast kam etwa um den Faktor COP zu niedrig heraus (auch im Reiter Abgleich). Ein neuer Import speichert
+die erzeugte Heizwärme direkt; ältere Importe teilen die Gesamtwärme nach den Stromanteilen auf. Im Abgleich
+bekommen Räume ohne Auskühl-Messung (τ) jetzt ihren Anteil an der gemessenen Gesamtlast nach Fläche.
+
 ## Warmwasser-Speicher & Legionellen
 
 Tab **Wärme → 🚿 Warmwasser**, Karte **🛁 Warmwasser-Speicher** (darunter, umgezogen aus
@@ -267,6 +302,9 @@ stehen bei Bosch meist im Fachmann-Menü des Reglers.
   (Punkte: Außen:Vorlauf:COP; ohne `pts` die 6800i AW 7 OR-S).
 * **Warmwasser-Speicher:** `/api/heatpump/dhwtank?days=14` (Ladungen, Minuten je Grad,
   Entladen, Sollwerte, Legionellen-Kennzahlen, Szenarien) aus `dhw_log` + `hp_samples`.
+* **Anlagen-Check:** `/api/heatpump/checkup?days=30&lat=…&lon=…` (Heizkurve, Heizlast-Kennlinie mit
+  Tagespunkten, Leistungsannahme und Bivalenzpunkten, Heizstab nach Außentemperatur und Betriebsart,
+  Warmwasser-Stunden, Spreizung, Durchfluss, Außenfühler gegen Wetterdienst, Abtauen, Raumtemperatur).
 * Umgesetzt in `bridge/homecom.py` – **ohne Zusatzpakete** (nur Standardbibliothek).
   Grundlage der Endpunkte: das Community-Projekt
   [`serbanb11/homecom_alt`](https://github.com/serbanb11/homecom_alt).

@@ -372,6 +372,23 @@
   }
   .copt-gap{font-size:12.5px; padding:6px 0; border-bottom:1px solid var(--line)}
   .copx-item{padding:10px 0; border-bottom:1px solid var(--line)}
+  .chk-h{font-size:14px; margin:16px 0 8px; font-weight:700}
+  .chk-facts{margin:8px 0 0; padding-left:18px; font-size:13px; line-height:1.55}
+  .chk-facts li{margin:3px 0}
+  .chk-cause{margin-top:5px; padding:6px 8px; border-radius:8px; background:color-mix(in srgb, #ffb64d 10%, transparent)}
+  .chk-cause div{margin:1px 0}
+  .chk-row{display:flex; justify-content:space-between; gap:8px; align-items:flex-start}
+  .chk-btns{display:flex; gap:4px; flex:0 0 auto}
+  .chk-btns button{font:inherit; font-size:11.5px; padding:4px 8px; border-radius:999px; border:1px solid var(--line); background:transparent; color:var(--muted); cursor:pointer; white-space:nowrap}
+  .chk-btns button.on{border-color:#4be0b0; color:#4be0b0; background:#4be0b01a}
+  .chk-btns button.bad.on{border-color:#ffb64d; color:#ffb64d; background:#ffb64d1a}
+  .chk-m.chk-ok > .chk-row b{opacity:.75}
+  .chk-d{margin-top:4px}
+  .chk-d > summary, .chk-okd > summary{cursor:pointer; font-size:12.5px; color:var(--muted)}
+  .chk-okd{padding:10px 0; border-bottom:1px solid var(--line)}
+  .chk-okd > summary{font-size:13px; line-height:1.5}
+  .chk-okd[open] > summary{margin-bottom:2px}
+  @media (max-width:420px){ .chk-row{flex-direction:column; gap:6px} }
   .copt-bar{height:6px; border-radius:3px; background:var(--card2); margin-top:4px; overflow:hidden}
   .copt-bar span{display:block; height:100%; border-radius:3px}
   .copt-pt{display:flex; align-items:center; gap:4px; font-size:12.5px; margin:4px 0; flex-wrap:wrap}
@@ -1085,6 +1102,20 @@
       <div class="note" id="copx-intro" style="margin-bottom:8px;clear:both"></div>
       <div id="copx-list"></div>
       <div class="note" id="copx-note" style="margin-top:10px"></div>
+    </div>
+    <div class="card" id="chk-card">
+      <h2><span class="info" data-info="hp-check" role="button" aria-label="Info">i</span>🩺 Anlagen-Check <span class="r" id="chk-head"></span></h2>
+      <div class="note" style="margin-bottom:10px;clear:both">Troubleshooting: Was deine Messwerte über Einbau und Einstellung verraten – und was du vor Ort nachsehen kannst.</div>
+      <h3 class="chk-h" id="chk-h1">Ist der Abstand zum Datenblatt normal?</h3>
+      <div id="chk-verdict"></div>
+      <h3 class="chk-h">Reichen die 7 kW? Heizlast gegen Leistung</h3>
+      <div id="chk-load"></div>
+      <h3 class="chk-h">Automatische Prüfungen</h3>
+      <div id="chk-auto"></div>
+      <h3 class="chk-h">Vor Ort nachsehen</h3>
+      <div class="note" style="margin-bottom:4px">Abhaken, was du selbst sehen kannst – den Rest mit dem Installateur oder bei der Wartung.</div>
+      <div id="chk-manual"></div>
+      <div class="note" id="chk-note" style="margin-top:10px"></div>
     </div>
     <div class="card">
       <h2><span class="info" data-info="cop" role="button" aria-label="Info">i</span>Wirkungsgrad (COP) pro Tag</h2>

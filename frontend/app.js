@@ -94,8 +94,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v213';   // short tag shown always-on in the header
-const APP_VERSION = 'v213 · 2026-11-21 · Arbeitszahl/Verbesserungs-Check: Warmwasser-Vorlauf jetzt aus dem Rücklauffühler – beim Speicherladen strömt durch ihn das Heizwasser aus der Speicher-Wendel (bei dir ~55 °C), während der gemeldete Vorlauffühler im ruhenden Heizkreis ~30 °C zeigt. Vorlauf = Rücklauf + 5 K; nur ohne brauchbaren Rücklauf weiter Speichertemperatur + 6 K. Die Notiz unter der Tabelle nennt den gemessenen Rücklauf. ' +
+const APP_BUILD = 'v214';   // short tag shown always-on in the header
+const APP_VERSION = 'v214 · 2026-11-21 · Wärme → Effizienz: neue Karte „🩺 Anlagen-Check“ (Troubleshooting). Ordnet den Abstand zum Datenblatt ein (Prüfstand vs. Alltag, Heizen/Warmwasser, nach Außentemperatur, Fraunhofer-Feldtests), zeigt Heizlast gegen Leistung der 7-kW-Außeneinheit (gemessene Tagespunkte, Gebäudemodell aus den U-Werten, Leistungsannahme, Bivalenzpunkt auch mit Warmwasserzeit und Leisemodus), den Heizstab nach Außentemperatur (Einstellung oder zu kleine WP?) und was die Dämmung des größten Verlusts an Heizlast und Vorlauf bringt. Automatische Prüfungen (Heizkurve, Spreizung, Durchfluss, Außenfühler gegen Wetterdienst, Abtauen, Heizstab, Warmwasser, Takten, Raumtemperatur) mit typischen Ursachen getrennt nach Einstellung und Einbau, dazu 14 Punkte „Vor Ort nachsehen“ zum Abhaken (gilt auf allen Geräten). Korrektur: Die Heizlast-Kennlinie rechnete beim CSV-Import mit dem Heizstrom statt der Heizwärme (etwa um den COP zu niedrig) – jetzt Wärme, ein Punkt je Tag; der Abgleich verteilt die Gesamtlast auch auf Räume ohne Auskühl-Messung (nach Fläche). Sanierungskosten für Boden/Kellerdecke nicht mehr halbiert. ' +
+  'v213 · 2026-11-21 · Arbeitszahl/Verbesserungs-Check: Warmwasser-Vorlauf jetzt aus dem Rücklauffühler – beim Speicherladen strömt durch ihn das Heizwasser aus der Speicher-Wendel (bei dir ~55 °C), während der gemeldete Vorlauffühler im ruhenden Heizkreis ~30 °C zeigt. Vorlauf = Rücklauf + 5 K; nur ohne brauchbaren Rücklauf weiter Speichertemperatur + 6 K. Die Notiz unter der Tabelle nennt den gemessenen Rücklauf. ' +
   'v212 · 2026-11-21 · Menü unten und Kopfzeile wieder am Rand: Safari unter iOS 26 lässt die Ansicht nach einer Tastatur (auch der der Adresszeile) manchmal verschoben – dann stand das Menü mitten im Bild und der Titel verschwand oben. Die App misst das jetzt und rückt beides an den sichtbaren Rand zurück; solange eine Eingabe mit Bildschirmtastatur aktiv ist, wird das Menü ausgeblendet. ' +
   'v211 · 2026-11-21 · Arbeitszahl: Warmwasser korrigiert – der Vorlauffühler der CS6800i sitzt im Heizkreis und zeigt beim Speicherladen nur ~30 °C; die App rechnet jetzt mit Speichertemperatur + 6 K (markiert mit *). Dadurch war der Datenblatt-Wert fürs Warmwasser zu hoch und „45 % erreicht“ zu schlecht. Neu: „🔧 Verbesserungs-Check“ mit bezifferten Stellschrauben – Vorlauf 2/4 K tiefer, Warmwasser kühler und mittags, Heizstab vermeiden (mit Aufteilung Heizen/Warmwasser), Raumtemperatur, dazu Heizen bei milder Luft, Verdichter-Starts und Stillstand; kWh und € pro Jahr (HomeCom-Import) bzw. pro Monat. Die Bridge speichert jetzt auch den Start-Zähler des Verdichters je Abfrage. Demo: wärmste Stunde nachmittags statt um 20 Uhr. ' +
   'v210 · 2026-11-21 · Wärme → Effizienz: neue Karte „⚖️ Arbeitszahl: Datenblatt vs. Praxis“ für die Bosch Compress 6800i AW 7 OR-S (EN 14511: A−7/W35 2,36 · A2/W35 4,06 · A7/W35 4,8; SCOP 4,58/3,51). Für jede Messung rechnet die App den COP, den die Maschine laut Datenblatt bei genau dieser Außen- und Vorlauftemperatur haben müsste, und stellt ihn der gemessenen Arbeitszahl gegenüber – gesamt, für Heizen und Warmwasser, je Außentemperatur und pro Tag/Monat. Dazu, wohin der Mehrverbrauch geht (Stillstand, Heizstab, Rest wie Abtauen/Takten), Einordnung mit SCOP und Fraunhofer-Feldtests, Hinweise (Heizstab-Anteil, Warmwasser, Vorlauf, Standby). Datenblatt-Werte anpassbar. Die Bridge schreibt jetzt den Heizstab-Zähler je Abfrage mit. Demo: Warmwasser mit realistischem Vorlauf, Heizen näher an einer modernen Wärmepumpe. ' +
@@ -447,6 +448,13 @@ const INFO = {
     '(Datenblatt-Modell auf deine gemessene Wärme), Warmwasser <b>mittags</b> statt bei der Außentemperatur, bei der es heute lädt, den <b>Heizstab</b> vermeiden (gemessen), die <b>Raumtemperatur</b> 1 K runter ' +
     '(Faustwert 6 % Heizwärme), dazu Heizen bei milder Luft, Verdichter-Starts und Stillstand. Jahreswerte auf deinen WP-Jahresstrom (HomeCom-Import) bzw. hochgerechnet; Euro mit deinem Strompreis. ' +
     'Schätzungen, nicht einfach addierbar – am besten eine Änderung nach der anderen und 1–2 Wochen später hier vergleichen.',
+  'hp-check': () => 'Der <b>Anlagen-Check</b> ist das Troubleshooting zur Wärmepumpe. Oben die Einordnung, ob dein Abstand zum Datenblatt normal ist ' +
+    '(Prüfstand nach EN 14511 vs. Alltag, Feldtests des Fraunhofer ISE). Dann <b>Heizlast gegen Leistung</b>: die gemessene Kennlinie (ein Punkt je Tag: mittlere Heizwärme über der Außentemperatur), ' +
+    'dein <b>Gebäudemodell</b> aus den U-Werten („🏗️ Theorie vs. Praxis“) und die angenommene Maximalleistung der 7-kW-Außeneinheit (Datenblattpunkt A−7/W35 6,71 kW, kälter und mit mehr Vorlauf weniger). ' +
+    'Wo die Heizlast die Leistung schneidet, liegt der <b>Bivalenzpunkt</b> – darunter braucht es den Heizstab; Warmwasser-Ladezeit und ein Nacht-Leisemodus verschieben ihn nach oben. ' +
+    'Die <b>automatischen Prüfungen</b> vergleichen Messwerte mit üblichen Bereichen (Heizkurve, Spreizung, Durchfluss, Außenfühler gegen Wetterdienst, Abtauen, Heizstab, Warmwasser, Takten, Raumtemperatur) ' +
+    'und nennen bei Auffälligkeiten typische Ursachen, getrennt nach <b>Einstellung</b> und <b>Einbau/Mechanik</b>. Die Liste <b>Vor Ort nachsehen</b> kannst du abhaken (✓ passt / ⚠ auffällig, nochmal tippen = zurücksetzen). ' +
+    'Alles Schätzungen aus Symptomen – exakte Bosch-Werte stehen im EinbauCheck und in der Installationsanleitung.',
   'cop-theory': () => 'Wie nah kommt deine Wärmepumpe an ihr <b>Datenblatt</b>? Die Datenblatt-Punkte (EN 14511, z. B. A2/W35 = 2 °C Außenluft, 35 °C Vorlauf) gelten im Prüfstand. ' +
     'Die App rechnet daraus für <b>jede Messung</b> (alle 5 Minuten) den COP, den die Maschine bei genau dieser <b>Außen- und Vorlauftemperatur</b> haben müsste – so wird fair verglichen: ' +
     'Warmwasser mit 50–55 °C Vorlauf hat auch laut Datenblatt einen niedrigeren COP als Heizen mit 30 °C. <b>Praxis</b> = erzeugte Wärme ÷ Strom aus den Zählern der WP. ' +
@@ -6074,6 +6082,16 @@ function hpSpec() {
 const hpSpecQuery = sp => sp.pts.map(p => p.map(Number).join(':')).join(',');
 let _coptDays = null, _coptData = {}, _coptBusy = false;
 function coptDays() { if (_coptDays == null) { try { _coptDays = parseInt(localStorage.getItem('bhe_copt_days'), 10) || 30; } catch (e) { _coptDays = 30; } } return _coptDays; }
+// one request per window/spec, shared by the comparison card and the Anlagen-Check
+const _coptPending = {};
+function coptFetch(sp) {
+  const key = coptDays() + '|' + hpSpecQuery(sp);
+  if (_coptData[key]) return Promise.resolve(_coptData[key]);
+  if (!_coptPending[key]) _coptPending[key] = api(`/api/heatpump/coptheory?days=${coptDays()}&pts=${encodeURIComponent(hpSpecQuery(sp))}`)
+    .then(r => { _coptData[key] = r; return r; })
+    .finally(() => { delete _coptPending[key]; });
+  return _coptPending[key];
+}
 async function renderCopTheory(force) {
   const card = $('copt-card'); if (!card) return;
   const sp = hpSpec(), key = coptDays() + '|' + hpSpecQuery(sp);
@@ -6082,8 +6100,9 @@ async function renderCopTheory(force) {
   if (_coptBusy) return; _coptBusy = true;
   const k = $('copt-kpis'); if (k && !_coptData[key]) k.innerHTML = '<div class="note" style="grid-column:1/-1;padding:10px 0;text-align:center">Lade Vergleich …</div>';
   try {
-    const r = await api(`/api/heatpump/coptheory?days=${coptDays()}&pts=${encodeURIComponent(hpSpecQuery(sp))}`);
-    _coptData[key] = r; paintCopTheory(r);
+    if (force) delete _coptData[key];
+    const r = await coptFetch(sp);
+    paintCopTheory(r);
   } catch (e) { if (k) k.innerHTML = '<div class="note" style="grid-column:1/-1">Nur mit laufender Bridge verfügbar.</div>'; }
   finally { _coptBusy = false; }
 }
@@ -6119,7 +6138,7 @@ function saveCopSpec(reset) {
     try { localStorage.setItem('bhe_hp_spec', JSON.stringify(sp)); } catch (e) {}
   }
   const body = $('copt-spec-body'); if (body) body.dataset.open = '';
-  renderCopTheory();
+  renderCopTheory(); renderHpCheckup();
   if (msg) msg.textContent = reset ? 'Datenblatt der 6800i AW 7 OR-S wiederhergestellt.' : 'Übernommen.';
 }
 function paintCopTheory(r) {
@@ -6309,6 +6328,378 @@ function paintCopLevers(r) {
     : '<div class="note">Keine auffälligen Stellschrauben gefunden – deine Wärmepumpe läuft schon gut.</div>';
   if (note) note.innerHTML = 'Schätzungen: das Datenblatt-Modell für Vorlauf und Warmwasser, der Faustwert 6 % je Grad Raumtemperatur. Die Effekte lassen sich nicht einfach addieren ' +
     '(z. B. senkt eine kühlere Raumtemperatur auch den Vorlauf). Am besten eine Änderung nach der anderen machen und hier 1–2 Wochen später vergleichen.';
+}
+
+// ===== Anlagen-Check: Troubleshooting (Symptome → typische Ursachen) ======== #
+// What the data can say about installation and settings: are the ~75 % of the
+// datasheet normal, does the 7-kW unit cover the heat load (measured signature,
+// building model from the U-values, an assumed capacity curve), automatic
+// symptom checks with typical setting / installation causes, and an on-site
+// checklist the user ticks (synced as bhe_hp_check). Symptoms only – the app
+// does not see pipes.
+const CHK_LS = 'bhe_hp_check';
+let _chkData = {}, _chkBusy = false;
+function chkState() {
+  try { const s = JSON.parse(localStorage.getItem(CHK_LS) || '{}'); return s && typeof s === 'object' ? s : {}; } catch (e) { return {}; }
+}
+function chkKey() {
+  const loc = getLatLon();
+  return (loc ? loc.lat.toFixed(3) + ',' + loc.lon.toFixed(3) : '-') + '|' + coptDays() + '|' + hpSpecQuery(hpSpec());
+}
+async function renderHpCheckup(force) {
+  if (!$('chk-card')) return;
+  const key = chkKey();
+  if (_chkData[key] && !force) { paintHpCheckup(_chkData[key]); return; }
+  if (_chkBusy) return; _chkBusy = true;
+  const v = $('chk-verdict'); if (v && !_chkData[key]) v.innerHTML = '<div class="note" style="padding:8px 0">Prüfe die Anlage …</div>';
+  try {
+    const loc = getLatLon();
+    const [ck, cop] = await Promise.all([
+      api('/api/heatpump/checkup?days=30' + (loc ? `&lat=${loc.lat}&lon=${loc.lon}` : '')),
+      coptFetch(hpSpec()).catch(() => null)]);
+    _chkData[key] = { ck: ck || {}, cop: cop || {} };
+    paintHpCheckup(_chkData[key]);
+  } catch (e) { if (v) v.innerHTML = '<div class="note">Nur mit laufender Bridge verfügbar.</div>'; }
+  finally { _chkBusy = false; }
+}
+// The building model (U-values from „Theorie vs. Praxis") against the measured
+// load: UA, design load, the biggest single loss and what insulating it does.
+function chkBuilding(design, tIn, hl, flowDesign, gainPerK) {
+  if (typeof buildData !== 'function') return null;
+  const b = buildData(), ua = buildingUA();
+  if (!(ua > 0)) return null;
+  const vent = 0.34 * (b.n || 0) * ((b.area || 0) * (b.height || 0));
+  let best = null;
+  (b.comps || []).forEach(c => {
+    const f = c.f == null ? 1 : c.f, R = RENO[c.k];
+    const loss = (c.u || 0) * (c.a || 0) * f;
+    if (!best || loss > best.loss) best = { c, loss, R: (R && c.u > R.u) ? R : null, d: (R && c.u > R.u) ? (c.u - R.u) * c.a * f : 0 };
+  });
+  const out = { ua, vent, q: ua * (tIn - design) / 1000, q20: ua * (20 - design) / 1000, best };
+  if (best && best.R && best.d > 0) {
+    const ratio = (ua - best.d) / ua;
+    const qMeas = hl && hl.reliable && hl.q_design != null ? hl.q_design : null;
+    const q0 = qMeas != null ? qMeas : out.q;
+    out.reno = { ratio, l: best.R.l, u0: best.c.u, u1: best.R.u, q0, q1: q0 * ratio, basis: qMeas != null ? 'gemessene Kennlinie' : 'Modell' };
+    // floor heating: heat output ~ (water − room)^1.1 → the flow needed falls with the load
+    if (flowDesign != null && flowDesign > tIn + 2) {
+      out.reno.flow1 = tIn + (flowDesign - tIn) * Math.pow(ratio, 1 / 1.1);
+      out.reno.dflow = flowDesign - out.reno.flow1;
+      out.reno.copGain = out.reno.dflow * (gainPerK != null ? gainPerK : 0.025);
+    }
+    // bivalent point after insulating: the measured line (or the model) scaled by the UA ratio
+    const L = (hl && hl.line) || [];
+    if (L.length) {
+      let tb = null;
+      L.forEach(x => { const q = (x.q != null && hl.reliable ? x.q : ua * (tIn - x.t) / 1000) * ratio; if (q > x.cap) tb = x.t; });
+      out.reno.t_biv = tb;
+    }
+  }
+  return out;
+}
+// heat load against outdoor temperature: measured days (dots) and line, the
+// building model, the unit's capacity (assumption, also halved for a night
+// quiet mode), design temperature and bivalent point
+function chkLoadChart(hl, bm, tIn, design) {
+  const L = (hl && hl.line) || [];
+  if (!L.length) return '';
+  const ts = L.map(x => x.t), n = ts.length, t0 = ts[0], t1 = ts[n - 1];
+  const model = bm ? ts.map(t => Math.max(0, bm.ua * (tIn - t) / 1000)) : null;
+  const P = ((hl && hl.pts) || []).filter(p => p[0] >= t0 && p[0] <= t1);
+  const ys = [...L.map(x => x.q || 0), ...L.map(x => x.cap), ...(model || []), ...P.map(p => p[1])];
+  const sc = niceScale(Math.max(2, ...ys));
+  const h = 220, padL = 30, padR = 10, top = 12, base = h - 24;
+  const X = t => padL + (CW - padL - padR) * (t - t0) / (t1 - t0);
+  const Y = v => base - (base - top) * Math.max(0, Math.min(1, v / sc.max));
+  const path = (vals, col, dash, w, op) => `<path d="${vals.map((v, i) => (i ? 'L' : 'M') + X(ts[i]).toFixed(1) + ' ' + Y(v).toFixed(1)).join(' ')}" fill="none" stroke="${col}" stroke-width="${w || 2}"${dash ? ` stroke-dasharray="${dash}"` : ''}${op ? ` opacity="${op}"` : ''} stroke-linejoin="round" stroke-linecap="round"/>`;
+  let g = gridLines(h, top, base, padL, sc.max, { step: sc.step, unit: 'kW' });
+  if (design >= t0 && design <= t1)
+    g += `<line x1="${X(design).toFixed(1)}" x2="${X(design).toFixed(1)}" y1="${top}" y2="${base}" stroke="var(--muted)" stroke-dasharray="3 3" opacity=".8"/>` +
+      `<text class="axis" x="${(X(design) + 4).toFixed(1)}" y="${top + 9}">Norm ${fmt(design, 0)}°</text>`;
+  P.forEach(p => { g += `<circle cx="${X(p[0]).toFixed(1)}" cy="${Y(p[1]).toFixed(1)}" r="2.6" fill="${COL.hp}" opacity=".32"/>`; });
+  g += path(L.map(x => x.cap * 0.5), COL.pv, '2 4', 1.4, 0.75);
+  g += path(L.map(x => x.cap), COL.pv, '', 2.4);
+  if (model) g += path(model, COL.heat, '6 4', 1.8);
+  const hasQ = L[0].q != null;
+  if (hasQ) g += path(L.map(x => x.q), COL.hp, hl.reliable ? '' : '4 3', 2.4);
+  if (hasQ && hl.t_biv != null && hl.t_biv >= t0) {
+    const lo = L.filter(x => x.t <= hl.t_biv).pop() || L[0], hi = L.find(x => x.t >= hl.t_biv) || lo;
+    const c = lo === hi || hi.t === lo.t ? lo.cap : lo.cap + (hi.cap - lo.cap) * (hl.t_biv - lo.t) / (hi.t - lo.t);
+    g += `<circle cx="${X(hl.t_biv).toFixed(1)}" cy="${Y(c).toFixed(1)}" r="4.5" fill="#ffb64d" stroke="var(--card)" stroke-width="1.5"/>`;
+  }
+  ts.forEach((t, i) => { if (i % 2 === 0) g += `<text class="axis" x="${X(t).toFixed(1)}" y="${h - 8}" text-anchor="middle">${t}°</text>`; });
+  const tips = ts.map((t, i) => `<b>${t} °C außen</b>` +
+    (L[i].q != null ? ` · Heizlast gemessen <b>${fmt(L[i].q, 1)} kW</b>` : '') +
+    (model ? ` · Gebäudemodell ${fmt(model[i], 1)} kW` : '') +
+    ` · WP max. ~<b>${fmt(L[i].cap, 1)} kW</b> (Leisemodus ~${fmt(L[i].cap * 0.5, 1)})`);
+  return svg(h, g, { kind: 'area', pad: padL, padR, n, h, tips });
+}
+// On-site checklist: [key, title, what to look at, why it matters for the COP,
+// related automatic checks]. Exact Bosch values (distances, pipe sizes, flow)
+// are in the EinbauCheck / installation manual – referenced, not invented.
+const CHK_MANUAL = [
+  ['place', '🌬️ Aufstellung der Außeneinheit', 'Ansaug- und Ausblasseite frei; die kalte Ausblasluft kann ungehindert weg (nicht gegen eine nahe Wand, Hecke, Zaun oder Mülltonnen); keine Ecke, Nische oder Senke, in der sich Kaltluft sammelt; nicht unter einem Vordach oder Carport. Abstände laut Bosch-EinbauCheck (dort u. a. mind. 400 mm zur Wand, Sonderfall 200 mm).',
+    'Saugt das Gerät seine eigene kalte Abluft wieder an (Kaltluft-Kurzschluss), ist die Luft am Verdampfer kälter als draußen: schlechterer COP und häufigeres Abtauen.', ['defrost', 'coldbins']],
+  ['clean', '🍂 Lamellen & Gitter sauber', 'Verdampfer-Lamellen frei von Laub, Pollen, Staub, Spinnweben; nichts davor gelagert. Reinigen nur vorsichtig und drucklos – die Lamellen knicken leicht.',
+    'Weniger Luftdurchsatz → tiefere Verdampfung → schlechterer COP, mehr Abtauen.', ['defrost', 'coldbins']],
+  ['snow', '❄️ Fundament, Schnee & Kondensat', 'Gerät erhöht über der üblichen Schneehöhe (Fundament/Konsole); das Abtauwasser läuft frostfrei ab (Kiesbett, Versickerung unter der Frostgrenze oder beheizter Ablauf); nach Frostnächten kein Eisberg unter dem Gerät.',
+    'Eis unter dem Gerät wächst in den Verdampfer – das Abtauen wird länger und häufiger.', ['defrost', 'coldbins']],
+  ['outpipe', '🧥 Leitungen außen gedämmt', 'Die Heizwasserleitungen zwischen Außen- und Inneneinheit lückenlos gedämmt – auch Bögen, Kugelhähne, Filter, Wanddurchführung; Dämmung UV- und wetterfest, trocken, nicht brüchig, nicht von Vögeln oder Mardern angefressen.',
+    'Bei der Monoblock-WP fließt das Heizwasser nach draußen: jeder offene Meter gibt im Winter Wärme an die Luft ab, die WP muss wärmer fahren.', ['flowcurve', 'loadgap']],
+  ['inpipe', '🏚️ Leitungen innen gedämmt', 'In Keller, Technikraum und Garage sind Heizungs-, Warmwasser- und Zirkulationsleitungen gedämmt, inklusive Armaturen, Pumpen und Verteiler; die Wege sind kurz.',
+    'Wärme, die in unbeheizten Räumen verloren geht, zählt die WP als „erzeugt“ – in den Wohnräumen kommt sie nicht an.', ['loadgap', 'dhw']],
+  ['pipedim', '📏 Leitungslänge & Rohrdurchmesser', 'Länge (hin + zurück), Durchmesser und Anzahl der Bögen der Verbindung Außen-/Inneneinheit mit der Tabelle „Rohrdimensionierung“ im Bosch-EinbauCheck für die 7-kW-Außeneinheit vergleichen (oder den Installateur fragen).',
+    'Zu dünn oder zu lang = hoher Druckverlust → zu wenig Durchfluss → große Spreizung, höherer Vorlauf, im Extremfall Störabschaltungen.', ['spread', 'flow']],
+  ['filter', '🧹 Schmutzfänger, Luft, Druck', 'Schmutzfänger/Filter vor der WP sauber (Fachbetrieb oder nach Anleitung); Anlage entlüftet (kein Gluckern, keine Luft-Meldung); Anlagendruck im Sollbereich laut Anleitung.',
+    'Ein zugesetzter Filter oder Luft im System bremst den Durchfluss – typisch: die Spreizung wird über die Monate größer.', ['spread', 'flow']],
+  ['buffer', '🔀 Pufferspeicher / hydraulische Weiche', 'Ist ein Puffer oder eine Weiche eingebaut? Wenn ja: Reihenpuffer im Rücklauf oder Trennpuffer mit zweiter Pumpe? Bei einem Trennpuffer den Vorlauf vor und hinter dem Puffer vergleichen.',
+    'Ein Trennpuffer oder eine Weiche mischt warmes mit kaltem Wasser: die WP muss einige Kelvin wärmer fahren, als die Fußbodenheizung bekommt.', ['flowcurve', 'starts']],
+  ['valves', '🎛️ Raumregler & Abgleich', 'Stellantriebe der Fußbodenheizung in den meisten Räumen dauerhaft offen; Durchflüsse am Verteiler eingestellt (Reiter Abgleich); keine Räume, die ständig zu warm sind.',
+    'Drosseln viele Thermostate, muss die WP gegen geschlossene Ventile mit mehr Vorlauf heizen – und sie taktet.', ['flowcurve', 'starts', 'indoor']],
+  ['tank', '🛁 Warmwasserspeicher', 'WP-tauglicher Speicher mit großer Heizwendel (Bosch empfiehlt passende WP-Speicher); Speicherfühler richtig in der Tauchhülse; Zirkulationspumpe mit Zeitprogramm oder aus; Speicher, Anschlüsse und Zirkulation gedämmt.',
+    'Eine kleine Wendel zwingt die WP zu hohem Ladevorlauf und langen Ladungen – die Heizung pausiert dann lange.', ['dhw']],
+  ['sensor', '🌡️ Außenfühler', 'Nord- oder Nordwestseite, ohne direkte Sonne; nicht über Fenstern, Türen, Abluft oder Kamin; nicht im Luftstrom der Außeneinheit; etwa 2–2,5 m hoch.',
+    'Misst er zu kalt, fährt die Heizkurve wärmer als nötig – das kostet COP, ohne dass es jemand merkt.', ['sensor', 'flowcurve']],
+  ['settings', '⚙️ Einstellungen im Regler', 'Heizkurve und Raum-Soll so niedrig, dass die Räume gerade warm werden; keine tiefe Nachtabsenkung; Zuheizer erst unter dem Bivalenzpunkt und mit Verzögerung; Warmwasser-Modus und -Stopptemperatur; Legionellenschaltung 1× pro Woche; Sommer/Winter-Umschaltung.',
+    'Einstellungen sind die häufigste Ursache für eine schwache Arbeitszahl – und am billigsten zu ändern.', ['heater', 'flowcurve', 'warm', 'indoor', 'dhw']],
+  ['quiet', '🌙 Leise-/Nachtmodus', 'Ist ein Nacht- oder Leisemodus mit Leistungsbegrenzung aktiv, und ab wann? Bosch rechnet die Schall-Mindestabstände im EinbauCheck mit 50 % Leistung nachts (22–6 Uhr).',
+    'Mit halber Leistung reicht die WP in kalten Nächten früher nicht mehr – dann hilft der Heizstab.', ['heater', 'load']],
+  ['service', '🧾 Wartung & Fehlerspeicher', 'Wann war die letzte Wartung? Den Fehler- und Störungsspeicher im Fachmann-Menü auslesen lassen (Durchfluss-, Hochdruck- oder Fühlermeldungen); Kältekreis und Ventilator prüfen lassen.',
+    'Gespeicherte Störungen zeigen mechanische Probleme direkt – ohne Raten.', ['spread', 'flow', 'heater', 'defrost']],
+];
+const CHK_REL = { defrost: 'Abtauen', coldbins: 'Kälte', flowcurve: 'Vorlauf', spread: 'Spreizung', flow: 'Durchfluss', sensor: 'Außenfühler', heater: 'Heizstab',
+  dhw: 'Warmwasser', starts: 'Takten', warm: 'milde Luft', load: 'Heizlast', loadgap: 'Heizlast über Modell', indoor: 'Raumtemperatur' };
+let _chkWarn = 0;
+function chkHead() {
+  const S = chkState(), done = CHK_MANUAL.filter(m => S[m[0]] === 'ok' || S[m[0]] === 'bad').length;
+  const e = $('chk-head'); if (e) e.innerHTML = `<span style="color:var(--muted)">${_chkWarn ? _chkWarn + ' ⚠ · ' : ''}${done}/${CHK_MANUAL.length} vor Ort</span>`;
+}
+// a tap updates the one item in place, so an opened detail stays open
+function chkSet(k, v) {
+  const S = chkState(); S[k] = S[k] === v ? '' : v;
+  try { localStorage.setItem(CHK_LS, JSON.stringify(S)); } catch (e) {}
+  const it = document.querySelector(`#chk-manual .chk-m[data-k="${k}"]`);
+  if (it) {
+    it.classList.toggle('chk-ok', S[k] === 'ok'); it.classList.toggle('chk-bad', S[k] === 'bad');
+    it.querySelectorAll('button[data-v]').forEach(b => { const on = b.dataset.v === S[k]; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); });
+  }
+  chkHead();
+}
+function paintHpCheckup(D) {
+  const ck = D.ck || {}, r = D.cop || {}, M = r.modes || {}, Lv = r.levers || {}, A = STATE.hpA || {};
+  const set = (id, html) => { const e = $(id); if (e) e.innerHTML = html; };
+  const pc = v => fmt(v * 100, 0) + ' %';
+  const flags = {};                                   // automatic check → 'warn' | 'info' | 'ok'
+  const design = ck.design_c != null ? ck.design_c : -12;
+  const hl = ck.heatload || null;
+  const tIn = Math.max(18, Math.min(26, (Lv.indoor && Lv.indoor.t) || ck.indoor || 20));
+  const fc = ck.flowcurve;
+  const gainK = Lv.heat_flow && Lv.heat_flow.gain2 != null ? Lv.heat_flow.gain2 / 2 : null;
+  const bm = chkBuilding(design, tIn, hl, fc ? fc.f_design : null, gainK);
+  const rows = [];
+  const add = (key, st, title, val, what, set_, mech) => { flags[key] = st; rows.push({ key, st, title, val, what, set_, mech }); };
+
+  // ---- heat load vs. capacity (first: the verdict refers to its flags) ---- #
+  let lt = '';
+  if (hl && hl.line) {
+    const qm = hl.q_design != null && hl.reliable ? hl.q_design : null, ref = qm != null ? qm : (bm ? bm.q : null);
+    const cap = hl.cap_design;
+    const st = ref == null ? 'info' : ref > cap * 1.08 ? 'warn' : ref > cap * 0.92 ? 'info' : 'ok';
+    flags.load = st;
+    const bivTxt = t => t == null ? 'auch bei −25 °C noch' : t < design ? `bis ${fmt(Math.ceil(t + 0.5), 0)} °C, also bis unter die Norm` : `nur bis etwa ${fmt(Math.ceil(t + 0.5), 0)} °C`;
+    let txt = `Bei der Normaußentemperatur <b>${fmt(design, 0)} °C</b> braucht dein Haus ` +
+      [hl.q_design != null ? `laut Messung <b>${fmt(hl.q_design, 1)} kW</b>${hl.reliable ? '' : ' <span style="color:var(--muted)">(Kennlinie noch nicht belastbar)</span>'}` : '',
+        bm ? `laut Gebäudemodell <b>${fmt(bm.q, 1)} kW</b> bei ${fmt(tIn, 1)} °C innen (${fmt(bm.q20, 1)} kW bei 20 °C)` : ''].filter(Boolean).join(', ') +
+      `. Die 7-kW-Außeneinheit schafft dann etwa <b>${fmt(cap, 1)} kW</b> bei ${fmt(hl.flow_design, 0)} °C Vorlauf.`;
+    if (qm != null) {
+      txt += ` Allein reicht sie ${bivTxt(hl.t_biv)}` + (hl.dhw_h ? `; weil das Warmwasser täglich ~${fmt(hl.dhw_h, 1)} h vom Heizen abzweigt, real eher ${bivTxt(hl.t_biv_dhw)}` : '') +
+        `. Mit einem Nacht-Leisemodus (−50 %) reicht sie nachts ${bivTxt(hl.t_biv_quiet)}.`;
+    }
+    txt += st === 'warn' ? ' <b>Die 7 kW sind für dein Haus knapp</b> – an sehr kalten Tagen muss der Heizstab helfen. Größter Hebel: die Heizlast senken (Dämmung, Raumtemperatur).'
+      : st === 'info' && ref != null ? ' <b>Die 7 kW passen gerade so</b> – an den kältesten Tagen ohne Reserve.'
+        : st === 'ok' ? ' <b>Die 7 kW passen zur Heizlast.</b> Läuft der Heizstab an milden Tagen, liegt das nicht an einer zu kleinen WP.' : '';
+    // measured vs. model: heat lost before it reaches the rooms, or a pessimistic model
+    if (qm != null && bm && bm.q > 0) {
+      const ratio = qm / bm.q;
+      if (ratio > 1.2) { flags.loadgap = 'warn'; txt += ` <br>Gemessen liegt <b>${pc(ratio - 1)} über</b> dem Gebäudemodell: entweder sind die U-Werte zu optimistisch, oder Wärme geht schon vor den Räumen verloren (ungedämmte Leitungen, Keller).`; }
+      else if (ratio < 0.7) txt += ` <br>Gemessen liegt deutlich unter dem Gebäudemodell (${pc(ratio)}) – die U-Werte sind eher vorsichtig angesetzt, oder Sonne, Personen und Geräte heizen kräftig mit.`;
+    }
+    // the electric heater: does the capacity explain it?
+    const He = ck.heater;
+    if (He && He.kwh >= 1) {
+      const bo = (He.by_out || []).filter(x => x.kwh >= 0.5).map(x => `${x.lo == null ? 'unter ' + fmt(x.hi, 0) : x.hi == null ? 'ab ' + fmt(x.lo, 0) : fmt(x.lo, 0) + ' bis ' + fmt(x.hi, 0)} °C: ${fmt(x.kwh, 0)} kWh`);
+      const bmode = He.by_mode || {};
+      const sh = He.above_biv != null && He.kwh > 0 ? He.above_biv / He.kwh : null;
+      txt += `<div class="dwt-box ${sh != null && sh > 0.5 ? 'warn' : 'tip'}" style="margin-top:8px"><b>🔥 Heizstab im Zeitraum: ${fmt(He.kwh, 0)} kWh</b>` +
+        (bo.length ? ` – nach Außentemperatur ${bo.join(', ')}` : '') +
+        `; davon beim Warmwasser ${fmt(bmode.dhw || 0, 0)} kWh, beim Heizen ${fmt(bmode.heating || 0, 0)} kWh. ` +
+        (sh == null ? 'Ob die Kälte das erklärt, zeigt sich, sobald die Heizlast-Kennlinie belastbar ist.'
+          : sh > 0.5 ? `<b>${pc(sh)} davon liefen bei Außentemperaturen, bei denen die WP laut Kennlinie allein reichen müsste</b> – das spricht für eine <b>Einstellung</b> (Zuheizer-Freigabe, Warmwasser/Legionellen mit Heizstab, Leisemodus) und nicht für eine zu kleine WP.`
+            : 'Er lief fast nur bei Kälte unter dem Bivalenzpunkt – das passt zur Heizlast.') + '</div>';
+    }
+    // insulation: the biggest loss and what fixing it does to load, flow and COP
+    if (bm && bm.best) {
+      const shL = bm.best.loss / bm.ua, R = bm.reno;
+      txt += `<div class="dwt-box tip" style="margin-top:8px"><b>🏗️ Dämmung und Wärmepumpe:</b> Größter Einzelverlust laut Gebäudemodell: <b>${esc(bm.best.c.l)}</b> (U ${fmt(bm.best.c.u, 2)}, ${pc(shL)} der Verluste; Lüftung ${pc(bm.vent / bm.ua)}). `;
+      if (R) {
+        txt += `${esc(R.l)} auf U ${fmt(R.u1, 2)}: Heizlast bei ${fmt(design, 0)} °C <b>${fmt(R.q0, 1)} → ${fmt(R.q1, 1)} kW</b> (${R.basis}), Heizwärme etwa <b>−${pc(1 - R.ratio)}</b>` +
+          (R.t_biv !== undefined ? `, die WP reicht dann ${R.t_biv == null ? 'auch bei −16 °C allein' : 'bis etwa ' + fmt(R.t_biv + 2, 0) + ' °C allein'}` : '') +
+          (R.dflow != null && R.dflow >= 0.5 ? `; die Fußbodenheizung käme mit etwa <b>${fmt(R.dflow, 0)} K weniger Vorlauf</b> aus (bei ${fmt(design, 0)} °C), das hebt die Arbeitszahl um grob <b>${pc(R.copGain)}</b>` : '') +
+          '. Dämmung wirkt also doppelt: weniger Wärme <i>und</i> jede kWh billiger erzeugt. Kosten und Amortisation stehen in „🏗️ Theorie vs. Praxis“. ';
+      }
+      txt += 'Den Abstand zum Datenblatt erklärt die Dämmung dagegen kaum – der Vergleich ist schon auf deinen Vorlauf bereinigt.</div>';
+    }
+    lt = chkLoadChart(hl, bm, tIn, design) +
+      `<div class="legend" style="margin-top:6px"><div class="it"><span class="sw" style="background:${COL.hp}"></span>Heizlast gemessen${hl.basis === 'day' ? ' (Punkte = Tage)' : ''}</div>` +
+      (bm ? `<div class="it"><span class="sw" style="background:${COL.heat}"></span>Gebäudemodell (U-Werte)</div>` : '') +
+      `<div class="it"><span class="sw" style="background:${COL.pv}"></span>max. WP-Leistung (Annahme) · gepunktet: Leisemodus</div></div>` +
+      `<div class="note" style="margin-top:6px">${txt}</div>`;
+  } else if (bm) {
+    lt = `<div class="note">Gebäudemodell: <b>${fmt(bm.q, 1)} kW</b> bei ${fmt(design, 0)} °C. Eine gemessene Kennlinie entsteht über Tage mit unterschiedlichem Wetter.</div>`;
+  }
+  set('chk-load', lt || '<div class="note">Noch keine Heizlast-Kennlinie – sie entsteht über Tage mit unterschiedlichem Wetter (oder HomeCom-CSV importieren).</div>');
+
+  // ---- automatic checks ----------------------------------------------------- #
+  if (fc) {
+    add('flowcurve', fc.f_design > 42 ? 'warn' : fc.f_design > 36 ? 'info' : 'ok', 'Heizkurve / Vorlauf',
+      `Gemessen: Ø <b>${fmt(fc.f0, 0)} °C</b> Vorlauf bei 0 °C außen, <b>${fmt(fc.f_design, 0)} °C</b> bei ${fmt(design, 0)} °C (hochgerechnet), ${fmt(fc.f10, 0)} °C bei 10 °C`,
+      'Eine Fußbodenheizung kommt im gut gedämmten Haus mit ~30–35 °C bei Normaußentemperatur aus, im Bestand oft mit 35–40 °C. Jedes Grad weniger bringt ~2–3 % Arbeitszahl.',
+      'Heizkurve/Fußpunkt zu hoch, Raum-Soll hoch, Nachtabsenkung mit Aufheizspitze',
+      'drosselnde Einzelraumregler, kein hydraulischer Abgleich, Puffer/Weiche mischt, zu wenig Heizfläche, Außenfühler misst zu kalt');
+  }
+  const sp = ck.spread;
+  if (sp) add('spread', sp.spread_k > 7 ? 'warn' : sp.spread_k < 2.5 ? 'info' : 'ok', 'Spreizung an der WP (Vor- minus Rücklauf)', `Median <b>${fmt(sp.spread_k, 1)} K</b> beim Heizen`,
+    sp.spread_k > 7 ? 'Zu groß: es fließt zu wenig Wasser, die WP muss für dieselbe Wärme wärmer fahren.' : sp.spread_k < 2.5 ? 'Sehr klein: viel Durchfluss – für den COP gut, kostet aber Pumpenstrom.' : 'Im üblichen Bereich (3–7 K).',
+    'Pumpenstufe/-modus zu niedrig', 'Schmutzfänger/Filter zu, Luft im System, Rohre zu dünn oder zu lang, viele geschlossene Kreise');
+  const fl = ck.flow;
+  if (fl && fl.l_min) {
+    const nom = 6.71 * 1000 / (1.163 * 5) / 60;
+    add('flow', flags.spread === 'warn' && fl.l_min < nom * 0.7 ? 'warn' : 'ok', 'Durchfluss', `<b>${fmt(fl.l_min, 1)} l/min</b> (${esc(fl.src || '')}); bei voller Leistung und 5 K Spreizung bräuchte die 7-kW-Einheit ≈ ${fmt(nom, 0)} l/min`,
+      'Bei Teillast reicht weniger. Kritisch ist nur wenig Durchfluss zusammen mit großer Spreizung; den Mindestdurchfluss nennt die Installationsanleitung.', 'Pumpeneinstellung', 'wie bei der Spreizung');
+  }
+  const sn = ck.sensor;
+  if (sn) {
+    const am = Math.abs(sn.mean), st = am > 3 ? 'warn' : am > 2 || sn.max >= 4 || sn.min <= -3.5 ? 'info' : 'ok';
+    const sg = x => (x > 0 ? '+' : '') + fmt(x, 1);
+    add('sensor', st, 'Außenfühler vs. Wetterdienst', `Tagesmittel <b>${sg(sn.mean)} K</b>, Tiefstwerte ${sg(sn.min)} K, Höchstwerte ${sg(sn.max)} K gegenüber dem Wetterdienst (${sn.n} Tage)`,
+      (sn.mean < -2 ? 'Der Fühler misst kälter als die Umgebung – die Heizkurve fährt dann wärmer als nötig. ' : sn.mean > 2 ? 'Der Fühler misst wärmer – an sonnigen Tagen heizt die WP dann eher zu wenig. ' : 'Passt (Wetterdaten gelten für dein Gebiet, ±2 K sind normal). ') +
+      (sn.max >= 4 ? 'Tagsüber deutlich wärmer: Sonne auf dem Fühler? ' : '') + (sn.min <= -3.5 ? 'Nachts deutlich kälter: Kaltluft der Außeneinheit am Fühler?' : ''),
+      '', 'Fühler im Luftstrom der Außeneinheit, an einer sonnigen Wand, über Fenster/Abluft, schlecht befestigt');
+  } else rows.push({ key: 'sensor', st: 'na', title: 'Außenfühler vs. Wetterdienst', val: getLatLon() ? 'Noch zu wenige vollständige Tage mit Wetterdaten.' : 'Standort im PV-Tab eintragen – dann vergleicht die App mit dem Wetterdienst.', what: '' });
+  const df = ck.defrost;
+  if (df) {
+    const odd = df.mild_per_day != null && df.mild_per_day >= 6 && (df.cold_per_day == null || df.mild_per_day >= 0.75 * df.cold_per_day);
+    add('defrost', odd ? 'warn' : 'ok', 'Abtauen', `Ø <b>${fmt(df.per_day, 1)}×</b> am Tag` +
+      (df.cold_per_day != null ? ` · an Tagen unter 7 °C ${fmt(df.cold_per_day, 1)}×` : '') + (df.mild_per_day != null ? ` · an milderen ${fmt(df.mild_per_day, 1)}×` : '') +
+      ' <span style="color:var(--muted)">(aus dem Leistungsverlauf erkannt, Schätzung)</span>',
+      odd ? 'Bei milder Luft fast so oft wie bei Kälte – das deutet auf Luftführung oder Verschmutzung.' : 'Bei 0–5 °C und feuchter Luft ist häufiges Abtauen normal; bei milder Luft wird es seltener – so soll es sein.',
+      '', 'Kaltluft-Kurzschluss (Abstände, Nische), Laub/Schmutz am Verdampfer, Eis am Boden, Kondensat friert');
+  }
+  // the gap along the outdoor temperature (3-K bins, heating): flat → general
+  // losses; dropping in the cold → defrost/heater; dropping in mild air → cycling
+  const B = (r.bins || []).filter(b => b.cop && b.cop_th && b.e > 0);
+  const wr = arr => { const e = arr.reduce((s, b) => s + b.e, 0); return e > 0 ? arr.reduce((s, b) => s + b.cop / b.cop_th * b.e, 0) / e : null; };
+  const rc = wr(B.filter(b => b.t + 1.5 < 2)), rm = wr(B.filter(b => b.t + 1.5 >= 2 && b.t + 1.5 < 10)), rw = wr(B.filter(b => b.t + 1.5 >= 10));
+  let pattern = '';
+  if (rm != null && (rc != null || rw != null)) {
+    const coldDrop = rc != null && rc < rm - 0.12, mildDrop = rw != null && rw < rm - 0.12;
+    pattern = coldDrop ? 'cold' : mildDrop ? 'mild' : 'flat';
+    add('coldbins', coldDrop ? 'warn' : mildDrop ? 'info' : 'ok', 'Abstand zum Datenblatt nach Außentemperatur',
+      [rc != null ? `kalt (unter 2 °C) <b>${pc(rc)}</b>` : '', `2–10 °C <b>${pc(rm)}</b>`, rw != null ? `mild (ab 10 °C) <b>${pc(rw)}</b>` : ''].filter(Boolean).join(' · '),
+      coldDrop ? 'Bricht in der Kälte ein: typisch für Abtauprobleme, Heizstab oder eine WP an der Leistungsgrenze.'
+        : mildDrop ? 'Schwächer bei milder Luft: die WP taktet, weil das Haus wenig Wärme braucht – Teillast, Pumpen und Stillstand wiegen schwerer.'
+          : 'Über alle Temperaturen ähnlich – kein typischer Kälte- oder Takt-Fehler, eher allgemeine Verluste (Pumpen, Regelung, Messung).',
+      'Zuheizer-Freigabe, Heizgrenze', 'wie beim Abtauen');
+  }
+  const life = r.lifetime, He = ck.heater;
+  const hWin = He && r.elec_kwh > 0 ? He.kwh / r.elec_kwh : null;
+  if (hWin != null || life) {
+    const sh = Math.max(hWin || 0, life ? life.heater_share : 0);
+    add('heater', sh > 0.05 ? 'warn' : sh > 0.02 ? 'info' : 'ok', 'Heizstab',
+      [hWin != null ? `im Zeitraum <b>${pc(hWin)}</b> des WP-Stroms` : '', life ? `seit Inbetriebnahme <b>${pc(life.heater_share)}</b> (${fmt(life.heater_kwh, 0)} kWh)` : ''].filter(Boolean).join(' · '),
+      'Normal sind wenige Prozent (sehr kalte Tage, Legionellenschaltung). Jede kWh aus dem Heizstab ersetzt ~3 kWh Wärmepumpen-Wärme.',
+      'Zuheizer-Freigabe/Bivalenzpunkt zu hoch, Heizstab fürs Warmwasser oder für die Legionellenschaltung, Leise-/Nachtmodus, Estrich-/Ausheizprogramm noch aktiv',
+      'WP zu klein für die Heizlast, zu wenig Durchfluss (Störabschaltung), Abtauen mit Heizstab-Hilfe');
+  }
+  if (M.dhw && M.dhw.cop) {
+    const eW = M.dhw.e || 0, eH = (M.heating && M.heating.e) || 0, shW = eW + eH > 0 ? eW / (eW + eH) : null, dh = hl && hl.dhw_h;
+    add('dhw', M.dhw.flow > 58 || (dh != null && dh > 2.5) ? 'info' : 'ok', 'Warmwasser',
+      `COP <b>${fmt(M.dhw.cop, 2)}</b> bei Ø ${fmt(M.dhw.flow, 0)} °C Ladevorlauf${M.dhw.ret != null ? ` (Rücklauf ${fmt(M.dhw.ret, 0)} °C)` : ''}` +
+      (shW != null ? ` · ${pc(shW)} des WP-Stroms` : '') + (dh != null ? ` · Ø ${fmt(dh, 1)} h Laden am Tag` : ''),
+      'Ein Ladevorlauf um 60 °C ist für eine WP teuer und dauert; mit großer Wendel und 50–52 °C Stopptemperatur reicht weniger (Legionellen: Reiter Warmwasser).',
+      'hohe Stopptemperatur, Komfort-Modus, Zirkulation dauernd an, Legionellenschaltung zu oft', 'kleine Speicherwendel, Fühler falsch gesteckt, ungedämmte Zirkulation');
+  }
+  const S2 = Lv.starts;
+  if (S2) add('starts', S2.per_day >= 15 || (S2.per_day >= 10 && (S2.min_per_start || 99) < 20) ? 'warn' : 'ok', 'Takten',
+    `Ø <b>${fmt(S2.per_day, 0)} Verdichter-Starts</b> am Tag${S2.min_per_start != null ? `, Ø ${fmt(S2.min_per_start, 0)} min Laufzeit je Start` : ''}`,
+    'Wenige lange Läufe sind effizient; viele kurze kosten Wirkungsgrad und Verschleiß.',
+    'Heizkurve zu hoch, Hysterese/Mindestpause klein, Warmwasser oft nachgeladen', 'WP für die Übergangszeit groß, drosselnde Thermostate, wenig Wasservolumen im System');
+  if (Lv.warm && Lv.warm.share != null && Lv.warm.share >= 0.05)
+    add('warm', 'info', 'Heizen bei milder Luft', `${pc(Lv.warm.share)} des Heizstroms bei ≥ 15 °C außen, COP ${fmt(Lv.warm.cop, 2)}`,
+      'Bei so milder Luft braucht das Haus kaum Wärme; die WP taktet dann.', 'Heizgrenze (Sommer/Winter-Umschaltung) hoch', '');
+  const tI = (Lv.indoor && Lv.indoor.t) || ck.indoor;
+  if (tI != null) add('indoor', tI >= 23 ? 'warn' : tI >= 22 ? 'info' : 'ok', 'Raumtemperatur', `Ø <b>${fmt(tI, 1)} °C</b> in den Räumen (Bosch-Thermostate)`,
+    'Jedes Grad mehr kostet grob 6 % Heizwärme und hebt den nötigen Vorlauf.', 'Raum-Soll der Thermostate und der WP', '');
+  if (r.standby_w != null && r.standby_w >= 5) add('standby', r.standby_w > 40 ? 'info' : 'ok', 'Stillstand', `Ø <b>${fmt(r.standby_w, 0)} W</b>, wenn die WP nicht läuft`,
+    'Üblich sind etwa 10–30 W (Regelung, im Winter Frostschutz/Kurbelwannenheizung).', '', 'Kurbelwannen- oder Begleitheizung dauerhaft an');
+  const icon = st => st === 'warn' ? '⚠️' : st === 'ok' ? '✅' : st === 'na' ? '❔' : 'ℹ️';
+  const ord = { warn: 0, info: 1, ok: 2, na: 3 };
+  rows.sort((a, b) => ord[a.st] - ord[b.st]);
+  const rowHtml = x => `<div class="copx-item"><div style="display:flex;gap:8px;align-items:baseline"><span aria-hidden="true">${icon(x.st)}</span><div style="flex:1;min-width:0">` +
+    `<b style="font-size:13.5px">${esc(x.title)}</b><div class="note" style="margin-top:2px">${x.val}${x.what ? '. ' + x.what : ''}</div>` +
+    (x.st === 'warn' && (x.set_ || x.mech) ? `<div class="note chk-cause">${x.set_ ? `<div>⚙️ <b>Einstellung:</b> ${esc(x.set_)}</div>` : ''}${x.mech ? `<div>🔧 <b>Einbau/Mechanik:</b> ${esc(x.mech)}</div>` : ''}</div>` : '') +
+    '</div></div></div>';
+  const okRows = rows.filter(x => x.st === 'ok');
+  set('chk-auto', rows.filter(x => x.st !== 'ok').map(rowHtml).join('') +
+    (okRows.length ? `<details class="chk-okd"><summary>✅ <b>${okRows.length} unauffällig:</b> ${okRows.map(x => esc(x.title)).join(' · ')}</summary>${okRows.map(rowHtml).join('')}</details>` : ''));
+
+  // ---- is ~75 % okay? -------------------------------------------------------- #
+  const pct = r.ratio != null ? r.ratio : null;
+  const h1 = $('chk-h1'); if (h1) h1.textContent = pct != null ? `Sind ${pc(pct)} vom Datenblatt okay?` : 'Ist der Abstand zum Datenblatt normal?';
+  if (pct != null) {
+    const cls = pct >= 0.85 ? 'ok' : pct >= 0.70 ? 'tip' : 'warn';
+    const rH = M.heating && M.heating.cop && M.heating.cop_th ? M.heating.cop / M.heating.cop_th : null;
+    const rW = M.dhw && M.dhw.cop && M.dhw.cop_th ? M.dhw.cop / M.dhw.cop_th : null;
+    const jaz = r.cop, im = A.imported && A.imported.months_used >= 10 ? A.imported : null;
+    const warns = rows.filter(x => x.st === 'warn').map(x => x.title);
+    if (flags.load === 'warn') warns.unshift('Heizlast über der WP-Leistung');
+    let v = `<div class="dwt-box ${cls}"><b>${pc(pct)} vom Datenblatt – ${pct >= 0.85 ? 'sehr gut, nahe am Prüfstand' : pct >= 0.70 ? 'üblich für eine echte Anlage' : pct >= 0.60 ? 'eher schwach, Suchen lohnt sich' : 'deutlich darunter, wahrscheinlich ein konkreter Fehler'}.</b> ` +
+      'Das Datenblatt (EN 14511) gilt im Prüfstand: Dauerlauf bei festen Temperaturen, ohne Takten, Stillstand und Warmwasser-Wechsel. Im Alltag sind 15–30 % Abstand normal (Faustwert). ' +
+      'Deine Prozentzahl ist schon auf Außentemperatur und Vorlauf bereinigt.</div><ul class="chk-facts">';
+    if (rH != null || rW != null) v += `<li>Heizen <b>${rH != null ? pc(rH) : '–'}</b>, Warmwasser <b>${rW != null ? pc(rW) : '–'}</b> – ` +
+      (rH != null && rW != null && Math.abs(rH - rW) >= 0.1 ? (rW < rH ? 'das Warmwasser fällt ab: Speicher, Wendel und Ladung anschauen.' : 'das Heizen fällt ab: Vorlauf, Takten und Abtauen anschauen.') : 'beide ähnlich, kein Fehler nur in einer Betriebsart.') + '</li>';
+    if (pattern) v += `<li>${pattern === 'flat' ? 'Über alle Außentemperaturen ähnlich – kein typisches Kälte- oder Takt-Problem.' : pattern === 'cold' ? '<b>In der Kälte deutlich schwächer</b> – Abtauen, Heizstab oder Leistungsgrenze.' : '<b>Bei milder Luft schwächer</b> – Takten in der Übergangszeit.'}</li>`;
+    const G = r.gap;
+    if (G && G.extra > 1 && G.e_meas > 0) {
+      const parts = [G.standby > 0.5 ? `Stillstand ${pc(G.standby / G.extra)}` : '', G.heater_extra > 0.5 ? `Heizstab ${pc(G.heater_extra / G.extra)}` : '', G.rest > 0.5 ? `Rest ${pc(G.rest / G.extra)} (Takten, Abtauen, Pumpen, Teillast, Messung)` : ''].filter(Boolean);
+      if (parts.length) v += `<li>Mehrverbrauch gegenüber dem Datenblatt: <b>${fmt(G.extra, 0)} kWh</b> im Zeitraum – ${parts.join(', ')}.</li>`;
+    }
+    if (jaz) v += `<li>Gemessene Arbeitszahl im Zeitraum <b>${fmt(jaz, 2)}</b>. Feldtests des Fraunhofer ISE im Bestand: Luft-WP im Jahresmittel 3,1 (2014–19) bzw. 3,4 (bis 2025, Spanne 2,6–4,9).` +
+      (im && im.seasonal_cop ? ` Deine Jahresarbeitszahl aus dem HomeCom-Import: <b>${fmt(im.seasonal_cop, 2)}</b>${im.seasonal_cop < 3.1 ? ' – unter dem Feldtest-Mittel; in die Jahreszahl gehen Heizstab und Sommer-Warmwasser voll ein.' : '.'}` : '') + '</li>';
+    v += '</ul>' + `<div class="note" style="margin-top:4px"><b>Fazit:</b> ${pct >= 0.70 ? 'Ein grober Einbau- oder Einstellfehler ist bei diesem Abstand eher unwahrscheinlich – Luft nach oben gibt es trotzdem' : 'Hier steckt wahrscheinlich etwas Konkretes dahinter'}` +
+      (warns.length ? `; auffällig sind bei dir vor allem: <b>${warns.slice(0, 3).map(esc).join(', ')}</b>.` : '; die automatischen Prüfungen zeigen nichts Auffälliges.') + '</div>';
+    set('chk-verdict', v);
+  } else set('chk-verdict', '<div class="note">Der Vergleich mit dem Datenblatt braucht ein paar Tage Messwerte (Karte „Arbeitszahl: Datenblatt vs. Praxis“).</div>');
+
+  // ---- on-site checklist --------------------------------------------------- #
+  const S = chkState();
+  _chkWarn = Object.values(flags).filter(x => x === 'warn').length;
+  chkHead();
+  const dhwNote = M.dhw && M.dhw.flow ? ` Bei dir lädt die WP mit Ø ${fmt(M.dhw.flow, 0)} °C${M.dhw.ret != null ? ` (Rücklauf ~${fmt(M.dhw.ret, 0)} °C)` : ''}.` : '';
+  const quietNote = hl && hl.t_biv_quiet != null && hl.reliable ? ` Bei dir wäre das nachts schon unter ~${fmt(Math.ceil(hl.t_biv_quiet + 0.5), 0)} °C außen.` : '';
+  set('chk-manual', CHK_MANUAL.map(([k, t, look, why, rel]) => {
+    const hint = rel.filter(x => flags[x] === 'warn').map(x => CHK_REL[x] || x);
+    const v = S[k] || '';
+    const extra = k === 'tank' ? dhwNote : k === 'quiet' ? quietNote : '';
+    return `<div class="copx-item chk-m${v ? ' chk-' + v : ''}" data-k="${k}"><div class="chk-row"><b style="font-size:13.5px">${t}</b>` +
+      `<span class="chk-btns"><button type="button" data-v="ok" class="${v === 'ok' ? 'on' : ''}" aria-pressed="${v === 'ok'}">✓ passt</button><button type="button" data-v="bad" class="bad${v === 'bad' ? ' on' : ''}" aria-pressed="${v === 'bad'}">⚠ auffällig</button></span></div>` +
+      (hint.length ? `<div class="note" style="margin-top:3px;color:#ffb64d">🔎 Passt zu einem Hinweis oben: ${esc(hint.join(', '))}</div>` : '') +
+      `<details class="chk-d"${hint.length ? ' open' : ''}><summary>Worauf achten – und warum</summary><div class="note" style="margin-top:4px">${esc(look)}</div>` +
+      `<div class="note" style="margin-top:3px;color:var(--muted)">Warum: ${esc(why)}${esc(extra)}</div></details></div>`;
+  }).join(''));
+  set('chk-note', 'Die App misst Symptome, sie sieht keine Rohre: Jede Prüfung nennt typische Ursachen, getrennt nach Einstellung (über Regler oder Fachmann-Menü änderbar) und Einbau/Mechanik (Fachbetrieb). ' +
+    'Exakte Bosch-Werte – Mindestabstände, Rohrdimensionen, Mindestdurchfluss – stehen im „EinbauCheck“ und in der Installationsanleitung der Compress 6800i AW. ' +
+    'Die Leistungskurve der Außeneinheit ist eine Annahme aus dem Datenblattpunkt A−7/W35 6,71 kW (−2 %/K kälter, −1 %/K je Kelvin Vorlauf über 35 °C). Deine Häkchen gelten auf allen Geräten.');
 }
 
 // ===== Tagesverlauf Wärmepumpe: chronologische Zustände + Leistung ========= #
@@ -7958,7 +8349,7 @@ function renderHeatDemand() {
     const t = RENO[c.k]; if (!t || c.u <= t.u) return;
     const saveKwh = (c.u - t.u) * c.a * c.f * r.factor * (1 - b.gain) / b.cop_heat;
     if (saveKwh < 20) return;
-    const cost = t.cost * c.a * c.f;
+    const cost = t.cost * c.a;                    // € per m² of the part (f is a heat-loss factor, not area)
     const saveEur = saveKwh * price;
     measures.push({ l: t.l, saveKwh, saveEur, cost, u0: c.u, u1: t.u,
       payback: (cost > 0 && saveEur > 0) ? cost / saveEur : null });
@@ -11562,7 +11953,7 @@ const HEAT_SUB_RENDER = {
   heizung: ['renderHpDay', 'renderHeatingDiag', 'renderRoomTemps', 'renderHeatTimeseries', 'renderRoomTs', 'renderWindows', 'renderHpCompare'],
   warmwasser: ['renderDhwTank', 'renderDhwImpact'],
   abgleich: ['renderAbgleich', 'renderLayout'],
-  effizienz: ['renderCopTheory', 'renderHpTrend'],
+  effizienz: ['renderCopTheory', 'renderHpTrend', 'renderHpCheckup'],
   einstellung: ['renderHeatingCurve', 'initHpControls', 'renderRoomSync'],
 };
 function renderHeatSub(sub) {
@@ -11738,7 +12129,7 @@ function init() {
       const b = e.target.closest('button'); if (!b) return;
       _coptDays = parseInt(b.dataset.cd, 10); try { localStorage.setItem('bhe_copt_days', String(_coptDays)); } catch (err) {}
       cdy.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
-      renderCopTheory();
+      renderCopTheory(); renderHpCheckup();
     });
     cdy.querySelectorAll('button').forEach(x => x.classList.toggle('on', parseInt(x.dataset.cd, 10) === coptDays()));
   }
@@ -11748,6 +12139,11 @@ function init() {
     else if (e.target.closest('#cpt-reset')) { e.preventDefault(); saveCopSpec(true); }
   });
   if (cspec) cspec.addEventListener('input', () => { const b = $('copt-spec-body'); if (b) b.dataset.open = '1'; });
+  const chkm = $('chk-manual');
+  if (chkm) chkm.addEventListener('click', e => {
+    const b = e.target.closest('button[data-v]'), it = e.target.closest('.chk-m');
+    if (b && it) { e.preventDefault(); chkSet(it.dataset.k, b.dataset.v); }
+  });
   const dwt = $('dhwt-days');
   if (dwt) {
     dwt.addEventListener('click', e => {
