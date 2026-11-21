@@ -10939,6 +10939,34 @@ class Handler(BaseHTTPRequestHandler):
         """Live heat-pump snapshot + a 'connected' flag (real token or demo)."""
         return self.ctx.hp_snapshot()
 
+    def _tv_payload(self) -> dict:
+        """The Wohn-Dashboard for the Apple TV app (see compute_tv). Cached 20 s:
+        several TVs polling must not hammer the Smart Home Controller."""
+        def build():
+            now = int(time.time())
+            hp = self._hp_live()
+            rooms, wsince = [], {}
+            if self.ctx.mode == "demo":
+                rooms = _demo_climate()
+                wsince = {r["room"]: now - 14 * 60 for r in rooms if r.get("windows_open")}
+            elif self.ctx.mode == "live":
+                try:
+                    client = SHCClient(self.cfg.get("shc_ip", ""), self.cfg["cert"], self.cfg["key"])
+                    rooms = client.list_climate(self.cfg.get("contact_room_map"))
+                except Exception:
+                    rooms = []
+                try:
+                    wsince = window_open_since(self.store)
+                except Exception:
+                    wsince = {}
+            try:
+                cal = compute_calendar(self.ctx, 7)
+            except Exception:
+                cal = None
+            return compute_tv(rooms, wsince, hp.get("outdoor_c"), self._fronius_payload(), hp, cal,
+                              self._settings_load(), now)
+        return self.ctx.calc_get(("tv",), 20, build)
+
     def _health(self) -> dict:
         """Bridge status for the app (mode, connections, capabilities)."""
         cfg = self.cfg
@@ -12288,6 +12316,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path == "/api/health":
                 return self._send_json(self._health())
+            if path == "/api/tv":
+                return self._send_json(self._tv_payload())
             if path == "/api/music/meta":
                 # a YouTube Music playlist link → canonical app link + title/cover
                 # (public oEmbed; private lists: the user names them). Cached in ytmusic.
@@ -13277,6 +13307,299 @@ def bridge_note_start(store: "Store") -> None:
         data["update_from"] = last_start["rev"]
     store.event_add("start", data)
     store.events_prune()
+
+
+# --------------------------------------------------------------------------- #
+# Apple TV: the living-room dashboard as ready-to-show texts (/api/tv). The
+# tvOS app only lays them out – the rules (what needs attention, how numbers
+# read) stay here, ported from the web dashboard's kioskAlerts().
+# --------------------------------------------------------------------------- #
+HP_MODE_DE = {"dhw": "Warmwasser", "ch": "Heizen", "heating": "Heizen", "heat": "Heizen",
+              "cooling": "Kühlen", "frost": "Frostschutz", "off": "Bereitschaft", "": "Bereitschaft"}
+TV_TRASH_RX = re.compile(r"m(ü|ue)ll|tonne|abfuhr|papier|gelber sack|wertstoff|sperrm", re.I)
+TV_WEEKDAYS = ("Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag")
+
+
+def _tv_num(v: float, d: int = 0) -> str:
+    """German number for the TV texts: 1.234,5 with a real minus sign, never "−0"."""
+    s = f"{float(v):,.{d}f}"
+    if s.startswith("-") and not s.strip("-0,."):
+        s = s[1:]
+    return s.replace(",", "§").replace(".", ",").replace("§", ".").replace("-", "−")
+
+
+def _kw(w) -> str:
+    w = float(w or 0)
+    return f"{_tv_num(w / 1000.0, 1)} kW" if abs(w) >= 1000 else f"{_tv_num(w)} W"
+
+
+def _ago(secs: float) -> str:
+    m = int(max(0, secs) // 60)
+    return f"{int(max(0, secs))} s" if secs < 60 else (f"{m} min" if m < 60 else f"{m // 60} h {m % 60:02d} min")
+
+
+def _air_level(air, purity) -> str:
+    a = str(air or "").upper()
+    if a in ("GOOD", "MEDIUM", "BAD"):
+        return {"GOOD": "good", "MEDIUM": "ok", "BAD": "warn"}[a]
+    if purity is not None:
+        return "good" if purity < 1000 else "ok" if purity < 1400 else "warn"
+    return "na"
+
+
+def _pv_parts(f: dict) -> dict:
+    """Port of the web app's pvFlowParts(): who supplies whom right now."""
+    pv = max(0.0, float(f.get("pv_w") or 0))
+    load, grid, batt = f.get("load_w"), f.get("grid_w"), f.get("batt_w")
+    ch = max(0.0, -batt) if batt is not None else 0.0
+    dis = max(0.0, batt) if batt is not None else 0.0
+    imp = max(0.0, grid) if grid is not None else 0.0
+    exp = max(0.0, -grid) if grid is not None else 0.0
+    pv_batt = min(pv, ch)
+    pv_grid = min(pv - pv_batt, exp)
+    pv_house = max(0.0, pv - pv_batt - pv_grid)
+    grid_batt = max(0.0, min(ch - pv_batt, imp)) if grid is not None else 0.0
+    batt_grid = max(0.0, min(dis, exp - pv_grid))
+    batt_house = max(0.0, dis - batt_grid)
+    grid_house = max(0.0, imp - grid_batt)
+    if load is not None:
+        grid_house = min(grid_house, max(0.0, load - pv_house - batt_house))
+    return {"pv": pv, "load": load, "ch": ch, "dis": dis, "imp": imp, "exp": exp, "pv_house": pv_house,
+            "pv_batt": pv_batt, "pv_grid": pv_grid, "grid_batt": grid_batt, "grid_house": grid_house,
+            "batt_house": batt_house}
+
+
+def compute_tv(rooms: list, window_since: dict, outdoor_c, fr: dict | None, hp: dict | None,
+               cal: dict | None, settings: dict | None, now: float | None = None) -> dict:
+    """The Wohn-Dashboard for the TV: header, attention tiles, energy now and
+    today, rooms, upcoming dates – every value already worded in German."""
+    now = float(now or time.time())
+    st = settings or {}
+
+    def num(k, d, lo, hi):
+        try:
+            return max(lo, min(hi, float(st.get(k))))
+        except (TypeError, ValueError):
+            return d
+    win_s = num("bhe_kiosk_win_s", 600.0, 1.0, 86400.0)
+    bin_days = int(num("bhe_kiosk_bin_days", 1.0, 1.0, 7.0))
+    away = str(st.get("bhe_kiosk_away") or "") == "1"
+    A = []
+
+    # 1) windows / doors open (pulsing once longer than the set time)
+    for rm in rooms:
+        if (rm.get("windows_open") or 0) <= 0:
+            continue
+        ws = [w for w in rm.get("windows") or [] if w.get("open")]
+        door = bool(ws) and all(w.get("door") for w in ws)
+        t0 = (window_since or {}).get(rm.get("room"))
+        secs = max(0.0, now - t0) if t0 else None
+        long_ = secs is not None and secs >= win_s
+        heating, cold = rm.get("heating") is True, outdoor_c is not None and outdoor_c < 12
+        level = "urgent" if away or (long_ and (heating or cold)) else "warn" if long_ else "info"
+        detail = [("offen" if secs is None else "gerade geöffnet" if secs < 20 and win_s >= 60 else f"seit {_ago(secs)}"),
+                  "ihr seid abwesend" if away else "",
+                  "Heizung läuft" if heating else (f"außen {_tv_num(outdoor_c)}°" if cold else ""),
+                  ("bitte schließen" + (" – Stoßlüften reicht 5–10 min" if win_s >= 300 else "")) if long_ and not door else "",
+                  ", ".join(w.get("name") or "" for w in ws) if len(ws) > 1 else ""]
+        A.append({"level": level, "blink": away or long_, "icon": "🚪" if door else "🪟",
+                  "title": f"{rm.get('room')}: {'Tür' if door else 'Fenster'} offen",
+                  "detail": " · ".join(x for x in detail if x)})
+    # 2) air / humidity, clearly too cold rooms
+    for rm in rooms:
+        if (rm.get("windows_open") or 0) > 0:
+            continue
+        hum = rm.get("humidity") if isinstance(rm.get("humidity"), (int, float)) else None
+        air = _air_level(rm.get("air"), rm.get("air_purity"))
+        hum_bad = hum is not None and hum >= 65
+        short = (f"{_tv_num(hum)}% feucht & Luft schlecht" if hum_bad and air == "warn" else
+                 f"{_tv_num(hum)}% feucht" if hum_bad else "Luft schlecht" if air == "warn" else None)
+        if short:
+            A.append({"level": "warn", "icon": "🌬️", "title": f"{rm.get('room')}: lüften", "detail": short})
+        t, sp = rm.get("temp"), rm.get("setpoint")
+        if t is not None and sp is not None and t <= sp - 1.5:
+            A.append({"level": "info", "icon": "🥶", "title": f"{rm.get('room')}: zu kalt",
+                      "detail": f"{_tv_num(t, 1)}° statt {_tv_num(sp)}°"})
+    # 3) calendar: what starts within the hour; bins the evening before / that morning
+    events = (cal or {}).get("events") or []
+    today = datetime.fromtimestamp(now).date()
+    hour = datetime.fromtimestamp(now).hour
+    bins: dict = {}
+    for e in events:
+        if not e.get("all_day") and now < e.get("start", 0) <= now + 3600:
+            mins = max(1, round((e["start"] - now) / 60))
+            A.append({"level": "warn" if e["start"] - now <= 900 else "info", "blink": e["start"] - now <= 900,
+                      "key": f"cal:{int(e['start'])}:{e.get('title')}",
+                      "icon": "📅", "title": f"In {mins} min: {e.get('title')}",
+                      "detail": datetime.fromtimestamp(e["start"]).strftime("%H:%M") + " Uhr"
+                      + (f" · {e['location']}" if e.get("location") else "")})
+        if e.get("all_day") and TV_TRASH_RX.search(e.get("title") or "") and e.get("start_day"):
+            try:
+                k = (datetime.strptime(e["start_day"], "%Y-%m-%d").date() - today).days
+            except ValueError:
+                continue
+            if 0 <= k <= bin_days and e["title"] not in bins.setdefault(k, []):
+                bins[k].append(e["title"])
+    for k in sorted(bins):
+        if not (hour < 10 if k == 0 else True if k < bin_days else hour >= 16):
+            continue
+        n = len(bins[k])
+        day = today + timedelta(days=k)
+        when = {0: "Heute", 1: "Morgen", 2: "Übermorgen"}.get(k, "Am " + TV_WEEKDAYS[day.weekday()])
+        many = "Tonnen" if n > 1 else "Tonne"
+        A.append({"level": "warn" if k <= 1 else "info", "icon": "🗑️", "title": f"{when}: {' + '.join(bins[k])}",
+                  "detail": (f"{many} rausstellen, falls noch nicht geschehen" if k == 0 else
+                             f"{many} heute Abend rausstellen" if k == 1 else
+                             f"Abholung in {k} Tagen – am Vorabend rausstellen")})
+    # 4) PV system / battery
+    fr = fr or {}
+    live = fr.get("live") if fr.get("connected") else None
+    fresh = bool(live and fr.get("last_poll") and (fr.get("server_time") or now) - fr["last_poll"] <= 120)
+    P = _pv_parts(live) if fresh else None
+    if P:
+        if P["grid_batt"] > 100:
+            A.append({"level": "info", "icon": "🔋", "title": "Batterie lädt aus dem Netz",
+                      "detail": _kw(P["grid_batt"]) + (f" · Ladestand {_tv_num(live['soc'])} %" if live.get("soc") is not None else "")})
+        if (live.get("load_w") or 0) >= 6000:
+            A.append({"level": "info", "icon": "⚡", "key": "load", "title": f"Hoher Verbrauch: {_kw(live['load_w'])}",
+                      "detail": ""})
+    elif fr.get("connected") and not fr.get("demo"):
+        age = round(((fr.get("server_time") or now) - fr["last_poll"]) / 60) if fr.get("last_poll") else None
+        A.append({"level": "warn", "icon": "☀️", "title": "PV-Anlage: keine aktuellen Werte",
+                  "detail": f"Wechselrichter seit {age} min ohne Antwort" if age is not None else "Wechselrichter antwortet nicht"})
+    # 5) heat pump without fresh data
+    hp = hp or {}
+    hp_stale = bool(hp.get("connected") and (hp.get("last_error") or (hp.get("last_poll") and now - hp["last_poll"] > 1500)))
+    hp_live = bool(hp.get("connected") and not hp_stale and hp.get("power_w") is not None)
+    if hp_stale:
+        ago = round((now - hp["last_poll"]) / 60) if hp.get("last_poll") else None
+        A.append({"level": "warn", "icon": "♨️", "title": "Wärmepumpe: keine aktuellen Daten",
+                  "detail": " · ".join(x for x in [f"letzte Werte vor {_ago(ago * 60)}" if ago is not None else "",
+                                                    str(hp.get("last_error") or "")[:70]] if x)})
+    rank = {"urgent": 0, "warn": 1, "info": 2, "good": 3}
+    A.sort(key=lambda a: rank.get(a["level"], 9))
+    # stable ids: the app keeps a tile (and its blinking) across refreshes; a
+    # tile that starts blinking gets a new id so the animation starts afresh
+    seen = set()
+    for a in A:
+        a["blink"] = bool(a.get("blink"))
+        k = str(a.pop("key", None) or a["title"]) + (":b" if a["blink"] else "")
+        base, n = k, 2
+        while k in seen:
+            k, n = f"{base}#{n}", n + 1
+        seen.add(k)
+        a["id"] = k
+
+    # energy now: tiles
+    flow = []
+    if P:
+        dests = sorted([("Haus", P["pv_house"]), ("Batterie", P["pv_batt"]), ("Netz", P["pv_grid"])], key=lambda x: -x[1])
+        flow.append({"id": "pv", "icon": "☀️", "label": "Sonne", "value": _kw(P["pv"]), "tone": "good" if P["pv"] > 50 else "muted",
+                     # the two biggest destinations – a TV tile has room for two short lines
+                     "sub": " · ".join(f"{n} {_kw(v)}" for n, v in dests[:2] if v > 50)})
+        if live.get("load_w") is not None:
+            own = round(100 * min(1.0, (P["pv_house"] + P["batt_house"]) / live["load_w"])) if live["load_w"] > 50 else None
+            flow.append({"id": "home", "icon": "🏠", "label": "Haus", "value": _kw(live["load_w"]), "tone": "plain",
+                         "sub": "" if own is None else "alles aus dem Netz" if own <= 0
+                         else "ganz aus Sonne & Batterie" if own >= 100 else f"{own} % aus Sonne & Batterie"})
+        if live.get("soc") is not None or live.get("batt_w") is not None:
+            b = live.get("batt_w") or 0
+            flow.append({"id": "batt", "icon": "🔋", "label": "Batterie",
+                         "value": f"{_tv_num(live['soc'])} %" if live.get("soc") is not None else _kw(abs(b)),
+                         "sub": ("lädt " + _kw(-b)) if b < -30 else ("entlädt " + _kw(b)) if b > 30 else "ruht",
+                         "tone": "good" if b < -30 else "warn" if b > 30 else "muted"})
+        if live.get("grid_w") is not None:
+            g = live["grid_w"]
+            flow.append({"id": "grid", "icon": "🔌", "label": "Netz", "value": _kw(abs(g)),
+                         "sub": "Bezug" if g > 30 else "Einspeisung" if g < -30 else "ausgeglichen",
+                         "tone": "warn" if g > 30 else "good" if g < -30 else "muted"})
+    if hp_live:
+        mode = HP_MODE_DE.get(str(hp.get("mode") or "").lower(), hp.get("mode") or "")
+        flow.append({"id": "hp", "icon": "♨️", "label": "Wärmepumpe", "value": _kw(hp.get("power_w") or 0),
+                     "sub": mode or "", "tone": "plain" if (hp.get("power_w") or 0) > 40 else "muted"})
+    elif hp_stale:
+        flow.append({"id": "hp", "icon": "♨️", "label": "Wärmepumpe", "value": "–",
+                     "sub": "keine aktuellen Daten", "tone": "muted"})
+
+    # today
+    td = ((fr.get("today") or {}).get("today") or {}) if fr.get("connected") else {}
+    today_tiles = []
+    if td.get("load_kwh") is not None:
+        def tt(i, label, val):
+            today_tiles.append({"id": i, "label": label, "value": val})
+        if td.get("pv_kwh") is not None:
+            tt("pv", "Sonne erzeugt", f"{_tv_num(td['pv_kwh'], 1)} kWh")
+        tt("use", "Verbraucht", f"{_tv_num(td['load_kwh'], 1)} kWh")
+        if td.get("autarky") is not None:
+            tt("aut", "Autark", f"{_tv_num(100 * td['autarky'])} %")
+        if td.get("self_rate") is not None:
+            tt("self", "Eigenverbrauch", f"{_tv_num(100 * td['self_rate'])} %")
+        if td.get("imp_kwh") is not None:
+            tt("imp", "Netzbezug", f"{_tv_num(td['imp_kwh'], 1)} kWh")
+        if td.get("exp_kwh") is not None:
+            tt("exp", "Eingespeist", f"{_tv_num(td['exp_kwh'], 1)} kWh")
+        if td.get("saved_eur") is not None:
+            tt("eur", "Gespart", f"{_tv_num(td['saved_eur'], 2)} €")
+
+    # rooms
+    room_rows = []
+    for i, rm in enumerate(rooms):
+        if rm.get("temp") is None and rm.get("humidity") is None:
+            continue
+        extra = []
+        if (rm.get("windows_open") or 0) > 0:
+            extra.append("🪟 offen")
+        if isinstance(rm.get("humidity"), (int, float)):
+            extra.append(f"{_tv_num(rm['humidity'])} %")
+        air = _air_level(rm.get("air"), rm.get("air_purity"))
+        if air != "na":
+            extra.append({"good": "Luft gut", "ok": "Luft mittel", "warn": "Luft schlecht"}[air])
+        t, sp = rm.get("temp"), rm.get("setpoint")
+        room_rows.append({"id": f"r{i}", "name": rm.get("room") or "Raum",
+                          "temp": f"{_tv_num(t, 1)}°" if t is not None else "–",
+                          "soll": f"Soll {_tv_num(sp, 1 if sp % 1 else 0)}°" if sp is not None else "",
+                          "info": " · ".join(extra),
+                          "tone": ("warn" if (rm.get("windows_open") or 0) > 0 or air == "warn"
+                                   else "cold" if t is not None and sp is not None and t <= sp - 1.5
+                                   else "heat" if rm.get("heating") is True else "plain")})
+
+    # upcoming dates (no bin entries – those are tiles above)
+    ev_rows = []
+    for e in events:
+        if TV_TRASH_RX.search(e.get("title") or "") and e.get("all_day"):
+            continue
+        end = e.get("end") or e.get("start") or 0
+        if end <= now:
+            continue
+        if e.get("all_day"):
+            try:
+                d = datetime.strptime(e.get("start_day") or "", "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            d = max(d, today)
+            tm = "ganztägig"
+        else:
+            sdt = datetime.fromtimestamp(e["start"])
+            d = max(sdt.date(), today)
+            tm = sdt.strftime("%H:%M") + "–" + datetime.fromtimestamp(end).strftime("%H:%M")
+        k = (d - today).days
+        if k > 6:
+            continue
+        ev_rows.append({"id": f"e{len(ev_rows)}", "day": {0: "Heute", 1: "Morgen"}.get(k, TV_WEEKDAYS[d.weekday()]),
+                        "time": tm, "title": e.get("title") or "", "loc": e.get("location") or "",
+                        "now": (not e.get("all_day")) and e.get("start", 0) <= now < end})
+        if len(ev_rows) >= 8:
+            break
+
+    nowdt = datetime.fromtimestamp(now)
+    return {"ok": True, "ts": int(now), "stand": nowdt.strftime("%H:%M"),
+            "header": {"outdoor": f"{_tv_num(outdoor_c)}°" if outdoor_c is not None else "",
+                       "status": "🚪 Abwesend" if away else "🏠 Zuhause",
+                       "hp": (f"WP {HP_MODE_DE.get(str(hp.get('mode') or '').lower(), '')}".strip()
+                              if hp_live and (hp.get("power_w") or 0) > 40 else "")},
+            "alerts": A[:8], "more": max(0, len(A) - 8), "flow": flow, "today": today_tiles,
+            "rooms": room_rows, "events": ev_rows,
+            "note": "" if P or not fr.get("connected") else "Wechselrichter ohne aktuelle Werte"}
 
 
 def compute_bridge_uptime(store: "Store", started: int, port: int, days: float = 14) -> dict:

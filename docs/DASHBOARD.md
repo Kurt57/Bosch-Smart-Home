@@ -86,6 +86,12 @@ Mehrere Kalender: eine Adresse pro Zeile. Die Adressen stehen nur in `bridge/con
 Kalender alle 15 Minuten (`bridge/calendar_ics.py`, nur lesend; Wiederholungen, Ausnahmen,
 ganztägige Termine und Zeitzonen werden berücksichtigt).
 
+## Apple TV
+
+Das Wohn-Dashboard gibt es auch als eigene **Apple-TV-App** (Ordner `appletv/`, Daten über `GET /api/tv`) –
+Installation mit Xcode und alles Weitere in **[APPLETV.md](APPLETV.md)**. Ohne App: iPad oder Mac per
+AirPlay-Bildschirmsynchronisierung aufs Apple TV spiegeln.
+
 ## Musik (YouTube Music)
 
 Setup → **„🎵 Musik im Wohn-Dashboard“**: Playlists per Link hinzufügen (YouTube Music → Playlist →
