@@ -94,8 +94,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v214';   // short tag shown always-on in the header
-const APP_VERSION = 'v214 · 2026-11-21 · Wärme → Effizienz: neue Karte „🩺 Anlagen-Check“ (Troubleshooting). Ordnet den Abstand zum Datenblatt ein (Prüfstand vs. Alltag, Heizen/Warmwasser, nach Außentemperatur, Fraunhofer-Feldtests), zeigt Heizlast gegen Leistung der 7-kW-Außeneinheit (gemessene Tagespunkte, Gebäudemodell aus den U-Werten, Leistungsannahme, Bivalenzpunkt auch mit Warmwasserzeit und Leisemodus), den Heizstab nach Außentemperatur (Einstellung oder zu kleine WP?) und was die Dämmung des größten Verlusts an Heizlast und Vorlauf bringt. Automatische Prüfungen (Heizkurve, Spreizung, Durchfluss, Außenfühler gegen Wetterdienst, Abtauen, Heizstab, Warmwasser, Takten, Raumtemperatur) mit typischen Ursachen getrennt nach Einstellung und Einbau, dazu 14 Punkte „Vor Ort nachsehen“ zum Abhaken (gilt auf allen Geräten). Korrektur: Die Heizlast-Kennlinie rechnete beim CSV-Import mit dem Heizstrom statt der Heizwärme (etwa um den COP zu niedrig) – jetzt Wärme, ein Punkt je Tag; der Abgleich verteilt die Gesamtlast auch auf Räume ohne Auskühl-Messung (nach Fläche). Sanierungskosten für Boden/Kellerdecke nicht mehr halbiert. ' +
+const APP_BUILD = 'v215';   // short tag shown always-on in the header
+const APP_VERSION = 'v215 · 2026-11-21 · Anlagen-Check: „📏 Und nach Norm?“ – dieselbe Frage wie „Reichen die 7 kW?“ mit den Annahmen der Auslegung statt wie gelebt: Norm-Innentemperaturen (20 °C Wohnen, 24 °C Bad, 15 °C Flur, flächengewichtet), keine Wärmegewinne, Wärmebrücken-Pauschale 0,10 W/m²K, Vorlauf passend zur Norm-Last. Tabelle „wie du lebst / nach Norm“ mit Heizlast, Vorlauf, WP-Leistung, Bivalenzpunkt und Heizstab-Anteil mit dem Wetter des letzten Jahres; Bedarf ohne Heizstab nach VDI 4645 (mit Warmwasser und optionaler EVU-Sperrzeit); was die eigene Raumtemperatur in kW ausmacht. Normaußentemperatur jetzt mit Nachkommastelle (Werte je PLZ nach DIN/TS 12831-1), direkt in der Karte und im Verteiler einstellbar. ' +
+  'v214 · 2026-11-21 · Wärme → Effizienz: neue Karte „🩺 Anlagen-Check“ (Troubleshooting). Ordnet den Abstand zum Datenblatt ein (Prüfstand vs. Alltag, Heizen/Warmwasser, nach Außentemperatur, Fraunhofer-Feldtests), zeigt Heizlast gegen Leistung der 7-kW-Außeneinheit (gemessene Tagespunkte, Gebäudemodell aus den U-Werten, Leistungsannahme, Bivalenzpunkt auch mit Warmwasserzeit und Leisemodus), den Heizstab nach Außentemperatur (Einstellung oder zu kleine WP?) und was die Dämmung des größten Verlusts an Heizlast und Vorlauf bringt. Automatische Prüfungen (Heizkurve, Spreizung, Durchfluss, Außenfühler gegen Wetterdienst, Abtauen, Heizstab, Warmwasser, Takten, Raumtemperatur) mit typischen Ursachen getrennt nach Einstellung und Einbau, dazu 14 Punkte „Vor Ort nachsehen“ zum Abhaken (gilt auf allen Geräten). Korrektur: Die Heizlast-Kennlinie rechnete beim CSV-Import mit dem Heizstrom statt der Heizwärme (etwa um den COP zu niedrig) – jetzt Wärme, ein Punkt je Tag; der Abgleich verteilt die Gesamtlast auch auf Räume ohne Auskühl-Messung (nach Fläche). Sanierungskosten für Boden/Kellerdecke nicht mehr halbiert. ' +
   'v213 · 2026-11-21 · Arbeitszahl/Verbesserungs-Check: Warmwasser-Vorlauf jetzt aus dem Rücklauffühler – beim Speicherladen strömt durch ihn das Heizwasser aus der Speicher-Wendel (bei dir ~55 °C), während der gemeldete Vorlauffühler im ruhenden Heizkreis ~30 °C zeigt. Vorlauf = Rücklauf + 5 K; nur ohne brauchbaren Rücklauf weiter Speichertemperatur + 6 K. Die Notiz unter der Tabelle nennt den gemessenen Rücklauf. ' +
   'v212 · 2026-11-21 · Menü unten und Kopfzeile wieder am Rand: Safari unter iOS 26 lässt die Ansicht nach einer Tastatur (auch der der Adresszeile) manchmal verschoben – dann stand das Menü mitten im Bild und der Titel verschwand oben. Die App misst das jetzt und rückt beides an den sichtbaren Rand zurück; solange eine Eingabe mit Bildschirmtastatur aktiv ist, wird das Menü ausgeblendet. ' +
   'v211 · 2026-11-21 · Arbeitszahl: Warmwasser korrigiert – der Vorlauffühler der CS6800i sitzt im Heizkreis und zeigt beim Speicherladen nur ~30 °C; die App rechnet jetzt mit Speichertemperatur + 6 K (markiert mit *). Dadurch war der Datenblatt-Wert fürs Warmwasser zu hoch und „45 % erreicht“ zu schlecht. Neu: „🔧 Verbesserungs-Check“ mit bezifferten Stellschrauben – Vorlauf 2/4 K tiefer, Warmwasser kühler und mittags, Heizstab vermeiden (mit Aufteilung Heizen/Warmwasser), Raumtemperatur, dazu Heizen bei milder Luft, Verdichter-Starts und Stillstand; kWh und € pro Jahr (HomeCom-Import) bzw. pro Monat. Die Bridge speichert jetzt auch den Start-Zähler des Verdichters je Abfrage. Demo: wärmste Stunde nachmittags statt um 20 Uhr. ' +
@@ -901,7 +902,7 @@ const GLOSS = {
   spec_wm2: ['Spezifische Heizlast (W/m²)', 'Heizleistung je Quadratmeter bei Auslegungs-Kälte. Grob: Passivhaus ~10–15, saniert ~30–50, Altbau 70–120.'],
   coverage: ['Fläche erfasst', 'Wie viel deiner Wohnfläche schon Raum-Daten (Fläche + Messung) hat. Höher = die Aufteilung der Gesamtlast ist verlässlicher.'],
   qtotal: ['Gesamt-Heizlast', 'Wie viel Heizleistung (Watt) das ganze Haus bei der kältesten Auslegungstemperatur braucht – Grundlage für WP-Größe und Durchfluss.'],
-  design_c: ['Auslegungstemperatur', 'Die kälteste Außentemperatur, für die geplant wird (regional, z. B. −12 °C). Bei ihr muss die Heizung die volle Heizlast schaffen.'],
+  design_c: ['Auslegungstemperatur', 'Die Normaußentemperatur deines Orts, für die geplant wird (DIN/TS 12831-1, je Postleitzahl mit einer Nachkommastelle – z. B. über die Klimakarte des Bundesverbands Wärmepumpe). Bei ihr muss die Heizung die volle Heizlast schaffen.'],
   spread_k: ['Spreizung ΔT', 'Temperatur-Unterschied zwischen Vor- und Rücklauf. Je Kreis der Auslege-Zielwert (Fußboden typ. 4–7 K); bestimmt den nötigen Durchfluss.'],
   tau: ['Trägheit τ (Tau)', 'Zeitkonstante: wie lange der Raum Wärme speichert. Hoch = träge (hält lange warm). Sehr hoch (>150 h) heißt meist: kühlt kaum aus → Messung noch unsicher.'],
   flow_lmin: ['Durchfluss (l/min)', 'Wassermenge pro Minute durch einen Heizkreis – das stellst du am Durchflussmesser (Tacosetter) ein. Mehr Durchfluss = mehr Wärme in den Raum.'],
@@ -5168,7 +5169,7 @@ function paintAbRooms(r) {
   body.innerHTML = abFlowCmpBox(fc) + h;
   if (note) {
     const method = t.method === 'calibrated'
-      ? `Heizlast aus der <b>gemessenen Gebäude-Kennlinie</b> (${t.q_total != null ? fmt(t.q_total, 0) + ' W' : '–'} bei ${fmt(t.design_c, 0)} °C), über Fläche und Trägheit auf die Räume verteilt.`
+      ? `Heizlast aus der <b>gemessenen Gebäude-Kennlinie</b> (${t.q_total != null ? fmt(t.q_total, 0) + ' W' : '–'} bei ${fmt(t.design_c, Number.isInteger(t.design_c) ? 0 : 1)} °C), über Fläche und Trägheit auf die Räume verteilt.`
       : `Heizlast noch als <b>Flächen-Schätzung</b> (${fmt(t.spec_wm2, 0)} W/m² × Fläche = ${t.q_total != null ? fmt(t.q_total, 0) + ' W' : '–'}) – die gemessene Kennlinie ist dafür noch nicht belastbar.`;
     note.innerHTML = (r.layout_demo ? '<b>Demo</b> mit Beispiel-Layout. ' : '') +
       `<b>Punkt im Balken</b> = Abweichung des Raums (${(r.house || {}).open ? 'gegenüber dem Hausschnitt' : 'gegenüber seinem Sollwert'}); im grünen Band passt es. ` +
@@ -5410,8 +5411,7 @@ function renderLayout() {
     `<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-bottom:10px;font-size:13px">` +
       `<label>Spez. Heizlast <input type="number" id="lay-q" value="${esc(String(l.q))}" style="width:58px;padding:4px 6px;margin:0"> W/m²</label>` +
       `<label>Spreizung ΔT <input type="number" id="lay-dt" value="${esc(String(l.dt))}" style="width:48px;padding:4px 6px;margin:0"> K</label>` +
-      `<label>Auslegung <select id="lay-design" style="width:auto;padding:4px 8px;margin:0">` +
-        [-10, -12, -14, -16].map(v => `<option value="${v}"${Number(l.design) === v ? ' selected' : ''}>${v} °C</option>`).join('') + `</select></label>` +
+      `<label>Auslegung <input type="number" id="lay-design" step="0.1" min="-25" max="-5" inputmode="decimal" value="${esc(String(l.design))}" style="width:66px;padding:4px 6px;margin:0"> °C</label>` +
     `</div>` +
     `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:-2px 0 8px">` +
       `<span style="color:var(--muted);font-size:12px">Haustyp:</span>` +
@@ -6342,9 +6342,10 @@ let _chkData = {}, _chkBusy = false;
 function chkState() {
   try { const s = JSON.parse(localStorage.getItem(CHK_LS) || '{}'); return s && typeof s === 'object' ? s : {}; } catch (e) { return {}; }
 }
+function chkDesign() { const v = parseFloat(layoutModel().design); return isFinite(v) ? Math.max(-25, Math.min(-5, v)) : -12; }
 function chkKey() {
   const loc = getLatLon();
-  return (loc ? loc.lat.toFixed(3) + ',' + loc.lon.toFixed(3) : '-') + '|' + coptDays() + '|' + hpSpecQuery(hpSpec());
+  return (loc ? loc.lat.toFixed(3) + ',' + loc.lon.toFixed(3) : '-') + '|' + coptDays() + '|' + hpSpecQuery(hpSpec()) + '|' + chkDesign();
 }
 async function renderHpCheckup(force) {
   if (!$('chk-card')) return;
@@ -6355,12 +6356,20 @@ async function renderHpCheckup(force) {
   try {
     const loc = getLatLon();
     const [ck, cop] = await Promise.all([
-      api('/api/heatpump/checkup?days=30' + (loc ? `&lat=${loc.lat}&lon=${loc.lon}` : '')),
+      api('/api/heatpump/checkup?days=30&design=' + chkDesign() + (loc ? `&lat=${loc.lat}&lon=${loc.lon}` : '')),
       coptFetch(hpSpec()).catch(() => null)]);
     _chkData[key] = { ck: ck || {}, cop: cop || {} };
-    paintHpCheckup(_chkData[key]);
-  } catch (e) { if (v) v.innerHTML = '<div class="note">Nur mit laufender Bridge verfügbar.</div>'; }
+  } catch (e) { if (v) v.innerHTML = '<div class="note">Nur mit laufender Bridge verfügbar.</div>'; return; }
   finally { _chkBusy = false; }
+  paintHpCheckup(_chkData[key]);
+}
+// heat-pump capacity (kW) like the bridge's hp_capacity(): datasheet point
+// A−7/W35 6.71 kW, −2 %/K colder, +1 %/K warmer (max +10 %), −1 %/K flow above 35 °C
+// a design temperature as given: −12 °C, but −9,6 °C (DIN/TS 12831-1 values per PLZ)
+const fmtDC = d => fmt(d, Number.isInteger(d) ? 0 : 1);
+function chkCap(t, flow) {
+  const fa = Math.max(0.5, Math.min(1.10, 1 + (t < -7 ? 0.02 : 0.01) * (t + 7)));
+  return 6.71 * fa * (1 - 0.01 * Math.max(0, flow - 35));
 }
 // The building model (U-values from „Theorie vs. Praxis") against the measured
 // load: UA, design load, the biggest single loss and what insulating it does.
@@ -6415,7 +6424,7 @@ function chkLoadChart(hl, bm, tIn, design) {
   let g = gridLines(h, top, base, padL, sc.max, { step: sc.step, unit: 'kW' });
   if (design >= t0 && design <= t1)
     g += `<line x1="${X(design).toFixed(1)}" x2="${X(design).toFixed(1)}" y1="${top}" y2="${base}" stroke="var(--muted)" stroke-dasharray="3 3" opacity=".8"/>` +
-      `<text class="axis" x="${(X(design) + 4).toFixed(1)}" y="${top + 9}">Norm ${fmt(design, 0)}°</text>`;
+      `<text class="axis" x="${(X(design) + 4).toFixed(1)}" y="${top + 9}">Norm ${fmtDC(design)}°</text>`;
   P.forEach(p => { g += `<circle cx="${X(p[0]).toFixed(1)}" cy="${Y(p[1]).toFixed(1)}" r="2.6" fill="${COL.hp}" opacity=".32"/>`; });
   g += path(L.map(x => x.cap * 0.5), COL.pv, '2 4', 1.4, 0.75);
   g += path(L.map(x => x.cap), COL.pv, '', 2.4);
@@ -6485,6 +6494,62 @@ function chkSet(k, v) {
   }
   chkHead();
 }
+// ---- the same question by the book (DIN EN 12831 / VDI 4645) ------------- #
+// Norm room temperatures as in DIN EN 12831 Beiblatt 1 (today DIN/TS 12831-1):
+// living/sleeping/kitchen 20 °C, bath 24 °C, heated corridors/stairs 15 °C –
+// area-weighted over the rooms of the manifold layout (else 20 °C).
+function chkNormIndoor() {
+  let a = 0, at = 0;
+  try {
+    const l = layoutModel(), R = l.rooms || {}, hid = new Set(l.hidden || []);
+    Object.keys(R).forEach(rm => {
+      const ar = parseFloat(R[rm] && R[rm].area); if (!(ar > 0) || hid.has(rm)) return;
+      const n = rm.toLowerCase(), t = /bad|dusch/.test(n) ? 24 : /flur|diele|treppe/.test(n) ? 15 : 20;
+      a += ar; at += ar * t;
+    });
+  } catch (e) {}
+  return a > 0 ? { t: at / a, rooms: true } : { t: 20, rooms: false };
+}
+// Norm heat load from the building model: ΣU·A·f + thermal bridges 0.10 W/m²K
+// (no proof, DIN/TS 12831-1) + ventilation as modelled, × (norm room − design)
+// temperature, no solar or internal gains. The floor heating's flow follows
+// the measured curve, scaled to the norm room temperature and load (exponent 1.1).
+function chkNorm(design, hl, fc, tIn, dhwDay, sperr) {
+  if (typeof buildData !== 'function') return null;
+  const b = buildData(); if (!b || !b.comps) return null;
+  let Ht = 0, Aenv = 0;
+  b.comps.forEach(c => { const f = c.f == null ? 1 : c.f; Ht += (c.u || 0) * (c.a || 0) * f; Aenv += (c.a || 0) * f; });
+  const Hwb = 0.10 * Aenv, Hv = 0.34 * (b.n || 0) * ((b.area || 0) * (b.height || 0)), H = Ht + Hwb + Hv;
+  if (!(H > 0)) return null;
+  const ni = chkNormIndoor(), QN = H * (ni.t - design) / 1000;
+  const flowMeas = t => fc ? Math.max(25, Math.min(60, fc.f0 + fc.slope * t)) : 40;
+  const qMeasD = hl && hl.qa != null ? Math.max(0.1, hl.qa * design + hl.qb) : null;
+  const k = qMeasD ? Math.pow(QN / qMeasD, 1 / 1.1) : 1;
+  const flowN = t => Math.max(25, Math.min(60, ni.t + (flowMeas(t) - tIn) * k));
+  const sp = Math.max(0, Math.min(12, sperr || 0)), dd = dhwDay || 0;
+  // usable heating output: blocking hours off, the hot water's daily heat taken out (VDI 4645 balance)
+  const capN = t => chkCap(t, flowN(t)) * (24 - sp) / 24 - dd / 24;
+  const loadN = (t, th) => Math.max(0, QN * (th - t) / (th - design));
+  // bivalent point: load line from the design point to zero at a heating limit of 15 °C
+  // (common planning assumption) – and without any gains, to zero at the norm room temperature
+  const biv = th => { let tb = null; for (let t = -25; t <= 15; t += 0.5) if (loadN(t, th) > capN(t)) tb = t; return tb; };
+  return { H, Hwb, Hv, ni, QN, sp, dd, flowD: flowN(design), capD: chkCap(design, flowN(design)),
+    need: (QN * 24 + dd) / (24 - sp), biv15: biv(15), bivNo: biv(ni.t), loadN, capN, flowMeas };
+}
+// how much of a year's heating heat the electric heater would have had to add,
+// day by day with the real daily mean temperatures (floor heating buffers within a day)
+function chkYear(tdays, loadFn, capFn) {
+  let heat = 0, heater = 0;
+  (tdays || []).forEach(T => { const q = loadFn(T); if (!(q > 0)) return; heat += q * 24; heater += Math.max(0, q - Math.max(0, capFn(T))) * 24; });
+  return heat > 0 ? { heat, heater, share: heater / heat } : null;
+}
+function chkSetDesign(v) {
+  const x = parseFloat(String(v).replace(',', '.'));
+  if (!isFinite(x) || x < -25 || x > -5) return;
+  const l = layoutModel(); l.design = Math.round(x * 10) / 10; layoutSave(l);
+  try { abLayoutChanged(0); } catch (e) {}
+  renderHpCheckup(true);
+}
 function paintHpCheckup(D) {
   const ck = D.ck || {}, r = D.cop || {}, M = r.modes || {}, Lv = r.levers || {}, A = STATE.hpA || {};
   const set = (id, html) => { const e = $(id); if (e) e.innerHTML = html; };
@@ -6507,7 +6572,7 @@ function paintHpCheckup(D) {
     const st = ref == null ? 'info' : ref > cap * 1.08 ? 'warn' : ref > cap * 0.92 ? 'info' : 'ok';
     flags.load = st;
     const bivTxt = t => t == null ? 'auch bei −25 °C noch' : t < design ? `bis ${fmt(Math.ceil(t + 0.5), 0)} °C, also bis unter die Norm` : `nur bis etwa ${fmt(Math.ceil(t + 0.5), 0)} °C`;
-    let txt = `Bei der Normaußentemperatur <b>${fmt(design, 0)} °C</b> braucht dein Haus ` +
+    let txt = `Bei der Normaußentemperatur <b>${fmtDC(design)} °C</b> braucht dein Haus ` +
       [hl.q_design != null ? `laut Messung <b>${fmt(hl.q_design, 1)} kW</b>${hl.reliable ? '' : ' <span style="color:var(--muted)">(Kennlinie noch nicht belastbar)</span>'}` : '',
         bm ? `laut Gebäudemodell <b>${fmt(bm.q, 1)} kW</b> bei ${fmt(tIn, 1)} °C innen (${fmt(bm.q20, 1)} kW bei 20 °C)` : ''].filter(Boolean).join(', ') +
       `. Die 7-kW-Außeneinheit schafft dann etwa <b>${fmt(cap, 1)} kW</b> bei ${fmt(hl.flow_design, 0)} °C Vorlauf.`;
@@ -6523,6 +6588,46 @@ function paintHpCheckup(D) {
       const ratio = qm / bm.q;
       if (ratio > 1.2) { flags.loadgap = 'warn'; txt += ` <br>Gemessen liegt <b>${pc(ratio - 1)} über</b> dem Gebäudemodell: entweder sind die U-Werte zu optimistisch, oder Wärme geht schon vor den Räumen verloren (ungedämmte Leitungen, Keller).`; }
       else if (ratio < 0.7) txt += ` <br>Gemessen liegt deutlich unter dem Gebäudemodell (${pc(ratio)}) – die U-Werte sind eher vorsichtig angesetzt, oder Sonne, Personen und Geräte heizen kräftig mit.`;
+    }
+    // the same by the book: norm room temperatures, no gains, thermal bridges, VDI 4645
+    const dhwDay = M.dhw && M.dhw.h != null && r.span_d ? M.dhw.h / r.span_d : null;
+    let sperr = 0; try { sperr = parseFloat(localStorage.getItem('bhe_hp_sperr')) || 0; } catch (e) {}
+    const N = chkNorm(design, hl, fc, tIn, dhwDay, sperr);
+    if (N) {
+      const td = ck.tdays || [], nd = td.length;
+      const flowMeas = N.flowMeas, dhwF = 1 - (hl.dhw_h || 0) / 24;
+      const yL = qm != null && hl.qa != null && nd >= 60 ? chkYear(td, t => Math.max(0, hl.qa * t + hl.qb), t => chkCap(t, flowMeas(t)) * dhwF) : null;
+      const yN = nd >= 60 ? chkYear(td, t => N.loadN(t, 15), N.capN) : null;
+      // t = warmest outdoor temperature at which the load still exceeds the output
+      const tb = t => t == null ? 'auch bei −25 °C' : 'bis ' + fmt(Math.ceil(t + 0.5), 0) + ' °C';
+      const range = N.biv15 === N.bivNo ? tb(N.biv15) : `${tb(N.biv15)} (ohne jede Wärmegewinne ${tb(N.bivNo).replace('bis ', '')})`;
+      const bivL = hl.dhw_h ? hl.t_biv_dhw : hl.t_biv;
+      const ok = N.biv15 == null || N.biv15 <= -5, close = !ok && N.biv15 <= -3;
+      const row = (l, a, b2) => `<tr><td>${l}</td><td>${a}</td><td>${b2}</td></tr>`;
+      const pcs = y => !y ? '–' : y.share < 0.0005 ? '0 %' : `~${fmt(y.share * 100, y.share < 0.1 ? 1 : 0)} %`;
+      const dT = qm != null && hl.qa != null ? -hl.qa * (tIn - N.ni.t) : null;
+      txt += `<div class="dwt-box ${ok ? 'ok' : close ? 'tip' : 'warn'}" style="margin-top:8px"><b>📏 Und nach Norm?</b> Ausgelegt wird eine Wärmepumpe nicht auf „wie du lebst“, ` +
+        'sondern auf die Norm-Heizlast (DIN EN 12831) mit festen Annahmen:' +
+        `<table class="chk-norm"><tr><th></th><th>wie du lebst</th><th>nach Norm</th></tr>` +
+        row('Raumtemperatur', `Ø ${fmt(tIn, 1)} °C`, `${fmt(N.ni.t, 1)} °C¹`) +
+        row('Sonne, Personen, Geräte', 'heizen mit', 'zählen nicht') +
+        row('Wärmebrücken', 'in der Messung', `+0,10 W/m²K²`) +
+        row(`Heizlast bei ${fmtDC(design)} °C`, qm != null ? `<b>${fmt(qm, 1)} kW</b>` : '–', `<b>${fmt(N.QN, 1)} kW</b>`) +
+        row('Vorlauf dann', fc ? `${fmt(fc.f_design, 0)} °C` : '–', `~${fmt(N.flowD, 0)} °C`) +
+        row('WP schafft dann', `${fmt(hl.cap_design, 1)} kW`, `${fmt(N.capD, 1)} kW`) +
+        row('WP reicht allein', qm != null ? tb(bivL) : '–', range) +
+        row(nd >= 300 ? 'Heizstab, Wetter letztes Jahr' : `Heizstab, ${nd} Tage Wetter`, pcs(yL), pcs(yN)) +
+        '</table>' +
+        (ok ? `<b>Nach Norm passt die 7-kW-Einheit</b> für den üblichen Betrieb mit Heizstab (monoenergetisch): sie reicht allein ${tb(N.biv15)}, angestrebt werden −5 °C oder kälter – der Heizstab liefert dann nur wenige Prozent der Jahreswärme.`
+          : `<b>Nach Norm ist die 7-kW-Einheit ${close ? 'knapp' : 'zu klein'} ausgelegt:</b> sie reicht allein ${tb(N.biv15)}, üblich angestrebt sind −5 °C oder kälter (monoenergetisch, Heizstab dann ~2–5 % der Jahreswärme).`) +
+        ` Ganz ohne Heizstab (monovalent) bräuchte sie nach VDI 4645 bei ${fmtDC(design)} °C <b>${fmt(N.need, 1)} kW</b> (Heizlast${N.dd ? ` + Warmwasser ${fmt(N.dd, 1)} kWh/Tag` : ''}${N.sp ? `, ${fmt(N.sp, 0)} h Sperrzeit` : ''}) – sie schafft ~${fmt(N.capD, 1)} kW.` +
+        (dT != null && dT > 0.1 ? ` Dein Wohnen macht den Unterschied: ${fmt(tIn, 1)} statt ${fmt(N.ni.t, 1)} °C Raumtemperatur kosten bei ${fmtDC(design)} °C etwa <b>${fmt(dT, 1)} kW</b> mehr (gemessene Kennlinie).` : '') +
+        `<div class="chk-norm-in"><label>Normaußentemperatur <input type="number" id="chk-dc" step="0.1" min="-25" max="-5" value="${String(design)}" inputmode="decimal"> °C</label>` +
+        `<label>EVU-Sperrzeit <input type="number" id="chk-sp" step="1" min="0" max="12" value="${fmt(N.sp, 0)}" inputmode="numeric"> h/Tag</label></div>` +
+        `<div class="note" style="margin-top:6px;font-size:11.5px">¹ Norm-Innentemperaturen 20 °C Wohn-/Schlafräume/Küche, 24 °C Bad, 15 °C beheizte Flure/Treppen (DIN EN 12831 Beiblatt 1, heute DIN/TS 12831-1)` +
+        `${N.ni.rooms ? ', flächengewichtet über deine Räume im Verteiler-Layout' : ''}. ² Pauschale ohne Wärmebrücken-Nachweis. Lüftung wie in deinem Gebäudemodell (${fmt(buildData().n || 0, 2)}/h). ` +
+        'Die Normaußentemperatur gilt je Postleitzahl (DIN/TS 12831-1, z. B. Klimakarte des Bundesverbands Wärmepumpe) – den Wert für deinen Ort hier eintragen, er gilt auch im Abgleich. ' +
+        'Sperrzeit nur, wenn dein Netzbetreiber die WP abschalten darf (WP-Tarif). Heizstab-Anteil: Heizlast-Linie bis 0 bei 15 °C Heizgrenze (übliche Planungsannahme), Warmwasser abgezogen, Tageswerte. Ersetzt keine Heizlastberechnung durch den Fachbetrieb.</div></div>';
     }
     // the electric heater: does the capacity explain it?
     const He = ck.heater;
@@ -6542,9 +6647,9 @@ function paintHpCheckup(D) {
       const shL = bm.best.loss / bm.ua, R = bm.reno;
       txt += `<div class="dwt-box tip" style="margin-top:8px"><b>🏗️ Dämmung und Wärmepumpe:</b> Größter Einzelverlust laut Gebäudemodell: <b>${esc(bm.best.c.l)}</b> (U ${fmt(bm.best.c.u, 2)}, ${pc(shL)} der Verluste; Lüftung ${pc(bm.vent / bm.ua)}). `;
       if (R) {
-        txt += `${esc(R.l)} auf U ${fmt(R.u1, 2)}: Heizlast bei ${fmt(design, 0)} °C <b>${fmt(R.q0, 1)} → ${fmt(R.q1, 1)} kW</b> (${R.basis}), Heizwärme etwa <b>−${pc(1 - R.ratio)}</b>` +
+        txt += `${esc(R.l)} auf U ${fmt(R.u1, 2)}: Heizlast bei ${fmtDC(design)} °C <b>${fmt(R.q0, 1)} → ${fmt(R.q1, 1)} kW</b> (${R.basis}), Heizwärme etwa <b>−${pc(1 - R.ratio)}</b>` +
           (R.t_biv !== undefined ? `, die WP reicht dann ${R.t_biv == null ? 'auch bei −16 °C allein' : 'bis etwa ' + fmt(R.t_biv + 2, 0) + ' °C allein'}` : '') +
-          (R.dflow != null && R.dflow >= 0.5 ? `; die Fußbodenheizung käme mit etwa <b>${fmt(R.dflow, 0)} K weniger Vorlauf</b> aus (bei ${fmt(design, 0)} °C), das hebt die Arbeitszahl um grob <b>${pc(R.copGain)}</b>` : '') +
+          (R.dflow != null && R.dflow >= 0.5 ? `; die Fußbodenheizung käme mit etwa <b>${fmt(R.dflow, 0)} K weniger Vorlauf</b> aus (bei ${fmtDC(design)} °C), das hebt die Arbeitszahl um grob <b>${pc(R.copGain)}</b>` : '') +
           '. Dämmung wirkt also doppelt: weniger Wärme <i>und</i> jede kWh billiger erzeugt. Kosten und Amortisation stehen in „🏗️ Theorie vs. Praxis“. ';
       }
       txt += 'Den Abstand zum Datenblatt erklärt die Dämmung dagegen kaum – der Vergleich ist schon auf deinen Vorlauf bereinigt.</div>';
@@ -6555,14 +6660,14 @@ function paintHpCheckup(D) {
       `<div class="it"><span class="sw" style="background:${COL.pv}"></span>max. WP-Leistung (Annahme) · gepunktet: Leisemodus</div></div>` +
       `<div class="note" style="margin-top:6px">${txt}</div>`;
   } else if (bm) {
-    lt = `<div class="note">Gebäudemodell: <b>${fmt(bm.q, 1)} kW</b> bei ${fmt(design, 0)} °C. Eine gemessene Kennlinie entsteht über Tage mit unterschiedlichem Wetter.</div>`;
+    lt = `<div class="note">Gebäudemodell: <b>${fmt(bm.q, 1)} kW</b> bei ${fmtDC(design)} °C. Eine gemessene Kennlinie entsteht über Tage mit unterschiedlichem Wetter.</div>`;
   }
   set('chk-load', lt || '<div class="note">Noch keine Heizlast-Kennlinie – sie entsteht über Tage mit unterschiedlichem Wetter (oder HomeCom-CSV importieren).</div>');
 
   // ---- automatic checks ----------------------------------------------------- #
   if (fc) {
     add('flowcurve', fc.f_design > 42 ? 'warn' : fc.f_design > 36 ? 'info' : 'ok', 'Heizkurve / Vorlauf',
-      `Gemessen: Ø <b>${fmt(fc.f0, 0)} °C</b> Vorlauf bei 0 °C außen, <b>${fmt(fc.f_design, 0)} °C</b> bei ${fmt(design, 0)} °C (hochgerechnet), ${fmt(fc.f10, 0)} °C bei 10 °C`,
+      `Gemessen: Ø <b>${fmt(fc.f0, 0)} °C</b> Vorlauf bei 0 °C außen, <b>${fmt(fc.f_design, 0)} °C</b> bei ${fmtDC(design)} °C (hochgerechnet), ${fmt(fc.f10, 0)} °C bei 10 °C`,
       'Eine Fußbodenheizung kommt im gut gedämmten Haus mit ~30–35 °C bei Normaußentemperatur aus, im Bestand oft mit 35–40 °C. Jedes Grad weniger bringt ~2–3 % Arbeitszahl.',
       'Heizkurve/Fußpunkt zu hoch, Raum-Soll hoch, Nachtabsenkung mit Aufheizspitze',
       'drosselnde Einzelraumregler, kein hydraulischer Abgleich, Puffer/Weiche mischt, zu wenig Heizfläche, Außenfühler misst zu kalt');
@@ -12139,6 +12244,16 @@ function init() {
     else if (e.target.closest('#cpt-reset')) { e.preventDefault(); saveCopSpec(true); }
   });
   if (cspec) cspec.addEventListener('input', () => { const b = $('copt-spec-body'); if (b) b.dataset.open = '1'; });
+  const chkl = $('chk-load');
+  if (chkl) chkl.addEventListener('change', e => {
+    const t = e.target;
+    if (t.id === 'chk-dc') chkSetDesign(t.value);
+    else if (t.id === 'chk-sp') {
+      const v = Math.max(0, Math.min(12, parseFloat(t.value) || 0));
+      try { localStorage.setItem('bhe_hp_sperr', String(v)); } catch (err) {}
+      renderHpCheckup();
+    }
+  });
   const chkm = $('chk-manual');
   if (chkm) chkm.addEventListener('click', e => {
     const b = e.target.closest('button[data-v]'), it = e.target.closest('.chk-m');
@@ -12410,7 +12525,10 @@ function init() {
     layCard.addEventListener('change', e => {
       const t = e.target;
       if (t.dataset.lay === 'manifold' && t.dataset.room) { layoutSet(t.dataset.room, 'manifold', t.value); abLayoutChanged(0); }
-      else if (t.id === 'lay-design') { const l = layoutModel(); l.design = parseFloat(t.value); layoutSave(l); abLayoutChanged(0); }
+      else if (t.id === 'lay-design') {
+        const v = parseFloat(String(t.value).replace(',', '.'));
+        if (isFinite(v) && v >= -25 && v <= -5) { const l = layoutModel(); l.design = Math.round(v * 10) / 10; layoutSave(l); abLayoutChanged(0); }
+      }
     });
     layCard.addEventListener('click', e => {
       const sp = e.target.closest('.specpre');

@@ -3221,6 +3221,44 @@ def hp_capacity(t_out: float, t_flow: float, cap=HP_CAP_DEFAULT) -> float:
 HP_HEATER_BINS = (-5.0, 0.0, 5.0, 10.0)   # outdoor bucket edges for the heater energy
 
 
+def _outdoor_days(store: "Store", now: int | None = None, max_days: int = 365) -> list[float]:
+    """Daily mean outdoor temperatures (°C) of up to the last year, oldest first:
+    imported CSV hours (≥ 20 per day), CSV day rows, live samples (≥ 20 hours
+    seen). With these the card estimates how much heat the electric heater
+    would have had to deliver in a real year, for a given load line."""
+    now = int(now or time.time())
+    today = time.strftime("%Y-%m-%d", time.localtime(now))
+    first = time.strftime("%Y-%m-%d", time.localtime(now - max_days * 86400))
+    days: dict = {}
+    hrs: dict = {}
+    for r in store.hp_history("hour"):
+        d, o = str(r.get("date") or "")[:10], r.get("outdoor_c")
+        if len(d) == 10 and o is not None:
+            x = hrs.setdefault(d, [0.0, 0])
+            x[0] += o
+            x[1] += 1
+    for d, (so, n) in hrs.items():
+        if n >= SIG_DAY_MIN_H:
+            days[d] = so / n
+    for r in store.hp_history("day"):
+        d, o = str(r.get("date") or "")[:10], r.get("outdoor_c")
+        if len(d) == 10 and o is not None and d not in days:
+            days[d] = o
+    live: dict = {}
+    for s in store.hp_samples_since(now - max_days * 86400):
+        if s.get("outdoor_c") is None or not s.get("ts"):
+            continue
+        lt = time.localtime(s["ts"])
+        x = live.setdefault(time.strftime("%Y-%m-%d", lt), [0.0, 0, set()])
+        x[0] += s["outdoor_c"]
+        x[1] += 1
+        x[2].add(lt.tm_hour)
+    for d, (so, n, hours) in live.items():
+        if d not in days and len(hours) >= 20:
+            days[d] = so / n
+    return [round(days[d], 1) for d in sorted(days) if first <= d < today]
+
+
 def compute_hp_checkup(store: "Store", days: float = 30, design_c: float | None = None,
                        lat: float | None = None, lon: float | None = None, now: int | None = None) -> dict:
     """Symptoms the data can show, for the troubleshooting card: heat load vs.
@@ -3307,7 +3345,7 @@ def compute_hp_checkup(store: "Store", days: float = 30, design_c: float | None 
     if sig:
         sp_ = sig.get("pts") or []
         step = max(1, len(sp_) // 160)
-        hl.update({"ua": round(-sig["a"], 1),
+        hl.update({"ua": round(-sig["a"], 1), "qa": round(sig["a"] / 1000.0, 5), "qb": round(sig["b"] / 1000.0, 4),
                    "balance_c": round(sig["balance_c"], 1) if sig.get("balance_c") is not None else None,
                    "reliable": sig.get("reliable"), "src": sig.get("src"), "basis": sig.get("basis"),
                    "span": sig.get("span"), "n": sig.get("n"),
@@ -3317,6 +3355,10 @@ def compute_hp_checkup(store: "Store", days: float = 30, design_c: float | None 
                    "t_biv_quiet": biv(0.5),
                    "pts": [[o, round(w / 1000.0, 2)] for o, w in sp_[::step]]})
     out["heatload"] = hl
+    try:
+        out["tdays"] = _outdoor_days(store, now)
+    except Exception:
+        out["tdays"] = []
 
     # ---- the electric heater: where it ran, and whether capacity explains it - #
     if he_logged:
@@ -6999,7 +7041,7 @@ def compute_heatload(store: "Store", areas: dict | None = None,
     insights = []
     sig_unreliable = bool(sig and not sig.get("reliable"))
     if method == "calibrated":
-        insights.append(f"Gesamt-Heizlast bei {design_c:.0f} °C ≈ <b>{round(q_total_design):d} W</b> "
+        insights.append(f"Gesamt-Heizlast bei {design_c:.{0 if design_c == int(design_c) else 1}f} °C ≈ <b>{round(q_total_design):d} W</b> "
                         f"(aus der gemessenen Kennlinie, Quelle: {'CSV' if sig['src']=='csv' else 'Live'}"
                         f"{', Tagesmittel aus ' + str(sig['n']) + ' Tagen' if sig.get('basis') == 'day' else ''}). "
                         f"Gebäude-UA ≈ {ua_total:.0f} W/K, Bilanzpunkt ≈ {sig['balance_c']:.1f} °C.")
@@ -12598,7 +12640,9 @@ class Handler(BaseHTTPRequestHandler):
                         return None
                 ckd = max(7.0, min(120.0, fq("days") or 30.0))
                 lat_c, lon_c = fq("lat"), fq("lon")
-                dsg = _settings_layout(self._settings_load())["design_c"]
+                dsg = fq("design")                # the card's own input wins over the layout
+                dsg = (max(-25.0, min(-5.0, dsg)) if dsg is not None
+                       else _settings_layout(self._settings_load())["design_c"])
                 return self._send_json(self.ctx.calc_get(
                     ("checkup", round(ckd, 1), lat_c, lon_c, dsg), 300,
                     lambda: compute_hp_checkup(self.store, ckd, dsg, lat_c, lon_c)))

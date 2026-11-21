@@ -220,6 +220,19 @@ Symptome, keine Rohre; jede Auffälligkeit nennt deshalb typische Ursachen, getr
   und mit einem Nacht-Leisemodus (−50 %). Der **Heizstab** nach Außentemperatur: läuft er dort, wo die WP allein
   reichen müsste, ist es eine Einstellung, keine zu kleine WP. Dazu der größte Einzelverlust des Gebäudemodells
   und was seine Dämmung an Heizlast, Bivalenzpunkt und Vorlauf (Fußbodenheizung, Exponent 1,1) bringt.
+* **Und nach Norm?** (ab v215) Dieselbe Frage mit den Annahmen der Auslegung statt „wie du lebst“:
+  Norm-Innentemperaturen 20 °C (Wohn-/Schlafräume, Küche), 24 °C Bad, 15 °C beheizte Flure/Treppen
+  (DIN EN 12831 Beiblatt 1, heute DIN/TS 12831-1; flächengewichtet über die Räume im Verteiler-Layout),
+  **keine** Wärmegewinne durch Sonne, Personen und Geräte, Wärmebrücken-Pauschale 0,10 W/m²K, Lüftung wie
+  im Gebäudemodell. Der nötige Vorlauf folgt der gemessenen Heizkurve, umgerechnet auf Norm-Raumtemperatur
+  und -Last. Ohne Heizstab (monovalent) bräuchte die WP nach VDI 4645
+  (Heizlast × 24 h + Warmwasser kWh/Tag) ÷ (24 h − Sperrzeit). Für den üblichen Betrieb mit Heizstab
+  (monoenergetisch) zählt der Bivalenzpunkt – angestrebt werden −5 °C oder kälter. Die Heizlast-Linie läuft
+  dafür von der Norm-Heizlast bis 0 bei 15 °C Heizgrenze (übliche Planungsannahme; zum Vergleich auch ganz
+  ohne Gewinne). Mit den Tagesmitteln des letzten Jahres (CSV/Live) schätzt die Karte für beide Fälle den
+  Anteil des Heizstabs an der Heizwärme. **Normaußentemperatur** (je Postleitzahl, eine Nachkommastelle)
+  und **EVU-Sperrzeit** lassen sich direkt in der Karte eintragen; die Normaußentemperatur gilt auch im Abgleich.
+  Ersetzt keine Heizlastberechnung durch den Fachbetrieb.
 * **Automatische Prüfungen:** Heizkurve/Vorlauf, Spreizung, Durchfluss, Außenfühler gegen den Wetterdienst
   (Standort aus dem PV-Tab), Abtauen (aus dem Leistungsverlauf geschätzt), Abstand nach Außentemperatur,
   Heizstab, Warmwasser, Takten, Heizen bei milder Luft, Raumtemperatur, Stillstand.
@@ -302,9 +315,10 @@ stehen bei Bosch meist im Fachmann-Menü des Reglers.
   (Punkte: Außen:Vorlauf:COP; ohne `pts` die 6800i AW 7 OR-S).
 * **Warmwasser-Speicher:** `/api/heatpump/dhwtank?days=14` (Ladungen, Minuten je Grad,
   Entladen, Sollwerte, Legionellen-Kennzahlen, Szenarien) aus `dhw_log` + `hp_samples`.
-* **Anlagen-Check:** `/api/heatpump/checkup?days=30&lat=…&lon=…` (Heizkurve, Heizlast-Kennlinie mit
+* **Anlagen-Check:** `/api/heatpump/checkup?days=30&design=-12&lat=…&lon=…` (Heizkurve, Heizlast-Kennlinie mit
   Tagespunkten, Leistungsannahme und Bivalenzpunkten, Heizstab nach Außentemperatur und Betriebsart,
-  Warmwasser-Stunden, Spreizung, Durchfluss, Außenfühler gegen Wetterdienst, Abtauen, Raumtemperatur).
+  Warmwasser-Stunden, Spreizung, Durchfluss, Außenfühler gegen Wetterdienst, Abtauen, Raumtemperatur,
+  Tagesmittel der Außentemperatur des letzten Jahres `tdays`).
 * Umgesetzt in `bridge/homecom.py` – **ohne Zusatzpakete** (nur Standardbibliothek).
   Grundlage der Endpunkte: das Community-Projekt
   [`serbanb11/homecom_alt`](https://github.com/serbanb11/homecom_alt).
