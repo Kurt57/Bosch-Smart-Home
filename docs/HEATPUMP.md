@@ -153,6 +153,34 @@ Startskripte (`start-macos.command`, `update-macos.command`, …) nehmen ein sol
 
 ---
 
+## Arbeitszahl: Datenblatt vs. Praxis
+
+Tab **Wärme → 📊 Effizienz**, Karte **⚖️ Arbeitszahl: Datenblatt vs. Praxis**. Voreingestellt ist die
+**Bosch Compress 6800i AW mit Außeneinheit AW 7 OR-S** (R290) mit ihren EN-14511-Punkten
+A−7/W35 COP 2,36 (6,71 kW) · A2/W35 4,06 (2,87 kW) · A7/W35 4,8 (2,85 kW) und SCOP 4,58 (35 °C) /
+3,51 (55 °C) – zusammengetragen aus Händler- und Fachportal-Angaben des Bosch-Datenblatts (das
+Original-PDF konnte nicht direkt geprüft werden). Unter „Datenblatt-Werte anpassen“ lassen sich die
+Punkte ändern oder ergänzen (z. B. W55-Punkte); sie gelten dann auf allen Geräten.
+
+* **Theorie für deine Bedingungen:** Jeder Datenblatt-Punkt sagt, welchen Anteil des idealen
+  (Carnot-)COP die Maschine bei dieser Außentemperatur erreicht (Verflüssigung 4 K über dem
+  Vorlauf, Verdampfung 8 K unter der Luft). Zwischen den Punkten linear, außerhalb gleich. Für jede
+  Messung (alle 5 Minuten) wird damit der COP bei genau der gemessenen Außen- und
+  Vorlauftemperatur berechnet – Warmwasser mit 50–55 °C Vorlauf bekommt also auch in der Theorie
+  einen niedrigeren COP als Heizen mit 30 °C.
+* **Praxis:** erzeugte Wärme ÷ Strom aus den Zählern der Wärmepumpe (HomeCom: Verdichter +
+  Heizstab, `outputProduced`). Keine geeichten Zähler; die Wärme berechnet die WP selbst. Grobe
+  Zähler (1-kWh-Schritte) gleichen sich über Tage aus, einzelne Tage schwanken.
+* **Aufteilung:** Heizen und Warmwasser getrennt, Heizen je Außentemperatur (3-K-Stufen), pro Tag
+  (ab 46 Tagen Zeitraum pro Monat).
+* **Wohin der Mehrverbrauch geht:** Strom im Stillstand (Standby, Frostschutz), der Heizstab (seine
+  Wärme hätte die WP mit dem Datenblatt-COP erzeugt) und der Rest (Abtauen, Takten, Teillast,
+  Umwälzpumpen, Messgenauigkeit). Den Heizstab-Zähler schreibt die Bridge ab v210 je Abfrage mit
+  (`hp_samples.eheater_kwh`); vorher steckt er im Rest.
+* **Zum Einordnen:** der SCOP ist ein Normwert (mittleres Klima, nur Heizen, ohne Warmwasser und
+  Stillstand); Feldtests des Fraunhofer ISE an Luft-Wärmepumpen im Bestand: Ø JAZ 3,1
+  („WPsmart im Bestand“) bzw. 3,4, Spanne 2,6–4,9 („WP-QS im Bestand“).
+
 ## Warmwasser-Speicher & Legionellen
 
 Tab **Wärme → 🚿 Warmwasser**, Karte **🛁 Warmwasser-Speicher** (darunter, umgezogen aus
@@ -214,6 +242,8 @@ stehen bei Bosch meist im Fachmann-Menü des Reglers.
   1-kWh-Schritte) werden viele Läufe zusammengerechnet. Der Wert gilt für das
   Wasser durch die Wärmepumpe – mit Pufferspeicher oder hydraulischer Weiche
   fließt in den Heizkreisen eine andere Menge. Ergebnis: `/api/heatpump/flow`.
+* **Arbeitszahl Datenblatt vs. Praxis:** `/api/heatpump/coptheory?days=30&pts=-7:35:2.36,2:35:4.06,7:35:4.8`
+  (Punkte: Außen:Vorlauf:COP; ohne `pts` die 6800i AW 7 OR-S).
 * **Warmwasser-Speicher:** `/api/heatpump/dhwtank?days=14` (Ladungen, Minuten je Grad,
   Entladen, Sollwerte, Legionellen-Kennzahlen, Szenarien) aus `dhw_log` + `hp_samples`.
 * Umgesetzt in `bridge/homecom.py` – **ohne Zusatzpakete** (nur Standardbibliothek).

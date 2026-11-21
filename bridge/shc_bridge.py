@@ -981,7 +981,7 @@ class Store:
             )
             hpcols = [r[1] for r in self.conn.execute("PRAGMA table_info(hp_samples)")]
             # supply_c/return_c let the heating-curve analysis build up over time
-            for col in ("heat_kwh", "heat_w", "supply_c", "return_c", "flow_lmin"):
+            for col in ("heat_kwh", "heat_w", "supply_c", "return_c", "flow_lmin", "eheater_kwh"):
                 if col not in hpcols:
                     self.conn.execute(f"ALTER TABLE hp_samples ADD COLUMN {col} REAL")
             if "mode" not in hpcols:
@@ -1200,12 +1200,13 @@ class Store:
         with self.lock, self.conn:
             self.conn.execute(
                 "INSERT INTO hp_samples(gateway,ts,energy_kwh,power_w,thermal_kw,"
-                "modulation,outdoor_c,heat_kwh,heat_w,mode,supply_c,return_c,flow_lmin)"
-                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "modulation,outdoor_c,heat_kwh,heat_w,mode,supply_c,return_c,flow_lmin,eheater_kwh)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (row.get("gateway"), row["ts"], row.get("energy_kwh"), row.get("power_w"),
                  row.get("thermal_kw"), row.get("modulation"), row.get("outdoor_c"),
                  row.get("heat_kwh"), row.get("heat_w"), row.get("mode"),
-                 row.get("supply_c"), row.get("return_c"), row.get("flow_lmin")),
+                 row.get("supply_c"), row.get("return_c"), row.get("flow_lmin"),
+                 row.get("eheater_kwh")),
             )
 
     def hp_last_good_ts(self) -> int | None:
@@ -1235,12 +1236,14 @@ class Store:
 
     def add_hp_samples_bulk(self, rows: list[tuple]):
         """Bulk insert (gateway,ts,energy_kwh,power_w,thermal_kw,modulation,
-        outdoor_c,heat_kwh,heat_w,mode,supply_c,return_c) tuples – demo seeder."""
+        outdoor_c,heat_kwh,heat_w,mode,supply_c,return_c[,eheater_kwh]) tuples –
+        demo seeder / imports."""
+        rows = [tuple(r) + (None,) * (13 - len(r)) for r in rows]
         with self.lock, self.conn:
             self.conn.executemany(
                 "INSERT INTO hp_samples(gateway,ts,energy_kwh,power_w,thermal_kw,"
-                "modulation,outdoor_c,heat_kwh,heat_w,mode,supply_c,return_c)"
-                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", rows)
+                "modulation,outdoor_c,heat_kwh,heat_w,mode,supply_c,return_c,eheater_kwh)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", rows)
 
     def hp_samples_since(self, since_ts: int) -> list[dict]:
         with self.lock:
@@ -2870,6 +2873,222 @@ def compute_dhw_tank(store: "Store", days: float = 14, now: int | None = None) -
             "episodes": eps[-14:], "today": [e for e in eps if e["end"] >= midnight or e["running"]],
             "series": series, "runs48": runs48, "now": now,
             "tank_now": {"ts": tts[-1], "t": round(tv[-1], 1)}}
+
+
+# --------------------------------------------------------------------------- #
+# Arbeitszahl: datasheet vs. practice. The datasheet COP points (EN 14511) are
+# turned into a model COP(outdoor, flow): each point says which share of the
+# ideal (Carnot) COP the machine reaches at that outdoor temperature; between
+# points linear, outside flat. The flow temperature then scales the COP the
+# way physics does (higher flow = bigger temperature lift = lower COP). Every
+# measured interval is compared with what the model expects for exactly its
+# outdoor and flow temperature.
+# --------------------------------------------------------------------------- #
+# Bosch Compress 6800i AW, outdoor unit AW 7 OR-S (R290), EN 14511 heating
+# points as published for this size (retail/portal listings of the datasheet):
+# A-7/W35 6.71 kW COP 2.36 · A2/W35 2.87 kW COP 4.06 · A7/W35 2.85 kW COP 4.8;
+# SCOP (average climate) 4.58 at 35 °C, 3.51 at 55 °C.
+HP_SPEC_DEFAULT = {"name": "Bosch Compress 6800i AW 7 OR-S",
+                   "pts": [(-7.0, 35.0, 2.36), (2.0, 35.0, 4.06), (7.0, 35.0, 4.8)]}
+COP_DC, COP_DE = 4.0, 8.0     # K: condensing above the flow, evaporating below the air
+
+
+def _carnot_cop(tout: float, tflow: float) -> float:
+    tc = tflow + COP_DC
+    return (tc + 273.15) / max(8.0, tc - (tout - COP_DE))
+
+
+def hp_cop_model(pts):
+    """COP(outdoor °C, flow °C) from datasheet points [(outdoor, flow, COP), …]
+    → (function, [(outdoor, share of Carnot)])."""
+    eta: dict = {}
+    for to, tf, c in pts:
+        eta.setdefault(float(to), []).append(float(c) / _carnot_cop(float(to), float(tf)))
+    xs = sorted(eta)
+    ys = [sum(eta[x]) / len(eta[x]) for x in xs]
+
+    def eta_at(t):
+        if t <= xs[0]:
+            return ys[0]
+        if t >= xs[-1]:
+            return ys[-1]
+        i = bisect.bisect_right(xs, t)
+        return ys[i - 1] + (ys[i] - ys[i - 1]) * (t - xs[i - 1]) / (xs[i] - xs[i - 1])
+
+    def cop(tout, tflow):
+        return max(1.0, min(8.0, eta_at(tout) * _carnot_cop(tout, tflow)))
+    return cop, [(x, round(y, 3)) for x, y in zip(xs, ys)]
+
+
+def parse_hp_spec(raw: str | None) -> dict:
+    """`pts` query value "-7:35:2.36,2:35:4.06,…" → spec; the default when
+    missing or implausible."""
+    pts = []
+    for part in (raw or "").split(","):
+        try:
+            to, tf, c = (float(x) for x in part.split(":"))
+        except ValueError:
+            continue
+        if -30 <= to <= 35 and 20 <= tf <= 75 and 1.0 <= c <= 9.0:
+            pts.append((to, tf, c))
+    if not pts:
+        return dict(HP_SPEC_DEFAULT)
+    return {"name": None, "pts": pts[:12]}
+
+
+def compute_hp_cop_theory(store: "Store", days: float = 30, spec: dict | None = None,
+                          live: dict | None = None, now: int | None = None) -> dict:
+    """Measured COP (heat ÷ electricity from the heat pump's own counters) vs.
+    the datasheet COP at the same outdoor and flow temperature: overall, for
+    heating and hot water, per outdoor-temperature bin and per day – and where
+    the extra electricity went (standby while off, the electric heater when it
+    is logged, the rest: defrost, cycling, part load, measurement)."""
+    now = int(now or time.time())
+    days = max(3.0, min(400.0, float(days)))
+    since = int(now - days * 86400)
+    spec = spec or dict(HP_SPEC_DEFAULT)
+    cop_th, etas = hp_cop_model(spec["pts"])
+    rows = sorted((s for s in store.hp_samples_since(since - 3600) if s.get("ts")), key=lambda s: s["ts"])
+    rows = [s for s in rows if s.get("energy_kwh") is not None and s.get("heat_kwh") is not None]
+    if len(rows) < 12:
+        return {"ok": True, "n": 0, "reason": "no_data", "days": days,
+                "spec": {"name": spec.get("name"), "pts": spec["pts"]}, "etas": etas}
+    gap = _hp_gap_s(rows)
+    active = lambda m: (m or "off").lower() not in ("off", "", "standby", "idle")
+
+    def kind(m):
+        m = (m or "").lower()
+        return "dhw" if _is_dhw_mode(m) else "heating" if m in ("ch", "heating", "heat") else "other"
+
+    acc = {k: {"e": 0.0, "h": 0.0, "h_ok": 0.0, "e_th": 0.0, "tf": 0.0, "to": 0.0} for k in ("heating", "dhw", "other")}
+    bins: dict = {}
+    per_day: dict = {}
+    sb_e = sb_h = 0.0              # while the heat pump was off (standby, frost protection …)
+    he_e = 0.0                     # electric heater, when the samples carry its counter
+    he_logged = False
+    n = 0
+    t_first = None
+    for p, c in zip(rows, rows[1:]):
+        if c["ts"] < since:
+            continue
+        dt = c["ts"] - p["ts"]
+        if dt <= 0 or dt > gap:
+            continue
+        de, dh = c["energy_kwh"] - p["energy_kwh"], c["heat_kwh"] - p["heat_kwh"]
+        if de < 0 or dh < 0 or de / (dt / 3600.0) > 25 or dh / (dt / 3600.0) > 80:
+            continue
+        n += 1
+        t_first = t_first or c["ts"]
+        if p.get("eheater_kwh") is not None and c.get("eheater_kwh") is not None:
+            he_logged = True
+            he_e += max(0.0, c["eheater_kwh"] - p["eheater_kwh"])     # ticks independently of the total
+        day = time.strftime("%Y-%m-%d", time.localtime(c["ts"]))
+        d = per_day.setdefault(day, {"day": day, "e": 0.0, "h": 0.0, "h_ok": 0.0, "e_th": 0.0, "sb": 0.0, "to": [], })
+        if not (active(p.get("mode")) or active(c.get("mode"))):
+            sb_e += de
+            sb_h += dh
+            d["sb"] += de
+            d["e"] += de
+            d["h"] += dh
+            continue
+        m = kind(p.get("mode") if active(p.get("mode")) else c.get("mode"))
+        a = acc[m]
+        a["e"] += de
+        a["h"] += dh
+        d["e"] += de
+        d["h"] += dh
+        outs = [x for x in (p.get("outdoor_c"), c.get("outdoor_c")) if x is not None]
+        flows = [x for x in (p.get("supply_c"), c.get("supply_c")) if x is not None]
+        if outs:
+            d["to"].append(sum(outs) / len(outs))
+        if dh > 0 and outs and flows:
+            to, tf = sum(outs) / len(outs), sum(flows) / len(flows)
+            eth = dh / cop_th(to, tf)
+            a["h_ok"] += dh
+            a["e_th"] += eth
+            a["tf"] += tf * dh
+            a["to"] += to * dh
+            d["h_ok"] += dh
+            d["e_th"] += eth
+            if m == "heating":
+                k = int(math.floor(to / 3.0) * 3)
+                b = bins.setdefault(k, {"t": k, "e": 0.0, "h": 0.0, "h_ok": 0.0, "e_th": 0.0, "tf": 0.0})
+                b["h_ok"] += dh
+                b["e_th"] += eth
+                b["tf"] += tf * dh
+        if m == "heating" and outs:
+            k = int(math.floor((sum(outs) / len(outs)) / 3.0) * 3)
+            b = bins.setdefault(k, {"t": k, "e": 0.0, "h": 0.0, "h_ok": 0.0, "e_th": 0.0, "tf": 0.0})
+            b["e"] += de
+            b["h"] += dh
+    if n < 12:
+        return {"ok": True, "n": 0, "reason": "no_data", "days": days,
+                "spec": {"name": spec.get("name"), "pts": spec["pts"]}, "etas": etas}
+
+    def cops(a):
+        """measured COP, datasheet COP for the same heat and conditions,
+        heat-weighted flow and outdoor temperature"""
+        cm = a["h"] / a["e"] if a["e"] > 0.3 and a["h"] > 0 else None
+        ct = a["h_ok"] / a["e_th"] if a["e_th"] > 0.05 else None
+        return {"e": round(a["e"], 1), "h": round(a["h"], 1), "cop": round(cm, 2) if cm else None,
+                "cop_th": round(ct, 2) if ct else None,
+                "flow": round(a["tf"] / a["h_ok"], 1) if a["h_ok"] > 0 else None,
+                "out": round(a["to"] / a["h_ok"], 1) if a["h_ok"] > 0 and "to" in a else None,
+                "cover": round(a["h_ok"] / a["h"], 2) if a["h"] > 0 else None}
+    run = {k: sum(acc[m][k] for m in acc) for k in ("e", "h", "h_ok", "e_th", "tf", "to")}
+    R = cops(run)
+    tot_e, tot_h = run["e"] + sb_e, run["h"] + sb_h
+    cop_meas = tot_h / tot_e if tot_e > 0.3 else None
+    # electricity the datasheet machine would have needed for ALL the heat
+    # (heat whose conditions were not logged at the same rate as the rest)
+    e_th_all = (run["e_th"] * tot_h / run["h_ok"]) if run["h_ok"] > 0 else None
+    cop_theory = (tot_h / e_th_all) if e_th_all else None
+    gapd = None
+    if e_th_all is not None and tot_e > 0:
+        extra = tot_e - e_th_all
+        he_extra = he_e * (1.0 - 1.0 / cop_theory) if (he_logged and cop_theory) else None
+        rest = extra - sb_e - (he_extra or 0.0)
+        gapd = {"e_meas": round(tot_e, 1), "e_th": round(e_th_all, 1), "extra": round(extra, 1),
+                "standby": round(sb_e, 1), "heater": round(he_e, 1) if he_logged else None,
+                "heater_extra": round(he_extra, 1) if he_extra is not None else None,
+                "rest": round(rest, 1)}
+    span_d = max(1.0, (now - (t_first or since)) / 86400.0)
+    daily = []
+    for dd in sorted(per_day):
+        x = per_day[dd]
+        daily.append({"day": dd, "e": round(x["e"], 2), "h": round(x["h"], 2),
+                      "cop": round(x["h"] / x["e"], 2) if x["e"] > 0.5 and x["h"] > 0 else None,
+                      "cop_th": round(x["h_ok"] / x["e_th"], 2) if x["e_th"] > 0.1 else None,
+                      "e_th": round(x["e_th"] * x["h"] / x["h_ok"], 2) if x["h_ok"] > 0 else None,
+                      "sb": round(x["sb"], 2),
+                      "out": round(sum(x["to"]) / len(x["to"]), 1) if x["to"] else None})
+    blist = []
+    for k in sorted(bins):
+        b = bins[k]
+        if b["e"] < 3.0 or b["h_ok"] <= 0:          # coarse (1-kWh) counters: a few kWh per bin at least
+            continue
+        blist.append({"t": k, "e": round(b["e"], 1), "h": round(b["h"], 1),
+                      "cop": round(b["h"] / b["e"], 2) if b["e"] > 0 else None,
+                      "cop_th": round(b["h_ok"] / b["e_th"], 2) if b["e_th"] > 0 else None,
+                      "flow": round(b["tf"] / b["h_ok"], 1)})
+    lv = live or {}
+    life = None
+    if lv.get("energy_kwh") and lv.get("eheater_kwh") is not None and lv["energy_kwh"] > 0:
+        life = {"heater_kwh": round(lv["eheater_kwh"], 0), "heater_share": round(lv["eheater_kwh"] / lv["energy_kwh"], 3),
+                "cop": lv.get("cop_lifetime")}
+    e_vals = [r["energy_kwh"] for r in rows]
+    return {"ok": True, "n": n, "days": days, "span_d": round(span_d, 1),
+            "spec": {"name": spec.get("name"), "pts": spec["pts"]}, "etas": etas,
+            "cop": round(cop_meas, 2) if cop_meas else None,
+            "cop_run": R["cop"], "cop_th": round(cop_theory, 2) if cop_theory else None,
+            "ratio": round(cop_meas / cop_theory, 3) if (cop_meas and cop_theory) else None,
+            "heat_kwh": round(tot_h, 1), "elec_kwh": round(tot_e, 1),
+            "modes": {k: cops(acc[k]) for k in ("heating", "dhw") if acc[k]["e"] > 0.3},
+            "bins": blist, "daily": daily, "gap": gapd,
+            "standby_w": round(sb_e / span_d / 24.0 * 1000.0) if span_d >= 1 else None,
+            "heater_logged": he_logged, "lifetime": life,
+            "counter_step": _counter_step(e_vals[-2000:]),
+            "cover": R["cover"]}
 
 
 LP_LEVELS = (600, 800, 1200, 2000, 3600, 5000, 8000, 10000, 15000)
@@ -8105,7 +8324,8 @@ def _demo_hp(dt: datetime) -> dict:
             comp_elec, mode, cop = 14.0, "off", 0.0
         else:
             comp_elec = 300.0 + (16.0 - outdoor) * 95.0
-            cop = max(1.6, min(4.8, 1.9 + 0.11 * outdoor))
+            # a modern inverter unit in a real house: ~70–75 % of its datasheet
+            cop = max(1.8, min(5.2, 2.7 + 0.12 * outdoor))
             # periodic defrost when cold & damp (≤ ~7 °C): ~10 min at the top of
             # the hour, compressor reverses so the heat output collapses
             if outdoor < 7.0 and minute_of_day % 60 < 10:
@@ -8123,11 +8343,14 @@ def _demo_hp(dt: datetime) -> dict:
         elec += 2500.0
         heat += 2450.0
     supply = round(28.0 + (heat / 6000.0) * 12.0, 1) if mode != "off" else round(24.0, 1)
+    if mode == "dhw":                                   # charging the tank: flow a few K above it
+        supply = round(tank_t + 6.0, 1)
     if defrost:
         supply = round(supply - 6.0, 1)                 # flow dips during defrost
     return {"elec_w": round(max(0.0, elec), 1), "heat_w": round(max(0.0, heat), 1),
             "outdoor_c": outdoor, "modulation": modulation, "mode": mode,
-            "supply_c": supply, "return_c": round(supply - (heat / 6000.0) * 5.0, 1)}
+            "supply_c": supply, "return_c": round(supply - (heat / 6000.0) * 5.0, 1),
+            "heater_w": 2500.0 if heater else 0.0}
 
 
 def _demo_controls() -> list[dict]:
@@ -8314,7 +8537,7 @@ def seed_demo(store: Store, days: int = 90):
     # temperature overlay in the day-timeline has distinct, chronologically
     # varying curves: (name, base °C, setpoint, responsiveness to the house swing)
     demo_rooms = DEMO_ROOMS
-    e_kwh = h_kwh = 0.0
+    e_kwh = h_kwh = eh_kwh = 0.0
     indoor = 21.5
     t = start
     while t <= now:
@@ -8322,9 +8545,11 @@ def seed_demo(store: Store, days: int = 90):
         dt_h = hp_step.total_seconds() / 3600.0
         e_kwh += op["elec_w"] / 1000.0 * dt_h
         h_kwh += op["heat_w"] / 1000.0 * dt_h
+        eh_kwh += op["heater_w"] / 1000.0 * dt_h
         hp_rows.append((DEMO_HP_GW, int(t.timestamp()), round(e_kwh, 4), op["elec_w"],
                         round(op["heat_w"] / 1000.0, 3), op["modulation"], op["outdoor_c"],
-                        round(h_kwh, 4), op["heat_w"], op["mode"], op["supply_c"], op["return_c"]))
+                        round(h_kwh, 4), op["heat_w"], op["mode"], op["supply_c"], op["return_c"],
+                        round(eh_kwh, 4)))
         hr = t.hour + t.minute / 60.0
         setp = 20.5 if (hr < 6 or hr >= 22) else 21.5      # mild night setback
         if is_away(t):
@@ -8397,6 +8622,7 @@ class DemoPoller(threading.Thread):
         hp_latest = self.store.hp_latest() or {}
         e_kwh = hp_latest.get("energy_kwh") or 0.0
         h_kwh = hp_latest.get("heat_kwh") or 0.0
+        eh_kwh = hp_latest.get("eheater_kwh") or 0.0
         last_room = 0
         while not self._stop.is_set():
             now = datetime.now()
@@ -8410,12 +8636,14 @@ class DemoPoller(threading.Thread):
             dt_h = self.interval / 3600.0
             e_kwh += op["elec_w"] / 1000.0 * dt_h
             h_kwh += op["heat_w"] / 1000.0 * dt_h
+            eh_kwh += op["heater_w"] / 1000.0 * dt_h
             self.store.add_hp_sample({
                 "gateway": DEMO_HP_GW, "ts": ts, "energy_kwh": round(e_kwh, 4),
                 "power_w": op["elec_w"], "heat_kwh": round(h_kwh, 4), "heat_w": op["heat_w"],
                 "thermal_kw": op["heat_w"] / 1000.0, "modulation": op["modulation"],
                 "outdoor_c": op["outdoor_c"], "mode": op["mode"],
-                "supply_c": op["supply_c"], "return_c": op["return_c"]})
+                "supply_c": op["supply_c"], "return_c": op["return_c"],
+                "eheater_kwh": round(eh_kwh, 4)})
             # per-room thermostat log + hot-water tank, every 5 min – otherwise the
             # seeded history ends at start-up and the room analyses go stale
             if ts - last_room >= 300:
@@ -8435,7 +8663,7 @@ class DemoPoller(threading.Thread):
                     "heat_w": op["heat_w"], "cop_live": cop,
                     "cop_lifetime": round(h_kwh / e_kwh, 2) if e_kwh > 0 else None,
                     "energy_kwh": round(e_kwh, 1), "heat_kwh": round(h_kwh, 1),
-                    "compressor_kwh": round(e_kwh * 0.87, 1), "eheater_kwh": round(e_kwh * 0.13, 1),
+                    "compressor_kwh": round(e_kwh - eh_kwh, 1), "eheater_kwh": round(eh_kwh, 1),
                     "modulation": op["modulation"], "mode": op["mode"],
                     "outdoor_c": op["outdoor_c"], "supply_c": op["supply_c"],
                     "return_c": op["return_c"], "starts": 655, "working_h": 4333,
@@ -8548,7 +8776,7 @@ class HeatPumpPoller(threading.Thread):
             "modulation": data.get("modulation"), "outdoor_c": data.get("outdoor_c"),
             "mode": data.get("mode"),
             "supply_c": data.get("supply_c"), "return_c": data.get("return_c"),
-            "flow_lmin": flow,
+            "flow_lmin": flow, "eheater_kwh": data.get("eheater_kwh"),
         })
         # hot-water tank temperature + setpoint, so a DHW phase can be judged on
         # what the tank really did (None when the device does not expose it)
@@ -11954,6 +12182,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json(self.ctx.calc_get(
                     ("dhwimpact", round(dwd, 2)), 120,
                     lambda: compute_dhw_impact(self.store, dwd, self._hp_live())))
+            if path == "/api/heatpump/coptheory":
+                try:
+                    ctd = max(3.0, min(400.0, float(qs.get("days", ["30"])[0])))
+                except ValueError:
+                    ctd = 30.0
+                raw_pts = qs.get("pts", [""])[0]
+                return self._send_json(self.ctx.calc_get(
+                    ("coptheory", round(ctd, 1), raw_pts), 120,
+                    lambda: compute_hp_cop_theory(self.store, ctd, parse_hp_spec(raw_pts), self._hp_live())))
             if path == "/api/heatpump/dhwtank":
                 try:
                     dtd = max(2.0, min(60.0, float(qs.get("days", ["14"])[0])))

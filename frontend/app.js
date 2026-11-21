@@ -94,8 +94,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v209';   // short tag shown always-on in the header
-const APP_VERSION = 'v209 · 2026-11-20 · Wärme-Tab: neuer Unterreiter „🚿 Warmwasser“ mit der Karte „🛁 Warmwasser-Speicher“ – gemessen am Speicherfühler: jede Ladung mit Start-/Endtemperatur, Dauer und Heizpause; unterbrochene und fortgesetzte Ladungen zählen als eine (so werden 3-Stunden-Programme sichtbar), lange Ladungen mit Grund (Zeitlimit, währenddessen gezapft, kalt draußen, langsame letzte Grad). Dazu: Speicherkurve der letzten 2 Tage, Minuten pro Grad beim Aufheizen, wie lange ein voller Speicher hält, Ruheverlust und Zapfungen nach Uhrzeit, Legionellen-Sicht (Stunden unter 45/50 °C, höchster Wert, 60-°C-Aufheizung gesehen oder nicht) und „Was wäre wenn“ für andere Start-/Stopptemperaturen (Schätzung aus den eigenen Messwerten) mit Empfehlung. „Warmwasser kostet Komfort“ ist mit in den Warmwasser-Reiter gezogen. Demo: realistischerer Speicher (Duschen, Ruheverlust, 2-h-Ladelimit). ' +
+const APP_BUILD = 'v210';   // short tag shown always-on in the header
+const APP_VERSION = 'v210 · 2026-11-21 · Wärme → Effizienz: neue Karte „⚖️ Arbeitszahl: Datenblatt vs. Praxis“ für die Bosch Compress 6800i AW 7 OR-S (EN 14511: A−7/W35 2,36 · A2/W35 4,06 · A7/W35 4,8; SCOP 4,58/3,51). Für jede Messung rechnet die App den COP, den die Maschine laut Datenblatt bei genau dieser Außen- und Vorlauftemperatur haben müsste, und stellt ihn der gemessenen Arbeitszahl gegenüber – gesamt, für Heizen und Warmwasser, je Außentemperatur und pro Tag/Monat. Dazu, wohin der Mehrverbrauch geht (Stillstand, Heizstab, Rest wie Abtauen/Takten), Einordnung mit SCOP und Fraunhofer-Feldtests, Hinweise (Heizstab-Anteil, Warmwasser, Vorlauf, Standby). Datenblatt-Werte anpassbar. Die Bridge schreibt jetzt den Heizstab-Zähler je Abfrage mit. Demo: Warmwasser mit realistischem Vorlauf, Heizen näher an einer modernen Wärmepumpe. ' +
+  'v209 · 2026-11-20 · Wärme-Tab: neuer Unterreiter „🚿 Warmwasser“ mit der Karte „🛁 Warmwasser-Speicher“ – gemessen am Speicherfühler: jede Ladung mit Start-/Endtemperatur, Dauer und Heizpause; unterbrochene und fortgesetzte Ladungen zählen als eine (so werden 3-Stunden-Programme sichtbar), lange Ladungen mit Grund (Zeitlimit, währenddessen gezapft, kalt draußen, langsame letzte Grad). Dazu: Speicherkurve der letzten 2 Tage, Minuten pro Grad beim Aufheizen, wie lange ein voller Speicher hält, Ruheverlust und Zapfungen nach Uhrzeit, Legionellen-Sicht (Stunden unter 45/50 °C, höchster Wert, 60-°C-Aufheizung gesehen oder nicht) und „Was wäre wenn“ für andere Start-/Stopptemperaturen (Schätzung aus den eigenen Messwerten) mit Empfehlung. „Warmwasser kostet Komfort“ ist mit in den Warmwasser-Reiter gezogen. Demo: realistischerer Speicher (Duschen, Ruheverlust, 2-h-Ladelimit). ' +
   'v208 · 2026-11-19 · Zweites Dashboard „Haus“ (…/#dash2): die PV-Anlage als selbst gezeichnete Haus-Grafik – Dach mit Modulen, Wechselrichter und Batterie an der Wand, Garage mit Auto und Wallbox, Wärmepumpe, Netzanschluss am Mast – mit den gemessenen Werten alle 10 s: Solar, Andere Lasten (Haus ohne Wallbox), Batterie (Leistung und Ladestand), Stromnetz (Bezug/Einspeisung) und Wallbox (nur wenn ein gemessenes Gerät so heißt, sonst „keine Messung“). Laufende Striche zeigen die Flussrichtung. Darunter „Tägliche Energie“ mit drei Reitern: Solar (Eigenverbrauchsquote), Batterie (Ladestand, verbleibende kWh, heute auf-/entladen) und Netz (Autarkie, bezogen/eingespeist). Status „Normal“ nur bei aktuellen Wechselrichter-Werten, Notstrom-Status per Knopf. Zwischen beiden Dashboards wischen oder die Punkte unten antippen; im Setup neuer Knopf „Haus-Dashboard“. Wohn-Dashboard auf dem Handy: die Knöpfe oben (u. a. ✕) bleiben im Bild, lange Raum-Hinweise brechen um statt über den Rand zu laufen. ' +
   'v207 · 2026-11-19 · PV-Planer: neue Karte „🔬 Theorie vs. Praxis“ unter „PV-Nutzung pro Monat“ – je Monat, was der Planer für deine Anlage erwartet (mit kWp und Batterie laut Wechselrichter, Ausrichtung der Strings, Verbrauch laut Planer), neben dem gemessenen Ergebnis: vier Balken (PV Theorie/Praxis, Verbrauch Theorie/Praxis; Theorie gestrichelt), Tabelle mit Abweichungen bei PV, Verbrauch, Netzbezug und Autarkie, angefangene Monate anteilig, und eine Einordnung mit den Sonnenstunden des Monats gegenüber dem langjährigen Mittel. ' +
   'v206 · 2026-11-19 · PV-Tab mit Wetter: drei Kacheln heute/morgen/übermorgen mit Wetterart (sonnig, heiter, wechselhaft, trüb, Regen/Schnee), Sonnenstunden von den Stunden Tageslicht, Bewölkung, Temperatur und erwartetem Ertrag – aus der Einstrahlung und dem, was deine Anlage an den letzten Tagen daraus gemacht hat. Im Verlauf die Sonnenstunden je Tag direkt unter den PV-Balken, das Wetter im Tooltip und eine Zusammenfassung (sonnigster/trübster Tag mit Ertrag). Neuer Zeitraum „Heute“ mit Balken je Stunde. Wetter: Open-Meteo (Modell für deinen Standort); fehlt der Standort, fragt die App nach dem Ort. Wohn-Dashboard: Termine und Stundenplan stehen auf breiten Bildschirmen nebeneinander. ' +
@@ -439,6 +440,11 @@ const INFO = {
     'wie viel die Innentemperatur vom Wert <b>bei WW-Start</b> bis zum Tiefpunkt <b>fällt</b> – und wie lange es nach dem Heizungs-Neustart dauert, bis dieser <b>Startwert wieder erreicht</b> ist. ' +
     'Die Beispiel-Kurve zeigt eine typische Phase (schattiert = WW-Pause, gestrichelt = Startwert, grün = wieder warm). Darunter die Abhängigkeit von der <b>Außentemperatur</b> und die letzten Phasen. ' +
     '<b>Je kälter draußen, desto größer der Dip.</b> Gegenmittel: WW in Schwachlastzeiten legen, WW-Soll/Hysterese senken oder die Ladedauer begrenzen – dann pausiert die Heizung kürzer.',
+  'cop-theory': () => 'Wie nah kommt deine Wärmepumpe an ihr <b>Datenblatt</b>? Die Datenblatt-Punkte (EN 14511, z. B. A2/W35 = 2 °C Außenluft, 35 °C Vorlauf) gelten im Prüfstand. ' +
+    'Die App rechnet daraus für <b>jede Messung</b> (alle 5 Minuten) den COP, den die Maschine bei genau dieser <b>Außen- und Vorlauftemperatur</b> haben müsste – so wird fair verglichen: ' +
+    'Warmwasser mit 50–55 °C Vorlauf hat auch laut Datenblatt einen niedrigeren COP als Heizen mit 30 °C. <b>Praxis</b> = erzeugte Wärme ÷ Strom aus den Zählern der WP. ' +
+    'Darunter: Heizen und Warmwasser getrennt, je Außentemperatur, pro Tag – und <b>wohin der Mehrverbrauch geht</b>: Stillstand (Standby), Heizstab (COP 1) und der Rest ' +
+    '(Abtauen, Takten, Teillast, Umwälzpumpen, Messgenauigkeit). Grenzen: die Zähler der WP sind keine geeichten Zähler, die Wärme berechnet die WP selbst; der Punkt A−7/W35 gilt bei voller Leistung.',
   'dhw-tank': () => 'Der <b>Warmwasser-Speicher</b>, gemessen: Bei jeder Abfrage der Wärmepumpe (meist alle 5 Minuten) schreibt die Bridge die <b>Speichertemperatur</b> ' +
     '(Fühler), den <b>Sollwert</b> und den <b>Betrieb</b> (Heizen/Warmwasser) mit. Daraus: jede <b>Ladung</b> mit Start- und Endtemperatur und Dauer – und warum lange Ladungen lang waren ' +
     '(Zeitlimit mit Heizpause dazwischen, während der Ladung gezapft, kalte Luft, die langsamen letzten Grad). <b>Minuten pro Grad</b> zeigt, wie viel Zeit jedes Grad beim Aufheizen kostet. ' +
@@ -6010,6 +6016,146 @@ function paintDhwTank(r) {
     `Ladungen, die nach einer Unterbrechung innerhalb von 90 min weitergehen, zählen als eine. Wie stark das Haus während der Heizpausen auskühlt, zeigt die Karte „Warmwasser kostet Komfort“ darunter.`);
 }
 
+// ===== Arbeitszahl: Datenblatt vs. Praxis ==================================== #
+// The datasheet COP points of the user's heat pump (default: Bosch Compress
+// 6800i AW 7 OR-S, EN 14511) → the bridge models COP(outdoor, flow) and
+// compares every measured interval with it. Editable: synced as bhe_hp_spec.
+const HP_SPEC_PRESET = { name: 'Bosch Compress 6800i AW 7 OR-S', pts: [[-7, 35, 2.36], [2, 35, 4.06], [7, 35, 4.8]], scop35: 4.58, scop55: 3.51 };
+function hpSpec() {
+  try { const s = JSON.parse(localStorage.getItem('bhe_hp_spec') || 'null'); if (s && Array.isArray(s.pts) && s.pts.length) return s; } catch (e) {}
+  return HP_SPEC_PRESET;
+}
+const hpSpecQuery = sp => sp.pts.map(p => p.map(Number).join(':')).join(',');
+let _coptDays = null, _coptData = {}, _coptBusy = false;
+function coptDays() { if (_coptDays == null) { try { _coptDays = parseInt(localStorage.getItem('bhe_copt_days'), 10) || 30; } catch (e) { _coptDays = 30; } } return _coptDays; }
+async function renderCopTheory(force) {
+  const card = $('copt-card'); if (!card) return;
+  const sp = hpSpec(), key = coptDays() + '|' + hpSpecQuery(sp);
+  paintCopSpec(sp);
+  if (_coptData[key] && !force) { paintCopTheory(_coptData[key]); return; }
+  if (_coptBusy) return; _coptBusy = true;
+  const k = $('copt-kpis'); if (k && !_coptData[key]) k.innerHTML = '<div class="note" style="grid-column:1/-1;padding:10px 0;text-align:center">Lade Vergleich …</div>';
+  try {
+    const r = await api(`/api/heatpump/coptheory?days=${coptDays()}&pts=${encodeURIComponent(hpSpecQuery(sp))}`);
+    _coptData[key] = r; paintCopTheory(r);
+  } catch (e) { if (k) k.innerHTML = '<div class="note" style="grid-column:1/-1">Nur mit laufender Bridge verfügbar.</div>'; }
+  finally { _coptBusy = false; }
+}
+function paintCopSpec(sp) {
+  const el = $('copt-model'); if (!el) return;
+  const pts = sp.pts.slice().sort((a, b) => b[0] - a[0] || a[1] - b[1]);
+  el.innerHTML = `Modell: <b>${esc(sp.name || 'eigene Werte')}</b> · Datenblatt (EN 14511): ` +
+    pts.map(p => `A${fmt(p[0], 0)}/W${fmt(p[1], 0)} <b>${fmt(p[2], 2)}</b>`).join(' · ') +
+    (sp.scop35 ? ` · SCOP ${fmt(sp.scop35, 2)} (35 °C)${sp.scop55 ? ` / ${fmt(sp.scop55, 2)} (55 °C)` : ''}` : '') + '.';
+  const body = $('copt-spec-body'); if (!body || body.dataset.open === '1') return;
+  const row = (p, i) => `<div class="copt-pt" data-i="${i}">A <input type="text" inputmode="decimal" class="cpt-o" value="${p ? fmt(p[0], 0) : ''}" aria-label="Außen °C"> °C ` +
+    `W <input type="text" inputmode="decimal" class="cpt-f" value="${p ? fmt(p[1], 0) : ''}" aria-label="Vorlauf °C"> °C ` +
+    `COP <input type="text" inputmode="decimal" class="cpt-c" value="${p ? fmt(p[2], 2) : ''}" aria-label="COP"></div>`;
+  body.innerHTML = `<div class="note" style="margin-bottom:8px">Punkte aus dem Datenblatt deiner Wärmepumpe (EN 14511: <b>A</b> = Außenluft °C, <b>W</b> = Vorlauf °C). ` +
+    `Mindestens einer; je mehr Außentemperaturen, desto genauer. Leere Zeilen werden ignoriert.</div>` +
+    `<label class="note">Name <input type="text" id="cpt-name" value="${esc(sp.name || '')}" style="width:100%"></label>` +
+    [...sp.pts, null, null].map(row).join('') +
+    `<div style="display:flex;gap:8px;margin-top:6px"><label class="note" style="flex:1">SCOP 35 °C <input type="text" inputmode="decimal" id="cpt-s35" value="${sp.scop35 ? fmt(sp.scop35, 2) : ''}"></label>` +
+    `<label class="note" style="flex:1">SCOP 55 °C <input type="text" inputmode="decimal" id="cpt-s55" value="${sp.scop55 ? fmt(sp.scop55, 2) : ''}"></label></div>` +
+    `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><button class="btn" id="cpt-save" style="width:auto;padding:8px 16px;margin:0">Übernehmen</button>` +
+    `<button class="btn sec" id="cpt-reset" style="width:auto;padding:8px 16px;margin:0">Zurück auf 6800i AW 7 OR-S</button></div>` +
+    `<div class="note" id="cpt-msg" style="margin-top:6px"></div>`;
+}
+function saveCopSpec(reset) {
+  const msg = $('cpt-msg');
+  if (reset) { try { localStorage.removeItem('bhe_hp_spec'); localStorage.setItem('bhe_hp_spec', JSON.stringify(HP_SPEC_PRESET)); } catch (e) {} }
+  else {
+    const num = v => { const x = parseFloat(String(v || '').replace(',', '.')); return isFinite(x) ? x : null; };
+    const pts = [...document.querySelectorAll('#copt-spec-body .copt-pt')].map(r => [num(r.querySelector('.cpt-o').value), num(r.querySelector('.cpt-f').value), num(r.querySelector('.cpt-c').value)])
+      .filter(p => p.every(x => x != null) && p[0] >= -30 && p[0] <= 35 && p[1] >= 20 && p[1] <= 75 && p[2] >= 1 && p[2] <= 9);
+    if (!pts.length) { if (msg) msg.innerHTML = '<span style="color:var(--warn)">Bitte mindestens einen gültigen Punkt eintragen (A −30…35, W 20…75, COP 1…9).</span>'; return; }
+    const sp = { name: ($('cpt-name').value || '').trim() || 'eigene Werte', pts, scop35: num($('cpt-s35').value), scop55: num($('cpt-s55').value) };
+    try { localStorage.setItem('bhe_hp_spec', JSON.stringify(sp)); } catch (e) {}
+  }
+  const body = $('copt-spec-body'); if (body) body.dataset.open = '';
+  renderCopTheory();
+  if (msg) msg.textContent = reset ? 'Datenblatt der 6800i AW 7 OR-S wiederhergestellt.' : 'Übernommen.';
+}
+function paintCopTheory(r) {
+  const ids = ['copt-head', 'copt-kpis', 'copt-modes', 'copt-bins', 'copt-legend', 'copt-bins-note', 'copt-gap', 'copt-daily', 'copt-ctx', 'copt-note'];
+  const E = {}; ids.forEach(i => { E[i] = $(i); });
+  const set = (k, html) => { if (E[k]) E[k].innerHTML = html; };
+  if (!r || !r.ok || !r.n) {
+    ids.forEach(k => set(k, ''));
+    set('copt-kpis', '<div class="note" style="grid-column:1/-1;padding:10px 0">Noch zu wenige Messwerte der Wärmepumpe im Zeitraum (Strom- und Wärmezähler aus HomeCom). Nach ein paar Tagen Betrieb erscheint hier der Vergleich.</div>');
+    return;
+  }
+  const sp = hpSpec(), pct = r.ratio != null ? Math.round(r.ratio * 100) : null;
+  const col = pct == null ? 'var(--muted)' : pct >= 90 ? COL.pv : pct >= 75 ? COL.heat : '#ff8f5a';
+  set('copt-head', pct != null ? `<span style="color:${col}">${pct} % vom Datenblatt</span>` : '');
+  const kpi = (v, l) => `<div class="kpi sm"><div class="v">${v}</div><div class="l">${l}</div></div>`;
+  set('copt-kpis', kpi(fmt(r.cop, 2), 'Praxis (gemessen)') + kpi(fmt(r.cop_th, 2), 'Datenblatt bei deinen Temperaturen') +
+    kpi(pct != null ? `<span style="color:${col}">${pct} %</span>` : '–', 'davon erreicht'));
+  // heating vs hot water
+  const M = r.modes || {};
+  const mrow = (lbl, m) => !m ? '' : `<tr><td><b>${lbl}</b></td><td><b>${fmt(m.cop, 2)}</b></td><td>${fmt(m.cop_th, 2)}</td>` +
+    `<td>${m.cop && m.cop_th ? Math.round(m.cop / m.cop_th * 100) + ' %' : '–'}</td><td style="color:var(--muted)">${m.flow != null ? 'Ø ' + fmt(m.flow, 0) + ' °C' : '–'}${m.out != null ? ` · außen ${fmt(m.out, 0)} °C` : ''}</td></tr>`;
+  set('copt-modes', (M.heating || M.dhw) ? `<table class="dwt-tbl" style="margin-top:12px"><thead><tr><th></th><th>Praxis</th><th>Datenblatt</th><th>erreicht</th><th>Vorlauf</th></tr></thead><tbody>` +
+    mrow('Heizen', M.heating) + mrow('Warmwasser', M.dhw) + '</tbody></table>' : '');
+  // per outdoor temperature (heating)
+  const B = r.bins || [];
+  if (B.length >= 2) {
+    set('copt-bins', groupedBar(B.map(b => ({ label: `${b.t}°`, full: `außen ${b.t} bis ${b.t + 3} °C · Ø Vorlauf ${fmt(b.flow, 0)} °C`,
+      values: { m: b.cop || 0, t: b.cop_th || 0 } })), [{ key: 'm', color: COL.pv, label: 'Praxis' }, { key: 't', color: 'var(--muted)', label: 'Datenblatt' }], { h: 180, dec: 2 }));
+    set('copt-legend', `<div class="it"><span class="sw" style="background:${COL.pv}"></span>Praxis (gemessen)</div><div class="it"><span class="sw" style="background:var(--muted)"></span>Datenblatt bei gleichem Vorlauf</div>`);
+    const worst = B.filter(b => b.cop && b.cop_th).reduce((a, b) => (b.cop / b.cop_th < a.cop / a.cop_th ? b : a), B.find(b => b.cop && b.cop_th) || B[0]);
+    const best = B.filter(b => b.cop && b.cop_th).reduce((a, b) => (b.cop / b.cop_th > a.cop / a.cop_th ? b : a), worst);
+    set('copt-bins-note', worst && worst.cop_th ? `Heizen je Außentemperatur. Am weitesten weg vom Datenblatt bei <b>${worst.t} bis ${worst.t + 3} °C</b> (${Math.round(worst.cop / worst.cop_th * 100)} %)` +
+      (best !== worst ? `, am nächsten bei ${best.t} bis ${best.t + 3} °C (${Math.round(best.cop / best.cop_th * 100)} %)` : '') +
+      '. In der Kälte zählt das Abtauen mit; der Datenblatt-Punkt A−7/W35 gilt bei voller Leistung.' : '');
+  } else { set('copt-bins', ''); set('copt-legend', ''); set('copt-bins-note', 'Je Außentemperatur: braucht ein paar Tage mit unterschiedlichem Wetter.'); }
+  // where the extra electricity went
+  const G = r.gap;
+  if (G && G.extra != null) {
+    const parts = [
+      ['Stillstand (Standby, Frostschutz)', G.standby, r.standby_w != null ? `Ø ${fmt(r.standby_w, 0)} W` : ''],
+      ['Heizstab (statt Wärmepumpe)', G.heater_extra, G.heater != null ? `${fmt(G.heater, 1)} kWh Heizstab-Strom` : ''],
+      ['Rest: Abtauen, Takten, Teillast, Pumpen, Messung', G.rest, ''],
+    ].filter(p => p[1] != null);
+    const mx = Math.max(0.1, ...parts.map(p => Math.abs(p[1])));
+    set('copt-gap', G.extra > 0
+      ? `<div class="note" style="margin-bottom:8px">In ${fmt(r.span_d, 0)} Tagen hat die WP <b>${fmt(G.e_meas, 0)} kWh</b> Strom gebraucht; mit den Datenblatt-Werten hätten für dieselbe Wärme <b>${fmt(G.e_th, 0)} kWh</b> gereicht ` +
+        `(<b>+${fmt(G.extra, 0)} kWh</b>, +${fmt(G.extra / G.e_th * 100, 0)} %). Davon:</div>` +
+        parts.map(([l, v, sub]) => `<div class="copt-gap"><div style="display:flex;justify-content:space-between;gap:8px"><span>${esc(l)}${sub ? ` <span style="color:var(--muted)">· ${esc(sub)}</span>` : ''}</span><b style="white-space:nowrap">${v >= 0 ? '+' : ''}${fmt(v, 1)} kWh</b></div>` +
+          `<div class="copt-bar"><span style="width:${Math.max(1, Math.abs(v) / mx * 100).toFixed(0)}%;background:${v >= 0 ? '#ff8f5a' : COL.pv}"></span></div></div>`).join('') +
+        (r.heater_logged ? '' : '<div class="note" style="margin-top:6px">Den Heizstab schreibt die Bridge ab dieser Version je Abfrage mit – bis dahin steckt er im Rest.</div>')
+      : `<div class="note">Deine WP liegt <b>über</b> den Datenblatt-Werten (${fmt(-G.extra, 0)} kWh weniger Strom als erwartet) – sehr gut, oder der Wärmezähler der WP rechnet optimistisch.</div>`);
+  } else set('copt-gap', '');
+  // per day (≤ 45 days) or per month
+  const D = (r.daily || []).filter(d => d.cop != null && d.cop_th != null);
+  let rows;
+  if (r.days > 45) {
+    const mm = {};
+    (r.daily || []).forEach(d => { const k = d.day.slice(0, 7); const x = mm[k] = mm[k] || { h: 0, e: 0, eth: 0 }; x.h += d.h; x.e += d.e; x.eth += d.e_th || 0; });
+    rows = Object.keys(mm).sort().filter(k => mm[k].e > 2 && mm[k].eth > 0).map(k => ({ label: MON[parseInt(k.slice(5), 10) - 1], full: k,
+      values: { m: mm[k].h / mm[k].e, t: mm[k].h / mm[k].eth } }));
+  } else rows = D.map(d => ({ label: d.day.slice(8, 10), full: `${dayLabel(d.day)} · außen Ø ${fmt(d.out, 0)} °C`, values: { m: d.cop, t: d.cop_th } }));
+  set('copt-daily', rows.length >= 2 ? `<div style="font-weight:600;font-size:13px;margin:14px 0 4px">${r.days > 45 ? 'Pro Monat' : 'Pro Tag'}</div>` +
+    groupedBar(rows, [{ key: 'm', color: COL.pv, label: 'Praxis' }, { key: 't', color: 'var(--muted)', label: 'Datenblatt' }], { h: 170, dec: 2 }) +
+    (r.counter_step && r.counter_step >= 0.5 ? `<div class="note" style="margin-top:4px">Die Zähler der WP zählen in ${fmt(r.counter_step, r.counter_step < 1 ? 1 : 0)}-kWh-Schritten – einzelne Tage schwanken deshalb; über den Zeitraum gleicht sich das aus.</div>` : '') : '');
+  // context: seasonal values and field tests
+  const jaz = STATE.hpA && STATE.hpA.imported && STATE.hpA.imported.seasonal_cop;
+  const L = r.lifetime;
+  const tips = [];
+  if (L && L.heater_share >= 0.05) tips.push(`Seit Inbetriebnahme kommen <b>${fmt(L.heater_share * 100, 0)} %</b> des WP-Stroms aus dem <b>Heizstab</b> (${fmt(L.heater_kwh, 0)} kWh) – der arbeitet 1:1 (COP 1). Oft steckt Warmwasser auf hoher Temperatur oder eine Legionellenschaltung mit Heizstab dahinter, oder eine zu hohe Bivalenztemperatur.`);
+  if (M.dhw && M.heating && M.dhw.e > 0.25 * (M.heating.e + M.dhw.e)) tips.push(`Warmwasser macht <b>${fmt(M.dhw.e / (M.heating.e + M.dhw.e) * 100, 0)} %</b> des Stroms im Betrieb – bei Ø ${fmt(M.dhw.flow, 0)} °C Vorlauf ist der COP von Natur aus niedriger. Ein paar Grad weniger Warmwasser bringen hier am meisten (siehe Reiter Warmwasser).`);
+  if (M.heating && M.heating.flow != null && M.heating.flow > 38) tips.push(`Heizen mit Ø <b>${fmt(M.heating.flow, 0)} °C</b> Vorlauf: jedes Grad weniger bringt grob 2–3 % mehr Arbeitszahl – Heizkurve prüfen.`);
+  if (r.standby_w != null && r.standby_w > 40) tips.push(`Im Stillstand braucht die WP Ø <b>${fmt(r.standby_w, 0)} W</b> – auffällig viel (Kurbelwannen-/Frostschutzheizung?).`);
+  set('copt-ctx', `<div class="dwt-box tip"><div style="font-weight:700;margin-bottom:6px">Zum Einordnen</div><ul style="margin:0;padding-left:18px">` +
+    `<li style="margin:3px 0">Datenblatt-<b>SCOP</b> ${sp.scop35 ? fmt(sp.scop35, 2) + ' (35 °C)' : '–'}${sp.scop55 ? ' / ' + fmt(sp.scop55, 2) + ' (55 °C)' : ''}: ein Normwert fürs ganze Jahr im „mittleren Klima“ – nur Heizen, ohne Warmwasser, ohne Stillstand. Kein Haus erreicht ihn eins zu eins.</li>` +
+    (jaz ? `<li style="margin:3px 0">Deine <b>Jahresarbeitszahl</b> aus dem HomeCom-Import (12 Monate): <b>${fmt(jaz, 2)}</b>.</li>` : '') +
+    `<li style="margin:3px 0">Feldtests des Fraunhofer ISE an Luft-Wärmepumpen im Bestand: Ø JAZ <b>3,1</b> („WPsmart im Bestand“) bzw. <b>3,4</b>, Spanne 2,6–4,9 („WP-QS im Bestand“).</li>` +
+    tips.map(t => `<li style="margin:3px 0">${t}</li>`).join('') + '</ul></div>');
+  set('copt-note', `„Datenblatt bei deinen Temperaturen“: Für jede 5-Minuten-Messung rechnet die App aus den Datenblatt-Punkten, welchen COP die Maschine bei genau dieser Außen- und Vorlauftemperatur haben müsste ` +
+    `(Anteil am idealen Carnot-COP je Außentemperatur, zwischen den Punkten linear). Praxis = erzeugte Wärme ÷ Strom aus den Zählern der WP selbst (HomeCom: Verdichter + Heizstab) – keine geeichten Zähler, die Wärme berechnet die WP. ` +
+    `Datenblatt-Werte der 6800i AW 7 OR-S aus Händler- und Fachportal-Angaben des Bosch-Datenblatts; unter „Datenblatt-Werte anpassen“ änderbar.`);
+}
+
 // ===== Tagesverlauf Wärmepumpe: chronologische Zustände + Leistung ========= #
 const _HPDN = 200;                          // buckets across the VISIBLE window
 // zoom span for the day view (hours, or 'auto'/'day')
@@ -11261,7 +11407,7 @@ const HEAT_SUB_RENDER = {
   heizung: ['renderHpDay', 'renderHeatingDiag', 'renderRoomTemps', 'renderHeatTimeseries', 'renderRoomTs', 'renderWindows', 'renderHpCompare'],
   warmwasser: ['renderDhwTank', 'renderDhwImpact'],
   abgleich: ['renderAbgleich', 'renderLayout'],
-  effizienz: ['renderHpTrend'],
+  effizienz: ['renderCopTheory', 'renderHpTrend'],
   einstellung: ['renderHeatingCurve', 'initHpControls', 'renderRoomSync'],
 };
 function renderHeatSub(sub) {
@@ -11431,6 +11577,22 @@ function init() {
   if (htm) htm.addEventListener('change', () => { try { htm.value ? localStorage.setItem('bhe_hp_abgleich', htm.value) : localStorage.removeItem('bhe_hp_abgleich'); } catch (e) {} const d = hptDays(); if (_hptData[d]) paintHpTrend(_hptData[d]); });
   const htmc = $('hpt-mark-clear');
   if (htmc) htmc.addEventListener('click', () => { try { localStorage.removeItem('bhe_hp_abgleich'); } catch (e) {} if ($('hpt-mark')) $('hpt-mark').value = ''; const d = hptDays(); if (_hptData[d]) paintHpTrend(_hptData[d]); });
+  const cdy = $('copt-days');
+  if (cdy) {
+    cdy.addEventListener('click', e => {
+      const b = e.target.closest('button'); if (!b) return;
+      _coptDays = parseInt(b.dataset.cd, 10); try { localStorage.setItem('bhe_copt_days', String(_coptDays)); } catch (err) {}
+      cdy.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+      renderCopTheory();
+    });
+    cdy.querySelectorAll('button').forEach(x => x.classList.toggle('on', parseInt(x.dataset.cd, 10) === coptDays()));
+  }
+  const cspec = $('copt-spec');
+  if (cspec) cspec.addEventListener('click', e => {
+    if (e.target.closest('#cpt-save')) { e.preventDefault(); saveCopSpec(false); }
+    else if (e.target.closest('#cpt-reset')) { e.preventDefault(); saveCopSpec(true); }
+  });
+  if (cspec) cspec.addEventListener('input', () => { const b = $('copt-spec-body'); if (b) b.dataset.open = '1'; });
   const dwt = $('dhwt-days');
   if (dwt) {
     dwt.addEventListener('click', e => {
