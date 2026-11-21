@@ -181,6 +181,25 @@ Punkte ändern oder ergänzen (z. B. W55-Punkte); sie gelten dann auf allen Ger�
   Stillstand); Feldtests des Fraunhofer ISE an Luft-Wärmepumpen im Bestand: Ø JAZ 3,1
   („WPsmart im Bestand“) bzw. 3,4, Spanne 2,6–4,9 („WP-QS im Bestand“).
 
+**Warmwasser-Vorlauf:** Bei der CS6800i sitzt der Vorlauffühler, den HomeCom meldet, im Heizkreis – während der
+Speicher lädt, zeigt er nur die abkühlende Heizleitung (~30 °C). Liegt er unter der Speichertemperatur, rechnet
+die App mit **Speichertemperatur + 6 K** (ohne Speicherwert: 50 °C) und markiert den Wert mit *.
+
+### Verbesserungs-Check
+
+Karte **🔧 Verbesserungs-Check** direkt darunter: was einzelne Stellschrauben mit deinen Messwerten bringen
+würden, sortiert nach Wirkung –
+
+* **Vorlauf beim Heizen** 2 bzw. 4 K tiefer (Datenblatt-Modell auf die gemessene Heizwärme),
+* **Warmwasser** 2 bzw. 4 K kühler und **mittags** statt bei der Außentemperatur, bei der es heute lädt,
+* **Heizstab** vermeiden (gemessen ab v210, vorher der Anteil seit Inbetriebnahme; mit Aufteilung Heizen/Warmwasser),
+* **Raumtemperatur** 1 K runter (Faustwert 6 % Heizwärme), ab Ø 22 °C,
+* Hinweise ohne Euro-Wert: **Heizen bei ≥ 15 °C** außen (Heizgrenze), **Verdichter-Starts** (Gerätezähler, ab v211
+  je Abfrage gespeichert) und **Stillstand** über 30 W.
+
+Mit einem HomeCom-Jahresimport stehen kWh und € pro Jahr da, sonst pro Monat beim Wetter des Zeitraums (Preis aus
+dem Setup). Schätzungen, nicht einfach addierbar.
+
 ## Warmwasser-Speicher & Legionellen
 
 Tab **Wärme → 🚿 Warmwasser**, Karte **🛁 Warmwasser-Speicher** (darunter, umgezogen aus

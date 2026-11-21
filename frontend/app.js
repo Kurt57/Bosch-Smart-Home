@@ -94,8 +94,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v210';   // short tag shown always-on in the header
-const APP_VERSION = 'v210 · 2026-11-21 · Wärme → Effizienz: neue Karte „⚖️ Arbeitszahl: Datenblatt vs. Praxis“ für die Bosch Compress 6800i AW 7 OR-S (EN 14511: A−7/W35 2,36 · A2/W35 4,06 · A7/W35 4,8; SCOP 4,58/3,51). Für jede Messung rechnet die App den COP, den die Maschine laut Datenblatt bei genau dieser Außen- und Vorlauftemperatur haben müsste, und stellt ihn der gemessenen Arbeitszahl gegenüber – gesamt, für Heizen und Warmwasser, je Außentemperatur und pro Tag/Monat. Dazu, wohin der Mehrverbrauch geht (Stillstand, Heizstab, Rest wie Abtauen/Takten), Einordnung mit SCOP und Fraunhofer-Feldtests, Hinweise (Heizstab-Anteil, Warmwasser, Vorlauf, Standby). Datenblatt-Werte anpassbar. Die Bridge schreibt jetzt den Heizstab-Zähler je Abfrage mit. Demo: Warmwasser mit realistischem Vorlauf, Heizen näher an einer modernen Wärmepumpe. ' +
+const APP_BUILD = 'v211';   // short tag shown always-on in the header
+const APP_VERSION = 'v211 · 2026-11-21 · Arbeitszahl: Warmwasser korrigiert – der Vorlauffühler der CS6800i sitzt im Heizkreis und zeigt beim Speicherladen nur ~30 °C; die App rechnet jetzt mit Speichertemperatur + 6 K (markiert mit *). Dadurch war der Datenblatt-Wert fürs Warmwasser zu hoch und „45 % erreicht“ zu schlecht. Neu: „🔧 Verbesserungs-Check“ mit bezifferten Stellschrauben – Vorlauf 2/4 K tiefer, Warmwasser kühler und mittags, Heizstab vermeiden (mit Aufteilung Heizen/Warmwasser), Raumtemperatur, dazu Heizen bei milder Luft, Verdichter-Starts und Stillstand; kWh und € pro Jahr (HomeCom-Import) bzw. pro Monat. Die Bridge speichert jetzt auch den Start-Zähler des Verdichters je Abfrage. Demo: wärmste Stunde nachmittags statt um 20 Uhr. ' +
+  'v210 · 2026-11-21 · Wärme → Effizienz: neue Karte „⚖️ Arbeitszahl: Datenblatt vs. Praxis“ für die Bosch Compress 6800i AW 7 OR-S (EN 14511: A−7/W35 2,36 · A2/W35 4,06 · A7/W35 4,8; SCOP 4,58/3,51). Für jede Messung rechnet die App den COP, den die Maschine laut Datenblatt bei genau dieser Außen- und Vorlauftemperatur haben müsste, und stellt ihn der gemessenen Arbeitszahl gegenüber – gesamt, für Heizen und Warmwasser, je Außentemperatur und pro Tag/Monat. Dazu, wohin der Mehrverbrauch geht (Stillstand, Heizstab, Rest wie Abtauen/Takten), Einordnung mit SCOP und Fraunhofer-Feldtests, Hinweise (Heizstab-Anteil, Warmwasser, Vorlauf, Standby). Datenblatt-Werte anpassbar. Die Bridge schreibt jetzt den Heizstab-Zähler je Abfrage mit. Demo: Warmwasser mit realistischem Vorlauf, Heizen näher an einer modernen Wärmepumpe. ' +
   'v209 · 2026-11-20 · Wärme-Tab: neuer Unterreiter „🚿 Warmwasser“ mit der Karte „🛁 Warmwasser-Speicher“ – gemessen am Speicherfühler: jede Ladung mit Start-/Endtemperatur, Dauer und Heizpause; unterbrochene und fortgesetzte Ladungen zählen als eine (so werden 3-Stunden-Programme sichtbar), lange Ladungen mit Grund (Zeitlimit, währenddessen gezapft, kalt draußen, langsame letzte Grad). Dazu: Speicherkurve der letzten 2 Tage, Minuten pro Grad beim Aufheizen, wie lange ein voller Speicher hält, Ruheverlust und Zapfungen nach Uhrzeit, Legionellen-Sicht (Stunden unter 45/50 °C, höchster Wert, 60-°C-Aufheizung gesehen oder nicht) und „Was wäre wenn“ für andere Start-/Stopptemperaturen (Schätzung aus den eigenen Messwerten) mit Empfehlung. „Warmwasser kostet Komfort“ ist mit in den Warmwasser-Reiter gezogen. Demo: realistischerer Speicher (Duschen, Ruheverlust, 2-h-Ladelimit). ' +
   'v208 · 2026-11-19 · Zweites Dashboard „Haus“ (…/#dash2): die PV-Anlage als selbst gezeichnete Haus-Grafik – Dach mit Modulen, Wechselrichter und Batterie an der Wand, Garage mit Auto und Wallbox, Wärmepumpe, Netzanschluss am Mast – mit den gemessenen Werten alle 10 s: Solar, Andere Lasten (Haus ohne Wallbox), Batterie (Leistung und Ladestand), Stromnetz (Bezug/Einspeisung) und Wallbox (nur wenn ein gemessenes Gerät so heißt, sonst „keine Messung“). Laufende Striche zeigen die Flussrichtung. Darunter „Tägliche Energie“ mit drei Reitern: Solar (Eigenverbrauchsquote), Batterie (Ladestand, verbleibende kWh, heute auf-/entladen) und Netz (Autarkie, bezogen/eingespeist). Status „Normal“ nur bei aktuellen Wechselrichter-Werten, Notstrom-Status per Knopf. Zwischen beiden Dashboards wischen oder die Punkte unten antippen; im Setup neuer Knopf „Haus-Dashboard“. Wohn-Dashboard auf dem Handy: die Knöpfe oben (u. a. ✕) bleiben im Bild, lange Raum-Hinweise brechen um statt über den Rand zu laufen. ' +
   'v207 · 2026-11-19 · PV-Planer: neue Karte „🔬 Theorie vs. Praxis“ unter „PV-Nutzung pro Monat“ – je Monat, was der Planer für deine Anlage erwartet (mit kWp und Batterie laut Wechselrichter, Ausrichtung der Strings, Verbrauch laut Planer), neben dem gemessenen Ergebnis: vier Balken (PV Theorie/Praxis, Verbrauch Theorie/Praxis; Theorie gestrichelt), Tabelle mit Abweichungen bei PV, Verbrauch, Netzbezug und Autarkie, angefangene Monate anteilig, und eine Einordnung mit den Sonnenstunden des Monats gegenüber dem langjährigen Mittel. ' +
@@ -440,6 +441,10 @@ const INFO = {
     'wie viel die Innentemperatur vom Wert <b>bei WW-Start</b> bis zum Tiefpunkt <b>fällt</b> – und wie lange es nach dem Heizungs-Neustart dauert, bis dieser <b>Startwert wieder erreicht</b> ist. ' +
     'Die Beispiel-Kurve zeigt eine typische Phase (schattiert = WW-Pause, gestrichelt = Startwert, grün = wieder warm). Darunter die Abhängigkeit von der <b>Außentemperatur</b> und die letzten Phasen. ' +
     '<b>Je kälter draußen, desto größer der Dip.</b> Gegenmittel: WW in Schwachlastzeiten legen, WW-Soll/Hysterese senken oder die Ladedauer begrenzen – dann pausiert die Heizung kürzer.',
+  'cop-levers': () => 'Der <b>Verbesserungs-Check</b> rechnet mit deinen Messwerten durch, was einzelne Stellschrauben bringen würden: <b>Vorlauf</b> und <b>Warmwasser</b> 2 bzw. 4 K kühler ' +
+    '(Datenblatt-Modell auf deine gemessene Wärme), Warmwasser <b>mittags</b> statt bei der Außentemperatur, bei der es heute lädt, den <b>Heizstab</b> vermeiden (gemessen), die <b>Raumtemperatur</b> 1 K runter ' +
+    '(Faustwert 6 % Heizwärme), dazu Heizen bei milder Luft, Verdichter-Starts und Stillstand. Jahreswerte auf deinen WP-Jahresstrom (HomeCom-Import) bzw. hochgerechnet; Euro mit deinem Strompreis. ' +
+    'Schätzungen, nicht einfach addierbar – am besten eine Änderung nach der anderen und 1–2 Wochen später hier vergleichen.',
   'cop-theory': () => 'Wie nah kommt deine Wärmepumpe an ihr <b>Datenblatt</b>? Die Datenblatt-Punkte (EN 14511, z. B. A2/W35 = 2 °C Außenluft, 35 °C Vorlauf) gelten im Prüfstand. ' +
     'Die App rechnet daraus für <b>jede Messung</b> (alle 5 Minuten) den COP, den die Maschine bei genau dieser <b>Außen- und Vorlauftemperatur</b> haben müsste – so wird fair verglichen: ' +
     'Warmwasser mit 50–55 °C Vorlauf hat auch laut Datenblatt einen niedrigeren COP als Heizen mit 30 °C. <b>Praxis</b> = erzeugte Wärme ÷ Strom aus den Zählern der WP. ' +
@@ -6083,6 +6088,7 @@ function paintCopTheory(r) {
   if (!r || !r.ok || !r.n) {
     ids.forEach(k => set(k, ''));
     set('copt-kpis', '<div class="note" style="grid-column:1/-1;padding:10px 0">Noch zu wenige Messwerte der Wärmepumpe im Zeitraum (Strom- und Wärmezähler aus HomeCom). Nach ein paar Tagen Betrieb erscheint hier der Vergleich.</div>');
+    paintCopLevers(r);
     return;
   }
   const sp = hpSpec(), pct = r.ratio != null ? Math.round(r.ratio * 100) : null;
@@ -6094,9 +6100,10 @@ function paintCopTheory(r) {
   // heating vs hot water
   const M = r.modes || {};
   const mrow = (lbl, m) => !m ? '' : `<tr><td><b>${lbl}</b></td><td><b>${fmt(m.cop, 2)}</b></td><td>${fmt(m.cop_th, 2)}</td>` +
-    `<td>${m.cop && m.cop_th ? Math.round(m.cop / m.cop_th * 100) + ' %' : '–'}</td><td style="color:var(--muted)">${m.flow != null ? 'Ø ' + fmt(m.flow, 0) + ' °C' : '–'}${m.out != null ? ` · außen ${fmt(m.out, 0)} °C` : ''}</td></tr>`;
+    `<td>${m.cop && m.cop_th ? Math.round(m.cop / m.cop_th * 100) + ' %' : '–'}</td><td style="color:var(--muted)">${m.flow != null ? 'Ø ' + fmt(m.flow, 0) + ' °C' + (m.flow_est > 0.5 ? '*' : '') : '–'}${m.out != null ? ` · außen ${fmt(m.out, 0)} °C` : ''}</td></tr>`;
   set('copt-modes', (M.heating || M.dhw) ? `<table class="dwt-tbl" style="margin-top:12px"><thead><tr><th></th><th>Praxis</th><th>Datenblatt</th><th>erreicht</th><th>Vorlauf</th></tr></thead><tbody>` +
-    mrow('Heizen', M.heating) + mrow('Warmwasser', M.dhw) + '</tbody></table>' : '');
+    mrow('Heizen', M.heating) + mrow('Warmwasser', M.dhw) + '</tbody></table>' +
+    (M.dhw && M.dhw.flow_est > 0.5 ? '<div class="note" style="margin-top:4px">* Warmwasser-Vorlauf geschätzt (Speichertemperatur + 6 K): der Vorlauffühler der WP sitzt im Heizkreis und sieht das Speicherladen nicht – er zeigt dabei nur die abkühlende Heizleitung.</div>' : '') : '');
   // per outdoor temperature (heating)
   const B = r.bins || [];
   if (B.length >= 2) {
@@ -6107,7 +6114,8 @@ function paintCopTheory(r) {
     const best = B.filter(b => b.cop && b.cop_th).reduce((a, b) => (b.cop / b.cop_th > a.cop / a.cop_th ? b : a), worst);
     set('copt-bins-note', worst && worst.cop_th ? `Heizen je Außentemperatur. Am weitesten weg vom Datenblatt bei <b>${worst.t} bis ${worst.t + 3} °C</b> (${Math.round(worst.cop / worst.cop_th * 100)} %)` +
       (best !== worst ? `, am nächsten bei ${best.t} bis ${best.t + 3} °C (${Math.round(best.cop / best.cop_th * 100)} %)` : '') +
-      '. In der Kälte zählt das Abtauen mit; der Datenblatt-Punkt A−7/W35 gilt bei voller Leistung.' : '');
+      '. In der Kälte zählt das Abtauen mit; der Datenblatt-Punkt A−7/W35 gilt bei voller Leistung.' +
+      (B.some(b => b.t >= 15 && b.cop && b.cop_th && b.cop / b.cop_th < 0.7) ? ' Ab etwa 15 °C außen braucht das Haus kaum Wärme: die WP taktet, Pumpen und Stillstand wiegen schwerer – das Datenblatt gilt für Dauerlauf.' : '') : '');
   } else { set('copt-bins', ''); set('copt-legend', ''); set('copt-bins-note', 'Je Außentemperatur: braucht ein paar Tage mit unterschiedlichem Wetter.'); }
   // where the extra electricity went
   const G = r.gap;
@@ -6151,9 +6159,113 @@ function paintCopTheory(r) {
     (jaz ? `<li style="margin:3px 0">Deine <b>Jahresarbeitszahl</b> aus dem HomeCom-Import (12 Monate): <b>${fmt(jaz, 2)}</b>.</li>` : '') +
     `<li style="margin:3px 0">Feldtests des Fraunhofer ISE an Luft-Wärmepumpen im Bestand: Ø JAZ <b>3,1</b> („WPsmart im Bestand“) bzw. <b>3,4</b>, Spanne 2,6–4,9 („WP-QS im Bestand“).</li>` +
     tips.map(t => `<li style="margin:3px 0">${t}</li>`).join('') + '</ul></div>');
+  paintCopLevers(r);
   set('copt-note', `„Datenblatt bei deinen Temperaturen“: Für jede 5-Minuten-Messung rechnet die App aus den Datenblatt-Punkten, welchen COP die Maschine bei genau dieser Außen- und Vorlauftemperatur haben müsste ` +
     `(Anteil am idealen Carnot-COP je Außentemperatur, zwischen den Punkten linear). Praxis = erzeugte Wärme ÷ Strom aus den Zählern der WP selbst (HomeCom: Verdichter + Heizstab) – keine geeichten Zähler, die Wärme berechnet die WP. ` +
     `Datenblatt-Werte der 6800i AW 7 OR-S aus Händler- und Fachportal-Angaben des Bosch-Datenblatts; unter „Datenblatt-Werte anpassen“ änderbar.`);
+}
+
+// ===== Verbesserungs-Check: what each lever would bring (estimated) ========= #
+// Built from the same /api/heatpump/coptheory answer: the datasheet model
+// applied to the user's measured heat (flow −2/−4 K, hot water cooler or at
+// midday), the measured electric heater, standby and starts, the indoor
+// temperature. kWh per year on the 12-month HomeCom import when there is one.
+function paintCopLevers(r) {
+  const head = $('copx-head'), intro = $('copx-intro'), list = $('copx-list'), note = $('copx-note');
+  if (!list) return;
+  if (!r || !r.ok || !r.n || !r.levers) {
+    list.innerHTML = '<div class="note">Kommt mit dem Vergleich oben, sobald ein paar Tage Messwerte da sind.</div>';
+    if (head) head.innerHTML = ''; if (intro) intro.innerHTML = ''; if (note) note.innerHTML = ''; return;
+  }
+  const L = r.levers, M = r.modes || {}, A = STATE.hpA || {};
+  // a year from the 12-month HomeCom import; without it, per month at the
+  // weather of the window (a winter month × 12 would overstate the year)
+  const yImp = A.imported && A.imported.months_used >= 10 && A.imported.year_elec_kwh;
+  const yearE = yImp || (r.elec_kwh / Math.max(1, r.span_d) * 30);
+  const per = yImp ? 'im Jahr' : 'im Monat';
+  const eH = (M.heating || {}).e || 0, eW = (M.dhw || {}).e || 0;
+  const shH = eH + eW > 0 ? eH / (eH + eW) : 0.8, shW = 1 - shH;
+  const price = STATE.price || 0.30;
+  const pct = g => g == null ? '–' : fmt(g * 100, g < 0.1 ? 1 : 0) + ' %';
+  const items = [];
+  const cop = r.cop_run || r.cop || 3;
+  if (L.heat_flow && L.heat_flow.gain2 != null && L.heat_flow.gain2 > 0) {
+    const f = L.heat_flow;
+    items.push({ icon: '🌡️', title: 'Vorlauf beim Heizen senken', tag: 'Modell', kwh: f.gain2 * yearE * shH, kwh2: f.gain4 * yearE * shH,
+      now: `Ø <b>${fmt(f.flow, 0)} °C</b> Vorlauf (Heizen, Ø ${fmt((M.heating || {}).out, 0)} °C außen).`,
+      eff: `2 K weniger: <b>${pct(f.gain2)}</b> weniger Heizstrom · 4 K weniger: <b>${pct(f.gain4)}</b>.`,
+      how: 'Die CS6800i regelt witterungsgeführt: den Vorlauf senkst du über das Raum-Soll der Wärmepumpe (Komfort/Eco) oder eine flachere Heizkurve im Fachmann-Menü. ' +
+        'Mit Fußbodenheizung die Einzelraumregler weit offen lassen, dann reicht ein niedrigerer Vorlauf. Ob danach alle Räume warm werden, zeigt der Reiter Abgleich.' });
+  }
+  if (L.dhw_temp && L.dhw_temp.gain2 != null && L.dhw_temp.gain2 > 0) {
+    const w = L.dhw_temp;
+    items.push({ icon: '🚿', title: 'Warmwasser 2–4 °C kühler', tag: 'Modell', kwh: w.gain2 * yearE * shW, kwh2: w.gain4 * yearE * shW,
+      now: `Warmwasser lädt mit Ø <b>${fmt(w.flow, 0)} °C</b> Vorlauf${w.est > 0.5 ? ' (geschätzt: Speicher + 6 K – der Vorlauffühler sieht das Laden nicht)' : ''}.`,
+      eff: `2 K weniger: <b>${pct(w.gain2)}</b> weniger Warmwasser-Strom · 4 K weniger: <b>${pct(w.gain4)}</b> – und kürzere Ladungen, die Heizung pausiert kürzer.`,
+      how: 'Stopptemperatur fürs Warmwasser z. B. 52 statt 54 °C, dazu 1× pro Woche 60 °C gegen Legionellen (Reiter Warmwasser zeigt, was das bei dir ändert).' });
+  }
+  if (L.dhw_midday && L.dhw_midday.gain >= 0.02) {
+    const m = L.dhw_midday;
+    items.push({ icon: '☀️', title: 'Warmwasser mittags laden', tag: 'Modell', kwh: m.gain * yearE * shW,
+      now: `Warmwasser lädt im Schnitt bei <b>${fmt(m.out_dhw, 1)} °C</b> außen, zwischen 11 und 15 Uhr sind es <b>${fmt(m.out_mid, 1)} °C</b>.`,
+      eff: `Wärmere Luft: <b>${pct(m.gain)}</b> weniger Warmwasser-Strom laut Datenblatt – dazu Sonnenstrom vom Dach, der dann oft gratis ist.`,
+      how: 'Zeitprogramm für Warmwasser auf die Mittagsstunden legen (HomeCom: Warmwasser → Zeitprogramm); morgens nur nachladen, wenn der Speicher wirklich leer ist.' });
+  }
+  const H = L.heater || {};
+  if (H.logged && H.e >= 0.5 && r.elec_kwh > 0) {
+    const yr = H.e / r.elec_kwh * yearE, save = yr * (1 - 1 / Math.max(1.5, cop));
+    const bm = H.by_mode || {}, where = [['dhw', 'beim Warmwasser'], ['heating', 'beim Heizen'], ['off', 'im Stillstand'], ['other', 'sonst']]
+      .filter(([k]) => bm[k] >= 0.1).map(([k, l]) => `${l} ${fmt(bm[k], 1)} kWh`).join(', ');
+    items.push({ icon: '🔥', title: 'Heizstab vermeiden', tag: 'gemessen', kwh: save,
+      now: `Im Zeitraum <b>${fmt(H.e, 1)} kWh</b> Heizstab-Strom (${pct(H.e / r.elec_kwh)} des WP-Stroms)${where ? ': ' + where : ''}.`,
+      eff: `Der Heizstab heizt 1:1 – die Wärmepumpe schafft dieselbe Wärme mit ~${fmt(cop, 1)}× weniger Strom.`,
+      how: 'Freigabe des Heizstabs prüfen (Fachmann-Menü: Zuheizer, Bivalenz-/Freigabetemperatur, Verzögerung). Läuft er beim Warmwasser, stecken oft eine hohe WW-Temperatur oder die thermische Desinfektion mit Heizstab dahinter.' });
+  } else if (r.lifetime && r.lifetime.heater_share >= 0.03) {
+    const yr = r.lifetime.heater_share * yearE, save = yr * (1 - 1 / Math.max(1.5, cop));
+    items.push({ icon: '🔥', title: 'Heizstab vermeiden', tag: 'seit Inbetriebnahme', kwh: save,
+      now: `Seit Inbetriebnahme <b>${fmt(r.lifetime.heater_kwh, 0)} kWh</b> aus dem Heizstab = <b>${pct(r.lifetime.heater_share)}</b> des WP-Stroms. Wann er läuft, schreibt die Bridge ab v210 je Abfrage mit.`,
+      eff: `Der Heizstab heizt 1:1 – die Wärmepumpe schafft dieselbe Wärme mit ~${fmt(cop, 1)}× weniger Strom.`,
+      how: 'Freigabe des Heizstabs prüfen (Fachmann-Menü: Zuheizer, Bivalenz-/Freigabetemperatur, Verzögerung); in ein paar Tagen zeigt diese Karte, ob er beim Heizen oder beim Warmwasser läuft.' });
+  }
+  if (L.indoor && L.indoor.t >= 22.0) {
+    items.push({ icon: '🏠', title: 'Raumtemperatur 1 °C runter', tag: 'Faustwert', kwh: 0.06 * yearE * shH,
+      now: `Im Haus sind es im Schnitt <b>${fmt(L.indoor.t, 1)} °C</b> (Bosch-Thermostate).`,
+      eff: 'Jedes Grad weniger spart grob <b>6 %</b> Heizwärme – und die WP darf dann mit niedrigerem Vorlauf fahren (zusätzlich bessere Arbeitszahl).',
+      how: 'Dort anfangen, wo es nicht stört (Schlafzimmer, Flur, Arbeitszimmer), und das Raum-Soll der Wärmepumpe mit absenken.' });
+  }
+  const W2 = L.warm || {};
+  if (W2.share != null && W2.share >= 0.05 && W2.e >= 3) {
+    items.push({ icon: '🍂', title: 'Heizen bei milder Luft', tag: 'gemessen', kwh: null,
+      now: `Bei <b>15 °C und wärmer</b> hat die WP noch <b>${fmt(W2.e, 0)} kWh</b> fürs Heizen gebraucht (${pct(W2.share)} des Heizstroms im Zeitraum), COP <b>${fmt(W2.cop, 2)}</b>.`,
+      eff: 'Bei so milder Luft braucht das Haus kaum Wärme – die WP läuft dann in kurzen Takten, Pumpen und Stillstand fallen stärker ins Gewicht.',
+      how: 'Heizgrenze prüfen (Sommer/Winter-Umschaltung in den WP-Einstellungen): liegt sie hoch, z. B. auf 17 °C senken und schauen, ob es behaglich bleibt.' });
+  }
+  const S2 = L.starts;
+  if (S2 && S2.per_day >= 10) {
+    items.push({ icon: '🔁', title: 'Weniger Takte', tag: 'gemessen', kwh: null,
+      now: `Ø <b>${fmt(S2.per_day, 0)} Verdichter-Starts am Tag</b>${S2.min_per_start != null ? `, Ø <b>${fmt(S2.min_per_start, 0)} min</b> Laufzeit je Start` : ''} (Zähler der WP, ${fmt(S2.days, 0)} Tage).`,
+      eff: 'Jeder Start kostet ein paar Minuten mit schlechtem Wirkungsgrad; lange, ruhige Läufe mit kleiner Leistung sind am effizientesten.',
+      how: 'Raumthermostate weit öffnen und den Vorlauf eher senken als anheben – dann läuft die WP länger durch. Verlauf im „Takt-Trend“ weiter unten.' });
+  }
+  if (r.standby_w != null && r.standby_w >= 30) {
+    items.push({ icon: '🔌', title: 'Stillstand', tag: 'gemessen', kwh: null,
+      now: `Ø <b>${fmt(r.standby_w, 0)} W</b> im Stillstand ≈ ${fmt(r.standby_w * 8.76, 0)} kWh im Jahr.`,
+      eff: 'Normal sind etwa 10–30 W (Regelung, im Winter Frostschutz/Kurbelwannenheizung).', how: 'Wenn deutlich mehr: Installateur nach Kurbelwannen-/Frostschutzheizung fragen.' });
+  }
+  items.sort((a, b) => (b.kwh || -1) - (a.kwh || -1));
+  const best = items.find(x => x.kwh != null);
+  if (head) head.innerHTML = best ? `<span style="color:var(--muted)">größter Hebel: ${esc(best.title)}</span>` : '';
+  if (intro) intro.innerHTML = `Was deine Arbeitszahl bzw. deinen Strom am meisten verbessern würde – gerechnet mit deinen Messwerten und dem Datenblatt-Modell. ` +
+    (yImp ? `Jahreswerte auf <b>${fmt(yearE, 0)} kWh</b> WP-Strom im Jahr (HomeCom-Import)` : `Werte pro Monat bei dem Wetter des Zeitraums (<b>${fmt(yearE, 0)} kWh</b> WP-Strom im Monat) – mit einem HomeCom-Jahresimport stehen hier Jahreswerte`) +
+    `, ${fmt(price * 100, 0)} ct/kWh.`;
+  list.innerHTML = items.length ? items.map(x => `<div class="copx-item"><div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline">` +
+      `<b style="font-size:13.5px">${x.icon} ${esc(x.title)}</b><span class="dwt-chip" style="margin:0">${esc(x.tag)}</span></div>` +
+      `<div class="note" style="margin-top:4px">${x.now} ${x.eff}</div>` +
+      (x.kwh != null ? `<div style="margin-top:6px;font-size:13px">≈ <b>${fmt(x.kwh, 0)} kWh</b> ${per} · <b>${fmt(x.kwh * price, 0)} €</b>${x.kwh2 != null ? ` <span style="color:var(--muted)">(bei 4 K: ${fmt(x.kwh2, 0)} kWh · ${fmt(x.kwh2 * price, 0)} €)</span>` : ''}</div>` : '') +
+      `<div class="note" style="margin-top:4px">💡 ${x.how}</div></div>`).join('')
+    : '<div class="note">Keine auffälligen Stellschrauben gefunden – deine Wärmepumpe läuft schon gut.</div>';
+  if (note) note.innerHTML = 'Schätzungen: das Datenblatt-Modell für Vorlauf und Warmwasser, der Faustwert 6 % je Grad Raumtemperatur. Die Effekte lassen sich nicht einfach addieren ' +
+    '(z. B. senkt eine kühlere Raumtemperatur auch den Vorlauf). Am besten eine Änderung nach der anderen machen und hier 1–2 Wochen später vergleichen.';
 }
 
 // ===== Tagesverlauf Wärmepumpe: chronologische Zustände + Leistung ========= #

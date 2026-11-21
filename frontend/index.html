@@ -371,6 +371,7 @@
     #kiosk-away{padding:0 12px; font-size:13px}
   }
   .copt-gap{font-size:12.5px; padding:6px 0; border-bottom:1px solid var(--line)}
+  .copx-item{padding:10px 0; border-bottom:1px solid var(--line)}
   .copt-bar{height:6px; border-radius:3px; background:var(--card2); margin-top:4px; overflow:hidden}
   .copt-bar span{display:block; height:100%; border-radius:3px}
   .copt-pt{display:flex; align-items:center; gap:4px; font-size:12.5px; margin:4px 0; flex-wrap:wrap}
@@ -1056,7 +1057,7 @@
     </div>
     <div class="card" id="copt-card">
       <h2><span class="info" data-info="cop-theory" role="button" aria-label="Info">i</span>⚖️ Arbeitszahl: Datenblatt vs. Praxis <span class="r" id="copt-head"></span></h2>
-      <div class="note" id="copt-model" style="margin-bottom:10px"></div>
+      <div class="note" id="copt-model" style="margin-bottom:10px;clear:both"></div>
       <div class="seg" id="copt-days" style="margin:0 0 12px">
         <button data-cd="14">14 T</button>
         <button data-cd="30" class="on">30 T</button>
@@ -1078,6 +1079,12 @@
         <div id="copt-spec-body" style="margin-top:8px"></div>
       </details>
       <div class="note" id="copt-note" style="margin-top:10px"></div>
+    </div>
+    <div class="card" id="copx-card">
+      <h2><span class="info" data-info="cop-levers" role="button" aria-label="Info">i</span>🔧 Verbesserungs-Check <span class="r" id="copx-head"></span></h2>
+      <div class="note" id="copx-intro" style="margin-bottom:8px;clear:both"></div>
+      <div id="copx-list"></div>
+      <div class="note" id="copx-note" style="margin-top:10px"></div>
     </div>
     <div class="card">
       <h2><span class="info" data-info="cop" role="button" aria-label="Info">i</span>Wirkungsgrad (COP) pro Tag</h2>
