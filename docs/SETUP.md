@@ -22,6 +22,11 @@ die Web-Seite dieser Bridge – es muss nichts installiert werden.
 Bosch SHC  ──▶  Bridge (Python auf Pi/NAS/PC)  ──▶  iPhone-Browser
 ```
 
+**Adressen im Heimnetz** (IP des Controllers, des Wechselrichters, von Home Assistant) zeigt die
+App verdeckt (`•••.•••.•.••`) – erst ein Tipp auf **„anzeigen“** macht sie sichtbar (bis die Seite
+neu geladen wird). So kannst du Screenshots teilen. In den Eingabefeldern ist die Adresse sichtbar,
+solange du darin tippst.
+
 ---
 
 ## 1. Bridge herunterladen

@@ -1,24 +1,42 @@
-# Bosch Smart Home – Strom-App 🔌📱
+# Bosch Smart Home – Energie-App 🔌🔥📱
 
-Eine schlanke iPhone-Web-App (PWA), die den **Stromverbrauch deiner Bosch
-„Licht-/Rollladensteuerung II"**-Module sichtbar macht – live, historisch und als
-Prognose. Läuft komplett in deinem Heimnetz, ohne Cloud.
+Eine schlanke iPhone-Web-App (PWA), die deinen **Stromverbrauch** sichtbar macht –
+die Bosch **„Licht-/Rollladensteuerung II"**-Module **und** deine Bosch-Wärmepumpe,
+**kombiniert** in einem kleinen Energiemanagement-System: live, historisch, als
+Prognose und aufgeschlüsselt nach **wann, wie viel, wofür**. Läuft komplett in
+deinem Heimnetz; die Wärmepumpe kommt über Bosch HomeCom Easy dazu.
 
-![Ansichten](https://img.shields.io/badge/Ansichten-Live·Verbrauch·Profil·Abwesenheit·Prognose-3ba9ff)
+![Ansichten](https://img.shields.io/badge/Ansichten-Übersicht·Heute·Verlauf·Wärmepumpe·Profil·PV·Börse·Konzept-3ba9ff)
 
 ## Was du bekommst
 
 | Ansicht | Inhalt |
 |---|---|
-| **Live** | Aktuelle Leistung (W) aller Module **kumuliert** und je Gerät, Grundlast/Standby, heute geschätzt + Kosten, Gesamt gemessen (kWh) |
-| **Verbrauch** | kWh **pro Tag** (14/30/90 Tage), abwesende Tage rot markiert, Anteil je Gerät am Gesamtverbrauch |
-| **Profil** | Ø-Leistung je **Stunde** (Tagesprofil), Ø-kWh je **Wochentag**, **Wärmekarte** Wochentag × Stunde |
-| **Abwesenheit** | Heuristische Schätzung, **wie oft ihr nicht zuhause wart**, Anwesenheit pro Tag + Kalender |
-| **Prognose** | **Jahres-Hochrechnung** (kWh + €), Monat/Tag, Standby-Anteil, Einordnung, **Sofort-Schätzung aus dem Zählerstand** (ab Minute 1), konfigurierbarer Strompreis |
-| **Setup** | **Controller automatisch finden**, Kopplung per Formular (kurzer Knopfdruck → live), Live-Status, **Geräte lokal umbenennen** |
+| **Übersicht** | **Heute bisher** (kWh + Kosten), aktuelle Gesamtleistung inkl. Wärmepumpen-Anteil, **Energiefluss jetzt** (Sonne · Haus · Batterie · Netz · Wärmepumpe, mit Fronius-Wechselrichter), Monats-Hochrechnung, **Monatsbudget** (Stand + Hochrechnung, warnt vor Überschreitung), **Wofür-heute-Donut** (Wärmepumpe + Geräte), letzte 14 Tage **gestapelt** (Smart Home vs. Wärmepumpe), **Sparpotenzial** (die größten Hebel mit €/Jahr, sortiert nach Wirkung), Wärmepumpen-Kurzstatus |
+| **Heute** | Verbrauch **nach Stunde** (Smart Home + Wärmepumpe gestapelt), Aufteilung heute als Donut mit Kosten, Smart-Home-Geräte heute |
+| **Verlauf** | kWh **pro Tag** (14/30/90 Tage) bzw. **pro Monat** (1 Jahr, fehlende Monate geschätzt), gestapelt nach Quelle; **echter Gesamtverbrauch** aus dem **Tibber**-Zähler (wenn verbunden); **Anteil je Quelle**; **Abwesenheit** (wie oft ihr nicht zuhause wart) + Kalender; **Jahres-Hochrechnung** & Einordnung |
+| **Wärmepumpe** | Live-Karte (elektr./therm. Leistung, **COP jetzt**, Zähler-Splits Kompressor/Heizstab, Temperaturen, **Volumenstrom** – gelesen, wenn die Anlage ihn meldet, sonst aus Wärmemenge ÷ Spreizung abgeleitet, Starts/Stunden), **Strom & Wärme pro Tag**, **COP-Verlauf**, **COP pro Monat**, **Monatsbilanz**, **Wärmekarte** Wochentag × Stunde, **Theorie vs. Praxis** (erwarteter Stromverbrauch aus deinen Gebäudedaten – U·A + Heizgradtage – gegen den gemessenen Verbrauch, mit den größten Sanierungs-Hebeln), **Strombedarf-Prognose** (erwarteter WP-Strom der nächsten Tage aus der Wettervorhersage), **Warmwasser-Anteil & -Kosten** pro Jahr mit Optimierungs-Tipp, Ø **Laufzeit je Start** mit Kurztakt-Warnung |
+| **Profil** | Ø-Leistung je **Stunde** (Tagesprofil), **Grundlast** (was läuft rund um die Uhr – Standby/Dauerverbraucher, Jahres-kWh & -kosten), Ø-kWh je **Wochentag**, **Wärmekarte** Wochentag × Stunde (Smart Home) |
+| **PV** | **Deine PV-Anlage live** (Fronius): Energiefluss, Tagesverlauf, Autarkie, Eigenverbrauch, Ersparnis, Batterie, **Strings** und **Smart Meter**, Verlauf über 7/30/90 Tage bzw. ein Jahr, **Monatswerte mit Erwartung** (PVGIS/Planer) – siehe **[docs/FRONIUS.md](docs/FRONIUS.md)**.
+Wohn-Dashboard (Hinweis-Kacheln, Kalender, Müllabfuhr AWB Köln): **[docs/DASHBOARD.md](docs/DASHBOARD.md)**. Darunter der **PV-Planer** für eine geplante Anlage bzw. Erweiterung: Anlagengröße/Ausrichtung/Batterie/**E-Auto** eingeben → **Jahresertrag**, **Eigenverbrauch & Autarkie** (aus deinem echten Tagesprofil simuliert), Ersparnis, **PV-Ertrag vs. Verbrauch pro Monat**, typischer Sommertag und **Amortisation**. **Echter Standort-Ertrag über PVGIS** (EU/JRC) und **Wetter-Prognose** (Open-Meteo): erwarteter **PV-Ertrag & Wärmepumpen-Strombedarf für morgen** samt bester PV-Stunden. Knopf **„kWp & Speicher vorschlagen"** dimensioniert aus deinem Verbrauch. **Bidirektionales Laden (V2H)**: rechnet, wie viel Heimspeicher dein Auto-Akku ersetzt. **60 %-Einspeisegrenze** (Solarspitzengesetz, ohne Smart Meter): zeigt, wie viel Ertrag durch die Kappung abgeregelt wird – und wie stark ein Speicher das rettet. |
+| **Börse** | **Dynamischer Börsentarif**: stündliche **Day-Ahead-Preise** (EPEX über aWATTar, kostenlos) – oder deine **echten Tibber-Tarifpreise** (all-in), wenn verbunden – als Verbraucherpreis, **beste Zeiten** für Warmwasser/Waschen/E-Auto, **dynamisch vs. Festpreis** und **Speicher clever laden** (Arbitrage) – gewichtet mit deinem echten Lastprofil. Dazu die **CO₂-Bilanz** (Netz-CO₂ je Stunde, dein **Jahres-Fußabdruck**, die **grünsten Stunden**) und der **Smart-Timer**, der die **beste Startzeit** für Waschen/Warmwasser/E-Auto nach Preis, CO₂ oder PV-Überschuss findet. |
+| **Konzept** | **Gesamt-Konzept**: vergleicht deine Jahres-Stromkosten in drei Abrechnungs-Varianten – **ein Zähler**, **zwei Zähler** (Wärmepumpen-Sondertarif) und **Börse** (lastgewichtet mit echten/historischen Preisen) – jeweils **ohne und mit PV**, erklärt **warum Börse nicht automatisch günstiger** ist, den PV-vs-WP-Zähler-Konflikt, rechnet die **Investition als Kredit** (Zins, Laufzeit, Break-even) und gibt eine **auf dich zugeschnittene Empfehlung**. |
 
-Alles basiert ausschließlich auf den `PowerMeter`-Daten (Wirkleistung in W,
-Energiezähler in Wh) der Bosch-Module – genau wie gewünscht.
+Auf der **Übersicht** erscheinen zusätzlich verbundene **AEG/Electrolux-Haushaltsgeräte**
+(Waschmaschine, Trockner) mit **Zustand, Strom pro Waschgang und Gesamtzähler** – siehe
+**[docs/AEG.md](docs/AEG.md)**. Mit einem **Tibber**-Konto nutzt der Börse-Tab deine
+**echten Tarifpreise** statt der Börse-Schätzung – siehe **[docs/TIBBER.md](docs/TIBBER.md)**.
+Ein **Fronius-Wechselrichter** (GEN24, Tauro, Symo/Primo) wird direkt im Heimnetz über die
+**Solar API** gelesen – PV, Batterie, Smart Meter und der Sonnenanteil der Wärmepumpe – siehe
+**[docs/FRONIUS.md](docs/FRONIUS.md)**.
+Läuft bei dir **Home Assistant**, liest die App dessen **Leistungs-/Energiesensoren** mit (z. B. eine
+alte **Koogeek-Steckdose** über den HomeKit Controller) – siehe **[docs/HOME-ASSISTANT.md](docs/HOME-ASSISTANT.md)**.
+| **Setup** | Strompreis, **Controller automatisch finden**, Kopplung per Formular, Live-Status, **Geräte lokal umbenennen**, **Wärmepumpe (HomeCom) verbinden**, **Wärmepumpen-Historie als CSV importieren**, **AEG/Electrolux verbinden**, **Tibber verbinden** (echte Tarifpreise), **PV-Anlage (Fronius) verbinden** (Suche im Heimnetz, Rohdaten-Diagnose), **Home Assistant verbinden** (Leistungs-/Energiesensoren, z. B. Koogeek-Steckdose), **Gesamt-Stromzähler** ablesen (kalibriert Prognosen & deckt fehlenden Hausstrom auf), **Verbrauchsdaten als CSV exportieren** (Tageswerte für Excel/Steuer), **Bridge aktualisieren** (Self-Update, manuell oder **automatisch** im Hintergrund) |
+
+Der Smart-Home-Teil basiert auf den `PowerMeter`-Daten (Wirkleistung in W,
+Energiezähler in Wh) der Bosch-Module; die Wärmepumpe liefert kumulative
+Energiezähler (Strom = Kompressor + Heizstab, Wärme = erzeugte Energie), aus
+denen die Bridge Leistung, COP und Historie ableitet.
 
 ## Architektur
 
@@ -50,6 +68,7 @@ Nach dem Klonen (siehe unten) im Finder einfach doppelklicken:
 
 * **`demo-macos.command`** – startet die Demo.
 * **`start-macos.command`** – startet den Normalbetrieb (Kopplung dann am iPhone im Tab *Setup*).
+* **`auto-update-macos.command`** – startet den Normalbetrieb **und hält die Bridge automatisch aktuell**: prüft alle paar Minuten auf neue Versionen, holt sie (git pull) und startet neu. Praktisch, wenn du Aufgaben nur per iPhone schickst. *Dasselbe geht auch ohne Extra-Skript direkt in der App:* Tab *Setup* → **„Automatisch aktualisieren"**.
 
 Beim allerersten Start fragt macOS evtl. „Eingehende Verbindungen erlauben?" → **Erlauben**.
 Falls Gatekeeper meckert: Rechtsklick auf die Datei → **Öffnen**.
@@ -90,6 +109,20 @@ siehe **[docs/SETUP.md](docs/SETUP.md)**.
   (Raspberry Pi, NAS, Mac/PC).
 * `openssl` (nur einmalig fürs Erzeugen des Client-Zertifikats).
 * iPhone im gleichen WLAN.
+
+## Bekannter Stolperstein: Safari lädt die Seite nicht neu
+
+Zeigt Safari beim **Neuladen** „Safari kann die Seite nicht öffnen … HTTP-URL mit
+aktiviertem Modus ‚HTTPS-Only'", liegt das nicht an der App: Die Bridge liefert im
+Heimnetz über **HTTP** aus, und Safari blockiert das, wenn in den Safari-Einstellungen
+die **Warnung bei nicht sicherer Verbindung** (*Not Secure Connection Warning*)
+eingeschaltet ist. Eingetippte Adressen nimmt Safari davon aus, ein Neuladen nicht –
+und für lokale Adressen bietet es kein „trotzdem fortfahren" an.
+
+* Abhilfe ohne Einstellung zu ändern: Adresse neu aufrufen (Lesezeichen) oder im
+  Verlauf einen Schritt zurück und wieder vor.
+* Dauerhaft: die genannte Warnung in den Safari-Einstellungen ausschalten (Safari
+  warnt dann auch bei fremden HTTP-Seiten nicht mehr).
 
 ## Datenschutz
 
