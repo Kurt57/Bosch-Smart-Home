@@ -94,8 +94,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v219';   // short tag shown always-on in the header
-const APP_VERSION = 'v219 · 2026-11-21 · Apple TV: Das Wohn-Dashboard gibt es als eigene Apple-TV-App (Ordner appletv/, Anleitung docs/APPLETV.md – einmal mit Xcode aufs Apple TV spielen). Sie zeigt Uhr, Außentemperatur, Hinweise (Fenster offen, lüften, zu kalt, Termin gleich, Tonnen, Batterie lädt aus dem Netz, PV/Wärmepumpe ohne Werte), Energie jetzt, Heute, Räume und die nächsten Termine – fertig formuliert von der Bridge (neu: GET /api/tv, dieselben Regeln wie im Wohn-Dashboard, 20 s zwischengespeichert). Veraltete Wärmepumpen-Werte zeigt sie als „–“ statt als Stand von vor einer Stunde. Hinweis im Setup → Wohn-Dashboard. ' +
+const APP_BUILD = 'v220';   // short tag shown always-on in the header
+const APP_VERSION = 'v220 · 2026-11-22 · PV-Tab: neue Kachel „Verbrauch heute“ (im Verlauf „Verbrauch“ für den gewählten Zeitraum) – derselbe Wert wie „Verbrauch“ in Fronius Solar.web, zum direkten Vergleich. Eigenverbrauch und Autarkie runden nicht mehr auf „100 %“ (oder „0 %“), wenn es nicht genau so ist: 99,6 % Eigenverbrauch bei 0,1 kWh Einspeisung steht jetzt als 99,6 % da (auch im Wohn-Dashboard und auf dem Apple TV). ' +
+  'v219 · 2026-11-21 · Apple TV: Das Wohn-Dashboard gibt es als eigene Apple-TV-App (Ordner appletv/, Anleitung docs/APPLETV.md – einmal mit Xcode aufs Apple TV spielen). Sie zeigt Uhr, Außentemperatur, Hinweise (Fenster offen, lüften, zu kalt, Termin gleich, Tonnen, Batterie lädt aus dem Netz, PV/Wärmepumpe ohne Werte), Energie jetzt, Heute, Räume und die nächsten Termine – fertig formuliert von der Bridge (neu: GET /api/tv, dieselben Regeln wie im Wohn-Dashboard, 20 s zwischengespeichert). Veraltete Wärmepumpen-Werte zeigt sie als „–“ statt als Stand von vor einer Stunde. Hinweis im Setup → Wohn-Dashboard. ' +
   'v218 · 2026-11-21 · Wohn-Dashboard: neuer Bereich „🎵 Musik“ mit deinen YouTube-Music-Playlists als Kacheln (Setup → Musik: Playlist-Link einfügen, Titel und Bild holt die Bridge bei öffentlichen Playlists selbst, private benennst du; Reihenfolge und Name änderbar; gilt auf allen Geräten). Antippen öffnet die Playlist in der YouTube-Music-App – HomePod dort per Cast/AirPlay. Optional Ein-Tipp über iOS-Kurzbefehle: HomePod im Dashboard wählen, das Dashboard startet „Musik Wohnzimmer“ o. ä. mit der Playlist. Abspielen/Steuern direkt aus dem Dashboard gibt es nicht – YouTube Music bietet dafür keine Schnittstelle. ' +
   'v217 · 2026-11-21 · Erreichbarkeit: Tipps passen jetzt auch zu Routern ohne feste IP-Vergabe (z. B. Speedport): Adresse über den Namen des Macs (.local) oder Tailscale; Router-VPN nur, falls vorhanden (FRITZ!Box; beim Speedport 7 angekündigt). Neuer Hinweis: aus dem Gast-WLAN ist die Bridge nicht erreichbar. ' +
   'v216 · 2026-11-21 · Erreichbarkeit: Die Bridge führt ein Protokoll, warum das iPhone sie nicht erreicht – Starts (und ob der Lauf davor unerwartet endete), Ruhezustand des Macs, Wechsel der IP-Adresse – neu im Setup als „📶 Erreichbarkeit & Fernzugriff“ mit Adressen (IP, Name .local, Tailscale), Zusammenfassung der letzten 14 Tage und konkreten Tipps. Ist die Bridge weg, nennt die App, wann sie zuletzt antwortete, und die häufigen Ursachen. Die Startskripte halten den Mac wach, solange die Bridge läuft (am Netzteil). Sicherheit: Die Bridge nimmt nur noch Verbindungen aus dem Heimnetz, vom Mac selbst und per VPN (Tailscale) an – Anfragen aus dem offenen Internet weist sie ab. Anleitung für den sicheren Fernzugriff per Tailscale oder FRITZ!Box-WireGuard: docs/FERNZUGRIFF.md. ' +
@@ -3071,7 +3072,7 @@ function renderKioskToday() {
   const tile = (ic, val, lbl, sub) => `<div class="kt-t"><span class="kt-ic">${ic}</span><div><b>${val}</b>` +
     `<small>${lbl}${sub ? ' · ' + sub : ''}</small></div></div>`;
   const tiles = [
-    tile('☀️', kw(d.pv_kwh), 'Sonne', d.self_rate != null && d.pv_kwh >= 0.1 ? `${fmt(d.self_rate * 100, 0)}\u00a0% selbst genutzt` : ''),
+    tile('☀️', kw(d.pv_kwh), 'Sonne', d.self_rate != null && d.pv_kwh >= 0.1 ? `${pctQ(d.self_rate).replace(' ', '\u00a0')} selbst genutzt` : ''),
     tile('🏠', kw(d.load_kwh), 'verbraucht', d.hp_kwh != null && d.hp_kwh >= 0.1
       ? `Wärmepumpe ${kw(d.hp_kwh)}${d.hp_sun_share != null ? `, ${fmt(d.hp_sun_share * 100, 0)}\u00a0% Sonne` : ''}` : ''),
     tile('🔌', kw(d.imp_kwh), 'aus dem Netz', (d.exp_kwh || 0) >= 0.05 ? `${kw(d.exp_kwh)} eingespeist` : ''),
@@ -13407,6 +13408,15 @@ function kwOrW(w) {
   return a >= 1000 ? fmt(w / 1000, a >= 10000 ? 0 : 1) + ' kW' : fmt(w, 0) + ' W';
 }
 function pctOf(x, d = 0) { return x == null ? '–' : fmt(x * 100, d) + ' %'; }
+// a share (self-use, autarky) in whole %, but never "100 %" or "0 %" unless it is
+// exactly that: 99,6 % self-use next to 0,1 kWh fed in must not read as 100 %
+function pctQ(x) {
+  if (x == null) return '–';
+  const p = x * 100;
+  if (p >= 99.5 && p < 100) return fmt(Math.floor(p * 10) / 10, 1) + ' %';
+  if (p > 0 && p < 0.5) return fmt(Math.ceil(p * 10) / 10, 1) + ' %';
+  return fmt(p, 0) + ' %';
+}
 function dayLabel(s) { return s ? s.slice(8, 10) + '.' + s.slice(5, 7) + '.' : ''; }
 
 function pvStatusTag(F) {
@@ -13495,7 +13505,7 @@ function pvTodayKpis(T, L, MNY) {
   const tile = (v, l) => `<div><b>${v}</b><small>${l}</small></div>`;
   let h = tile(kwh(d.pv_kwh, d.pv_kwh < 10 ? 2 : 1), 'PV heute');
   if (d.load_kwh != null) {
-    h += tile(pctOf(d.autarky), 'Autarkie') + tile(pctOf(d.self_rate), 'Eigenverbrauch') +
+    h += tile(kwh(d.load_kwh, 1), 'Verbrauch heute') + tile(pctQ(d.autarky), 'Autarkie') + tile(pctQ(d.self_rate), 'Eigenverbrauch') +
       tile(kwh(d.exp_kwh, 1), 'eingespeist') + tile(kwh(d.imp_kwh, 1), 'Netzbezug') +
       tile(money(d.saved_eur), 'gespart heute' + (d.feed_eur ? ` <span style="opacity:.8">(${eur(d.self_eur)} + ${eur(d.feed_eur)} Einsp.)</span>` : ''));
     if (MNY && MNY.month && MNY.month.days > 1) h += tile(money(MNY.month.saved_eur), 'gespart diesen Monat');
@@ -13971,7 +13981,8 @@ function paintPvHist() {
   const cap = F.details && F.details.storage && F.details.storage.capacity_wh;
   const tile = (v, l) => `<div><b>${v}</b><small>${l}</small></div>`;
   let k = tile(kwh(T.pv_kwh, T.pv_kwh < 100 ? 1 : 0), 'PV-Erzeugung');
-  if (meter) k += tile(pctOf(T.self_rate), 'Eigenverbrauch') + tile(pctOf(T.autarky), 'Autarkie') + tile(money(T.saved_eur), 'gespart') +
+  if (meter) k += tile(kwh(T.load_kwh, T.load_kwh < 100 ? 1 : 0), 'Verbrauch') +
+    tile(pctQ(T.self_rate), 'Eigenverbrauch') + tile(pctQ(T.autarky), 'Autarkie') + tile(money(T.saved_eur), 'gespart') +
     tile(kwh(T.exp_kwh, T.exp_kwh < 10 ? 1 : 0), 'eingespeist') + tile(kwh(T.imp_kwh, T.imp_kwh < 10 ? 1 : 0), 'Netzbezug');
   if (T.hp_sun_share != null) k += tile(pctOf(T.hp_sun_share), 'WP-Strom von der Sonne');
   if (T.dis_kwh != null && cap) { const cy = T.dis_kwh / (cap / 1000); k += tile(fmt(cy, cy < 10 ? 1 : 0), 'Batterie-Vollzyklen'); }
@@ -14044,7 +14055,7 @@ function paintPvHist() {
       return `<tr><td>${MON[+m.month.slice(5, 7) - 1]} ${m.month.slice(2, 4)}${part ? `<br><small style="color:var(--muted)">${m.days} Tage</small>` : ''}</td>` +
         `<td>${fmt(m.pv_kwh, 0)}</td>` +
         (showExp ? `<td>${e ? fmt(e, 0) : '–'}${dev != null ? `<br><small style="color:${dev >= -0.15 ? '#4be0b0' : '#ffb64d'}">${dev >= 0 ? '+' : '−'}${fmt(Math.abs(dev) * 100, 0)} %</small>` : ''}</td>` : '') +
-        (meter ? `<td>${pctOf(m.self_rate)}</td><td>${pctOf(m.autarky)}</td><td>${m.saved_eur != null ? fmt(m.saved_eur, 0) + ' ' + STATE.cur : '–'}</td>` : '') + '</tr>';
+        (meter ? `<td>${pctQ(m.self_rate)}</td><td>${pctQ(m.autarky)}</td><td>${m.saved_eur != null ? fmt(m.saved_eur, 0) + ' ' + STATE.cur : '–'}</td>` : '') + '</tr>';
     }).join('') + '</table>' : '';
   const gaps = R.daily.filter(d => d.gap_h > 0.5).length;
   const feed = (R.feedin || 0) * 100;

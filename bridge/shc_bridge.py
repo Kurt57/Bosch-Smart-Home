@@ -13328,6 +13328,16 @@ def _tv_num(v: float, d: int = 0) -> str:
     return s.replace(",", "§").replace(".", ",").replace("§", ".").replace("-", "−")
 
 
+def _tv_pct(x) -> str:
+    """A share in whole % – but never "100 %" or "0 %" unless it is exactly that."""
+    p = 100.0 * float(x)
+    if 99.5 <= p < 100:
+        return f"{_tv_num(math.floor(p * 10) / 10, 1)} %"
+    if 0 < p < 0.5:
+        return f"{_tv_num(math.ceil(p * 10) / 10, 1)} %"
+    return f"{_tv_num(p)} %"
+
+
 def _kw(w) -> str:
     w = float(w or 0)
     return f"{_tv_num(w / 1000.0, 1)} kW" if abs(w) >= 1000 else f"{_tv_num(w)} W"
@@ -13531,9 +13541,9 @@ def compute_tv(rooms: list, window_since: dict, outdoor_c, fr: dict | None, hp: 
             tt("pv", "Sonne erzeugt", f"{_tv_num(td['pv_kwh'], 1)} kWh")
         tt("use", "Verbraucht", f"{_tv_num(td['load_kwh'], 1)} kWh")
         if td.get("autarky") is not None:
-            tt("aut", "Autark", f"{_tv_num(100 * td['autarky'])} %")
+            tt("aut", "Autark", _tv_pct(td["autarky"]))
         if td.get("self_rate") is not None:
-            tt("self", "Eigenverbrauch", f"{_tv_num(100 * td['self_rate'])} %")
+            tt("self", "Eigenverbrauch", _tv_pct(td["self_rate"]))
         if td.get("imp_kwh") is not None:
             tt("imp", "Netzbezug", f"{_tv_num(td['imp_kwh'], 1)} kWh")
         if td.get("exp_kwh") is not None:
