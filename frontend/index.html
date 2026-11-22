@@ -106,6 +106,11 @@
 
   .legend{display:flex; flex-wrap:wrap; gap:8px 16px; margin-top:12px}
   .legend .it{display:flex; align-items:center; gap:7px; font-size:13px}
+  .legend .it[hidden]{display:none}
+  .mc-tab{width:100%; border-collapse:collapse; font-size:12.5px; margin-top:6px}
+  .mc-tab th{font-weight:600; color:var(--muted); text-align:right; padding:3px 4px; font-size:11.5px}
+  .mc-tab td{padding:4px; text-align:right; border-top:1px solid var(--line, rgba(255,255,255,.06)); white-space:nowrap}
+  .mc-tab th:first-child, .mc-tab td:first-child{text-align:left; white-space:normal}
   .legend .sw{width:11px; height:11px; border-radius:3px; flex:none}
   .legend small{color:var(--muted); margin-left:4px}
 
@@ -605,6 +610,7 @@
       <div class="legend" id="ov-daily-legend">
         <div class="it"><span class="sw" style="background:var(--sh)"></span>Smart Home</div>
         <div class="it"><span class="sw" style="background:var(--hp)"></span>Wärmepumpe</div>
+        <div class="it" id="ov-daily-leg-rest" hidden><span class="sw" style="background:#8b93a7"></span>Nicht einzeln gemessen (Smart Meter)</div>
       </div>
       <div class="note" id="ov-daily-note" style="margin-top:8px" hidden></div>
     </div>
@@ -650,7 +656,7 @@
   <!-- HEUTE --------------------------------------------------------------->
   <section class="view" id="v-today">
     <div class="grid3">
-      <div class="kpi sm"><div class="v" id="t-total">–</div><div class="l">Gesamt heute</div></div>
+      <div class="kpi sm"><div class="v" id="t-total">–</div><div class="l">Gesamt heute<small id="t-total-src" style="display:block;font-size:10.5px;color:var(--muted)"></small></div></div>
       <div class="kpi sm"><div class="v" id="t-sh">–</div><div class="l">Smart Home</div></div>
       <div class="kpi sm"><div class="v" id="t-hp">–</div><div class="l">Wärmepumpe</div></div>
     </div>
@@ -660,6 +666,7 @@
       <div class="legend">
         <div class="it"><span class="sw" style="background:var(--sh)"></span>Smart Home</div>
         <div class="it"><span class="sw" style="background:var(--hp)"></span>Wärmepumpe</div>
+        <div class="it" id="t-leg-rest" hidden><span class="sw" style="background:#8b93a7"></span>Nicht einzeln gemessen</div>
       </div>
       <div class="note" id="t-hourly-note" style="margin-top:10px"></div>
     </div>
@@ -1231,8 +1238,9 @@
   <!-- PROFIL -------------------------------------------------------------->
   <section class="view" id="v-profile">
     <div class="card">
-      <h2>Tagesprofil · Ø Leistung je Stunde (Smart Home)</h2>
+      <h2 id="profile-title">Tagesprofil · Ø Leistung je Stunde (Smart Home)</h2>
       <div id="chart-hourly"></div>
+      <div class="legend" id="profile-legend" hidden></div>
       <div class="note" id="profile-note" style="margin-top:10px"></div>
     </div>
     <div class="card" id="pf-base-card">
@@ -1305,12 +1313,12 @@
       <div class="note" id="pf-lp-note" style="margin-top:10px"></div>
     </div>
     <div class="card">
-      <h2>Wochenprofil · Ø kWh je Wochentag</h2>
+      <h2 id="profile-wd-title">Wochenprofil · Ø kWh je Wochentag</h2>
       <div id="chart-weekday"></div>
       <div class="note" id="profile-weekday-note" style="margin-top:8px"></div>
     </div>
     <div class="card">
-      <h2>Wärmekarte · Wochentag × Stunde (W)</h2>
+      <h2 id="profile-heat-title">Wärmekarte · Wochentag × Stunde (W)</h2>
       <div id="chart-heat"></div>
       <div class="note" id="profile-heat-note" style="margin-top:8px"></div>
     </div>
@@ -2200,8 +2208,8 @@
     </div>
 
     <div class="card" id="meter-card">
-      <h2><span class="info" data-info="meter" role="button" aria-label="Info">i</span>🔢 Gesamt-Stromzähler</h2>
-      <div class="note" style="line-height:1.6; margin-bottom:10px">
+      <h2><span class="info" data-info="meter" role="button" aria-label="Info">i</span>🔢 Stromzähler &amp; Smart Meter</h2>
+      <div class="note" id="meter-intro" style="line-height:1.6; margin-bottom:10px">
         Trag ab und zu deinen <b>Zählerstand vom Hauptstromzähler</b> ein (Gesamt = Haushalt
         <b>+</b> Wärmepumpe). Aus zwei Ablesungen berechnet die App den <b>echten
         Gesamtverbrauch</b>, deckt den <b>noch nicht gemessenen Hausstrom</b> auf und
@@ -2210,11 +2218,18 @@
       <div style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap">
         <div style="flex:1; min-width:130px"><label>Datum</label>
           <input id="meter-date" type="date"></div>
-        <div style="flex:1; min-width:130px"><label>Zählerstand (kWh)</label>
-          <input id="meter-kwh" type="number" min="0" step="1" inputmode="decimal" placeholder="z. B. 2337"></div>
+        <div style="flex:1; min-width:100px"><label>Uhrzeit</label>
+          <input id="meter-time" type="time"></div>
+      </div>
+      <div style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap; margin-top:8px">
+        <div style="flex:1; min-width:130px"><label id="meter-kwh-l">Zählerstand (kWh)</label>
+          <input id="meter-kwh" type="number" min="0" step="0.1" inputmode="decimal" placeholder="z. B. 2337"></div>
+        <div style="flex:1; min-width:130px" id="meter-exp-box"><label>Einspeisung 2.8.0 (kWh, optional)</label>
+          <input id="meter-exp" type="number" min="0" step="0.1" inputmode="decimal" placeholder="leer lassen, wenn nicht abgelesen"></div>
         <button class="btn" id="meter-add" style="flex:0 0 auto">Hinzufügen</button>
       </div>
       <div class="note" id="meter-note" style="margin-top:10px"></div>
+      <div id="meter-check" style="margin-top:4px"></div>
       <div id="meter-list" style="margin-top:8px"></div>
     </div>
 

@@ -1091,6 +1091,13 @@ class Store:
                 "CREATE TABLE IF NOT EXISTS meter_readings("
                 " ts INTEGER PRIMARY KEY, kwh REAL, note TEXT)"
             )
+            # since v221: the feed-in register (2.8.0) and whether the time of
+            # day is known (older readings carry only a date, stored at 12:00)
+            mrcols = [r[1] for r in self.conn.execute("PRAGMA table_info(meter_readings)")]
+            if "exp_kwh" not in mrcols:
+                self.conn.execute("ALTER TABLE meter_readings ADD COLUMN exp_kwh REAL")
+            if "timed" not in mrcols:
+                self.conn.execute("ALTER TABLE meter_readings ADD COLUMN timed INTEGER")
             # cached day-ahead exchange market prices (ct/kWh) per hour
             self.conn.execute(
                 "CREATE TABLE IF NOT EXISTS spot_prices("
@@ -1555,18 +1562,46 @@ class Store:
         return round(d, 3) if d >= 0 else None
 
     # -- manual whole-house meter readings ------------------------------- #
-    def meter_upsert(self, ts: int, kwh: float, note: str = ""):
+    def meter_upsert(self, ts: int, kwh: float, note: str = "", exp_kwh: float | None = None,
+                     timed: bool = False):
+        """kwh = grid import register (1.8.0; before a PV system that was the
+        whole consumption), exp_kwh = feed-in register (2.8.0, optional)."""
         with self.lock, self.conn:
             self.conn.execute(
-                "INSERT INTO meter_readings(ts,kwh,note) VALUES(?,?,?)"
-                " ON CONFLICT(ts) DO UPDATE SET kwh=excluded.kwh, note=excluded.note",
-                (int(ts), float(kwh), note or ""))
+                "INSERT INTO meter_readings(ts,kwh,note,exp_kwh,timed) VALUES(?,?,?,?,?)"
+                " ON CONFLICT(ts) DO UPDATE SET kwh=excluded.kwh, note=excluded.note,"
+                " exp_kwh=excluded.exp_kwh, timed=excluded.timed",
+                (int(ts), float(kwh), note or "", None if exp_kwh is None else float(exp_kwh),
+                 1 if timed else 0))
 
     def meter_list(self) -> list[dict]:
         with self.lock:
             rows = self.conn.execute(
-                "SELECT ts,kwh,note FROM meter_readings ORDER BY ts ASC").fetchall()
-        return [dict(r) for r in rows]
+                "SELECT ts,kwh,note,exp_kwh,timed FROM meter_readings ORDER BY ts ASC").fetchall()
+        return [{**dict(r), "timed": bool(r["timed"])} for r in rows]
+
+    def pv_counters_at(self, ts: int, max_gap: int = 900) -> dict | None:
+        """The smart meter's import/export counters (Wh) at ts – interpolated
+        between the stored rows around it (each at most max_gap away), or the
+        nearest row when it is within two minutes."""
+        with self.lock:
+            a = self.conn.execute(
+                "SELECT ts, imp_wh, exp_wh FROM pv_samples WHERE ts<=? AND imp_wh IS NOT NULL"
+                " ORDER BY ts DESC LIMIT 1", (int(ts),)).fetchone()
+            b = self.conn.execute(
+                "SELECT ts, imp_wh, exp_wh FROM pv_samples WHERE ts>=? AND imp_wh IS NOT NULL"
+                " ORDER BY ts ASC LIMIT 1", (int(ts),)).fetchone()
+        if a and b and ts - a["ts"] <= max_gap and b["ts"] - ts <= max_gap:
+            f = 0.0 if b["ts"] == a["ts"] else (ts - a["ts"]) / (b["ts"] - a["ts"])
+
+            def lerp(k):
+                va, vb = a[k], b[k]
+                return None if va is None or vb is None else va + f * (vb - va)
+            return {"imp_wh": lerp("imp_wh"), "exp_wh": lerp("exp_wh")}
+        for r in (a, b):
+            if r and abs(r["ts"] - ts) <= 120:
+                return {"imp_wh": r["imp_wh"], "exp_wh": r["exp_wh"]}
+        return None
 
     def meter_delete(self, ts: int):
         with self.lock, self.conn:
@@ -2091,6 +2126,116 @@ def _meter_daily_kwh(store: "Store") -> dict | None:
         return None
     return {"daily_kwh": (last["kwh"] - first["kwh"]) / span, "span_days": span,
             "first_ts": first["ts"], "last_ts": last["ts"]}
+
+
+METER_TOL_PCT = 2.0     # two calibrated meters on the same line agree within ~1–2 %
+
+
+def _meter_day_spread(store: "Store", ts: int, key: str) -> float | None:
+    """How much a reading taken 'some time that day' (no time of day, stored at
+    12:00) can be off: the larger half of that day's smart-meter count."""
+    d0, d1 = _day_bounds(_local_day(ts))
+    end = min(d1, int(time.time()))              # today: the day is not over yet
+    noon = int(datetime.fromtimestamp(d0).replace(hour=12).timestamp())
+    cs = [store.pv_counters_at(t, 1800) for t in ((d0, noon, end) if end > noon else (d0, end))]
+    if any(c is None or c.get(key) is None for c in cs):
+        return None
+    if len(cs) == 3:
+        return max(cs[1][key] - cs[0][key], cs[2][key] - cs[1][key]) / 1000.0
+    return (cs[1][key] - cs[0][key]) / 1000.0
+
+
+def compute_meter_check(store: "Store", now: int | None = None) -> dict:
+    """The utility meter (manual readings) against the smart meter's own
+    counters over the same intervals. Both sit at the grid connection: what
+    came from the grid (register 1.8.0) and – if entered – what went into it
+    (2.8.0). Since the PV system the utility meter no longer sees the whole
+    consumption; that is the smart meter's job, the readings check it.
+    A reading without time of day makes its interval uncertain by up to half
+    a day; we say by how much."""
+    first, _last, n = store.pv_span()
+    rows = []
+    for r in sorted(store.meter_list(), key=lambda x: x["ts"]):
+        c = store.pv_counters_at(int(r["ts"])) if n else None
+        rows.append({"ts": int(r["ts"]), "kwh": r["kwh"], "exp_kwh": r.get("exp_kwh"),
+                     "timed": bool(r.get("timed")),
+                     "sm_imp": c["imp_wh"] / 1000.0 if c and c.get("imp_wh") is not None else None,
+                     "sm_exp": c["exp_wh"] / 1000.0 if c and c.get("exp_wh") is not None else None})
+
+    def compare(a, b, mk, sk, skey):
+        """One register over a → b: utility meter vs smart meter."""
+        if a[mk] is None or b[mk] is None:
+            return None
+        m = b[mk] - a[mk]
+        out = {"meter_kwh": round(m, 2)}
+        if a[sk] is None or b[sk] is None:
+            out["why"] = ("vor der Smart-Meter-Aufzeichnung" if n and min(a["ts"], b["ts"]) < first
+                          else "keine Smart-Meter-Werte zu dieser Zeit")
+            return out
+        sm = b[sk] - a[sk]
+        if sm < -0.05 or m < -0.05:
+            out["why"] = "ein Zählerstand ist gesprungen (Tausch oder Tippfehler?)"
+            return out
+        out["sm_kwh"] = round(sm, 2)
+        out["diff_kwh"] = round(sm - m, 2)
+        out["diff_pct"] = round(100.0 * (sm - m) / m, 1) if m >= 1.0 else None
+        unc = 0.0
+        for r in (a, b):
+            if not r["timed"]:
+                u = _meter_day_spread(store, r["ts"], skey)
+                unc = None if u is None or unc is None else unc + u
+        out["uncert_kwh"] = round(unc, 1) if unc else (None if unc is None else 0.0)
+        # many meters show whole kWh: two readings may each be off by 0.5 kWh
+        tol = max(1.0, abs(m) * METER_TOL_PCT / 100.0)
+        if abs(sm - m) <= tol:
+            out["verdict"] = "ok"
+        elif unc and abs(sm - m) <= unc + tol:
+            out["verdict"] = "time"          # explained by the missing time of day
+        else:
+            out["verdict"] = "off"
+        return out
+
+    pairs = []
+    for a, b in zip(rows, rows[1:]):
+        p = {"from": a["ts"], "to": b["ts"], "days": round((b["ts"] - a["ts"]) / 86400.0, 2),
+             "timed": a["timed"] and b["timed"],
+             "imp": compare(a, b, "kwh", "sm_imp", "imp_wh"),
+             "exp": compare(a, b, "exp_kwh", "sm_exp", "exp_wh")}
+        pairs.append(p)
+    # the whole span: the longest unbroken chain of plausible intervals – a typo
+    # (a counter going backwards, more than 20 % off) breaks the chain instead
+    # of spoiling the total
+    def plausible(p):
+        x = p["imp"]
+        return bool(x and x.get("sm_kwh") is not None and x.get("diff_kwh") is not None
+                    and abs(x["diff_kwh"]) <= max(2.0, 0.2 * abs(x["meter_kwh"])))
+    best, i = None, 0
+    while i < len(pairs):
+        if not plausible(pairs[i]):
+            i += 1
+            continue
+        j = i
+        while j + 1 < len(pairs) and plausible(pairs[j + 1]):
+            j += 1
+        span = pairs[j]["to"] - pairs[i]["from"]
+        if best is None or span > best[2]:
+            best = (i, j, span)
+        i = j + 1
+    # intervals the smart meter could have checked, but which do not fit at all
+    implausible = sum(1 for p in pairs if p["imp"] and (p["imp"].get("sm_kwh") is not None
+                                                         or "gesprungen" in (p["imp"].get("why") or ""))
+                      and not plausible(p))
+    total = None
+    if best:
+        a, b = rows[best[0]], rows[best[1] + 1]
+        total = {"from": a["ts"], "to": b["ts"], "days": round((b["ts"] - a["ts"]) / 86400.0, 2),
+                 "timed": a["timed"] and b["timed"], "intervals": best[1] - best[0] + 1,
+                 "imp": compare(a, b, "kwh", "sm_imp", "imp_wh"),
+                 "exp": compare(a, b, "exp_kwh", "sm_exp", "exp_wh")}
+    readings = [{"ts": r["ts"], "kwh": r["kwh"], "exp_kwh": r["exp_kwh"], "timed": r["timed"],
+                 "sm": r["sm_imp"] is not None} for r in rows]
+    return {"ok": True, "sm_since": first or None, "tol_pct": METER_TOL_PCT,
+            "readings": readings, "pairs": pairs, "total": total, "implausible": implausible}
 
 
 def compute_dhw_impact(store: "Store", days: float = 14, hp_live: dict | None = None) -> dict:
@@ -9102,11 +9247,8 @@ def seed_demo(store: Store, days: int = 90):
         t += timedelta(hours=1)
     print("[demo] inserted demo AEG appliance history.")
 
-    # two demo whole-house meter readings (~34 kWh/day total incl. heat pump) –
-    # chosen above the measured plugs+WP sum so the "ungemessener Rest" bucket and
-    # the meter-anchored load analysis have something to show in demo mode.
-    store.meter_upsert(int((now - timedelta(days=8)).timestamp()), 2202.0, "")
-    store.meter_upsert(int(now.timestamp()), 2202.0 + 8 * 34.0, "")
+    # utility-meter readings: added by seed_demo_pv, consistent with the demo
+    # smart meter (since the PV system the meter counts grid import only)
 
 
 class DemoPoller(threading.Thread):
@@ -9532,6 +9674,23 @@ def seed_demo_pv(store: "Store", days: int = 90):
         t += 300
     store.pv_add_bulk(rows)
     print(f"[demo] inserted {len(rows)} PV rows (Fronius demo installation).")
+    # three readings of the utility meter that agree with the demo smart meter
+    # (it counts 0.5 % more import, 0.3 % less export) – the middle one without
+    # time of day, like older entries: taken at 18:20, stored at 12:00
+    base = datetime.fromtimestamp(now).replace(second=0, microsecond=0)
+    picks = [(base - timedelta(days=27)).replace(hour=8, minute=40), None, base - timedelta(hours=2)]
+    mid = (base - timedelta(days=13)).replace(hour=18, minute=20)
+    c0 = store.pv_counters_at(int(picks[0].timestamp()))
+    if c0 and c0.get("imp_wh") is not None:
+        for when, stored_at, timed in ((picks[0], picks[0], True), (mid, mid.replace(hour=12, minute=0), False),
+                                       (picks[2], picks[2], True)):
+            c = store.pv_counters_at(int(when.timestamp()))
+            if not c or c.get("imp_wh") is None:
+                continue
+            imp = 21345.0 + (c["imp_wh"] - c0["imp_wh"]) / 1000.0 * 1.005
+            exp = (4120.0 + (c["exp_wh"] - c0["exp_wh"]) / 1000.0 * 0.997
+                   if timed and c.get("exp_wh") is not None and c0.get("exp_wh") is not None else None)
+            store.meter_upsert(int(stored_at.timestamp()), round(imp, 1), "", None if exp is None else round(exp, 1), timed)
 
 
 class DemoFronius:
@@ -10217,6 +10376,184 @@ def demo_pv_weather(now: int, days: int) -> dict:
     return {"daily": daily, "hours": hours}
 
 
+# --------------------------------------------------------------------------- #
+# The whole house as the smart meter measures it. Since the PV system, the
+# utility meter only counts what comes FROM the grid – the house's real
+# consumption is the Fronius "load" (smart meter at the grid connection plus
+# the inverter). It is the total in every view; the heat pump (HomeCom) and
+# the Smart-Home devices are its breakdown, the rest is "nicht einzeln
+# gemessen". The manual meter readings serve as a cross-check (see
+# compute_meter_check), no longer as the household total.
+# --------------------------------------------------------------------------- #
+HOUSE_DAY_MIN_H = 22.5          # a day counts with ≥ 22.5 h of smart-meter data …
+HOUSE_DAY_MAX_GAP_H = 0.5       # … and gaps of at most half an hour in total
+HOUSE_PROFILE_DAYS = 28         # the typical day: up to the last 4 complete weeks
+
+
+def _house_complete(d: dict, today: str) -> bool:
+    return (d.get("day", "9") < today and d.get("load_kwh") is not None
+            and (d.get("cov_h") or 0.0) >= HOUSE_DAY_MIN_H
+            and (d.get("gap_h") or 0.0) <= HOUSE_DAY_MAX_GAP_H)
+
+
+def _house_hour_map(store: "Store", t0: int, t1: int) -> dict:
+    """Whole-house consumption (smart-meter "load") per (local day, hour) for
+    the rows with t0 ≤ ts < t1: {(day, hour): [Wh, seconds covered]}.
+    Integrated exactly like compute_pv (so the day sums match the PV tab): a
+    row stands for the step that ends at its time stamp; a longer gap counts
+    one step only."""
+    rows = store.pv_rows(t0, t1)
+    out: dict = {}
+    if not rows:
+        return out
+    diffs = sorted(b[0] - a[0] for a, b in zip(rows[:400], rows[1:401]) if b[0] > a[0])
+    step = diffs[len(diffs) // 2] if diffs else PV_STORE_EVERY
+    cap = max(90.0, 2.5 * step)
+    il = _PV_I["load_w"]
+    prev = store.pv_before(t0)
+    last_ts = prev[0] if prev else None
+    for r in rows:
+        ts, load = r[0], r[il]
+        dt = ts - last_ts if last_ts is not None else step
+        last_ts = ts
+        if dt <= 0 or load is None:
+            continue
+        eff = dt if dt <= cap else min(step, PV_STORE_EVERY)
+        d0, _d1, day = _day_of(ts)
+        hour = min(23, max(0, int((ts - d0 - 1) // 3600)))
+        c = out.get((day, hour))
+        if c is None:
+            c = out[(day, hour)] = [0.0, 0.0]
+        c[0] += max(0.0, load) * eff / 3600.0
+        c[1] += eff
+    return out
+
+
+def _hp_hour_map(store: "Store", t0: int, t1: int) -> dict:
+    """Heat-pump electricity (kWh) per (local day, hour) in [t0, t1) from the
+    HomeCom counter deltas – same guards as the overview's hourly split."""
+    out: dict = {}
+    prev = None
+    for s in store.hp_samples_between(t0 - 3600, t1 + 1):
+        v = s.get("energy_kwh")
+        if v is None:
+            continue
+        if (prev is not None and prev[0] >= t0 and prev[0] < t1
+                and 0 < (v - prev[1]) < 100 and (s["ts"] - prev[0]) < 21600):
+            k = (_day_of(prev[0])[2], datetime.fromtimestamp(prev[0]).hour)
+            out[k] = out.get(k, 0.0) + (v - prev[1])
+        prev = (s["ts"], v)
+    return out
+
+
+def compute_house_day(store: "Store", day: str, now: int | None = None) -> dict:
+    """One local day per hour: the whole house (smart meter, kWh; None where
+    the hour is not covered to 90 %) and the heat pump (kWh)."""
+    now = int(now or time.time())
+    d0, d1 = _day_bounds(day)
+    end = min(d1, now)
+    hm = _house_hour_map(store, d0, end) if end > d0 else {}
+    hpm = _hp_hour_map(store, d0, end) if end > d0 else {}
+    house = []
+    for h in range(24):
+        c = hm.get((day, h))
+        span = max(0, min(3600, end - (d0 + h * 3600)))
+        house.append(round(c[0] / 1000.0, 4) if c is not None and span > 0 and c[1] >= 0.9 * span else None)
+    return {"ok": True, "day": day, "house_kwh": house,
+            "hp_kwh": [round(hpm.get((day, h), 0.0), 4) for h in range(24)],
+            "has_house": any(v is not None for v in house)}
+
+
+def _house_profile(store: "Store", full: list, daily: list, now: int) -> dict | None:
+    """The typical day of the whole house over complete smart-meter days: mean
+    power per hour (and per weekday × hour), split into the heat pump, the
+    Smart-Home devices and the rest nobody measures individually – all three
+    over exactly the same days, so they add up."""
+    if not full:
+        return None
+    want = set(full)
+    t0, t1 = _day_bounds(full[0])[0], _day_bounds(full[-1])[1]
+    hm = _house_hour_map(store, t0, t1)
+    hpm = _hp_hour_map(store, t0, t1)
+    try:
+        per = _window_stats(store, full[0], now)
+    except Exception as exc:                  # never lose the profile over it
+        print(f"[house] smart-home hours: {exc}", file=sys.stderr)
+        per = {}
+    n = len(full)
+    H = [[0.0, 0.0] for _ in range(24)]
+    HW: dict = {}
+    for (day, h), (wh, sec) in hm.items():
+        if day not in want:
+            continue
+        H[h][0] += wh
+        H[h][1] += sec
+        wd = datetime.strptime(day, "%Y-%m-%d").weekday()
+        c = HW.setdefault((wd, h), [0.0, 0.0])
+        c[0] += wh
+        c[1] += sec
+    hp_wh = [0.0] * 24
+    for (day, h), kwh in hpm.items():
+        if day in want:
+            hp_wh[h] += kwh * 1000.0
+    sh_wh = [0.0] * 24
+    sh_any = False
+    for _dev, dd in per.items():
+        for day, st in dd.items():
+            if day not in want:
+                continue
+            hs, hn = st.get("hs") or [], st.get("hn") or []
+            for h in range(min(24, len(hn))):
+                if hn[h]:
+                    sh_wh[h] += hs[h] / hn[h]          # mean W over that hour = Wh
+                    sh_any = True
+    hourly = []
+    for h in range(24):
+        house_w = H[h][0] / H[h][1] * 3600.0 if H[h][1] > 0 else None
+        hp_w, sh_w = hp_wh[h] / n, sh_wh[h] / n
+        hourly.append({"hour": h, "house_w": round(house_w, 1) if house_w is not None else None,
+                       "hp_w": round(hp_w, 1), "sh_w": round(sh_w, 1),
+                       "rest_w": round(max(0.0, house_w - hp_w - sh_w), 1) if house_w is not None else None})
+    wk: dict = {}
+    for d in daily:
+        if d["day"] in want:
+            wk.setdefault(datetime.strptime(d["day"], "%Y-%m-%d").weekday(), []).append(d["kwh"])
+    weekday = [{"weekday": i, "avg_kwh": round(sum(wk[i]) / len(wk[i]), 3) if wk.get(i) else 0.0,
+                "n": len(wk.get(i, []))} for i in range(7)]
+    heat = [[round(HW[(wd, h)][0] / HW[(wd, h)][1] * 3600.0, 1) if HW.get((wd, h)) and HW[(wd, h)][1] > 0 else 0.0
+             for h in range(24)] for wd in range(7)]
+    return {"days": n, "first": full[0], "last": full[-1], "hourly": hourly, "weekday": weekday,
+            "heatmap": heat, "has_hp": any(v > 0 for v in hp_wh), "has_sh": sh_any}
+
+
+def compute_house(store: "Store", days: int = 90, now: int | None = None) -> dict | None:
+    """The smart meter's whole-house consumption per day (the same day math
+    as the PV tab) and the typical day; None without a smart meter."""
+    now = int(now or time.time())
+    first, _last, n_rows = store.pv_span()
+    if not n_rows:
+        return None
+    pv = compute_pv(store, days, now=now)
+    if pv.get("empty"):
+        return None
+    today = _local_day(now)
+    daily = [{"day": d["day"], "kwh": round(d["load_kwh"], 3), "imp_kwh": d.get("imp_kwh"),
+              "exp_kwh": d.get("exp_kwh"), "pv_kwh": d.get("pv_kwh"), "cov_h": d.get("cov_h"),
+              "gap_h": d.get("gap_h"), "complete": _house_complete(d, today)}
+             for d in pv.get("daily") or [] if d.get("load_kwh") is not None]
+    if not daily:
+        return None                              # inverter without smart meter
+    full = [d["day"] for d in daily if d["complete"]][-HOUSE_PROFILE_DAYS:]
+    prof = None
+    if len(full) >= 3:
+        try:
+            prof = _house_profile(store, full, daily, now)
+        except Exception as exc:
+            print(f"[house] profile: {exc}", file=sys.stderr)
+    return {"ok": True, "since": first, "daily": daily,
+            "complete_days": sum(1 for d in daily if d["complete"]), "profile": prof}
+
+
 def compute_pv_weather(ctx, lat: float | None, lon: float | None, days: int = 30, force: bool = False) -> dict:
     """Weather of the last `days` days, today (also per hour) and the next two
     days for the PV views."""
@@ -10482,6 +10819,7 @@ class Runtime:
                 res = compute_overview(self.store, days, price, self.hp_snapshot(),
                                        sh=self.core("analytics", days, price, fresh, touch),
                                        hp=self.core("hpanalytics", days, price, fresh, touch))
+                self._attach_house(res, days)
             self.calc_ms[key] = (round((time.time() - t0) * 1000), int(time.time()))
             return res
         if fresh:
@@ -10492,6 +10830,26 @@ class Runtime:
                     self._calc_wanted[key] = time.time()
             return res
         return self.calc_get(key, self.CORE_TTL, run)
+
+    def _attach_house(self, res: dict, days: int):
+        """The smart meter's whole house next to the measured parts: per day
+        (cached 10 min – finished days do not change) and per hour of today
+        (fresh with every overview). Absent without a smart meter."""
+        try:
+            house = self.calc_get(("house", days), 600, lambda: compute_house(self.store, days))
+        except Exception as exc:              # never lose the overview over it
+            print(f"[house] {exc}", file=sys.stderr)
+            house = None
+        res["house"] = house
+        if not house:
+            return
+        try:
+            hd = compute_house_day(self.store, _local_day(int(time.time())))
+            for h, row in enumerate(res.get("today_hourly") or []):
+                if h < 24:
+                    row["house_kwh"] = hd["house_kwh"][h]
+        except Exception as exc:
+            print(f"[house] today: {exc}", file=sys.stderr)
 
     BOOT_SNAP_KEY = "boot_snap"      # last core results, kept on disk
     BOOT_BUDGET_S = 1.5              # answer with the last state if fresh takes longer
@@ -11045,7 +11403,7 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:
             core = {"error": str(exc)}
         core.update({"days": days, "price": price, "ms": round((time.time() - t0) * 1000),
-                     "meter": {"readings": self.store.meter_list()}})
+                     "meter": self._meter_payload()})
         return {"ok": True, "ts": int(time.time()), "settings": st,
                 "health": self._health(), "core": core}
 
@@ -11990,6 +12348,7 @@ class Handler(BaseHTTPRequestHandler):
             self.ctx.fr_state["identity"] = {k: v for k, v in ident.items() if k != "flow"}
             self.ctx.fr_state["live"] = ident.get("flow")
         self.ctx.calc_clear("pv")
+        self.ctx.calc_clear("house")
         return self._send_json({"ok": True, "identity": ident, "demo": self.ctx.mode == "demo"})
 
     def _post_awb_config(self, body):
@@ -12111,17 +12470,33 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:
             return self._send_json({"ok": False, "error": str(exc)}, 200)
 
+    def _meter_payload(self) -> dict:
+        """The readings plus their comparison with the smart meter."""
+        out = {"ok": True, "readings": self.store.meter_list()}
+        try:
+            out["check"] = compute_meter_check(self.store)
+        except Exception as exc:                # the list must always come back
+            print(f"[meter] check: {exc}", file=sys.stderr)
+            out["check"] = None
+        return out
+
     def _post_meter(self, body):
-        """Add/update a whole-house meter reading (date + total kWh)."""
+        """Add/update a utility-meter reading: time, grid import register
+        (1.8.0, before a PV system the whole consumption) and optionally the
+        feed-in register (2.8.0)."""
         try:
             ts = int(body.get("ts"))
             kwh = float(body.get("kwh"))
+            ev = body.get("exp_kwh")
+            exp_kwh = None if ev in (None, "") else float(ev)
         except (TypeError, ValueError):
             return self._send_json({"ok": False, "error": "Datum und Zählerstand (kWh) sind erforderlich."}, 400)
-        if kwh < 0:
+        if kwh < 0 or (exp_kwh is not None and exp_kwh < 0):
             return self._send_json({"ok": False, "error": "Zählerstand muss ≥ 0 sein."}, 400)
-        self.store.meter_upsert(ts, kwh, str(body.get("note") or "")[:120])
-        return self._send_json({"ok": True, "readings": self.store.meter_list()})
+        if ts > time.time() + 300:
+            return self._send_json({"ok": False, "error": "Die Ablesung liegt in der Zukunft."}, 400)
+        self.store.meter_upsert(ts, kwh, str(body.get("note") or "")[:120], exp_kwh, bool(body.get("timed")))
+        return self._send_json(self._meter_payload())
 
     def _post_meter_delete(self, body):
         try:
@@ -12129,7 +12504,7 @@ class Handler(BaseHTTPRequestHandler):
         except (TypeError, ValueError):
             return self._send_json({"ok": False, "error": "ts fehlt."}, 400)
         self.store.meter_delete(ts)
-        return self._send_json({"ok": True, "readings": self.store.meter_list()})
+        return self._send_json(self._meter_payload())
 
     def _post_observation_start(self, body):
         """Anchor a guided observation run so progress is measured from now."""
@@ -12560,7 +12935,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/appliances":
                 return self._send_json(self._appliances_payload())
             if path == "/api/meter":
-                return self._send_json({"readings": self.store.meter_list()})
+                return self._send_json(self._meter_payload())
             if path == "/api/products":
                 prods = self.store.products_list() or PRODUCT_CATALOG
                 return self._send_json({"products": prods,
@@ -12748,6 +13123,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json(self.ctx.calc_get(
                     ("loadpeaks", round(lpd, 2)), 60,
                     lambda: compute_load_peaks(self.store, lpd, self._hp_live())))
+            if path == "/api/house/day":
+                day = qs.get("day", [""])[0]
+                if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day or ""):
+                    return self._send_json({"ok": False, "error": "day=YYYY-MM-DD fehlt."}, 400)
+                return self._send_json(self.ctx.calc_get(
+                    ("houseday", day), 60, lambda: compute_house_day(self.store, day)))
             if path == "/api/abgleich":
                 return self._send_json(self._balance("force" in qs))
             if path == "/api/heatpump/opstate":

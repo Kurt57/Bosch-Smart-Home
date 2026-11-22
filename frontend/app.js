@@ -94,8 +94,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v220';   // short tag shown always-on in the header
-const APP_VERSION = 'v220 · 2026-11-22 · PV-Tab: neue Kachel „Verbrauch heute“ (im Verlauf „Verbrauch“ für den gewählten Zeitraum) – derselbe Wert wie „Verbrauch“ in Fronius Solar.web, zum direkten Vergleich. Eigenverbrauch und Autarkie runden nicht mehr auf „100 %“ (oder „0 %“), wenn es nicht genau so ist: 99,6 % Eigenverbrauch bei 0,1 kWh Einspeisung steht jetzt als 99,6 % da (auch im Wohn-Dashboard und auf dem Apple TV). ' +
+const APP_BUILD = 'v221';   // short tag shown always-on in the header
+const APP_VERSION = 'v221 · 2026-11-22 · Smart Meter als Gesamtverbrauch – überall: Seit der PV-Anlage zählt dein Stromzähler nur noch den Netzbezug, den ganzen Hausverbrauch misst der Smart Meter. Übersicht (14 Tage), Heute (Summe, Stunden, Kreis), Verlauf (Tage, Monate, Tagesansicht je Stunde, Anteile mit Jahreshochrechnung) und Profil (Tagesprofil, Wochentage, Wärmekarte) zeigen jetzt das ganze Haus – aufgeteilt in Wärmepumpe, Smart-Home-Geräte und grau „nicht einzeln gemessen“. Prognosen, Börse und Konzept rechnen den Haushalt aus den letzten vollständigen Smart-Meter-Tagen (Haus minus Wärmepumpe) statt aus den Zählerablesungen. Setup → 🔢 Stromzähler & Smart Meter: Ablesungen mit Uhrzeit und optional Einspeisung (2.8.0); die App vergleicht jeden Zeitraum mit dem Smart Meter (✓ bis 2 %, ≈ erklärbar durch fehlende Uhrzeit, ⚠︎ darüber; Tippfehler werden erkannt). Behoben: Verlauf „Tag“ brach ab (zwei gleichnamige Funktionen); die Tagesansicht zeigt jetzt auch Wärmepumpe und Rest. ' +
+  'v220 · 2026-11-22 · PV-Tab: neue Kachel „Verbrauch heute“ (im Verlauf „Verbrauch“ für den gewählten Zeitraum) – derselbe Wert wie „Verbrauch“ in Fronius Solar.web, zum direkten Vergleich. Eigenverbrauch und Autarkie runden nicht mehr auf „100 %“ (oder „0 %“), wenn es nicht genau so ist: 99,6 % Eigenverbrauch bei 0,1 kWh Einspeisung steht jetzt als 99,6 % da (auch im Wohn-Dashboard und auf dem Apple TV). ' +
   'v219 · 2026-11-21 · Apple TV: Das Wohn-Dashboard gibt es als eigene Apple-TV-App (Ordner appletv/, Anleitung docs/APPLETV.md – einmal mit Xcode aufs Apple TV spielen). Sie zeigt Uhr, Außentemperatur, Hinweise (Fenster offen, lüften, zu kalt, Termin gleich, Tonnen, Batterie lädt aus dem Netz, PV/Wärmepumpe ohne Werte), Energie jetzt, Heute, Räume und die nächsten Termine – fertig formuliert von der Bridge (neu: GET /api/tv, dieselben Regeln wie im Wohn-Dashboard, 20 s zwischengespeichert). Veraltete Wärmepumpen-Werte zeigt sie als „–“ statt als Stand von vor einer Stunde. Hinweis im Setup → Wohn-Dashboard. ' +
   'v218 · 2026-11-21 · Wohn-Dashboard: neuer Bereich „🎵 Musik“ mit deinen YouTube-Music-Playlists als Kacheln (Setup → Musik: Playlist-Link einfügen, Titel und Bild holt die Bridge bei öffentlichen Playlists selbst, private benennst du; Reihenfolge und Name änderbar; gilt auf allen Geräten). Antippen öffnet die Playlist in der YouTube-Music-App – HomePod dort per Cast/AirPlay. Optional Ein-Tipp über iOS-Kurzbefehle: HomePod im Dashboard wählen, das Dashboard startet „Musik Wohnzimmer“ o. ä. mit der Playlist. Abspielen/Steuern direkt aus dem Dashboard gibt es nicht – YouTube Music bietet dafür keine Schnittstelle. ' +
   'v217 · 2026-11-21 · Erreichbarkeit: Tipps passen jetzt auch zu Routern ohne feste IP-Vergabe (z. B. Speedport): Adresse über den Namen des Macs (.local) oder Tailscale; Router-VPN nur, falls vorhanden (FRITZ!Box; beim Speedport 7 angekündigt). Neuer Hinweis: aus dem Gast-WLAN ist die Bridge nicht erreichbar. ' +
@@ -406,8 +407,9 @@ const INFO = {
     'Tarifwechsel. Die Lastverschiebung zeigt, was zusätzlich drin wäre, wenn du WP/E-Auto konsequent in die ' +
     'günstigsten Stunden legst. Grobe Realitäts-Schätzung, kein Vertragsangebot.',
   'ov-month': () => 'Hochrechnung für den laufenden Monat: dein durchschnittlicher Tagesverbrauch ' +
-    '(Smart Home aus dem Zählerstand, Wärmepumpe aus dem Zählerwachstum) – <b>saisonal</b> für diesen ' +
-    'Monat gewichtet und mit deinem kWh-Preis multipliziert.',
+    '(Haushalt aus dem <b>Smart Meter</b> – ganzes Haus minus Wärmepumpe, über die letzten vollständig gemessenen Tage –, ' +
+    'Wärmepumpe aus ihrem Zählerwachstum) – <b>saisonal</b> für diesen Monat gewichtet und mit deinem kWh-Preis multipliziert. ' +
+    'Ohne Smart Meter: Haushalt aus Zählerablesungen bzw. Jahreswert.',
   standby: () => 'Zeigt je <b>gemessenem Gerät</b>, wie viel es im <b>Ruhezustand dauerhaft</b> zieht (Standby/Phantomlast) – ' +
     'nur Geräte, die überhaupt einen Standby haben. <b>Woher ich das weiß:</b> Ich nehme das <b>Dauer-Minimum</b> jedes ' +
     'Geräts (das 10-%-Perzentil seiner <b>eigenen</b> Messwerte) – was es fast immer zieht, ist Standby; alles darüber ist ' +
@@ -492,7 +494,9 @@ const INFO = {
     'Monat verbraucht hast, und rechnet – aus deinem Ø-Tagesverbrauch, saisonal gewichtet – auf das <b>Monatsende</b> ' +
     'hoch. Der weiße Strich markiert die Hochrechnung: liegt er rechts vom Budget, drohst du drüber zu landen, und die ' +
     'App sagt dir, wie viel pro restlichem Tag noch drin ist. Wird lokal gespeichert.',
-  fill: () => 'Gemessene Tage werden voll angezeigt. Für Tage <b>ohne</b> Messung (Bridge lief nicht) ' +
+  fill: () => 'Mit <b>Smart Meter</b> ist ein Balken der <b>ganze Hausverbrauch</b> dieses Tages: Wärmepumpe (HomeCom), ' +
+    'einzeln gemessene Smart-Home-Geräte und grau der Rest, den keins davon erklärt (Herd, Kühlschrank, Steckdosen ohne Messung …). ' +
+    'Tage ohne vollständige Smart-Meter-Daten zeigen nur die einzeln gemessenen Teile. Für Tage <b>ohne</b> Messung (Bridge lief nicht) ' +
     'wird dein bisheriger Verbrauch <b>saisonal</b> hochgerechnet und blass dargestellt. Echte Messungen ' +
     'ersetzen die Schätzung automatisch.',
   forecast: () => 'Jahres-Hochrechnung = Ø-Tagesverbrauch × 365, saisonal verteilt (Wärmepumpe im Winter ' +
@@ -729,7 +733,8 @@ const INFO = {
     'wird (Bosch-Module + Smart Plugs). Die Differenz ist der noch <b>nicht einzeln gemessene</b> Anteil („Dunkelverbrauch"). ' +
     'Mit dem <b>Smart Meter</b> des Wechselrichters: oben <b>jetzt</b> (Haus − Wärmepumpe − Geräte, alle 10 s neu) und die ' +
     'Tagesbilanz aus den letzten vollständig gemessenen Tagen. Ohne Smart Meter wird der Haushalt aus deinen ' +
-    '<b>Zählerablesungen</b> bzw. dem eingetragenen Jahreswert geschätzt. So siehst du, ob sich weitere ' +
+    '<b>Zählerablesungen</b> (nur solange der Zähler das ganze Haus sah, also vor einer PV-Anlage) bzw. dem eingetragenen ' +
+    'Jahreswert geschätzt. So siehst du, ob sich weitere ' +
     '<b>Mess-Steckdosen</b> lohnen. Wird kleiner, sobald du Plugs ergänzt.',
   ha: () => 'Optionaler Zusatz: liest beliebige Leistungs- und Energiesensoren aus deinem <b>Home Assistant</b> ' +
     '(lokal, über dessen REST-API mit einem Zugangs-Token) – z. B. einen Lesekopf am Hauptzähler, eine PV-/Batterie-' +
@@ -762,10 +767,18 @@ const INFO = {
   'spot-cost': () => 'Vergleich deiner realen Last mit dem <b>dynamischen</b> Preis vs. deinem <b>Festpreis</b>. ' +
     '„Ø dynamisch" gewichtet den Börsenpreis mit deinem <b>Stundenprofil</b> (wann du wie viel verbrauchst). ' +
     'Liegt er unter dem Festpreis, lohnt der dynamische Tarif – noch mehr, wenn du flexible Lasten verschiebst.',
-  meter: () => 'Trag deinen <b>Hauptstromzähler</b>-Stand (Gesamt = Haushalt + Wärmepumpe) ' +
-    'ab und zu ein. Aus zwei Ablesungen ergibt sich dein <b>echter Gesamtverbrauch</b>; die App zieht ' +
-    'die (saisonale) Wärmepumpe ab, deckt so den <b>noch nicht gemessenen Hausstrom</b> auf und ' +
-    '<b>kalibriert alle Prognosen</b> auf deinen realen Wert. Bleibt lokal.',
+  meter: () => houseDays()
+    ? 'Mit PV-Anlage zählt dein <b>Stromzähler</b> nur noch, was <b>aus dem Netz</b> kommt (<b>Bezug</b>, Register 1.8.0) und ' +
+      'was <b>hineingeht</b> (<b>Einspeisung</b>, 2.8.0) – den <b>Gesamtverbrauch</b> des Hauses misst der Smart Meter des ' +
+      'Wechselrichters, und den nutzt die App überall. Deine Ablesungen <b>prüfen den Smart Meter</b>: Für jeden Zeitraum ' +
+      'zwischen zwei Ablesungen vergleicht die App, was dein Zähler und was der Smart Meter gezählt haben. Zwei geeichte Zähler ' +
+      'an derselben Leitung liegen meist innerhalb von 1–2 %. Trag die <b>Uhrzeit</b> mit ein – im Winter macht ein halber Tag ' +
+      'schnell 10 kWh aus. Bleibt lokal.'
+    : 'Trag deinen <b>Hauptstromzähler</b>-Stand (Gesamt = Haushalt + Wärmepumpe) ' +
+      'ab und zu ein. Aus zwei Ablesungen ergibt sich dein <b>echter Gesamtverbrauch</b>; die App zieht ' +
+      'die (saisonale) Wärmepumpe ab, deckt so den <b>noch nicht gemessenen Hausstrom</b> auf und ' +
+      '<b>kalibriert alle Prognosen</b> auf deinen realen Wert. Bleibt lokal. Mit PV-Anlage und Smart Meter ' +
+      'übernimmt der Smart Meter diese Rolle, die Ablesungen dienen dann zum Abgleich.',
   aeg: () => 'Deine AEG/Electrolux-Geräte (Waschmaschine, Trockner …) über die offizielle ' +
     'Electrolux-Cloud. Angezeigt werden Betriebszustand, <b>Strom pro Waschgang</b> und der ' +
     '<b>Gesamtzähler</b>. „Heute" ist der Zuwachs des Gesamtzählers seit Mitternacht. Verbinden ' +
@@ -961,11 +974,39 @@ function shMeteredDaily() {
   const v = (d.daily || []).map(x => x.kwh).filter(x => x > 0);
   return v.length ? v.reduce((a, b) => a + b, 0) / v.length : 0;
 }
-// Household daily (everything except the heat pump). Best source first:
-// real whole-house meter readings (total − heat pump), then a manual yearly
-// household figure, then just the measured modules.
+/* ------------------------------------------------- whole house (smart meter) */
+// Since the PV system the utility meter only counts what comes from the grid;
+// the house's real consumption is the smart meter's "Verbrauch" (Fronius). It
+// is the total everywhere – heat pump and Smart-Home devices are its breakdown,
+// the rest is "nicht einzeln gemessen". The bridge sends it with the overview
+// (ov.house); the utility-meter readings only cross-check it (Setup).
+const COL_REST = '#8b93a7';
+function houseDays() { const h = STATE.ov && STATE.ov.house; return h && Array.isArray(h.daily) && h.daily.length ? h.daily : null; }
+function houseByDay() { const m = {}; (houseDays() || []).forEach(d => { m[d.day] = d; }); return m; }
+function smName() { return STATE.fr && STATE.fr.demo ? 'Demo-Anlage' : 'Smart Meter'; }
+// heat pump per day from HomeCom – only the days it actually reported
+function hpDayMap() { const m = {}; ((STATE.hpA && STATE.hpA.daily) || []).forEach(d => { if (d.elec_kwh != null) m[d.day] = d.elec_kwh; }); return m; }
+// Household (everything but the heat pump) per day from complete smart-meter
+// days (up to 4 weeks): house − heat pump, de-seasonalised like the other
+// annual figures. null until there are three such days.
+function smHousehold() {
+  const H = houseDays(); if (!H) return null;
+  const hp = hpDayMap();
+  const days = H.filter(d => d.complete && hp[d.day] != null).slice(-28);
+  if (days.length < 3) return null;
+  const raw = mean(days.map(d => Math.max(0, d.kwh - hp[d.day])));
+  const f = mean(days.map(d => shDayFactor(+d.day.slice(5, 7) - 1))) || 1;
+  return { daily: raw / f, raw, n: days.length, first: days[0].day, last: days[days.length - 1].day,
+           house: mean(days.map(d => d.kwh)) };
+}
+// Household daily (everything except the heat pump). Best source first: the
+// smart meter (house − heat pump); without one the utility-meter readings
+// (total − heat pump – only valid while that meter saw the whole house, i.e.
+// before a PV system), then a manual yearly figure, then the measured modules.
 function shAvgDaily() {
-  const md = meterHouseholdDaily();
+  const sm = smHousehold();
+  if (sm && sm.daily > 0) return sm.daily;
+  const md = houseDays() ? null : meterHouseholdDaily();
   if (md != null && md > 0) return md;
   const house = houseManual();
   if (house > 0) return house / 365;
@@ -1298,12 +1339,18 @@ function annualForecast() {
 }
 // Complete per-day series over [from,to]; real where measured, else a
 // seasonally-scaled average (flagged estimated). Capped to keep it light.
+// With the smart meter a day's total is the house as measured there; the part
+// neither the heat pump nor a Smart-Home device accounts for is `rest`
+// ("nicht einzeln gemessen"). Today counts once the smart meter has covered it
+// since midnight.
 function filledDaily(from, to) {
   const shReal = {}, hpReal = {};
   ((STATE.ov && STATE.ov.combined_daily) || []).forEach(d => {
     shReal[d.day] = d.smarthome_kwh; hpReal[d.day] = d.heatpump_kwh;
   });
+  const HB = houseByDay(), todayKey = localKey(new Date()), mT = meterToday();
   const shA = shAvgDaily(), hpA = hpAvgDaily();
+  const sm = smHousehold(), devA = shMeteredDaily();
   const out = [];
   const t = new Date(from.getFullYear(), from.getMonth(), from.getDate());
   const end = new Date(to.getFullYear(), to.getMonth(), to.getDate());
@@ -1311,25 +1358,41 @@ function filledDaily(from, to) {
   while (t <= end && guard++ < 800) {
     const key = localKey(t), m = t.getMonth();
     const hasSh = shReal[key] != null, hasHp = hpReal[key] != null;
-    const sh = hasSh ? shReal[key] : shA * shDayFactor(m);
-    // prefer real monthly history (spread over the month) over the model
-    const hp = hasHp ? hpReal[key] : hpMonthEst(m) / DIM[m];
-    out.push({ day: key, sh, hp, total: sh + hp, estimated: !(hasSh || hasHp) });
+    const house = key === todayKey ? mT : (HB[key] && HB[key].complete ? HB[key].kwh : null);
+    let sh, hp, rest = 0;
+    if (house != null) {
+      sh = hasSh ? shReal[key] : 0;
+      hp = hasHp ? hpReal[key] : 0;
+      rest = Math.max(0, house - sh - hp);
+    } else {
+      sh = hasSh ? shReal[key] : (sm ? Math.min(devA, shA) : shA) * shDayFactor(m);
+      // prefer real monthly history (spread over the month) over the model
+      hp = hasHp ? hpReal[key] : hpMonthEst(m) / DIM[m];
+      // an estimated day with a smart meter: the unmeasured share as well
+      if (!hasSh && !hasHp && sm) rest = Math.max(0, shA - devA) * shDayFactor(m);
+    }
+    out.push({ day: key, sh, hp, rest, total: sh + hp + rest, house, estimated: !(hasSh || hasHp || house != null) });
     t.setDate(t.getDate() + 1);
   }
   return out;
+}
+// the stack definitions for these series (the rest only when there is one)
+function dailySeries(rows) {
+  const s = [{ key: 'sh', color: COL.sh }, { key: 'hp', color: COL.hp }];
+  if (rows.some(r => (r.rest || 0) > 0.01)) s.push({ key: 'rest', color: COL_REST });
+  return s;
 }
 // Aggregate a filled daily series to months (for long spans).
 function aggregateMonths(filled) {
   const map = {};
   filled.forEach(d => {
     const m = d.day.slice(0, 7);
-    (map[m] = map[m] || { sh: 0, hp: 0, est: 0, n: 0 });
-    map[m].sh += d.sh; map[m].hp += d.hp; map[m].n++; if (d.estimated) map[m].est++;
+    (map[m] = map[m] || { sh: 0, hp: 0, rest: 0, est: 0, n: 0 });
+    map[m].sh += d.sh; map[m].hp += d.hp; map[m].rest += d.rest || 0; map[m].n++; if (d.estimated) map[m].est++;
   });
   return Object.keys(map).sort().map(m => ({
-    key: m, label: MON[+m.slice(5) - 1], sh: map[m].sh, hp: map[m].hp,
-    total: map[m].sh + map[m].hp, estimated: map[m].est > map[m].n / 2,
+    key: m, label: MON[+m.slice(5) - 1], sh: map[m].sh, hp: map[m].hp, rest: map[m].rest,
+    total: map[m].sh + map[m].hp + map[m].rest, estimated: map[m].est > map[m].n / 2,
   }));
 }
 // Fill empty (weekday,hour) cells of a 7×24 grid with that hour's column mean,
@@ -1371,6 +1434,7 @@ function applyCoreState(c, health, origin) {
   }
   STATE.ov = c.ov; STATE.hpA = c.hpA; STATE.data = c.data;
   STATE.meter = Array.isArray(c.meter) ? c.meter : ((c.meter && c.meter.readings) || []);
+  STATE.meterCheck = (c.meter && !Array.isArray(c.meter) && c.meter.check) || null;
   // safe defaults so the first render never trips over missing optional data
   STATE.appliances = STATE.appliances || null;
   STATE.spot = STATE.spot || null;
@@ -2036,15 +2100,94 @@ function renderHa() {
     `„W jetzt" ist die aktuelle Leistung; der Jahreswert gilt nur bei Dauerlauf.`;
 }
 
+// Utility meter vs smart meter: for each interval between two readings what
+// each of them counted – grid import (1.8.0) and, if read, feed-in (2.8.0).
+function meterSign(v) { return v > 0 ? '+' : v < 0 ? '−' : '±'; }
+function meterMark(x) {
+  return x.verdict === 'ok' ? '<span style="color:#4be0b0">✓</span>'
+    : x.verdict === 'time' ? '<span style="color:#f6b93b">≈</span>' : '<span style="color:#ff6b8a">⚠︎</span>';
+}
+function meterCheckHtml(C) {
+  if (!C || !C.pairs || !C.pairs.length) return '';
+  const dm = ts => new Date(ts * 1000).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' });
+  const row = (label, x) => {
+    if (!x) return '';
+    if (x.sm_kwh == null) return `<tr><td>${label}</td><td>${kwh(x.meter_kwh, 1)}</td>` +
+      `<td colspan="2" style="color:var(--muted);text-align:left;white-space:normal">${esc(x.why || '–')}</td></tr>`;
+    return `<tr><td>${label}</td><td>${kwh(x.meter_kwh, 1)}</td><td>${kwh(x.sm_kwh, 1)}</td>` +
+      `<td>${meterMark(x)} ${x.diff_pct == null ? '–' : meterSign(x.diff_pct) + fmt(Math.abs(x.diff_pct), 1) + ' %'}` +
+      (x.uncert_kwh ? `<br><small style="color:var(--muted)">±${fmt(x.uncert_kwh, 0)} kWh (Uhrzeit fehlt)</small>` : '') + '</td></tr>';
+  };
+  let h = '<table class="mc-tab"><tr><th>Zeitraum</th><th>dein Zähler</th><th>Smart Meter</th><th>Abweichung</th></tr>';
+  C.pairs.slice(-6).forEach(p => {
+    const span = `${dm(p.from)}–${dm(p.to)} <small style="color:var(--muted)">(${fmt(p.days, p.days < 10 ? 1 : 0)} T)</small>`;
+    h += row(span + ' · Bezug', p.imp);
+    if (p.exp) h += row('<small style="color:var(--muted)">… Einspeisung</small>', p.exp);
+  });
+  return h + '</table>';
+}
+function meterCheckSummary(C) {
+  if (!C) return '';
+  const T = C.total, since = C.sm_since ? new Date(C.sm_since * 1000).toLocaleDateString('de-DE') : null;
+  const bad = C.implausible || 0;
+  const badTxt = bad ? ` <br>⚠︎ <b>${bad} ${bad === 1 ? 'Zeitraum passt' : 'Zeiträume passen'} gar nicht</b> (über 20 % daneben oder ` +
+    'Zählerstand rückwärts) – vermutlich ein Tippfehler; unten prüfen und die falsche Ablesung löschen (✕).' : '';
+  if (!T || !T.imp || T.imp.sm_kwh == null) {
+    return (bad ? '' : 'Für den Vergleich braucht es <b>zwei Ablesungen</b> aus der Zeit, in der der Smart Meter aufzeichnet' +
+      (since ? ` (seit ${since})` : '') + ' – trag die nächste mit Uhrzeit ein.') + badTxt;
+  }
+  const X = T.imp;
+  let txt = `Netzbezug über <b>${fmt(T.days, 0)} Tage</b>: dein Zähler <b>${kwh(X.meter_kwh, 1)}</b>, ${smName()} ` +
+    `<b>${kwh(X.sm_kwh, 1)}</b>` + (X.diff_pct != null && X.diff_pct !== 0
+      ? ` – ${fmt(Math.abs(X.diff_pct), 1)} % ${X.diff_pct < 0 ? 'weniger' : 'mehr'}.` : '.');
+  txt += X.verdict === 'ok' ? ' ✓ <b>Passt</b> – zwei geeichte Zähler liegen meist innerhalb von 1–2 %.'
+    : X.verdict === 'time' ? ` ≈ Das liegt im Rahmen der <b>fehlenden Uhrzeit</b> (±${fmt(X.uncert_kwh, 0)} kWh) – mit Uhrzeit wird der Vergleich genau.`
+    : ' ⚠︎ <b>Mehr als 2 % Unterschied.</b> Prüfe Ablesezeit und Zahlen (Tippfehler?). Bleibt es dabei: Sitzt der Smart Meter ' +
+      'direkt am Hausanschluss, und hängen alle Verbraucher dahinter – auch die Wärmepumpe?';
+  if (T.exp && T.exp.sm_kwh != null) {
+    const E = T.exp;
+    txt += ` Einspeisung: dein Zähler <b>${kwh(E.meter_kwh, 1)}</b>, ${smName()} <b>${kwh(E.sm_kwh, 1)}</b>` +
+      (E.diff_pct != null ? ` (${meterSign(E.diff_pct)}${fmt(Math.abs(E.diff_pct), 1)} %)` : '') + ' ' + meterMark(E) + '.';
+  }
+  return txt + badTxt;
+}
+
 function renderMeter() {
   const list = $('meter-list'), note = $('meter-note'); if (!note) return;
-  const di = $('meter-date'); if (di && !di.value) di.value = new Date().toISOString().slice(0, 10);
+  const di = $('meter-date'); if (di && !di.value) di.value = ymdLocal(new Date());
+  const ti = $('meter-time');
+  if (ti && !ti.value) { const n = new Date(); ti.value = String(n.getHours()).padStart(2, '0') + ':' + String(n.getMinutes()).padStart(2, '0'); }
+  const smOn = !!houseDays();
+  const intro = $('meter-intro');
+  if (intro) intro.innerHTML = smOn
+    ? 'Trag ab und zu den Stand deines <b>Stromzählers</b> ein – mit <b>Uhrzeit</b>. Seit der PV-Anlage zählt er nur noch, was ' +
+      '<b>aus dem Netz</b> kommt (Bezug, 1.8.0) und was <b>hineingeht</b> (Einspeisung, 2.8.0). Den <b>Gesamtverbrauch</b> misst der ' +
+      'Smart Meter des Wechselrichters – den nutzt die App überall. Deine Ablesungen <b>prüfen den Smart Meter</b>.'
+    : 'Trag ab und zu deinen <b>Zählerstand vom Hauptstromzähler</b> ein (Gesamt = Haushalt <b>+</b> Wärmepumpe). Aus zwei ' +
+      'Ablesungen berechnet die App den <b>echten Gesamtverbrauch</b>, deckt den <b>noch nicht gemessenen Hausstrom</b> auf und ' +
+      '<b>kalibriert die Prognosen</b>. Je mehr Ablesungen, desto genauer.';
+  const kl = $('meter-kwh-l'); if (kl) kl.textContent = smOn ? 'Bezug 1.8.0 (kWh)' : 'Zählerstand (kWh)';
+  const eb = $('meter-exp-box'); if (eb) eb.hidden = !smOn;
   const rs = (STATE.meter || []).slice().sort((a, b) => b.ts - a.ts);
-  list.innerHTML = rs.length ? rs.map(r =>
-    `<div class="statusrow"><span class="k">${longDay(new Date(r.ts * 1000).toISOString().slice(0, 10))}</span>` +
-    `<span class="v">${kwh(r.kwh, 0)} <button class="linkbtn meter-del" data-ts="${r.ts}" ` +
-    `style="background:none;border:none;color:#ff6b8a;cursor:pointer;font-size:13px">✕</button></span></div>`).join('')
+  list.innerHTML = rs.length ? '<div class="note" style="margin:10px 0 2px">Deine Ablesungen</div>' + rs.map(r => {
+    const d = new Date(r.ts * 1000);
+    const when = longDay(ymdLocal(d)) + (r.timed
+      ? ' · ' + d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) + ' Uhr'
+      : ' <small style="color:var(--muted)">· ohne Uhrzeit</small>');
+    return `<div class="statusrow"><span class="k">${when}</span>` +
+      `<span class="v">${kwh(r.kwh, r.kwh % 1 ? 1 : 0)}` +
+      (r.exp_kwh != null ? ` <small style="color:var(--muted)">· Einsp. ${kwh(r.exp_kwh, r.exp_kwh % 1 ? 1 : 0)}</small>` : '') +
+      ` <button class="linkbtn meter-del" data-ts="${r.ts}" ` +
+      `style="background:none;border:none;color:#ff6b8a;cursor:pointer;font-size:13px">✕</button></span></div>`;
+  }).join('')
     : '<div class="note">Noch keine Ablesung. Trag oben deinen aktuellen Zählerstand ein – und in ein paar Tagen den nächsten.</div>';
+  const box = $('meter-check');
+  if (smOn) {
+    if (box) box.innerHTML = meterCheckHtml(STATE.meterCheck);
+    note.innerHTML = rs.length ? meterCheckSummary(STATE.meterCheck) : '';
+    return;
+  }
+  if (box) box.innerHTML = '';
   const s = meterStats();
   if (s && s.dailyAvg != null) {
     const hpDaily = meterHpDaily(s);
@@ -7390,6 +7533,7 @@ function ymdLocal(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).pad
 let _pvDarkBusy = false;
 async function loadPvDark() {
   const h = STATE.health;
+  if (houseDays()) return;                 // the overview brings the smart-meter days already
   if (_pvDarkBusy || !h || !h.fronius_connected) return;
   if (STATE.pvDark && Date.now() - (STATE.pvDarkAt || 0) < 10 * 60000) return;
   _pvDarkBusy = true;
@@ -7401,13 +7545,14 @@ async function loadPvDark() {
 // day): house consumption − heat pump − individually measured devices = what
 // no plug/module measures. null until there is such a day.
 function smartMeterDays() {
-  const P = STATE.pvDark, data = STATE.data, A = STATE.hpA;
-  if (!P || !P.daily || !data || !A) return null;
+  const P = STATE.pvDark, H = houseDays(), data = STATE.data, A = STATE.hpA;
+  if ((!H && (!P || !P.daily)) || !data || !A) return null;
   const today = ymdLocal(new Date());
-  const hpBy = {}; (A.daily || []).forEach(d => { hpBy[d.day] = d.elec_kwh; });
+  const hpBy = hpDayMap();
   const pdd = data.per_device_day || {};
-  const days = P.daily.filter(d => d.day < today && d.load_kwh != null && d.cov_h >= 22.5 &&
-    (d.gap_h || 0) <= 0.5 && hpBy[d.day] != null).slice(-7);
+  const src = H ? H.filter(d => d.complete).map(d => ({ day: d.day, load_kwh: d.kwh }))
+    : P.daily.filter(d => d.day < today && d.load_kwh != null && d.cov_h >= 22.5 && (d.gap_h || 0) <= 0.5);
+  const days = src.filter(d => hpBy[d.day] != null).slice(-7);
   if (!days.length) return null;
   const dev = day => Object.keys(pdd).reduce((a, id) => a + ((pdd[id] || {})[day] || 0), 0);
   const per = days.map(d => ({ day: d.day, house: Math.max(0, d.load_kwh - hpBy[d.day]), hp: hpBy[d.day], dev: dev(d.day) }));
@@ -7455,7 +7600,8 @@ function renderDarkLoad() {
   const liveOk = !!(M && M.load_w != null && ov && ov.now);
   const smd = smartMeterDays();
   // need a whole-house household reference beyond the modules themselves
-  const md = meterHouseholdDaily();
+  // (with a smart meter the utility-meter readings no longer count as one)
+  const md = houseDays() ? null : meterHouseholdDaily();
   const houseDaily = smd ? smd.house : (md != null && md > 0) ? md : (houseManual() > 0 ? houseManual() / 365 : null);
   if (!data || (houseDaily == null && !liveOk)) { card.hidden = true; return; }
   card.hidden = false;
@@ -7550,7 +7696,7 @@ function renderDarkLoad() {
     `Standby). Weitere Steckdosen bringen hier wenig Neues.`;
   $('ov-dark-note').innerHTML = `Basis: Haushalt <b>${kwh(houseDaily, 1)}/Tag</b> (${src}, ohne Wärmepumpe) ` +
     `minus gemessene <b>${kwh(measured, 1)}/Tag</b>. ` + advice +
-    (!smd && liveOk ? ' <br><small style="color:var(--muted)">Die Tagesbilanz rechnet noch mit deinen Zählerablesungen (geschätzt); ' +
+    (!smd && liveOk ? ' <br><small style="color:var(--muted)">Die Tagesbilanz ist noch geschätzt; ' +
       'ab dem ersten vollständig gemessenen Tag nimmt sie automatisch den Smart Meter.</small>' : '');
 }
 
@@ -7587,9 +7733,11 @@ function renderOverview() {
 
   const now = new Date();
   const w = filledDaily(new Date(now.getTime() - 13 * 86400000), now);
+  const wSer = dailySeries(w);
   $('ov-daily').innerHTML = stackedBar(
-    w.map(d => ({ label: shortDay(d.day), estimated: d.estimated, values: { sh: d.sh, hp: d.hp } })),
-    [{ key: 'sh', color: COL.sh }, { key: 'hp', color: COL.hp }], { h: 200, unit: 'kWh' });
+    w.map(d => ({ label: shortDay(d.day), estimated: d.estimated, values: { sh: d.sh, hp: d.hp, rest: d.rest } })),
+    wSer, { h: 200, unit: 'kWh' });
+  const ovLegRest = $('ov-daily-leg-rest'); if (ovLegRest) ovLegRest.hidden = wSer.length < 3;
   const estN = w.filter(d => d.estimated).length;
   const dn = $('ov-daily-note');
   if (dn) {
@@ -7769,9 +7917,16 @@ function renderTips() {
   const tips = [];
   const A = STATE.hpA, data = STATE.data, fc = annualForecast(), price = STATE.price;
   const l = (A && A.live) || {};
-  // 0) whole-house meter calibration: reveal the not-yet-measured household load
-  const ms = meterStats();
-  if (ms && ms.dailyAvg != null) {
+  // 0) the not-yet-measured household load: from the smart meter when there is
+  //    one, else from the utility-meter readings (while that meter saw the whole house)
+  const smT = smHousehold();
+  const ms = houseDays() ? null : meterStats();
+  if (smT) {
+    const unmetered = Math.max(0, smT.raw - shMeteredDaily());
+    if (unmetered > 0.3) tips.push(['🔢', `Laut <b>${smName()}</b> braucht dein Haushalt (ohne Wärmepumpe) Ø <b>${kwh(smT.raw, 1)}/Tag</b> ` +
+      `(${money(smT.raw * price)}/Tag). Rund <b>${kwh(unmetered, 1)}/Tag</b> davon misst noch kein Gerät einzeln ` +
+      `(Kühlschrank, Herd, …) – ein Zwischenstecker/Klemmzähler würde das sichtbar machen.`]);
+  } else if (ms && ms.dailyAvg != null) {
     const hpDaily = meterHpDaily(ms);
     const household = Math.max(0, ms.dailyAvg - hpDaily);
     const unmetered = Math.max(0, household - shMeteredDaily());
@@ -7822,27 +7977,43 @@ function renderTips() {
 
 function renderToday() {
   const ov = STATE.ov; if (!ov) return;
-  $('t-total').innerHTML = kwh(ov.today.total_kwh, 1);
+  // the house as the smart meter measured it today (whole day so far covered);
+  // what neither the heat pump nor a device accounts for is its own slice
+  const mT = meterToday(), meas = ov.today.total_kwh;
+  const restT = mT != null ? Math.max(0, mT - meas) : 0;
+  const totalT = mT != null && mT >= meas ? mT : meas;
+  const costT = meas > 0 ? ov.today.cost * totalT / meas : totalT * STATE.price;
+  $('t-total').innerHTML = kwh(totalT, 1);
+  const tSrc = $('t-total-src');
+  if (tSrc) tSrc.textContent = mT != null ? smName() + (restT > 0.05 ? ` · ${kwh(restT, 1)} nicht einzeln gemessen` : '') : 'Summe der Messungen';
   $('t-sh').innerHTML = kwh(ov.today.smarthome_kwh, 2);
   $('t-hp').innerHTML = kwh(ov.today.heatpump_kwh, 2);
 
-  const hrs = ov.today_hourly || [];
-  const hasData = hrs.some(h => h.smarthome_kwh > 0 || h.heatpump_kwh > 0);
+  const hrs = (ov.today_hourly || []).map(h => {
+    const sh = h.smarthome_kwh || 0, hp = h.heatpump_kwh || 0;
+    const rest = h.house_kwh != null ? Math.max(0, h.house_kwh - sh - hp) : 0;
+    return { hour: h.hour, sh, hp, rest, tot: sh + hp + rest, house: h.house_kwh };
+  });
+  const hasHouse = hrs.some(h => h.house != null);
+  const hasData = hrs.some(h => h.tot > 0);
+  const hSer = [{ key: 'sh', color: COL.sh }, { key: 'hp', color: COL.hp }].concat(hasHouse ? [{ key: 'rest', color: COL_REST }] : []);
   $('t-hourly').innerHTML = hasData ? stackedBar(
-    hrs.map(h => ({ label: h.hour % 3 === 0 ? h.hour + '' : '', full: h.hour + ':00 Uhr', values: { sh: h.smarthome_kwh, hp: h.heatpump_kwh } })),
-    [{ key: 'sh', color: COL.sh }, { key: 'hp', color: COL.hp }], { h: 190, unit: 'kWh' })
+    hrs.map(h => ({ label: h.hour % 3 === 0 ? h.hour + '' : '', full: h.hour + ':00 Uhr', values: { sh: h.sh, hp: h.hp, rest: h.rest } })),
+    hSer, { h: 190, unit: 'kWh' })
     : '<div class="note">Der Stundenverlauf füllt sich im Lauf des Tages.</div>';
+  const tLegRest = $('t-leg-rest'); if (tLegRest) tLegRest.hidden = !hasHouse;
   if (hasData) {
-    const peak = hrs.reduce((a, b) => (b.smarthome_kwh + b.heatpump_kwh) > (a.smarthome_kwh + a.heatpump_kwh) ? b : a);
+    const peak = hrs.reduce((a, b) => b.tot > a.tot ? b : a);
     $('t-hourly-note').innerHTML = `Verbrauchsstärkste Stunde bisher: <b>${peak.hour}:00 Uhr</b> ` +
-      `(${kwh(peak.smarthome_kwh + peak.heatpump_kwh, 2)}).`;
+      `(${kwh(peak.tot, 2)}).` + (hasHouse ? ` Grau: Hausverbrauch laut ${smName()}, den weder die Wärmepumpe noch ein ` +
+      'einzeln gemessenes Gerät erklärt (Herd, Kühlschrank, Steckdosen ohne Messung …).' : '');
   } else { $('t-hourly-note').textContent = ''; }
 
   const segs = [
     { label: 'Smart Home', value: ov.today.smarthome_kwh, color: COL.sh },
     { label: 'Wärmepumpe', value: ov.today.heatpump_kwh, color: COL.hp },
-  ].filter(s => s.value > 0);
-  $('t-donut').innerHTML = segs.length ? donutChart(segs, { big: eur(ov.today.cost), center: 'heute' })
+  ].concat(restT > 0.05 ? [{ label: 'Nicht einzeln gemessen', value: restT, color: COL_REST }] : []).filter(s => s.value > 0);
+  $('t-donut').innerHTML = segs.length ? donutChart(segs, { big: eur(costT), center: 'heute' })
     : '<div class="note">Noch keine Daten für heute.</div>';
   $('t-legend').innerHTML = legendHtml(segs.map(s => ({ label: s.label, color: s.color, sub: kwh(s.value, 2) })));
 
@@ -7855,8 +8026,10 @@ function renderToday() {
 }
 
 // Resolve the current Verlauf window [from,to] and the display mode.
-// label a day as heute / gestern / "Mi, 15.10.2026"
-function dayLabel(d) {
+// label a day as heute / gestern / "Mi, 15.10.2026" (a Date; dayLabel() below
+// is the short 'DD.MM.' label for 'YYYY-MM-DD' strings – same name before v221,
+// which broke the single-day Verlauf)
+function dayLabelRel(d) {
   const t = new Date(); t.setHours(0, 0, 0, 0);
   const diff = Math.round((t - d) / 86400000);
   if (diff === 0) return 'heute';
@@ -7869,7 +8042,7 @@ function historyWindow() {
   if (sel === 'day') {
     const base = STATE.histDay ? new Date(STATE.histDay) : new Date();
     const from = new Date(base.getFullYear(), base.getMonth(), base.getDate());
-    const name = dayLabel(from), rel = !/\d{4}/.test(name);   // heute/gestern/… vs. a date
+    const name = dayLabelRel(from), rel = !/\d{4}/.test(name);   // heute/gestern/… vs. a date
     return { from, to: new Date(from), mode: 'day', single: true, day: from,
       title: 'Strom ' + (rel ? name : 'am ' + name) + ' · pro Stunde' };
   }
@@ -7895,8 +8068,10 @@ function renderHistory() {
   const win = historyWindow();
   const filled = filledDaily(win.from, win.to);
   const anyEst = filled.some(d => d.estimated);
+  const ser = dailySeries(filled);
   $('h-daily-legend').innerHTML = legendHtml([
     { label: 'Smart Home', color: shHex }, { label: 'Wärmepumpe', color: hpHex }]
+    .concat(ser.length > 2 ? [{ label: 'Nicht einzeln gemessen', color: COL_REST }] : [])
     .concat(anyEst ? [{ label: 'geschätzt (Ø, saisonal)', color: 'rgba(147,162,196,.5)' }] : [])) +
     `<span style="color:var(--muted);font-size:11px;margin-left:6px">tippen/fahren für Tageswerte</span>`;
 
@@ -7905,31 +8080,38 @@ function renderHistory() {
   } else if (win.mode === 'month') {
     const months = aggregateMonths(filled);
     $('h-daily').innerHTML = `<div class="dhit" style="touch-action:none">` + stackedBar(
-      months.map(m => ({ label: m.label, estimated: m.estimated, values: { sh: m.sh, hp: m.hp } })),
-      [{ key: 'sh', color: shHex }, { key: 'hp', color: hpHex }], { h: 210 }) + `</div>`;
-    _histHit = { mode: 'month', rows: months.map(m => ({ tip: m.label, sh: m.sh, hp: m.hp, total: m.total, estimated: m.estimated })) };
+      months.map(m => ({ label: m.label, estimated: m.estimated, values: { sh: m.sh, hp: m.hp, rest: m.rest } })),
+      ser, { h: 210 }) + `</div>`;
+    _histHit = { mode: 'month', rows: months.map(m => ({ tip: m.label, sh: m.sh, hp: m.hp, rest: m.rest, total: m.total, estimated: m.estimated })) };
     const tot = months.map(m => m.total);
     $('h-avg').innerHTML = kwh(mean(months.map(m => m.total / 30.4)), 2);
     $('h-max').innerHTML = kwh(Math.max(0, ...tot), 0); $('h-max-l').textContent = 'Stärkster Monat';
   } else {
     $('h-daily').innerHTML = `<div class="dhit" style="touch-action:none">` + stackedBar(
-      filled.map(d => ({ label: shortDay(d.day), estimated: d.estimated, values: { sh: d.sh, hp: d.hp } })),
-      [{ key: 'sh', color: shHex }, { key: 'hp', color: hpHex }], { h: 210 }) + `</div>`;
+      filled.map(d => ({ label: shortDay(d.day), estimated: d.estimated, values: { sh: d.sh, hp: d.hp, rest: d.rest } })),
+      ser, { h: 210 }) + `</div>`;
     _histHit = { mode: 'day', rows: filled.map(d => ({
       tip: new Date(d.day + 'T12:00').toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' }),
-      sh: d.sh, hp: d.hp, total: d.total, estimated: d.estimated })) };
+      sh: d.sh, hp: d.hp, rest: d.rest, total: d.total, house: d.house, estimated: d.estimated })) };
     const tot = filled.map(d => d.total);
     $('h-avg').innerHTML = kwh(mean(tot), 2);
     $('h-max').innerHTML = kwh(Math.max(0, ...tot), 2); $('h-max-l').textContent = 'Höchster Tag';
   }
   $('h-daily-title').textContent = win.title;
-  $('h-daily-note').hidden = !anyEst;
+  // which days show the whole house (smart meter) and which only the measured parts
+  const hN = filled.filter(d => d.house != null).length, partN = filled.filter(d => d.house == null && !d.estimated).length;
+  const notes = [];
+  if (hN) notes.push(`<b>${hN}</b> ${hN === 1 ? 'Tag zeigt' : 'Tage zeigen'} den <b>ganzen Hausverbrauch</b> laut ${smName()} ` +
+    '(grau: was weder die Wärmepumpe noch ein einzeln gemessenes Gerät erklärt)' +
+    (partN ? `; an <b>${partN}</b> ${partN === 1 ? 'Tag' : 'Tagen'} davor (ohne vollständige Smart-Meter-Daten) nur die einzeln gemessenen Teile.` : '.'));
   if (anyEst) {
     const realN = filled.filter(d => !d.estimated).length;
-    $('h-daily-note').innerHTML = `<b>${realN}</b> von ${filled.length} Tagen sind gemessen; ` +
+    notes.push(`<b>${realN}</b> von ${filled.length} Tagen sind gemessen; ` +
       `blasse Balken sind aus deinem bisherigen Verbrauch hochgerechnet und <b>saisonal verteilt</b> ` +
-      `(Wärmepumpe im Winter mehr, im Sommer weniger). Echte Messungen ersetzen die Schätzung automatisch.`;
+      `(Wärmepumpe im Winter mehr, im Sommer weniger). Echte Messungen ersetzen die Schätzung automatisch.`);
   }
+  $('h-daily-note').hidden = !notes.length;
+  if (notes.length) $('h-daily-note').innerHTML = notes.join(' ');
 
   // cumulative share over the (measured) window: per Smart-Home device + heat
   // pump, each with a per-year projection (kWh + €) so unnecessary consumers pop.
@@ -7944,6 +8126,10 @@ function renderHistory() {
   const hpByDay = {}; ((ov.combined_daily) || []).forEach(d => hpByDay[d.day] = d.heatpump_kwh);
   let hpWin = 0, hpN = 0; winKeys.forEach(k => { if (hpByDay[k] != null && hpByDay[k] > 0) { hpWin += hpByDay[k]; hpN++; } });
   if (hpWin > 0) shares.push({ label: 'Wärmepumpe', kwh: hpWin, days: hpN, color: COL.hp, seasonal: true });
+  // with the smart meter: what nobody measures individually, over its complete days
+  const restDays = filled.filter(d => d.house != null && d.day < localKey(new Date()));
+  const restWin = restDays.reduce((a, d) => a + (d.rest || 0), 0);
+  if (restWin > 0.05) shares.push({ label: 'Nicht einzeln gemessen', kwh: restWin, days: restDays.length, color: COL_REST, rest: true });
   shares.sort((a, b) => b.kwh - a.kwh);
   const totShare = shares.reduce((a, s) => a + s.kwh, 0) || 1;
   const sharePrice = STATE.price;
@@ -7952,7 +8138,8 @@ function renderHistory() {
   const totYear = shares.reduce((a, s) => a + yearOf(s), 0);
   const totalRow = shares.length
     ? `<div class="devrow" style="border-bottom:1px solid var(--card-bd,#2a2f3a);padding-bottom:8px;margin-bottom:4px">` +
-      `<div class="nm"><b>Gesamt (alle gelisteten)</b><small>gemessen <b>${kwh(totShare, 1)}</b> · ${winDays} Tage</small></div>` +
+      `<div class="nm"><b>Gesamt (alle gelisteten)</b><small>gemessen <b>${kwh(totShare, 1)}</b> · ${winDays} Tage` +
+      (restWin > 0.05 ? ` · mit dem Rest laut ${smName()}` : '') + `</small></div>` +
       `<div class="val"><b>~${kwh(totYear, 0)}/Jahr</b><small>${money(totYear * sharePrice)}</small></div></div>`
     : '';
   $('h-share').innerHTML = shares.length
@@ -7961,7 +8148,7 @@ function renderHistory() {
         // exact measured days + average for every not-measured day of the year:
         //   s.kwh (exact) + (s.kwh/s.days) × (365 − s.days)  ==  s.kwh/s.days × 365
         const yearK = yearOf(s);
-        const sub = `${pct.toFixed(0)} % · gemessen <b>${kwh(s.kwh, 1)}</b> (${s.days}/${winDays} Tage)` +
+        const sub = `${pct.toFixed(0)} % · ${s.rest ? smName() + ' − Teile' : 'gemessen'} <b>${kwh(s.kwh, 1)}</b> (${s.days}/${winDays} Tage)` +
           (s.seasonal ? ' · saisonal' : '');
         return devRow(s.label, sub, `~${kwh(yearK, 0)}/Jahr`, money(yearK * sharePrice), pct, s.color);
       }).join('')
@@ -8029,10 +8216,16 @@ async function paintHistoryDayHourly(day) {
   const daysBack = Math.max(1, Math.ceil(Date.now() / 1000 / 86400 - t0 / 86400) + 1);
   el.innerHTML = '<div class="note" style="padding:16px 0;text-align:center">Lade Stundenwerte …</div>';
   const token = (_histDayTok = _histDayTok + 1);
-  let samples;
-  try { samples = await devtlFetchSeries(daysBack); }
+  let samples, HD = null;
+  try {
+    // the devices' samples + (with a smart meter) the whole house and heat pump per hour
+    [samples, HD] = await Promise.all([devtlFetchSeries(daysBack),
+      api('/api/house/day?day=' + ymdLocal(dayStart)).catch(() => null)]);
+  }
   catch (e) { if (token === _histDayTok) el.innerHTML = '<div class="note">Stundenwerte nur mit laufender Bridge verfügbar.</div>'; return; }
   if (token !== _histDayTok) return;                // a newer day was picked meanwhile
+  const houseH = HD && HD.ok && HD.has_house ? HD.house_kwh : null;
+  const hpH = HD && HD.ok && (HD.hp_kwh || []).some(v => v > 0) ? HD.hp_kwh : null;
   const by = {};
   for (const s of samples) if (s.ts >= t0 && s.ts < t1) (by[s.device_id] = by[s.device_id] || []).push(s);
   const perDev = {}; let any = false;
@@ -8044,7 +8237,7 @@ async function paintHistoryDayHourly(day) {
       if (h >= 0 && h < 24 && wh > 0) { perDev[id][h] = (perDev[id][h] || 0) + wh; any = true; }
     }
   }
-  if (!any) {
+  if (!any && !houseH && !hpH) {
     el.innerHTML = '<div class="note" style="padding:16px 0;text-align:center">Für diesen Tag liegen keine gemessenen Stundenwerte vor (gemessene Steckdosen). Mit einem der Mehrtage-Zeiträume siehst du geschätzte Tageswerte.</div>';
     if (leg) leg.innerHTML = '';
     $('h-avg').innerHTML = '–'; $('h-max').innerHTML = '–'; $('h-max-l').textContent = 'Stärkste Stunde';
@@ -8052,14 +8245,25 @@ async function paintHistoryDayHourly(day) {
   }
   const ranked = Object.keys(perDev).map(id => ({ id, val: Object.values(perDev[id]).reduce((a, b) => a + b, 0) }))
     .filter(x => x.val > 0.001).sort((a, b) => b.val - a.val);
-  const { series, restIds } = _devtlSeries3(ranked, 'all');
+  const dser = any ? _devtlSeries3(ranked, 'all') : { series: [], restIds: [] };
+  const restIds = dser.restIds;
+  const series = dser.series.slice()
+    .concat(hpH ? [{ key: '__hp', color: COL.hp, label: 'Wärmepumpe' }] : [])
+    .concat(houseH ? [{ key: '__unm', color: COL_REST, label: 'Nicht einzeln gemessen' }] : []);
   const rows = []; let dayTot = 0; const hourTot = new Array(24).fill(0);
   for (let h = 0; h < 24; h++) {
     const values = {};
-    series.forEach(s => {
+    let devK = 0;
+    dser.series.forEach(s => {
       const wh = s.key === '__rest' ? restIds.reduce((a, id) => a + ((perDev[id] || {})[h] || 0), 0) : ((perDev[s.key] || {})[h] || 0);
-      values[s.key] = wh / 1000; dayTot += wh / 1000; hourTot[h] += wh / 1000;
+      values[s.key] = wh / 1000; devK += wh / 1000;
     });
+    const hpK = hpH ? (hpH[h] || 0) : 0;
+    if (hpH) values.__hp = hpK;
+    // the house as the smart meter measured it, minus what the parts explain
+    if (houseH) values.__unm = houseH[h] != null ? Math.max(0, houseH[h] - devK - hpK) : 0;
+    const tot = devK + hpK + (values.__unm || 0);
+    dayTot += tot; hourTot[h] += tot;
     rows.push({ label: h % 3 === 0 ? (String(h).padStart(2, '0') + 'h') : '',
       full: String(h).padStart(2, '0') + ':00–' + String((h + 1) % 24).padStart(2, '0') + ':00', values });
   }
@@ -8078,7 +8282,7 @@ function updateHistDayNav() {
   const lbl = $('hist-day-label'); if (!lbl) return;
   const base = STATE.histDay ? new Date(STATE.histDay) : new Date();
   const d = new Date(base.getFullYear(), base.getMonth(), base.getDate());
-  const name = dayLabel(d), full = d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  const name = dayLabelRel(d), full = d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
   lbl.textContent = /\d{4}/.test(name) ? name : `${name} · ${full}`;
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const next = $('hist-day-next'); if (next) next.disabled = d >= today;
@@ -8107,7 +8311,11 @@ function renderForecastBasis(fc) {
       : '<b>Wärmepumpe</b>: aus dem gemessenen Zählerwachstum <b>hochgerechnet</b> (noch keine CSV importiert).');
   }
   // household source
-  if (ms && ms.dailyAvg != null) {
+  const smH = smHousehold();
+  if (smH) {
+    parts.push(`<b>Hausstrom</b>: aus dem <b>Smart Meter</b>${STATE.fr && STATE.fr.demo ? ' (Demo)' : ''} – ganzes Haus minus Wärmepumpe über ${smH.n} vollständig gemessene Tage ` +
+      `(${dayLabel(smH.first)}–${dayLabel(smH.last)}, Ø ${kwh(smH.raw, 1)}/Tag), saisonal bereinigt aufs Jahr hochgerechnet ✓`);
+  } else if (ms && ms.dailyAvg != null && !houseDays()) {
     const days = Math.round(ms.spanDays);
     parts.push(`<b>Hausstrom</b>: aus deiner <b>Zählerablesung</b> (${days} Tag(e), Gesamtzähler minus Wärmepumpe), aufs Jahr hochgerechnet.`);
   } else if (houseManual() > 0) {
@@ -8115,16 +8323,23 @@ function renderForecastBasis(fc) {
   } else {
     parts.push('<b>Hausstrom</b>: nur aus den <b>gemessenen Bosch-Modulen</b> – erfasst evtl. nicht das ganze Haus. Trag im Setup deinen <b>Gesamtzähler</b> ein für eine realistische Zahl.');
   }
-  // plausibility cross-check against the real meter daily average
+  // plausibility cross-check against the real meter daily average (only while
+  // that meter saw the whole house – with a smart meter it counts grid import)
   let cross = '';
-  if (ms && ms.dailyAvg != null) {
+  if (smH) {
+    const projDaily = fc.year / 365;
+    cross = ` <br>🔎 Laut ${smName()} brauchte das ganze Haus zuletzt Ø <b>${kwh(smH.house, 1)}/Tag</b>; die Jahresprognose entspricht Ø <b>${kwh(projDaily, 1)}/Tag</b>` +
+      (projDaily > smH.house * 1.15 ? ' – mehr, <b>weil die Wärmepumpe im Winter stärker heizt</b> als im Schnitt der gemessenen Tage.'
+        : projDaily < smH.house * 0.85 ? ' – weniger, weil die gemessenen Tage in die Heizzeit fallen; übers Jahr heizt die Wärmepumpe weniger.'
+        : ' – passt gut zusammen.');
+  } else if (ms && ms.dailyAvg != null && !houseDays()) {
     const projDaily = fc.year / 365;
     cross = ` <br>🔎 Dein Zähler zeigt aktuell ~<b>${kwh(ms.dailyAvg, 1)}/Tag</b>; die Jahresprognose entspricht Ø <b>${kwh(projDaily, 1)}/Tag</b>` +
       (projDaily > ms.dailyAvg * 1.15
         ? ` – mehr, <b>weil die Wärmepumpe im Winter viel stärker heizt</b> als jetzt. Das treibt die Jahreszahl.`
         : ` – passt gut zusammen.`);
   }
-  const accuracy = (ms && ms.spanDays < 25)
+  const accuracy = (!smH && !houseDays() && ms && ms.spanDays < 25)
     ? ' <span style="color:var(--muted)">Für eine stabilere Prognose weitere Zählerstände über mehrere Monate eintragen – dann glättet sich die Hochrechnung.</span>'
     : '';
   el.innerHTML = 'Woher die Zahlen kommen: ' + parts.join(' ') + cross + accuracy;
@@ -8826,17 +9041,41 @@ function renderHeatpump() {
 /* --------------------------------------------------------------- profile */
 function renderProfile() {
   const data = STATE.data; if (!data) return;
-  const prof = data.hourly_profile;
-  $('chart-hourly').innerHTML = areaChart(prof.map(h => ({ v: h.avg_w, label: h.hour % 3 === 0 ? h.hour + '' : '', full: h.hour + ':00 Uhr', tip: `<b>${h.hour}:00 Uhr</b>: Ø <b>${fmt(h.avg_w, 0)} W</b>` })), { h: 190, unit: 'W' });
+  // with a smart meter: the whole house (heat pump, Smart Home, the rest) over
+  // complete days – otherwise the individually measured Smart-Home devices
+  const HP = STATE.ov && STATE.ov.house && STATE.ov.house.profile;
+  const useHouse = !!(HP && HP.hourly && HP.hourly.some(h => h.house_w != null));
+  const prof = useHouse ? HP.hourly.map(h => ({ hour: h.hour, avg_w: h.house_w || 0 })) : data.hourly_profile;
+  const pLeg = $('profile-legend');
+  if (useHouse) {
+    $('chart-hourly').innerHTML = stackedBar(HP.hourly.map(h => ({
+      label: h.hour % 3 === 0 ? h.hour + '' : '', full: h.hour + ':00 Uhr',
+      values: { hp: h.hp_w || 0, sh: h.sh_w || 0, rest: h.rest_w || 0 } })),
+      [{ key: 'hp', color: COL.hp }, { key: 'sh', color: COL.sh }, { key: 'rest', color: COL_REST }], { h: 190, unit: 'W' });
+    if (pLeg) { pLeg.hidden = false; pLeg.innerHTML = legendHtml([{ label: 'Wärmepumpe', color: COL.hp },
+      { label: 'Smart Home', color: COL.sh }, { label: 'Nicht einzeln gemessen', color: COL_REST }]); }
+  } else {
+    $('chart-hourly').innerHTML = areaChart(prof.map(h => ({ v: h.avg_w, label: h.hour % 3 === 0 ? h.hour + '' : '', full: h.hour + ':00 Uhr', tip: `<b>${h.hour}:00 Uhr</b>: Ø <b>${fmt(h.avg_w, 0)} W</b>` })), { h: 190, unit: 'W' });
+    if (pLeg) pLeg.hidden = true;
+  }
+  const scope = useHouse ? 'ganzes Haus' : 'Smart Home';
+  if ($('profile-title')) $('profile-title').textContent = `Tagesprofil · Ø Leistung je Stunde (${scope})`;
+  if ($('profile-wd-title')) $('profile-wd-title').textContent = `Wochenprofil · Ø kWh je Wochentag (${scope})`;
+  if ($('profile-heat-title')) $('profile-heat-title').textContent = `Wärmekarte · Wochentag × Stunde (W, ${scope})`;
   const peak = prof.reduce((a, b) => b.avg_w > a.avg_w ? b : a);
   const low = prof.reduce((a, b) => b.avg_w < a.avg_w ? b : a);
   const nDays = (data.daily || []).length;
-  const basis = `<span style="color:var(--muted)">Basis: Ø über ${nDays} gemessene Tage – nicht nur heute.</span>`;
-  $('profile-note').innerHTML = `Höchste Ø-Leistung um <b>${peak.hour}:00 Uhr</b> (${fmt(peak.avg_w, 1)} W), ` +
+  const basis = useHouse
+    ? `<span style="color:var(--muted)">Basis: ${smName()} – ganzes Haus inkl. Wärmepumpe, Ø über ${HP.days} vollständig gemessene Tage ` +
+      `(${dayLabel(HP.first)}–${dayLabel(HP.last)}). Aufgeteilt in Wärmepumpe (HomeCom), einzeln gemessene Smart-Home-Geräte und den Rest.</span>`
+    : `<span style="color:var(--muted)">Basis: Ø über ${nDays} gemessene Tage – nicht nur heute.</span>`;
+  $('profile-note').innerHTML = `Höchste Ø-Leistung um <b>${peak.hour}:00 Uhr</b> (${fmt(peak.avg_w, useHouse ? 0 : 1)} W), ` +
     `niedrigste um <b>${low.hour}:00 Uhr</b>. Typische Aktivitätszeiten im Haushalt. ` + basis;
-  $('chart-weekday').innerHTML = barChart(data.weekday_profile.map(w => ({ v: w.avg_kwh, label: WD[w.weekday] })), { h: 170 });
+  const wkProf = useHouse ? HP.weekday : data.weekday_profile;
+  $('chart-weekday').innerHTML = barChart(wkProf.map(w => ({ v: w.avg_kwh, label: WD[w.weekday] })), { h: 170 });
   if ($('profile-weekday-note')) $('profile-weekday-note').innerHTML = basis;
-  $('chart-heat').innerHTML = data.heatmap ? heatmap(fillHeatmap(data.heatmap)) : '<div class="note">Keine Heatmap-Daten.</div>';
+  const heatGrid = useHouse ? HP.heatmap : data.heatmap;
+  $('chart-heat').innerHTML = heatGrid ? heatmap(fillHeatmap(heatGrid)) : '<div class="note">Keine Heatmap-Daten.</div>';
   if ($('profile-heat-note')) $('profile-heat-note').innerHTML =
     `Dunkel = wenig, hell = viel. ${basis} Leere Zellen sind mit dem Stunden-Ø gefüllt.`;
 
@@ -8845,7 +9084,7 @@ function renderProfile() {
   const morning = sumRange(6, 12), afternoon = sumRange(12, 18), evening = sumRange(18, 24), night = sumRange(0, 6);
   const dayTot = morning + afternoon + evening + night || 1;
   const share = v => (v / dayTot * 100).toFixed(0) + ' %';
-  const wkAll = data.weekday_profile, wk = wkAll.filter(w => w.avg_kwh > 0);
+  const wkAll = wkProf, wk = wkAll.filter(w => w.avg_kwh > 0);
   const weekdayVals = wkAll.filter(w => w.weekday < 5 && w.avg_kwh > 0).map(w => w.avg_kwh);
   const weekendVals = wkAll.filter(w => w.weekday >= 5 && w.avg_kwh > 0).map(w => w.avg_kwh);
   const m = new Date().getMonth();
@@ -10755,7 +10994,7 @@ function renderBalcony() {
     (r0 ? `<b>Ohne</b> Speicher wären es nur <b>${fmt(r0.autarky * 100, 0)} %</b> (Gap ${kwh(r0.yearGrid, 0)}) – der Speicher schließt also <b>${kwh(r0.yearGrid - r.yearGrid, 0)}/Jahr</b>. ` : '') +
     `Durch die <b>${p.capW} W</b>-Grenze gehen <b>${kwh(r.yearClip, 0)}/Jahr</b> verloren (Mittags-Überschuss, den der Speicher nicht mehr fasst) – ${r.yearClip > 60 ? 'ein größerer Speicher würde hier noch etwas holen.' : 'die Grenze kostet dich kaum etwas.'} ` +
     `Einspeisung: ${kwh(r.yearFeed, 0)}/Jahr. ` +
-    (((typeof houseManual === 'function' ? houseManual() : 0) <= 0 && (typeof meterHouseholdDaily === 'function' ? (meterHouseholdDaily() || 0) : 0) <= 0)
+    (((typeof houseManual === 'function' ? houseManual() : 0) <= 0 && (typeof meterHouseholdDaily === 'function' ? (meterHouseholdDaily() || 0) : 0) <= 0 && !smHousehold())
       ? `<br>⚠︎ <b>Für realistische Zahlen</b> trag deinen <b>Haushaltsstrom (kWh/Jahr)</b> ein (Feld „Haushaltsstrom" oben im PV-Tab bzw. im Konzept) – sonst zählt nur der kleine <b>gemessene</b> Anteil deiner Steckdosen, und die Autarkie wirkt zu hoch. ` : '') +
     `<span style="color:var(--muted)">Last = ${p.inclHp ? 'Hausstrom + Wärmepumpe' : 'Hausstrom'} (${kwh(r.yearLoad, 0)}/Jahr); Erzeugung aus ${fmt(p.kwp, 1)} kWp × ${fmt(p.spec, 0)} kWh/kWp.</span>`;
 }
@@ -12358,7 +12597,9 @@ function init() {
       const t = $('toast');
       if (t) {
         t.innerHTML = `<b>${esc(r.tip)}</b> · 🏠 <b>${kwh(r.sh, 1)}</b> · 🔥 <b>${kwh(r.hp, 1)}</b>` +
-          `<div class="note" style="margin-top:2px;color:var(--muted)">Σ <b>${kwh(r.total, 1)}</b>${_histHit.mode === 'month' ? '/Monat' : '/Tag'} · ` +
+          ((r.rest || 0) > 0.05 ? ` · ⚪ <b>${kwh(r.rest, 1)}</b> nicht einzeln gemessen` : '') +
+          `<div class="note" style="margin-top:2px;color:var(--muted)">Σ <b>${kwh(r.total, 1)}</b>${_histHit.mode === 'month' ? '/Monat' : '/Tag'}` +
+          (r.house != null ? ` (${smName()})` : '') + ' · ' +
           `${money(r.total * STATE.price)}${r.estimated ? ' · <i>geschätzt</i>' : ''}</div>`;
         t.hidden = false; clearTimeout(_toastT); _toastT = setTimeout(() => { t.hidden = true; }, 5000);
       }
@@ -12784,12 +13025,22 @@ function init() {
   if (mAdd) mAdd.addEventListener('click', async () => {
     const note = $('meter-note');
     const dv = $('meter-date').value, kv = parseFloat($('meter-kwh').value);
+    const tv = ($('meter-time') && $('meter-time').value) || '';
+    const evRaw = $('meter-exp') && !$('meter-exp-box').hidden ? String($('meter-exp').value).trim() : '';
+    const ex = evRaw === '' ? null : parseFloat(evRaw);
     if (!dv || !isFinite(kv)) { note.textContent = 'Bitte Datum und Zählerstand eingeben.'; return; }
-    const ts = Math.floor(new Date(dv + 'T12:00:00').getTime() / 1000);
+    if (ex != null && !isFinite(ex)) { note.textContent = 'Einspeisung: bitte eine Zahl eintragen oder leer lassen.'; return; }
+    // with the time of day the comparison with the smart meter is exact; without, noon is assumed
+    const ts = Math.floor(new Date(dv + 'T' + (tv || '12:00') + ':00').getTime() / 1000);
+    if (ts > Date.now() / 1000 + 300) { note.textContent = 'Die Ablesung liegt in der Zukunft – Datum und Uhrzeit prüfen.'; return; }
     mAdd.disabled = true;
     try {
-      const r = await postJSON('/api/meter', { ts, kwh: kv });
-      if (r && r.ok) { STATE.meter = r.readings || []; $('meter-kwh').value = ''; renderAll(); }
+      const r = await postJSON('/api/meter', { ts, kwh: kv, exp_kwh: ex, timed: !!tv });
+      if (r && r.ok) {
+        STATE.meter = r.readings || []; STATE.meterCheck = r.check || null;
+        $('meter-kwh').value = ''; if ($('meter-exp')) $('meter-exp').value = ''; if ($('meter-time')) $('meter-time').value = '';
+        renderAll();
+      }
       else note.textContent = (r && r.error) || 'Konnte nicht gespeichert werden.';
     } catch (e) { note.textContent = 'Nur möglich, wenn die Seite von der Bridge geöffnet ist.'; }
     mAdd.disabled = false;
@@ -12800,7 +13051,7 @@ function init() {
     const ts = parseInt(btn.dataset.ts, 10);
     try {
       const r = await postJSON('/api/meter/delete', { ts });
-      if (r && r.ok) { STATE.meter = r.readings || []; renderAll(); }
+      if (r && r.ok) { STATE.meter = r.readings || []; STATE.meterCheck = r.check || null; renderAll(); }
     } catch (err) {}
   });
 

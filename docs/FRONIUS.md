@@ -138,6 +138,38 @@ nach einem Neustart verbindet sich die Bridge von selbst wieder.
   (bis zu 30) vollständig erfassten Tagen aus der Einstrahlung gemacht hat – so steckt deine
   Ausrichtung, Verschattung und Anlagengröße schon drin; eine Schätzung, ab 3 Tagen.
 
+## Gesamtverbrauch des Hauses und Zählerablesungen
+
+Seit der PV-Anlage zählt der Stromzähler des Netzbetreibers nur noch, was **aus dem Netz** kommt
+(Bezug, Register 1.8.0) und was **hineingeht** (Einspeisung, 2.8.0). Was das Haus wirklich
+verbraucht, misst der **Smart Meter** zusammen mit dem Wechselrichter („Verbrauch“ in Solar.web).
+Die App nimmt diesen Wert deshalb **überall als Gesamtverbrauch** (seit v221):
+
+* **Übersicht, Heute, Verlauf:** Ein Tag bzw. eine Stunde zeigt den ganzen Hausverbrauch,
+  aufgeteilt in **Wärmepumpe** (HomeCom), **einzeln gemessene Smart-Home-Geräte** und grau den
+  **Rest**, den keins davon erklärt (Herd, Kühlschrank, Steckdosen ohne Messung …). Ein Tag zählt,
+  wenn der Smart Meter mindestens 22,5 Stunden aufgezeichnet hat (Lücken zusammen höchstens
+  30 Minuten); Tage davor zeigen nur die einzeln gemessenen Teile.
+* **Prognosen, Börse, Konzept:** Der Haushalt (alles außer der Wärmepumpe) ist das Mittel der
+  letzten bis zu 28 vollständigen Tage (Haus minus Wärmepumpe), saisonal bereinigt.
+* **Profil:** Tagesprofil, Wochentage und Wärmekarte zeigen das ganze Haus über dieselben Tage;
+  das Tagesprofil ist aufgeteilt in Wärmepumpe, Smart Home und Rest.
+
+**Zählerablesungen** (Setup → 🔢 Stromzähler & Smart Meter) prüfen jetzt den Smart Meter. Trag
+Datum, **Uhrzeit**, den Bezug (1.8.0) und – wenn du magst – die Einspeisung (2.8.0) ein. Für jeden
+Zeitraum zwischen zwei Ablesungen zeigt die App, was dein Zähler und was der Smart Meter gezählt
+haben (der Smart-Meter-Stand wird auf die Minute der Ablesung interpoliert):
+
+| Zeichen | Bedeutung |
+|---|---|
+| ✓ | höchstens 2 % Unterschied (mindestens 1 kWh Spielraum, weil viele Zähler nur ganze kWh zeigen) – zwei geeichte Zähler an derselben Leitung liegen meist innerhalb von 1–2 % |
+| ≈ | mehr, aber durch eine **fehlende Uhrzeit** erklärbar: Ablesungen ohne Uhrzeit (alle vor v221) gelten als 12:00 Uhr; die App rechnet aus, wie viel ein halber Tag an diesem Tag ausmachte |
+| ⚠︎ | mehr als 2 % – Ablesezeit und Zahlen prüfen. Bleibt es dabei: Sitzt der Smart Meter direkt am Hausanschluss, hängen alle Verbraucher dahinter (auch die Wärmepumpe)? |
+
+Zeiträume, die gar nicht passen (über 20 % daneben oder ein Zählerstand rückwärts), sind meist
+Tippfehler – sie zählen nicht zur Gesamtbilanz und werden eigens genannt. Ablesungen aus der Zeit
+vor der Smart-Meter-Aufzeichnung bleiben gespeichert, lassen sich aber nicht vergleichen.
+
 ## Strings vergleichen (🧵 String-Vergleich)
 
 Ein **String** ist eine Reihe von Modulen an einem MPP-Eingang des Wechselrichters (der GEN24
