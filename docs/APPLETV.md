@@ -27,10 +27,11 @@ zeigt die App höchstens 2 Hinweis-Kacheln (weitere als Zeile „+ N weitere: �
 wie darunter Platz haben.
 
 **Kinder-Routine 🧒:** Läuft eine Routine (z. B. die Abendroutine, eingerichtet in der App unter Setup →
-*Kinder-Routine*), steht links statt des Energieflusses je Kind eine Abhakliste. Mit der Fernbedienung auf eine
-Aufgabe wischen und klicken – abgehakt; noch einmal klicken nimmt den Haken zurück. Die Liste ist dieselbe wie im
-Wohn-Dashboard (die Bridge führt sie). Wer alles geschafft hat, bekommt Konfetti und einen ⭐. Während die Liste
-zu sehen ist, liegt der Fokus meist auf einer Aufgabe – für die Einstellungen nach oben rechts zum ⚙︎ wischen.
+*Kinder-Routine*), steht rechts statt der Raumliste je Kind eine Abhakliste (die Energie links bleibt sichtbar;
+ein Raum, um den man sich kümmern sollte, erscheint weiter als Hinweis-Kachel). Der Fokus der Fernbedienung
+startet auf der ersten offenen Aufgabe, sonst vom ⚙︎ nach unten wischen. Klicken hakt ab, noch einmal klicken nimmt
+den Haken zurück. Die Liste ist dieselbe wie im Wohn-Dashboard (die Bridge führt sie). Wer alles geschafft hat,
+bekommt Konfetti und einen ⭐.
 
 **Radio 📻:** Sender, die du in der App unter Setup → *Radio auf dem Apple TV* eingetragen hast, stehen rechts
 oben als Knöpfe. Hinwischen und klicken spielt den Sender in der App selbst – das Dashboard bleibt vorne;
@@ -45,7 +46,8 @@ Ventil, kein Wunsch. Gemeldet wird ab 1,5 K darunter (gleiche Regel im Wohn-Dash
 
 **Feier-Modus 🎉:** An einem Geburtstag oder Jahrestag steht oben in der Mitte ein Glückwunsch, das Farblicht
 wird pink, violett und gold, und Konfetti fliegt – beim Start aus den unteren Ecken, alle 10 Minuten als
-Schauer von oben und jedes Mal, wenn du ▶︎❙❙ drückst. Eingeschaltet wird er in der App unter Setup →
+Schauer von oben, jedes Mal, wenn du ▶︎❙❙ drückst, und wenn du den Glückwunsch anklickst (vom ⚙︎ nach links
+wischen). Eingeschaltet wird er in der App unter Setup →
 🖥️ Wohn-Dashboard → *Feier-Modus* („Heute feiern“, mit eigenem Glückwunsch) oder von selbst durch einen
 ganztägigen Kalendertermin mit „Geburtstag“, „Birthday“, „Doğum Günü“, „Jahrestag“, „Hochzeitstag“ oder 🎂 im
 Namen. Um Mitternacht ist er vorbei. Mit „Bewegung reduzieren“ (Bedienungshilfen) gibt es den Glückwunsch ohne

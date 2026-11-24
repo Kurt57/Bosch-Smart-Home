@@ -153,6 +153,10 @@ struct DashboardView: View {
     var openSettings: () -> Void
     /// counts Play/Pause presses – on a party day each one fires confetti
     var confettiTick = 0
+    /// clicks on the birthday banner – confetti again
+    @State private var partyTaps = 0
+    /// where the remote's focus starts: the first open task of a running routine
+    @Namespace private var focusNS
 
     /// 0 … 1: how much of the house the sun covers right now (warms the light).
     private var warmth: Double {
@@ -179,43 +183,49 @@ struct DashboardView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(AmbientBackground(warmth: warmth, party: model.payload?.party != nil).ignoresSafeArea())
-        .overlay(ConfettiLayer(partyID: model.payload?.party?.title, tick: confettiTick, celebrate: finishedKids))
+        .overlay(ConfettiLayer(partyID: model.payload?.party?.title, tick: confettiTick + partyTaps,
+                               celebrate: finishedKids))
     }
 
     @ViewBuilder private var page: some View {
         VStack(alignment: .leading, spacing: 24) {
             HeaderView(header: model.payload?.header, stand: model.payload?.stand,
                        error: model.error, lastOK: model.lastOK, openSettings: openSettings,
-                       party: model.payload?.party)
+                       party: model.payload?.party, partyTap: { partyTaps += 1 })
             if let payload = model.payload {
                 HStack(alignment: .top, spacing: 36) {
+                    // energy always stays in view
                     VStack(alignment: .leading, spacing: 22) {
                         AlertsView(alerts: payload.alerts ?? [], more: payload.more ?? 0)
-                        if let routine = payload.routines?.first {
-                            // while the children's routine runs it gets the room of the energy cards
-                            RoutineCard(routine: routine) { kid, item in
-                                Task { await model.toggleRoutine(routine: routine.id, kid: kid, item: item) }
-                            }
+                        if let live = payload.live, !(payload.flow ?? []).isEmpty {
+                            EnergyFlowCard(live: live, tiles: payload.flow ?? [], note: payload.note)
                         } else {
-                            if let live = payload.live, !(payload.flow ?? []).isEmpty {
-                                EnergyFlowCard(live: live, tiles: payload.flow ?? [], note: payload.note)
-                            } else {
-                                TileSection(title: "Energie jetzt", tiles: payload.flow ?? [], big: true,
-                                            note: payload.note)
-                            }
-                            TileSection(title: "Heute", tiles: payload.today ?? [], big: false, note: nil)
+                            TileSection(title: "Energie jetzt", tiles: payload.flow ?? [], big: true,
+                                        note: payload.note)
                         }
+                        TileSection(title: "Heute", tiles: payload.today ?? [], big: false, note: nil)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    // the column under the gear: everything the remote can select lives here,
+                    // so swiping down from the top right always lands on it
                     VStack(alignment: .leading, spacing: 22) {
                         if !(payload.radio ?? []).isEmpty || radio.playingID != nil {
                             RadioBar(stations: payload.radio ?? [], radio: radio)
                         }
-                        RoomsView(rooms: payload.rooms ?? [])
+                        if let routine = payload.routines?.first {
+                            // while the children's routine runs it takes the place of the rooms
+                            // (a room that needs attention still shows up as a tile on the left)
+                            RoutineCard(routine: routine, focusNS: focusNS) { kid, item in
+                                Task { await model.toggleRoutine(routine: routine.id, kid: kid, item: item) }
+                            }
+                        } else {
+                            RoomsView(rooms: payload.rooms ?? [])
+                        }
                         EventsView(events: payload.events ?? [])
                     }
                     .frame(width: 620, alignment: .topLeading)
                     .frame(maxHeight: .infinity, alignment: .top)
+                    .focusSection()
                 }
                 .frame(maxHeight: .infinity, alignment: .top)
                 // numbers roll to their new value on every refresh
@@ -227,6 +237,7 @@ struct DashboardView: View {
                 Spacer(minLength: 0)
             }
         }
+        .focusScope(focusNS)
     }
 }
 
@@ -273,6 +284,8 @@ struct HeaderView: View {
     let lastOK: Date?
     let openSettings: () -> Void
     let party: TVParty?
+    /// click on the birthday banner
+    var partyTap: () -> Void = {}
 
     private var statusLine: String {
         if let e = error {
@@ -305,7 +318,12 @@ struct HeaderView: View {
             .layoutPriority(1)
             if let party {
                 Spacer(minLength: 12)
-                PartyBanner(party: party)
+                // a button: select it with the remote and click – confetti again
+                Button(action: partyTap) {
+                    PartyBanner(party: party)
+                }
+                .buttonStyle(PartyBannerStyle())
+                .focusEffectDisabled()
                 Spacer(minLength: 12)
             } else {
                 Spacer()
@@ -924,39 +942,58 @@ private struct RadioChipBody: View {
 
 // MARK: - Kinder-Routine
 
-/// The children's checklist (e.g. the evening routine) – one column per child,
-/// every task a button: select it with the remote and click to tick it off.
+/// The children's checklist (e.g. the evening routine) in the right column, under
+/// the gear: one block per child, the tasks two by two, every task a button –
+/// select it with the remote and click to tick it off. The remote starts on the
+/// first open task.
 struct RoutineCard: View {
     let routine: TVRoutine
+    let focusNS: Namespace.ID
     let toggle: (String, String) -> Void          // kid, item
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(alignment: .firstTextBaseline) {
-                Text((routine.emoji ?? "✅") + " " + routine.title)
-                    .font(.system(size: 34, weight: .bold, design: .rounded))
-                Spacer()
-                Text(routine.all_done == true ? "Alle fertig – gute Nacht! 🌙"
-                     : (routine.to.map { "bis " + $0 + " Uhr" } ?? ""))
-                    .font(.system(size: 22, weight: .medium))
-                    .foregroundStyle(routine.all_done == true ? Palette.green : Color.secondary)
-            }
-            HStack(alignment: .top, spacing: 22) {
-                ForEach(routine.kids) { kid in
-                    KidColumn(kid: kid) { item in toggle(kid.id, item) }
-                }
+    /// "kid/item" of the task the remote should start on: the first one not done
+    private var firstOpen: String? {
+        for kid in routine.kids {
+            if let item = kid.items.first(where: { !$0.done }) {
+                return kid.id + "/" + item.id
             }
         }
-        .padding(24)
+        return nil
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .firstTextBaseline) {
+                Text((routine.emoji ?? "✅") + " " + routine.title)
+                    .font(.system(size: 30, weight: .bold, design: .rounded))
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                Text(routine.all_done == true ? "Alle fertig – gute Nacht! 🌙"
+                     : (routine.to.map { "bis " + $0 + " Uhr" } ?? ""))
+                    .font(.system(size: 20, weight: .medium))
+                    .foregroundStyle(routine.all_done == true ? Palette.green : Color.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            ForEach(routine.kids) { kid in
+                KidBlock(kid: kid, focusNS: focusNS, preferred: firstOpen) { item in toggle(kid.id, item) }
+            }
+        }
+        .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
         .glassCard()
+        .focusSection()
     }
 }
 
-private struct KidColumn: View {
+private struct KidBlock: View {
     let kid: TVRoutineKid
+    let focusNS: Namespace.ID
+    let preferred: String?
     let toggle: (String) -> Void
     private let maxItems = 8
+    private let columns = [GridItem(.flexible(), spacing: 10, alignment: .topLeading),
+                           GridItem(.flexible(), spacing: 10, alignment: .topLeading)]
 
     private var line: String {
         let stars = String(repeating: "⭐", count: min(7, kid.stars ?? 0))
@@ -966,57 +1003,69 @@ private struct KidColumn: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 14) {
+            HStack(spacing: 12) {
                 Text(kid.emoji ?? "🙂")
-                    .font(.system(size: 46))
-                VStack(alignment: .leading, spacing: 2) {
+                    .font(.system(size: 38))
+                VStack(alignment: .leading, spacing: 0) {
                     Text(kid.name)
-                        .font(.system(size: 30, weight: .bold, design: .rounded))
+                        .font(.system(size: 26, weight: .bold, design: .rounded))
                         .lineLimit(1)
                     Text(line)
-                        .font(.system(size: 20, weight: .medium))
+                        .font(.system(size: 18, weight: .medium))
                         .foregroundStyle(kid.complete ? Palette.green : Color.secondary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)
                 }
                 Spacer(minLength: 0)
+                Ring(fraction: Double(kid.done) / Double(max(1, kid.total)), color: Palette.green)
+                    .frame(width: 34, height: 34)
             }
-            ProgressView(value: Double(kid.done), total: Double(max(1, kid.total)))
-                .tint(Palette.green)
-            ForEach(Array(kid.items.prefix(maxItems))) { item in
-                Button {
-                    toggle(item.id)
-                } label: {
-                    HStack(spacing: 14) {
-                        Image(systemName: item.done ? "checkmark.circle.fill" : "circle")
-                            .font(.system(size: 32, weight: .semibold))
-                            .foregroundStyle(item.done ? Palette.green : Color.secondary)
-                        if let e = item.emoji, !e.isEmpty {
-                            Text(e).font(.system(size: 30))
-                        }
-                        Text(item.text)
-                            .font(.system(size: 27, weight: .semibold))
-                            .strikethrough(item.done)
-                            .foregroundStyle(item.done ? Color.secondary : Color.primary)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.7)
-                        Spacer(minLength: 0)
+            LazyVGrid(columns: columns, alignment: .leading, spacing: 10) {
+                ForEach(Array(kid.items.prefix(maxItems))) { item in
+                    Button {
+                        toggle(item.id)
+                    } label: {
+                        RoutineItemLabel(item: item)
                     }
+                    .buttonStyle(RoutineItemStyle())
+                    .focusEffectDisabled()
+                    .prefersDefaultFocus(preferred == kid.id + "/" + item.id, in: focusNS)
                 }
-                .buttonStyle(RoutineItemStyle())
-                .focusEffectDisabled()
             }
             if kid.items.count > maxItems {
                 Text("+ \(kid.items.count - maxItems) weitere im Wohn-Dashboard")
-                    .font(.system(size: 18))
+                    .font(.system(size: 17))
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(18)
+        .padding(14)
         .frame(maxWidth: .infinity, alignment: .topLeading)
-        .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(Color.white.opacity(0.05)))
-        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous)
+        .background(RoundedRectangle(cornerRadius: 20, style: .continuous).fill(Color.white.opacity(0.05)))
+        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous)
             .strokeBorder(kid.complete ? Palette.green.opacity(0.8) : Color.clear, lineWidth: 2))
+    }
+}
+
+private struct RoutineItemLabel: View {
+    let item: TVRoutineItem
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: item.done ? "checkmark.circle.fill" : "circle")
+                .font(.system(size: 26, weight: .semibold))
+                .foregroundStyle(item.done ? Palette.green : Color.secondary)
+            if let e = item.emoji, !e.isEmpty {
+                Text(e).font(.system(size: 24))
+            }
+            Text(item.text)
+                .font(.system(size: 22, weight: .semibold))
+                .strikethrough(item.done)
+                .foregroundStyle(item.done ? Color.secondary : Color.primary)
+                .lineLimit(2)
+                .minimumScaleFactor(0.8)
+                .multilineTextAlignment(.leading)
+            Spacer(minLength: 0)
+        }
     }
 }
 
@@ -1034,12 +1083,12 @@ private struct RoutineItemBody: View {
 
     var body: some View {
         configuration.label
-            .padding(.horizontal, 16)
-            .padding(.vertical, 9)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color.white.opacity(isFocused ? 0.24 : 0.06)))
-            .scaleEffect(configuration.isPressed ? 0.97 : (isFocused ? 1.03 : 1))
+            .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.white.opacity(isFocused ? 0.26 : 0.06)))
+            .scaleEffect(configuration.isPressed ? 0.97 : (isFocused ? 1.05 : 1))
             .shadow(color: Color.black.opacity(isFocused ? 0.35 : 0), radius: 12, y: 6)
             .animation(.easeOut(duration: 0.15), value: isFocused)
     }
@@ -1076,6 +1125,25 @@ private func partyTitle(_ s: String) -> Text {
         result = result + piece(run, emoji: runIsEmoji)
     }
     return result
+}
+
+/// The banner as a button: grows a little and lights up while the remote points at it.
+private struct PartyBannerStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        PartyBannerBody(configuration: configuration)
+    }
+}
+
+private struct PartyBannerBody: View {
+    let configuration: ButtonStyleConfiguration
+    @Environment(\.isFocused) private var isFocused
+
+    var body: some View {
+        configuration.label
+            .brightness(isFocused ? 0.08 : 0)
+            .scaleEffect(configuration.isPressed ? 0.96 : (isFocused ? 1.06 : 1))
+            .animation(.easeOut(duration: 0.15), value: isFocused)
+    }
 }
 
 /// Birthday (or anniversary) greeting in the middle of the header.
