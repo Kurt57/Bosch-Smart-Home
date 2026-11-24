@@ -77,6 +77,13 @@ Tools wie Sideloadly oder atvloadly können das Erneuern übernehmen (Drittanbie
 
 ### Gut zu wissen
 
+* **Musik (YouTube Music):** Die App kann sie nicht selbst abspielen – tvOS hat keinen Web-Player (kein WebKit),
+  und YouTube Music bietet keine Schnittstelle zum Abspielen in fremden Apps. Damit Musik läuft, während das
+  Dashboard zu sehen ist: Musik am iPhone/iPad in der YouTube-Music-App starten und per **AirPlay an den
+  HomePod** schicken (im Wohn-Dashboard über die Musik-Kacheln, siehe [DASHBOARD.md](DASHBOARD.md)). Das Apple TV
+  ist daran nicht beteiligt und zeigt weiter das Dashboard; die App selbst macht keinen Ton und unterbricht
+  nichts.
+
 * Die Bridge nimmt nur Verbindungen aus dem Heimnetz bzw. per VPN an (siehe
   [FERNZUGRIFF.md](FERNZUGRIFF.md)) – das Apple TV steht ja im Heimnetz.
 * Ist die Bridge nicht erreichbar, bleibt der letzte Stand stehen, oben steht der Grund und die Uhrzeit.

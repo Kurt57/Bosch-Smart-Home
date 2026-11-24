@@ -2,6 +2,8 @@ import SwiftUI
 
 // Where the bridge is: the same address as in Safari on the iPhone, e.g.
 // 192.168.2.20:8090, mac-name.local:8090 or a Tailscale name.
+// Shown as a full-screen cover with its own opaque background – otherwise
+// tvOS lets the dashboard shine through and the page looks muddled.
 struct SettingsView: View {
     @Binding var bridgeURL: String
     @Binding var keepAwake: Bool
@@ -9,7 +11,10 @@ struct SettingsView: View {
     @State private var draft: String = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 34) {
+        VStack(alignment: .leading, spacing: 30) {
+            Label("Einstellungen", systemImage: "gearshape.fill")
+                .font(.system(size: 26, weight: .semibold))
+                .foregroundStyle(.secondary)
             Text("Adresse der Bridge")
                 .font(.system(size: 48, weight: .bold))
             Text("Wie im Safari am iPhone, z. B. 192.168.2.20:8090 oder mac-name.local:8090. " +
@@ -38,9 +43,12 @@ struct SettingsView: View {
             Text("Tipp: ▶︎❙❙ auf der Fernbedienung lädt die Werte sofort neu.")
                 .font(.system(size: 22))
                 .foregroundStyle(.secondary)
-            Spacer()
         }
-        .padding(80)
+        .padding(56)
+        .frame(maxWidth: 1300, alignment: .leading)
+        .glassCard(36)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(AmbientBackground(warmth: 0).ignoresSafeArea())
         .onAppear { draft = bridgeURL }
     }
 }
