@@ -11351,8 +11351,13 @@ class Handler(BaseHTTPRequestHandler):
                 cal = compute_calendar(self.ctx, 7)
             except Exception:
                 cal = None
-            return compute_tv(rooms, wsince, hp.get("outdoor_c"), self._fronius_payload(), hp, cal,
-                              self._settings_load(), now)
+            st = self._settings_load()
+            out = compute_tv(rooms, wsince, hp.get("outdoor_c"), self._fronius_payload(), hp, cal, st, now)
+            try:
+                out["routines"] = compute_routines(self.store, st, now)["routines"]
+            except Exception:
+                out["routines"] = []
+            return out
         return self.ctx.calc_get(("tv",), 20, build)
 
     def _health(self) -> dict:
@@ -11851,6 +11856,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._post_meter(body)
             if parsed.path == "/api/meter/delete":
                 return self._post_meter_delete(body)
+            if parsed.path == "/api/routine/toggle":
+                return self._post_routine(body, "toggle")
+            if parsed.path == "/api/routine/reset":
+                return self._post_routine(body, "reset")
             if parsed.path == "/api/observation/start":
                 return self._post_observation_start(body)
             if parsed.path == "/api/observation/stop":
@@ -12534,6 +12543,28 @@ class Handler(BaseHTTPRequestHandler):
         self.store.meter_upsert(ts, kwh, str(body.get("note") or "")[:120], exp_kwh, bool(body.get("timed")))
         return self._send_json(self._meter_payload())
 
+    def _post_routine(self, body, action: str):
+        """Kinder-Routine: tick a task (from the wall dashboard, the app or the
+        Apple TV's remote) or clear today's ticks; answers with the new state."""
+        st = self._settings_load()
+        rid = str(body.get("routine") or "")
+        kid = str(body.get("kid") or "") or None
+        try:
+            if action == "toggle":
+                if not kid:
+                    raise ValueError("Welches Kind?")
+                d = body.get("done")
+                changed = routine_toggle(self.store, st, rid, kid, str(body.get("item") or ""),
+                                         None if d is None else bool(d))
+            else:
+                routine_reset(self.store, st, rid, kid)
+                changed = {"routine": rid, "kid": kid, "reset": True}
+        except ValueError as exc:
+            return self._send_json({"ok": False, "error": str(exc)}, 400)
+        self.ctx.calc_clear("tv")                  # the TVs see the tick on their next poll
+        return self._send_json({**compute_routines(self.store, st, include_all=bool(body.get("all"))),
+                                "changed": changed})
+
     def _post_meter_delete(self, body):
         try:
             ts = int(body.get("ts"))
@@ -12972,6 +13003,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json(self._appliances_payload())
             if path == "/api/meter":
                 return self._send_json(self._meter_payload())
+            if path == "/api/routine":
+                return self._send_json(compute_routines(self.store, self._settings_load(),
+                                                        include_all=qs.get("all", ["0"])[0] == "1"))
             if path == "/api/products":
                 prods = self.store.products_list() or PRODUCT_CATALOG
                 return self._send_json({"products": prods,
@@ -13737,6 +13771,206 @@ def bridge_note_start(store: "Store") -> None:
         data["update_from"] = last_start["rev"]
     store.event_add("start", data)
     store.events_prune()
+
+
+# --------------------------------------------------------------------------- #
+# Kinder-Routine: what the children still have to do – e.g. the evening
+# routine – as a checklist per child on the wall dashboard and the Apple TV
+# (ticked off there with the remote). The lists come from the synced settings
+# (bhe_routine, typed in Setup – the names live only there, never in the
+# repository); what is ticked off lives in the store, per routine and day.
+# A child that finishes gets confetti and a star (⭐ = finished days, last 7).
+# --------------------------------------------------------------------------- #
+ROUTINE_STATE_KEY = "routine_state"     # kv: {"<routine>|<day>": {kid: {item: ts}}}
+ROUTINE_HIST_KEY = "routine_hist"       # kv: {"<day>": {routine: [kid, …]}} – finished (⭐)
+ROUTINE_LOCK = threading.Lock()
+ROUTINE_KID_EMOJI = ("🦊", "🐻", "🐼", "🦄")
+ROUTINE_DEFAULT_ITEMS = ("🧸 Zimmer aufräumen\n🎒 Tasche für morgen packen\n👕 Schlafanzug anziehen\n"
+                         "🪥 Zähne putzen\n🚽 Noch mal aufs Klo\n📖 Buch aussuchen")
+ROUTINE_MAX_ITEMS = 12
+
+
+def _hhmm(s, default: int) -> int:
+    """'18:30' → minutes after midnight (default when unreadable)."""
+    m = re.match(r"^\s*(\d{1,2})[:.](\d{2})\s*$", str(s or ""))
+    if not m or int(m.group(1)) > 23 or int(m.group(2)) > 59:
+        return default
+    return int(m.group(1)) * 60 + int(m.group(2))
+
+
+def _fmt_hhmm(m: int) -> str:
+    return f"{m // 60:02d}:{m % 60:02d}"
+
+
+def _kv_json(store: "Store", key: str) -> dict:
+    try:
+        d = json.loads(store.kv_get(key) or "{}")
+        return d if isinstance(d, dict) else {}
+    except (TypeError, ValueError):
+        return {}
+
+
+def routine_config(st: dict | None) -> dict:
+    """The routine setup from the synced settings, cleaned: {on, kids, routines}."""
+    try:
+        raw = json.loads((st or {}).get("bhe_routine") or "{}")
+    except (TypeError, ValueError):
+        raw = {}
+    raw = raw if isinstance(raw, dict) else {}
+    kids = []
+    for i, k in enumerate((raw.get("kids") or [])[:4]):
+        if isinstance(k, dict):
+            kids.append({"id": f"k{i + 1}", "name": " ".join(str(k.get("name") or "").split())[:24] or f"Kind {i + 1}",
+                         "emoji": str(k.get("emoji") or "")[:8] or ROUTINE_KID_EMOJI[i]})
+    if not kids:
+        kids = [{"id": "k1", "name": "Kind 1", "emoji": "🦊"}, {"id": "k2", "name": "Kind 2", "emoji": "🐻"}]
+    routines = []
+    for r in (raw.get("routines") or [])[:4]:
+        rid = re.sub(r"[^a-z0-9_-]", "", str((r or {}).get("id") or "").lower())[:20] if isinstance(r, dict) else ""
+        if rid and all(x["id"] != rid for x in routines):
+            routines.append({"id": rid, "title": " ".join(str(r.get("title") or "Routine").split())[:40],
+                             "emoji": str(r.get("emoji") or "")[:8],
+                             "from": _hhmm(r.get("from"), 18 * 60 + 30), "to": _hhmm(r.get("to"), 20 * 60 + 30),
+                             "items": str(r.get("items") or "")[:4000]})
+    if not routines:
+        routines = [{"id": "abend", "title": "Abendroutine", "emoji": "🌙", "from": 18 * 60 + 30,
+                     "to": 20 * 60 + 30, "items": ROUTINE_DEFAULT_ITEMS}]
+    return {"on": bool(raw.get("on")), "kids": kids, "routines": routines}
+
+
+def _routine_items(text: str, kids: list) -> dict:
+    """One task per line, an emoji in front optional; "Name: task" is for that
+    child only. The id comes from the words, so a new emoji keeps the tick."""
+    names = {k["name"].lower(): k["id"] for k in kids}
+    out = {k["id"]: [] for k in kids}
+    for raw in str(text or "").splitlines():
+        line = " ".join(raw.split())
+        if not line or line.startswith("#"):
+            continue
+        who = None
+        m = re.match(r"^([^:]{1,24}):\s*(\S.*)$", line)
+        if m and m.group(1).strip().lower() in names:
+            who, line = names[m.group(1).strip().lower()], m.group(2).strip()
+        head, _, rest = line.partition(" ")
+        emoji, words = (head, rest.strip()) if rest.strip() and not any(c.isalnum() for c in head) else ("", line)
+        iid = hashlib.sha1(words.lower().encode("utf-8")).hexdigest()[:10]
+        for k in kids:
+            lst = out[k["id"]]
+            if (who is None or who == k["id"]) and len(lst) < ROUTINE_MAX_ITEMS and all(x["id"] != iid for x in lst):
+                lst.append({"id": iid, "text": words[:60], "emoji": emoji[:8]})
+    return out
+
+
+def _routine_day(r: dict, nd: datetime, test: bool) -> str | None:
+    """The day this routine runs for right now (YYYY-MM-DD), None outside its
+    time. A window past midnight (20:00–00:30) belongs to the evening it began."""
+    mins, f, t = nd.hour * 60 + nd.minute, r["from"], r["to"]
+    today = nd.strftime("%Y-%m-%d")
+    if test:
+        return today
+    if f < t:
+        return today if f <= mins < t else None
+    if f > t:
+        if mins >= f:
+            return today
+        if mins < t:
+            return (nd - timedelta(days=1)).strftime("%Y-%m-%d")
+    return None
+
+
+def compute_routines(store: "Store", st: dict | None, now: float | None = None, include_all: bool = False) -> dict:
+    """The routines running now (include_all: also outside their time, for the
+    Setup preview) with every child's tasks, what is done and the ⭐."""
+    now = float(now or time.time())
+    cfg = routine_config(st)
+    nd = datetime.fromtimestamp(now)
+    today = nd.strftime("%Y-%m-%d")
+    test = str((st or {}).get("bhe_routine_test") or "") == today
+    state, hist = _kv_json(store, ROUTINE_STATE_KEY), _kv_json(store, ROUTINE_HIST_KEY)
+    week = [(nd - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
+    out = []
+    for r in cfg["routines"] if (cfg["on"] or include_all) else []:
+        day = _routine_day(r, nd, test)
+        active = day is not None and cfg["on"]
+        if not active and not include_all:
+            continue
+        day = day or today
+        items, done = _routine_items(r["items"], cfg["kids"]), state.get(f"{r['id']}|{day}") or {}
+        kids = []
+        for k in cfg["kids"]:
+            if not items[k["id"]]:
+                continue
+            dk = done.get(k["id"]) or {}
+            rows = [{**it, "done": it["id"] in dk} for it in items[k["id"]]]
+            n = sum(1 for x in rows if x["done"])
+            kids.append({"id": k["id"], "name": k["name"], "emoji": k["emoji"], "items": rows, "done": n,
+                         "total": len(rows), "complete": n == len(rows),
+                         "stars": sum(1 for d in week if k["id"] in ((hist.get(d) or {}).get(r["id"]) or []))})
+        if kids:
+            out.append({"id": r["id"], "title": r["title"], "emoji": r["emoji"], "day": day, "active": active,
+                        "from": _fmt_hhmm(r["from"]), "to": _fmt_hhmm(r["to"]), "kids": kids,
+                        "all_done": all(k["complete"] for k in kids)})
+    return {"ok": True, "on": cfg["on"], "test": test, "routines": out, "ts": int(now)}
+
+
+def _routine_target(st: dict | None, rid: str, kid: str | None, now: float):
+    cfg = routine_config(st)
+    r = next((x for x in cfg["routines"] if x["id"] == rid), None)
+    if r is None:
+        raise ValueError("Diese Routine gibt es nicht.")
+    if kid is not None and all(k["id"] != kid for k in cfg["kids"]):
+        raise ValueError("Dieses Kind gibt es nicht.")
+    nd = datetime.fromtimestamp(now)
+    test = str((st or {}).get("bhe_routine_test") or "") == nd.strftime("%Y-%m-%d")
+    return r, cfg, _routine_day(r, nd, test) or nd.strftime("%Y-%m-%d"), nd
+
+
+def _routine_save(store: "Store", state: dict, hist: dict, nd: datetime):
+    cut, hcut = (nd - timedelta(days=3)).strftime("%Y-%m-%d"), (nd - timedelta(days=60)).strftime("%Y-%m-%d")
+    store.kv_set(ROUTINE_STATE_KEY, json.dumps({k: v for k, v in state.items() if k.split("|", 1)[-1] >= cut}))
+    store.kv_set(ROUTINE_HIST_KEY, json.dumps({d: v for d, v in hist.items() if d >= hcut}))
+
+
+def routine_toggle(store: "Store", st: dict | None, rid: str, kid: str, item: str, done=None,
+                   now: float | None = None) -> dict:
+    """Tick (or untick) one task of one child; done=None flips it."""
+    now = float(now or time.time())
+    r, cfg, day, nd = _routine_target(st, rid, kid, now)
+    items = _routine_items(r["items"], cfg["kids"]).get(kid) or []
+    if all(i["id"] != item for i in items):
+        raise ValueError("Diese Aufgabe gibt es nicht (mehr) – Liste neu laden.")
+    with ROUTINE_LOCK:
+        state, hist = _kv_json(store, ROUTINE_STATE_KEY), _kv_json(store, ROUTINE_HIST_KEY)
+        dk = state.setdefault(f"{rid}|{day}", {}).setdefault(kid, {})
+        new = (item not in dk) if done is None else bool(done)
+        if new:
+            dk[item] = int(now)
+        else:
+            dk.pop(item, None)
+        complete = all(i["id"] in dk for i in items)
+        fin = hist.setdefault(day, {}).setdefault(rid, [])
+        if complete and kid not in fin:
+            fin.append(kid)
+        elif not complete and kid in fin:
+            fin.remove(kid)
+        _routine_save(store, state, hist, nd)
+    return {"routine": rid, "kid": kid, "item": item, "done": new, "complete": complete}
+
+
+def routine_reset(store: "Store", st: dict | None, rid: str, kid: str | None = None, now: float | None = None):
+    """Clear today's ticks of a routine (one child or all) – for trying it out."""
+    now = float(now or time.time())
+    _r, _cfg, day, nd = _routine_target(st, rid, kid, now)
+    with ROUTINE_LOCK:
+        state, hist = _kv_json(store, ROUTINE_STATE_KEY), _kv_json(store, ROUTINE_HIST_KEY)
+        inst = state.get(f"{rid}|{day}") or {}
+        fin = (hist.get(day) or {}).get(rid) or []
+        for k in ([kid] if kid else list(inst.keys()) + list(fin)):
+            inst.pop(k, None)
+            if k in fin:
+                fin.remove(k)
+        state[f"{rid}|{day}"] = inst
+        _routine_save(store, state, hist, nd)
 
 
 # --------------------------------------------------------------------------- #

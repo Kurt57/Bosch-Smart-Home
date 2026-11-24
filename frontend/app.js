@@ -94,8 +94,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v225';   // short tag shown always-on in the header
-const APP_VERSION = 'v225 · 2026-11-24 · „gespart“ mit Akku-Anteil: Strom, der heute in den Akku ging und noch nicht verbraucht ist, steht jetzt neben „gespart“ als „+ ≈ … € im Akku“ – auf dem Apple TV (ohne neuen App-Build, kommt von der Bridge), im Wohn-Dashboard, im PV-Tab und in der Geldzeile des Banners. „gespart“ zählt Akku-Strom erst, wenn er das Haus versorgt; der Hinweis zeigt, um wie viel der Wert noch wächst (Ladestand-Zuwachs seit Mitternacht × Akkugröße × 95 % × Arbeitspreis). ' +
+const APP_BUILD = 'v226';   // short tag shown always-on in the header
+const APP_VERSION = 'v226 · 2026-11-24 · Kinder-Routine 🧒: Abhakliste je Kind (Setup → Kinder-Routine: zwei Namen mit Tier-Symbol, Uhrzeit, Aufgaben – „Name: Aufgabe“ gilt nur für ein Kind). Zur Abendzeit im Wohn-Dashboard mit großen Tippflächen und auf dem Apple TV zum Abhaken mit der Fernbedienung (dort statt des Energieflusses); die Bridge führt die Häkchen, alle Geräte zeigen denselben Stand. Wer fertig ist, bekommt Konfetti, ein Lob und einen ⭐ (geschaffte Abende der letzten 7 Tage). Zum Ausprobieren: „Heute zum Testen den ganzen Tag zeigen“ und „Häkchen von heute löschen“. Apple TV: Einstellungsseite mit eigenem Hintergrund. ' +
+  'v225 · 2026-11-24 ·„gespart“ mit Akku-Anteil: Strom, der heute in den Akku ging und noch nicht verbraucht ist, steht jetzt neben „gespart“ als „+ ≈ … € im Akku“ – auf dem Apple TV (ohne neuen App-Build, kommt von der Bridge), im Wohn-Dashboard, im PV-Tab und in der Geldzeile des Banners. „gespart“ zählt Akku-Strom erst, wenn er das Haus versorgt; der Hinweis zeigt, um wie viel der Wert noch wächst (Ladestand-Zuwachs seit Mitternacht × Akkugröße × 95 % × Arbeitspreis). ' +
   'v224 · 2026-11-24 · Feier-Modus 🎉: An Geburtstagen und Jahrestagen zeigen Wohn-Dashboard, Haus-Dashboard und Apple TV einen Glückwunsch mit Konfetti (beim Öffnen, alle 10 Minuten, beim Antippen bzw. mit ▶︎❙❙), dazu ein Farblicht in Partyfarben; die App grüßt am Feiertag einmal pro Gerät. Einschalten unter Setup → Wohn-Dashboard → Feier-Modus („Heute feiern“, eigener Glückwunsch möglich) oder von selbst durch einen ganztägigen Kalendertermin mit „Geburtstag“, „Birthday“, „Doğum Günü“, „Jahrestag“, „Hochzeitstag“ oder 🎂. Endet um Mitternacht; „Beenden“ schaltet ihn für den Tag ab. Mit „Bewegung reduzieren“ ohne Konfetti. ' +
   'v223 · 2026-11-24 · Apple TV aufgehübscht: Glaskarten über einem wandernden Farblicht (warm, wenn die Sonne das Haus versorgt), Uhr und Zahlen rollen auf neue Werte, „Energie jetzt“ als bewegtes Flussbild (Haus in der Mitte, Punkte laufen in Flussrichtung), Ringe für Autarkie und Eigenverbrauch, Thermometer-Balken je Raum, Zahnrad ohne große Fokusfläche. „Zu kalt“ misst jetzt gegen deine Wunschtemperatur aus dem Abgleich, sonst gegen das Thermostat-Soll, aber höchstens 22 °C – ein Thermostat auf 25 °C ist bei Wärmepumpen meist ein offenes Ventil (Apple TV und Wohn-Dashboard). ' +
   'v222 · 2026-11-24 · PV: Durch Tage blättern – in „Erzeugung & Verbrauch“ (Zeitraum „Tag“, bisher „Heute“) und im „String-Vergleich“ mit ◀ ▶ und „→ heute“. Beide Karten zeigen denselben Tag: Kennzahlen, Sonnenstrom und Strombezug je Stunde, die String-Kurven im 15-Minuten-Raster und (im Zeitraum „Tag“) die String-Tabelle mit Hinweisen; dazu das Tageswetter. Die Bridge rechnet einen früheren Tag mit derselben Tagesrechnung wie heute (GET /api/pv?days=1&day=…). Tage ohne gespeicherte Werte werden benannt. ' +
@@ -2949,13 +2950,14 @@ const VIEW_RENDERS = {
   pv: ['renderPvReal', 'renderPv', 'renderCarbon', 'renderSmart'],          // the last two also fill PV fields
   borse: ['renderBorse', 'renderCarbon', 'renderSmart'],
   konzept: ['renderKonzept'],
-  settings: ['renderSettings', 'renderMeter', 'renderFroniusSetup', 'renderCalSetup', 'renderAwbSetup', 'renderDashSetup', 'renderSchoolSetup'],
+  settings: ['renderSettings', 'renderMeter', 'renderFroniusSetup', 'renderCalSetup', 'renderAwbSetup', 'renderDashSetup', 'renderSchoolSetup',
+    'renderRoutineSetup'],
 };
 // the order renderAll() always used (some renders build on earlier ones)
 const RENDER_ORDER = ['renderOverview', 'paintNowLine', 'renderToday', 'renderHistory', 'renderHeatpump', 'renderProfile', 'renderPv',
   'renderSettings', 'renderAppliances', 'renderMeter', 'renderBorse', 'renderCarbon', 'renderSmart', 'renderKonzept',
   'renderHa', 'renderDarkLoad', 'renderSwitches', 'renderHeatExtras', 'renderFlow', 'renderPvReal', 'renderFroniusSetup',
-  'renderCalSetup', 'renderAwbSetup', 'renderDashSetup', 'renderSchoolSetup'];
+  'renderCalSetup', 'renderAwbSetup', 'renderDashSetup', 'renderSchoolSetup', 'renderRoutineSetup'];
 const _viewStale = {};                 // view -> Set of render names waiting for that view
 function activeView() { const el = document.querySelector('.view.on'); return el ? el.id.replace(/^v-/, '') : 'overview'; }
 function _runRender(name) {
@@ -3450,7 +3452,7 @@ async function kioskPullSettings() {
   try {
     const r = await api('/api/settings'), srv = (r && r.settings) || {}, unsent = _unsentGet();
     ['bhe_kiosk_win_s', 'bhe_kiosk_bin_days', 'bhe_school_plan', 'bhe_school_title', 'bhe_music',
-     'bhe_party_date', 'bhe_party_text', 'bhe_party_off', 'bhe_party_auto'].forEach(k => {
+     'bhe_party_date', 'bhe_party_text', 'bhe_party_off', 'bhe_party_auto', 'bhe_routine', 'bhe_routine_test'].forEach(k => {
       if (srv[k] != null && !(k in unsent)) { try { localStorage.setItem(k, srv[k]); _lastSynced[k] = srv[k]; } catch (e) {} }
     });
   } catch (e) { /* keep the local values */ }
@@ -3915,6 +3917,139 @@ function partyToast(P) {
   partyToast._t = setTimeout(() => { t.classList.add('out'); partyToast._t2 = setTimeout(() => { t.hidden = true; }, 600); }, 6500);
 }
 
+/* ---- Kinder-Routine: Abhakliste je Kind (Regeln und Häkchen in der Bridge) -----
+ * The lists come from Setup (bhe_routine, synced; names only there), the bridge
+ * decides what runs now (/api/routine) and keeps the ticks, so the wall iPad,
+ * the phone and the Apple TV (remote) all tick the same list. A child that is
+ * done gets confetti and a ⭐ (finished days, last 7). */
+const ROUTINE_LS = 'bhe_routine', ROUTINE_TEST_LS = 'bhe_routine_test';
+const ROUTINE_EMOJI = ['🦊', '🐻', '🐼', '🦄', '🐯', '🐸', '🐰', '🐶', '🐱', '🦁', '🐨', '🐵', '🐢', '🦖', '🐬', '🦋'];
+const ROUTINE_DEFAULT_ITEMS = '🧸 Zimmer aufräumen\n🎒 Tasche für morgen packen\n👕 Schlafanzug anziehen\n🪥 Zähne putzen\n🚽 Noch mal aufs Klo\n📖 Buch aussuchen';
+let _routine = null, _routineT = null, _routineBusy = 0;    // _routineBusy: taps still on their way to the bridge
+const _routineSeen = {};                 // "routine|day|kid" → was complete (confetti only on the change)
+function routineCfg() {
+  let c = null; try { c = JSON.parse(localStorage.getItem(ROUTINE_LS) || 'null'); } catch (e) {}
+  c = c && typeof c === 'object' ? c : {};
+  const kids = [0, 1].map(i => { const k = (Array.isArray(c.kids) && c.kids[i]) || {};
+    return { name: String(k.name || ''), emoji: k.emoji || ROUTINE_EMOJI[i] }; });
+  const r = (Array.isArray(c.routines) && c.routines.find(x => x && x.id === 'abend')) || {};
+  return { on: !!c.on, kids, abend: { from: r.from || '18:30', to: r.to || '20:30', items: r.items != null ? String(r.items) : ROUTINE_DEFAULT_ITEMS } };
+}
+function routineHtml(R) {
+  const kids = (R.kids || []).map(k => {
+    const pct = k.total ? Math.round(100 * k.done / k.total) : 0;
+    const stars = k.stars ? ' · ' + '⭐'.repeat(Math.min(7, k.stars)) : '';
+    return `<div class="krt-kid${k.complete ? ' ok' : ''}"><div class="krt-kh"><span class="em">${esc(k.emoji || '🙂')}</span><div>` +
+      `<b>${esc(k.name)}</b><small>${k.complete ? 'Alles erledigt – super! 🎉' : `${k.done} von ${k.total} erledigt`}${stars}</small></div></div>` +
+      `<div class="krt-bar"><i style="width:${pct}%"></i></div>` +
+      (k.items || []).map(it => `<button class="krt-it${it.done ? ' done' : ''}" data-rt="${esc(R.id)}" data-kid="${esc(k.id)}" ` +
+        `data-item="${esc(it.id)}" aria-pressed="${it.done ? 'true' : 'false'}"><span class="bx">${it.done ? '✓' : ''}</span>` +
+        (it.emoji ? `<span class="ie">${esc(it.emoji)}</span>` : '') + `<span class="tx">${esc(it.text)}</span></button>`).join('') +
+      '</div>';
+  }).join('');
+  const sub = R.all_done ? 'Alle fertig – gute Nacht! 🌙' : R.active ? `bis ${esc(R.to)} Uhr` : `Vorschau – läuft ${esc(R.from)}–${esc(R.to)} Uhr`;
+  return `<div class="krt-card"><div class="krt-head"><span>${esc(R.emoji || '✅')} ${esc(R.title)}</span><small>${sub}</small></div>` +
+    `<div class="krt-kids">${kids}</div></div>`;
+}
+// confetti + a word of praise when a child has just finished (not on the first look)
+function routineCelebrate(data) {
+  ((data && data.routines) || []).forEach(R => (R.kids || []).forEach(k => {
+    const key = `${R.id}|${R.day}|${k.id}`, was = _routineSeen[key];
+    _routineSeen[key] = !!k.complete;
+    if (was === false && k.complete) {
+      confetti('burst');
+      partyToast({ emoji: k.emoji || '⭐', title: `Super, ${k.name}! Alles erledigt` });
+    }
+  }));
+}
+async function routineLoad() {
+  try { const r = await api('/api/routine'); if (r && r.ok && !_routineBusy) { _routine = r; routineCelebrate(r); } } catch (e) { /* keep */ }
+  try { if (!_routineBusy) renderKioskRoutine(); } catch (e) { console.error(e); }
+}
+function renderKioskRoutine() {
+  const el = $('kiosk-routine'); if (!el) return;
+  const list = (_routine && _routine.routines) || [];
+  const h = list.map(routineHtml).join('');
+  if (el.innerHTML !== h) el.innerHTML = h;
+}
+// tap: tick at once on screen, then let the bridge confirm (it holds the truth)
+async function routineTap(btn, all) {
+  if (!btn || btn.classList.contains('busy')) return null;
+  const on = !btn.classList.contains('done');
+  _routineBusy++;
+  btn.classList.add('busy'); btn.classList.toggle('done', on);
+  const bx = btn.querySelector('.bx'); if (bx) bx.textContent = on ? '✓' : '';
+  try {
+    const r = await postJSON('/api/routine/toggle', { routine: btn.dataset.rt, kid: btn.dataset.kid, item: btn.dataset.item, done: on, all: !!all });
+    if (r && r.ok) { routineCelebrate(r); if (!all) _routine = r; return r; }
+    throw new Error((r && r.error) || 'nicht gespeichert');
+  } catch (e) {
+    btn.classList.toggle('done', !on); if (bx) bx.textContent = !on ? '✓' : '';
+    const note = $('krt-note'); if (note && all) note.textContent = '⚠︎ ' + (e.message || e);
+    return null;
+  } finally { btn.classList.remove('busy'); _routineBusy = Math.max(0, _routineBusy - 1); }
+}
+// Setup → Kinder-Routine
+function renderRoutineSetup() {
+  const C = routineCfg(), on = $('krt-on'); if (!on) return;
+  [1, 2].forEach(i => {
+    const sel = $('krt-k' + i + 'e'), inp = $('krt-k' + i), k = C.kids[i - 1];
+    if (sel && !sel.options.length) sel.innerHTML = ROUTINE_EMOJI.map(e => `<option>${e}</option>`).join('');
+    if (sel && document.activeElement !== sel) sel.value = ROUTINE_EMOJI.includes(k.emoji) ? k.emoji : ROUTINE_EMOJI[i - 1];
+    if (inp && document.activeElement !== inp) inp.value = k.name;
+  });
+  if (document.activeElement !== on) on.checked = C.on;
+  const f = $('krt-from'), t = $('krt-to'), it = $('krt-items');
+  if (f && document.activeElement !== f) f.value = C.abend.from;
+  if (t && document.activeElement !== t) t.value = C.abend.to;
+  if (it && document.activeElement !== it) it.value = C.abend.items;
+  const test = $('krt-test'), today = ymdLocal(new Date());
+  if (test) test.textContent = localStorage.getItem(ROUTINE_TEST_LS) === today ? 'Test beenden (wieder nur zur Uhrzeit)' : 'Heute zum Testen den ganzen Tag zeigen';
+  routinePreview();
+}
+async function routinePreview() {
+  const box = $('krt-preview'), note = $('krt-note'); if (!box) return;
+  let r = null; try { r = await api('/api/routine?all=1'); } catch (e) { /* bridge not reachable */ }
+  if (!r || !r.ok) { box.innerHTML = ''; if (note) note.textContent = 'Nur möglich, wenn die Seite von der Bridge geöffnet ist.'; return; }
+  routineCelebrate(r);
+  box.innerHTML = (r.routines || []).map(routineHtml).join('');
+  const C = routineCfg(), today = ymdLocal(new Date()), testing = localStorage.getItem(ROUTINE_TEST_LS) === today;
+  if (note) note.innerHTML = !C.on ? 'Aus – zum Einschalten oben den Haken setzen und speichern.'
+    : testing ? '🧪 Test: heute den ganzen Tag im Wohn-Dashboard und auf dem Apple TV zu sehen.'
+    : (r.routines || []).some(x => x.active) ? '✅ Läuft gerade – im Wohn-Dashboard und auf dem Apple TV zu sehen.'
+    : `Erscheint täglich von ${esc(C.abend.from)} bis ${esc(C.abend.to)} Uhr. Häkchen hier in der Vorschau zählen wie echte.`;
+}
+async function routineSaveSetup() {
+  const cfg = { on: $('krt-on').checked,
+    kids: [1, 2].map(i => ({ name: ($('krt-k' + i).value || '').replace(/\s+/g, ' ').trim().slice(0, 24), emoji: $('krt-k' + i + 'e').value })),
+    routines: [{ id: 'abend', title: 'Abendroutine', emoji: '🌙', from: $('krt-from').value || '18:30', to: $('krt-to').value || '20:30',
+      items: String($('krt-items').value || '').slice(0, 4000) }] };
+  const v = JSON.stringify(cfg);
+  try { localStorage.setItem(ROUTINE_LS, v); } catch (e) {}
+  const note = $('krt-note'); if (note) note.textContent = 'Speichere …';
+  try { await postJSON('/api/settings', { settings: { [ROUTINE_LS]: v } }); } catch (e) { /* the sweep sends it again */ }
+  renderRoutineSetup();
+  if (kioskOpen()) routineLoad();
+}
+function initRoutineSetup() {
+  const s = $('krt-save'); if (s) s.addEventListener('click', routineSaveSetup);
+  const t = $('krt-test'); if (t) t.addEventListener('click', async () => {
+    const today = ymdLocal(new Date()), v = localStorage.getItem(ROUTINE_TEST_LS) === today ? '' : today;
+    try { localStorage.setItem(ROUTINE_TEST_LS, v); } catch (e) {}
+    try { await postJSON('/api/settings', { settings: { [ROUTINE_TEST_LS]: v } }); } catch (e) {}
+    renderRoutineSetup();
+  });
+  const x = $('krt-reset'); if (x) x.addEventListener('click', async () => {
+    try { await postJSON('/api/routine/reset', { routine: 'abend', all: true }); } catch (e) {}
+    routinePreview();
+  });
+  const p = $('krt-preview'); if (p) p.addEventListener('click', async e => {
+    const b = e.target.closest('.krt-it'); if (!b) return;
+    const r = await routineTap(b, true);
+    if (r && !_routineBusy) p.innerHTML = (r.routines || []).map(routineHtml).join('');
+  });
+}
+
 function paintKiosk() {
   const rooms = _kioskRooms || [];
   // away toggle button state
@@ -3942,6 +4077,7 @@ function paintKiosk() {
     const kk = $('kiosk'); if (kk) kk.classList.toggle('party', !!_partyKey);
   } catch (e) { console.error(e); }
   try { renderKioskAlerts(); } catch (e) { console.error(e); }
+  try { renderKioskRoutine(); } catch (e) { console.error(e); }
   try { renderKioskCal(); } catch (e) { console.error(e); }
   try { renderKioskSchool(); } catch (e) { console.error(e); }
   try { renderKioskMusic(); } catch (e) { console.error(e); }
@@ -4006,6 +4142,7 @@ async function kioskLoadData() {
   try { await loadFronius(true); } catch (e) {}
   try { await kioskLoadCal(); } catch (e) {}
   try { await kioskPullSettings(); } catch (e) {}
+  try { await routineLoad(); } catch (e) {}
   paintKiosk();
 }
 function kioskTick() {
@@ -4037,11 +4174,15 @@ function openKiosk() {
   kioskTick(); paintKiosk(); kioskLoadData();
   clearInterval(_kioskClockT); _kioskClockT = setInterval(kioskTick, 1000);
   clearInterval(_kioskDataT); _kioskDataT = setInterval(kioskLoadData, 60000);
+  clearInterval(_routineT); _routineT = setInterval(() => {
+    if (kioskOpen() && !document.hidden && _routine && (_routine.routines || []).length) routineLoad();
+  }, 15000);
 }
 function closeKiosk() {
   const k = $('kiosk'); if (k) k.hidden = true;
   partyStop();
   clearInterval(_kioskClockT); clearInterval(_kioskDataT); _kioskClockT = _kioskDataT = null;
+  clearInterval(_routineT); _routineT = null;
   clearTimeout(_kioskWinT); _kioskWinT = null;
   try { const m = document.querySelector('meta[name="theme-color"]'); if (m) m.setAttribute('content', '#0b1220'); } catch (e) {}
   try { if (location.hash === '#dash') history.replaceState(null, '', location.pathname + location.search); } catch (e) {}
@@ -12906,6 +13047,11 @@ function init() {
     paintKiosk();
   });
   const kp = $('kiosk-party'); if (kp) kp.addEventListener('click', () => confetti('burst'));
+  const kr = $('kiosk-routine'); if (kr) kr.addEventListener('click', async e => {
+    const b = e.target.closest('.krt-it'); if (!b) return;
+    const r = await routineTap(b, false);
+    if (r && !_routineBusy) renderKioskRoutine();        // quick taps: draw once the last one is confirmed
+  });
   const km = $('kiosk-music'); if (km) km.addEventListener('click', e => {      // HomePod chips (per device)
     const r = e.target.closest('[data-mroom]'); if (!r) return;
     e.preventDefault();
@@ -15639,6 +15785,7 @@ function initMusicSetup() {
 }
 function initCalSetup() {
   initDashSetup();
+  initRoutineSetup();
   initSchoolSetup();
   initMusicSetup();
   const b = $('cal-save'); if (b) b.addEventListener('click', calSave);

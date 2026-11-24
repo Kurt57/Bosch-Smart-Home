@@ -70,6 +70,35 @@ struct TVParty: Decodable, Equatable {
     let emoji: String?
 }
 
+/// Kinder-Routine: one task of one child.
+struct TVRoutineItem: Decodable, Identifiable {
+    let id: String
+    let text: String
+    let emoji: String?
+    let done: Bool
+}
+
+struct TVRoutineKid: Decodable, Identifiable {
+    let id: String
+    let name: String
+    let emoji: String?
+    let items: [TVRoutineItem]
+    let done: Int
+    let total: Int
+    let complete: Bool
+    let stars: Int?             // finished days in the last 7
+}
+
+/// A routine running now (e.g. the evening routine) – ticked off with the remote.
+struct TVRoutine: Decodable, Identifiable {
+    let id: String
+    let title: String
+    let emoji: String?
+    let to: String?
+    let kids: [TVRoutineKid]
+    let all_done: Bool?
+}
+
 struct TVPayload: Decodable {
     let ok: Bool?
     let ts: Int?
@@ -83,6 +112,7 @@ struct TVPayload: Decodable {
     let rooms: [TVRoom]?
     let events: [TVEvent]?
     let party: TVParty?
+    let routines: [TVRoutine]?
     let note: String?
 }
 
@@ -136,8 +166,30 @@ final class DashboardModel: ObservableObject {
         }
     }
 
+    /// Kinder-Routine: tick (or untick) a task with the remote; the bridge keeps
+    /// the list, so the wall dashboard shows the same at once.
+    func toggleRoutine(routine: String, kid: String, item: String) async {
+        let raw = UserDefaults.standard.string(forKey: "bridgeURL") ?? ""
+        guard let url = DashboardModel.endpoint(raw, path: "/api/routine/toggle") else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 10
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["routine": routine, "kid": kid, "item": item])
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            if code != 200 {
+                error = "Abhaken hat nicht geklappt (Fehler \(code))."
+            }
+        } catch {
+            self.error = "Abhaken hat nicht geklappt – \(error.localizedDescription)"
+        }
+        await load()
+    }
+
     /// "192.168.2.20", "mac.local:8090", "http://…/" → http://…:8090/api/tv
-    static func endpoint(_ raw: String) -> URL? {
+    static func endpoint(_ raw: String, path: String = "/api/tv") -> URL? {
         var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if s.isEmpty { return nil }
         let lower = s.lowercased()
@@ -149,6 +201,6 @@ final class DashboardModel: ObservableObject {
         if base.port == nil && base.scheme == "http" && base.path.isEmpty {
             s += ":8090"            // the bridge's default port
         }
-        return URL(string: s + "/api/tv")
+        return URL(string: s + path)
     }
 }

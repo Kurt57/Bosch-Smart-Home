@@ -99,6 +99,21 @@ um Mitternacht endet er ohnehin. Der Text wird wie die übrigen Einstellungen in
 (`bhe_party_text`, `bhe_party_date`, `bhe_party_off`, `bhe_party_auto`) – nichts davon steht im Repository.
 Mit „Bewegung reduzieren“ in den Bedienungshilfen gibt es den Glückwunsch ohne Konfetti.
 
+## Kinder-Routine
+
+Setup → **🧒 Kinder-Routine**: einschalten, zwei Namen (mit Tier-Symbol), Uhrzeit (Abendroutine, Standard
+18:30–20:30) und die Aufgaben – eine pro Zeile, ein Emoji vorne ist erlaubt. Eine Zeile `Name: Aufgabe` gilt nur
+für dieses Kind (z. B. den Schulranzen nur für das Schulkind). Während der Uhrzeit steht im Wohn-Dashboard je Kind
+eine **Abhakliste** mit großen Tippflächen und Fortschrittsbalken, auf dem Apple TV dieselbe Liste zum Abhaken mit
+der Fernbedienung. Die Bridge führt die Häkchen (`GET /api/routine`, `POST /api/routine/toggle`), deshalb sehen
+iPad, Handy und Fernseher immer denselben Stand; um Mitternacht beginnt ein neuer Tag (eine Routine über
+Mitternacht gehört zum Abend, an dem sie begann). Wer fertig ist, bekommt Konfetti, ein Lob und einen **⭐** –
+gezählt werden die geschafften Abende der letzten 7 Tage.
+
+Zum Ausprobieren: **„Heute zum Testen den ganzen Tag zeigen“** (endet um Mitternacht oder per Knopf),
+**„Häkchen von heute löschen“** setzt zurück; die Vorschau im Setup lässt sich wie die echte Liste abhaken.
+Namen und Aufgaben stehen nur in den Einstellungen der Bridge (`bhe_routine`), nicht im Repository.
+
 ## Apple TV
 
 Das Wohn-Dashboard gibt es auch als eigene **Apple-TV-App** (Ordner `appletv/`, Daten über `GET /api/tv`) –

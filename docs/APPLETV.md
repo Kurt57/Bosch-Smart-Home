@@ -26,6 +26,12 @@ Fernbedienung lädt sofort neu; ein Klick auf die Mitte der Fernbedienung öffne
 zeigt die App höchstens 2 Hinweis-Kacheln (weitere als Zeile „+ N weitere: …“), 9 Räume und so viele Termine,
 wie darunter Platz haben.
 
+**Kinder-Routine 🧒:** Läuft eine Routine (z. B. die Abendroutine, eingerichtet in der App unter Setup →
+*Kinder-Routine*), steht links statt des Energieflusses je Kind eine Abhakliste. Mit der Fernbedienung auf eine
+Aufgabe wischen und klicken – abgehakt; noch einmal klicken nimmt den Haken zurück. Die Liste ist dieselbe wie im
+Wohn-Dashboard (die Bridge führt sie). Wer alles geschafft hat, bekommt Konfetti und einen ⭐. Während die Liste
+zu sehen ist, liegt der Fokus meist auf einer Aufgabe – für die Einstellungen nach oben rechts zum ⚙︎ wischen.
+
 **„Zu kalt“** misst gegen deine **Wunschtemperatur** je Raum (Wärme → Abgleich), sonst gegen das Thermostat-Soll –
 aber höchstens 22 °C: Steht ein Thermostat auf 25 °C, ist das bei einer Wärmepumpe meist ein absichtlich offenes
 Ventil, kein Wunsch. Gemeldet wird ab 1,5 K darunter (gleiche Regel im Wohn-Dashboard).

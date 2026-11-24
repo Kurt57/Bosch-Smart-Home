@@ -336,6 +336,34 @@
   #party-toast b{white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0}
   #party-toast.out{opacity:0; transform:translate(-50%,-20px)}
   @keyframes pt-in{from{opacity:0; transform:translate(-50%,-24px) scale(.9)}}
+  /* Kinder-Routine (wall dashboard; the Setup preview falls back to the app colours) */
+  #kiosk-routine:not(:empty){margin:16px 0}
+  .krt-card{border-radius:22px; padding:18px 20px; background:var(--k-card, var(--card)); box-shadow:var(--k-shadow, none);
+    border:1px solid var(--k-sep, var(--line))}
+  .krt-card + .krt-card{margin-top:14px}
+  .krt-head{display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; font-size:22px; font-weight:800; margin-bottom:12px}
+  .krt-head small{font-size:14px; font-weight:500; color:var(--k-sub, var(--muted)); margin-left:auto}
+  .krt-kids{display:grid; grid-template-columns:repeat(auto-fit, minmax(250px, 1fr)); gap:14px}
+  .krt-kid{border-radius:18px; padding:14px; background:var(--k-card2, var(--card2)); transition:box-shadow .3s}
+  .krt-kid.ok{box-shadow:0 0 0 2px var(--kb-green, var(--good, #30d158)) inset}
+  .krt-kh{display:flex; align-items:center; gap:10px; margin-bottom:8px}
+  .krt-kh .em{font-size:34px; line-height:1}
+  .krt-kh b{font-size:21px; display:block}
+  .krt-kh small{display:block; font-size:13px; color:var(--k-sub, var(--muted)); margin-top:2px}
+  .krt-bar{height:8px; border-radius:4px; background:var(--k-sep, var(--line)); overflow:hidden; margin:0 0 8px}
+  .krt-bar i{display:block; height:100%; background:var(--kb-green, var(--good, #30d158)); transition:width .4s}
+  .krt-it{display:flex; align-items:center; gap:12px; width:100%; min-height:56px; padding:8px 12px; margin:6px 0 0;
+    border-radius:14px; border:none; background:var(--k-card, var(--card)); color:var(--k-ink, var(--ink));
+    font:600 19px/1.25 -apple-system,system-ui,sans-serif; text-align:left; cursor:pointer;
+    -webkit-tap-highlight-color:transparent; transition:transform .12s, opacity .25s}
+  .krt-it:active{transform:scale(.97)}
+  .krt-it .bx{flex:none; width:30px; height:30px; border-radius:50%; border:2.5px solid var(--k-faint, var(--muted));
+    display:grid; place-items:center; font-size:17px; font-weight:800; color:#fff; box-sizing:border-box}
+  .krt-it .ie{font-size:24px; flex:none}
+  .krt-it.done{opacity:.55}
+  .krt-it.done .tx{text-decoration:line-through}
+  .krt-it.done .bx{background:var(--kb-green, var(--good, #30d158)); border-color:transparent}
+  .krt-it.busy{opacity:.7}
   #party-setup{margin-top:14px; padding-top:12px; border-top:1px solid var(--line)}
   #party-setup h3{margin:0 0 6px; font-size:15px}
   @media (prefers-reduced-motion: reduce){ .pt-emo,.pt-txt b,#party-toast{animation:none} }
@@ -2085,6 +2113,41 @@
       </div>
     </div>
 
+    <div class="card" id="routine-card">
+      <h2>🧒 Kinder-Routine</h2>
+      <div class="note" style="line-height:1.6; margin-bottom:10px">
+        Was die Kinder noch erledigen müssen – als <b>Abhakliste je Kind</b> im Wohn-Dashboard (antippen) und auf dem
+        <b>Apple TV</b> (mit der Fernbedienung abhaken). Wer alles geschafft hat, bekommt Konfetti und einen ⭐
+        (gezählt über 7 Tage). Namen und Aufgaben bleiben in der Bridge, wie die übrigen Einstellungen.
+      </div>
+      <label style="display:flex; align-items:center; gap:8px; cursor:pointer"><input type="checkbox" id="krt-on"
+        style="width:auto; margin:0"> Kinder-Routine anzeigen</label>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px">
+        <div style="flex:1; min-width:150px"><label for="krt-k1">Kind 1</label>
+          <div style="display:flex; gap:6px"><select id="krt-k1e" aria-label="Symbol Kind 1" style="width:64px"></select>
+            <input id="krt-k1" maxlength="24" autocomplete="off" placeholder="Name"></div></div>
+        <div style="flex:1; min-width:150px"><label for="krt-k2">Kind 2</label>
+          <div style="display:flex; gap:6px"><select id="krt-k2e" aria-label="Symbol Kind 2" style="width:64px"></select>
+            <input id="krt-k2" maxlength="24" autocomplete="off" placeholder="Name"></div></div>
+      </div>
+      <h3 style="margin:14px 0 4px; font-size:15px">🌙 Abendroutine</h3>
+      <div style="display:flex; gap:8px; flex-wrap:wrap">
+        <div style="flex:1; min-width:120px"><label for="krt-from">von</label><input id="krt-from" type="time" value="18:30"></div>
+        <div style="flex:1; min-width:120px"><label for="krt-to">bis</label><input id="krt-to" type="time" value="20:30"></div>
+      </div>
+      <label for="krt-items">Aufgaben – eine pro Zeile, ein Emoji vorne ist erlaubt. Nur für ein Kind: <code>Name: Aufgabe</code></label>
+      <textarea id="krt-items" rows="7" autocomplete="off" spellcheck="false"
+        style="width:100%; box-sizing:border-box; padding:10px 12px; border-radius:12px; border:1px solid var(--line);
+               background:var(--card2); color:var(--ink); font:14px/1.5 -apple-system,system-ui,sans-serif; resize:vertical"></textarea>
+      <button class="btn" id="krt-save">✅ Speichern</button>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px">
+        <button class="btn sec" id="krt-test" style="width:auto; margin-top:0">Heute zum Testen den ganzen Tag zeigen</button>
+        <button class="btn sec" id="krt-reset" style="width:auto; margin-top:0">Häkchen von heute löschen</button>
+      </div>
+      <div class="note" id="krt-note" style="margin-top:8px"></div>
+      <div id="krt-preview" style="margin-top:10px"></div>
+    </div>
+
     <div class="card" id="school-card">
       <h2>🎒 Stundenplan im Wohn-Dashboard</h2>
       <div class="note" style="line-height:1.6; margin-bottom:10px">
@@ -2489,6 +2552,7 @@
   <div id="kiosk-alerts"></div>
   <div id="kiosk-warn"></div>
   <div id="kiosk-banner"></div>
+  <div id="kiosk-routine"></div>
   <div id="kiosk-cs">
     <div id="kiosk-cal"></div>
     <div id="kiosk-school"></div>
