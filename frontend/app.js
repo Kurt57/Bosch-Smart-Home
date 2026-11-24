@@ -94,8 +94,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v222';   // short tag shown always-on in the header
-const APP_VERSION = 'v222 · 2026-11-24 · PV: Durch Tage blättern – in „Erzeugung & Verbrauch“ (Zeitraum „Tag“, bisher „Heute“) und im „String-Vergleich“ mit ◀ ▶ und „→ heute“. Beide Karten zeigen denselben Tag: Kennzahlen, Sonnenstrom und Strombezug je Stunde, die String-Kurven im 15-Minuten-Raster und (im Zeitraum „Tag“) die String-Tabelle mit Hinweisen; dazu das Tageswetter. Die Bridge rechnet einen früheren Tag mit derselben Tagesrechnung wie heute (GET /api/pv?days=1&day=…). Tage ohne gespeicherte Werte werden benannt. ' +
+const APP_BUILD = 'v223';   // short tag shown always-on in the header
+const APP_VERSION = 'v223 · 2026-11-24 · Apple TV aufgehübscht: Glaskarten über einem wandernden Farblicht (warm, wenn die Sonne das Haus versorgt), Uhr und Zahlen rollen auf neue Werte, „Energie jetzt“ als bewegtes Flussbild (Haus in der Mitte, Punkte laufen in Flussrichtung), Ringe für Autarkie und Eigenverbrauch, Thermometer-Balken je Raum, Zahnrad ohne große Fokusfläche. „Zu kalt“ misst jetzt gegen deine Wunschtemperatur aus dem Abgleich, sonst gegen das Thermostat-Soll, aber höchstens 22 °C – ein Thermostat auf 25 °C ist bei Wärmepumpen meist ein offenes Ventil (Apple TV und Wohn-Dashboard). ' +
+  'v222 · 2026-11-24 · PV: Durch Tage blättern – in „Erzeugung & Verbrauch“ (Zeitraum „Tag“, bisher „Heute“) und im „String-Vergleich“ mit ◀ ▶ und „→ heute“. Beide Karten zeigen denselben Tag: Kennzahlen, Sonnenstrom und Strombezug je Stunde, die String-Kurven im 15-Minuten-Raster und (im Zeitraum „Tag“) die String-Tabelle mit Hinweisen; dazu das Tageswetter. Die Bridge rechnet einen früheren Tag mit derselben Tagesrechnung wie heute (GET /api/pv?days=1&day=…). Tage ohne gespeicherte Werte werden benannt. ' +
   'v221 · 2026-11-22 · Smart Meter als Gesamtverbrauch – überall: Seit der PV-Anlage zählt dein Stromzähler nur noch den Netzbezug, den ganzen Hausverbrauch misst der Smart Meter. Übersicht (14 Tage), Heute (Summe, Stunden, Kreis), Verlauf (Tage, Monate, Tagesansicht je Stunde, Anteile mit Jahreshochrechnung) und Profil (Tagesprofil, Wochentage, Wärmekarte) zeigen jetzt das ganze Haus – aufgeteilt in Wärmepumpe, Smart-Home-Geräte und grau „nicht einzeln gemessen“. Prognosen, Börse und Konzept rechnen den Haushalt aus den letzten vollständigen Smart-Meter-Tagen (Haus minus Wärmepumpe) statt aus den Zählerablesungen. Setup → 🔢 Stromzähler & Smart Meter: Ablesungen mit Uhrzeit und optional Einspeisung (2.8.0); die App vergleicht jeden Zeitraum mit dem Smart Meter (✓ bis 2 %, ≈ erklärbar durch fehlende Uhrzeit, ⚠︎ darüber; Tippfehler werden erkannt). Behoben: Verlauf „Tag“ brach ab (zwei gleichnamige Funktionen); die Tagesansicht zeigt jetzt auch Wärmepumpe und Rest. ' +
   'v220 · 2026-11-22 · PV-Tab: neue Kachel „Verbrauch heute“ (im Verlauf „Verbrauch“ für den gewählten Zeitraum) – derselbe Wert wie „Verbrauch“ in Fronius Solar.web, zum direkten Vergleich. Eigenverbrauch und Autarkie runden nicht mehr auf „100 %“ (oder „0 %“), wenn es nicht genau so ist: 99,6 % Eigenverbrauch bei 0,1 kWh Einspeisung steht jetzt als 99,6 % da (auch im Wohn-Dashboard und auf dem Apple TV). ' +
   'v219 · 2026-11-21 · Apple TV: Das Wohn-Dashboard gibt es als eigene Apple-TV-App (Ordner appletv/, Anleitung docs/APPLETV.md – einmal mit Xcode aufs Apple TV spielen). Sie zeigt Uhr, Außentemperatur, Hinweise (Fenster offen, lüften, zu kalt, Termin gleich, Tonnen, Batterie lädt aus dem Netz, PV/Wärmepumpe ohne Werte), Energie jetzt, Heute, Räume und die nächsten Termine – fertig formuliert von der Bridge (neu: GET /api/tv, dieselben Regeln wie im Wohn-Dashboard, 20 s zwischengespeichert). Veraltete Wärmepumpen-Werte zeigt sie als „–“ statt als Stand von vor einer Stunde. Hinweis im Setup → Wohn-Dashboard. ' +
@@ -3473,8 +3474,16 @@ function kioskAlerts() {
     if ((rm.windows_open || 0) > 0) return;
     const va = ventAdvice(rm);
     if (va.lvl === 'warn') A.push({ level: 'warn', icon: '🌬️', title: `${rm.room}: lüften`, detail: va.short || va.txt });
-    if (rm.temp != null && rm.setpoint != null && rm.temp <= rm.setpoint - 1.5)
-      A.push({ level: 'info', icon: '🥶', title: `${rm.room}: zu kalt`, detail: `${fmt(rm.temp, 1)}° statt ${fmt(rm.setpoint, 0)}°` });
+    // "zu kalt" against the comfort target (Abgleich) if there is one, else the
+    // thermostat setpoint – capped at 22 °C: 25 °C on every valve is no wish but
+    // an open valve (the heat pump regulates). Same rule as the TV (/api/tv).
+    const tg = targetGet(rm.room);
+    const ref = tg != null ? tg : (rm.setpoint != null ? Math.min(rm.setpoint, KIOSK_COLD_CAP) : null);
+    if (rm.temp != null && ref != null && rm.temp <= ref - 1.5)
+      A.push({ level: 'info', icon: '🥶', title: `${rm.room}: zu kalt`, detail: tg != null
+        ? `${fmt(rm.temp, 1)}° statt ${fmt(tg, tg % 1 ? 1 : 0)}° (dein Ziel)`
+        : rm.setpoint <= KIOSK_COLD_CAP ? `${fmt(rm.temp, 1)}° statt ${fmt(rm.setpoint, 0)}°`
+        : `${fmt(rm.temp, 1)}° (Thermostat auf ${fmt(rm.setpoint, 0)}°)` });
   });
   // 3) calendar: what starts within the hour; bins the evening before / that morning
   const C = _kioskCal;
@@ -4839,6 +4848,7 @@ function roomChart(d, sel) {
 }
 let _rtsData = null, _rtsBusy = false, _rtsSel = '', _rtsDays = 2;
 /* ---- Raumtemperaturen: Balken je Raum + Ziel-Marker (Soll-Erreichung) ----- */
+const KIOSK_COLD_CAP = 22;    // a thermostat set higher is usually wide open on purpose
 function targetKey(room) { return 'bhe_target_' + room; }
 function targetGet(room) {
   try { const v = parseFloat(localStorage.getItem(targetKey(room))); if (isFinite(v) && v > 0) return v; } catch (e) {}

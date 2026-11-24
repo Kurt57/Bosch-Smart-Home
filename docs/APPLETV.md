@@ -12,19 +12,25 @@ gibt es zwei Wege:
 
 Die App zeigt Uhr, Außentemperatur, Zuhause/Abwesend, **Hinweise** (Fenster offen, lüften, Raum zu kalt,
 Termin in der nächsten Stunde, Mülltonnen, Batterie lädt aus dem Netz, PV/Wärmepumpe ohne Werte),
-**Energie jetzt** (Sonne, Haus, Batterie, Netz, Wärmepumpe), **Heute** (erzeugt, verbraucht, autark,
-Eigenverbrauch, Netzbezug, Einspeisung, gespart), die **Räume** und die nächsten **Termine**. Sie rechnet
+**Energie jetzt** als bewegtes Bild – das Haus in der Mitte, Sonne, Batterie, Netz und Wärmepumpe drumherum,
+Punkte laufen in Flussrichtung, schneller bei mehr Leistung –, **Heute** (erzeugt, verbraucht, autark und
+Eigenverbrauch mit Ring, Netzbezug, Einspeisung, gespart), die **Räume** mit Thermometer-Balken (weißer Strich =
+deine Wunschtemperatur) und die nächsten **Termine**. Glaskarten über einem langsam wandernden Farblicht, das
+warm wird, sobald die Sonne das Haus versorgt; Zahlen rollen beim Aktualisieren auf den neuen Wert. Sie rechnet
 nichts selbst: Alle 15 Sekunden holt sie `GET /api/tv` von der Bridge, dort steht alles fertig formuliert
 (dieselben Regeln wie im Wohn-Dashboard, z. B. die Fenster-Blinkschwelle und der Tonnen-Vorlauf aus dem Setup).
 Der Bildschirmschoner bleibt aus, solange die App offen ist (abschaltbar, siehe unten). ▶︎❙❙ auf der
 Fernbedienung lädt sofort neu; ein Klick auf die Mitte der Fernbedienung öffnet die Einstellungen
 (⚙︎ oben rechts: Adresse der Bridge, „Bildschirm anlassen“). Damit alles ohne Blättern auf den Fernseher passt,
-zeigt die App höchstens 4 Hinweis-Kacheln (weitere als Zeile „+ N weitere: …“), 10 Räume und so viele Termine,
+zeigt die App höchstens 2 Hinweis-Kacheln (weitere als Zeile „+ N weitere: …“), 9 Räume und so viele Termine,
 wie darunter Platz haben.
 
-Nur Standard-Schnittstellen von tvOS (SwiftUI, ab tvOS 17). **Hinweis:** Der Code ist ohne Xcode entstanden
-und noch nicht auf einem Apple TV gebaut oder getestet – meldet Xcode einen Fehler, bitte die Meldung
-weitergeben.
+**„Zu kalt“** misst gegen deine **Wunschtemperatur** je Raum (Wärme → Abgleich), sonst gegen das Thermostat-Soll –
+aber höchstens 22 °C: Steht ein Thermostat auf 25 °C, ist das bei einer Wärmepumpe meist ein absichtlich offenes
+Ventil, kein Wunsch. Gemeldet wird ab 1,5 K darunter (gleiche Regel im Wohn-Dashboard).
+
+Nur Standard-Schnittstellen von tvOS (SwiftUI, ab tvOS 17). Die erste Fassung lief im tvOS-Simulator; ändert
+sich der Code, ohne dass ich ihn bauen kann (kein Mac hier), bitte Fehlermeldungen von Xcode weitergeben.
 
 ### Installieren (einmalig, am Mac)
 

@@ -13723,6 +13723,21 @@ def _tv_num(v: float, d: int = 0) -> str:
     return s.replace(",", "§").replace(".", ",").replace("§", ".").replace("-", "−")
 
 
+TV_COLD_CAP = 22.0      # a thermostat set above this is usually wide open on purpose (the heat pump regulates)
+
+
+def _tv_cold_ref(room: str, setpoint, targets: dict):
+    """What "zu kalt" measures against: the comfort target the user entered
+    (Abgleich, ``bhe_target_<room>``), else the thermostat setpoint – capped
+    at TV_COLD_CAP, since 25 °C on every valve is no wish but an open valve."""
+    tg = targets.get(room)
+    if tg is not None:
+        return float(tg), "target"
+    if setpoint is None:
+        return None, None
+    return min(float(setpoint), TV_COLD_CAP), "setpoint"
+
+
 def _tv_pct(x) -> str:
     """A share in whole % – but never "100 %" or "0 %" unless it is exactly that."""
     p = 100.0 * float(x)
@@ -13786,6 +13801,7 @@ def compute_tv(rooms: list, window_since: dict, outdoor_c, fr: dict | None, hp: 
             return max(lo, min(hi, float(st.get(k))))
         except (TypeError, ValueError):
             return d
+    targets = _settings_targets(st)
     win_s = num("bhe_kiosk_win_s", 600.0, 1.0, 86400.0)
     bin_days = int(num("bhe_kiosk_bin_days", 1.0, 1.0, 7.0))
     away = str(st.get("bhe_kiosk_away") or "") == "1"
@@ -13822,9 +13838,12 @@ def compute_tv(rooms: list, window_since: dict, outdoor_c, fr: dict | None, hp: 
         if short:
             A.append({"level": "warn", "icon": "🌬️", "title": f"{rm.get('room')}: lüften", "detail": short})
         t, sp = rm.get("temp"), rm.get("setpoint")
-        if t is not None and sp is not None and t <= sp - 1.5:
+        ref, kind = _tv_cold_ref(rm.get("room"), sp, targets)
+        if t is not None and ref is not None and t <= ref - 1.5:
             A.append({"level": "info", "icon": "🥶", "title": f"{rm.get('room')}: zu kalt",
-                      "detail": f"{_tv_num(t, 1)}° statt {_tv_num(sp)}°"})
+                      "detail": (f"{_tv_num(t, 1)}° statt {_tv_num(ref, 1 if ref % 1 else 0)}° (dein Ziel)" if kind == "target"
+                                 else f"{_tv_num(t, 1)}° statt {_tv_num(sp, 1 if sp % 1 else 0)}°" if sp <= TV_COLD_CAP
+                                 else f"{_tv_num(t, 1)}° (Thermostat auf {_tv_num(sp, 1 if sp % 1 else 0)}°)")})
     # 3) calendar: what starts within the hour; bins the evening before / that morning
     events = (cal or {}).get("events") or []
     today = datetime.fromtimestamp(now).date()
@@ -13930,15 +13949,16 @@ def compute_tv(rooms: list, window_since: dict, outdoor_c, fr: dict | None, hp: 
     td = ((fr.get("today") or {}).get("today") or {}) if fr.get("connected") else {}
     today_tiles = []
     if td.get("load_kwh") is not None:
-        def tt(i, label, val):
-            today_tiles.append({"id": i, "label": label, "value": val})
+        def tt(i, label, val, pct=None):
+            today_tiles.append({"id": i, "label": label, "value": val,
+                                **({"pct": round(float(pct), 3)} if pct is not None else {})})
         if td.get("pv_kwh") is not None:
             tt("pv", "Sonne erzeugt", f"{_tv_num(td['pv_kwh'], 1)} kWh")
         tt("use", "Verbraucht", f"{_tv_num(td['load_kwh'], 1)} kWh")
         if td.get("autarky") is not None:
-            tt("aut", "Autark", _tv_pct(td["autarky"]))
+            tt("aut", "Autark", _tv_pct(td["autarky"]), td["autarky"])
         if td.get("self_rate") is not None:
-            tt("self", "Eigenverbrauch", _tv_pct(td["self_rate"]))
+            tt("self", "Eigenverbrauch", _tv_pct(td["self_rate"]), td["self_rate"])
         if td.get("imp_kwh") is not None:
             tt("imp", "Netzbezug", f"{_tv_num(td['imp_kwh'], 1)} kWh")
         if td.get("exp_kwh") is not None:
@@ -13960,12 +13980,19 @@ def compute_tv(rooms: list, window_since: dict, outdoor_c, fr: dict | None, hp: 
         if air != "na":
             extra.append({"good": "Luft gut", "ok": "Luft mittel", "warn": "Luft schlecht"}[air])
         t, sp = rm.get("temp"), rm.get("setpoint")
+        ref, kind = _tv_cold_ref(rm.get("room"), sp, targets)
+        # the marker on the thermometer: the wish, or a setpoint that is one
+        mark = ref if kind == "target" or (sp is not None and sp <= TV_COLD_CAP) else None
         room_rows.append({"id": f"r{i}", "name": rm.get("room") or "Raum",
                           "temp": f"{_tv_num(t, 1)}°" if t is not None else "–",
-                          "soll": f"Soll {_tv_num(sp, 1 if sp % 1 else 0)}°" if sp is not None else "",
+                          "soll": (f"Ziel {_tv_num(ref, 1 if ref % 1 else 0)}°" if kind == "target"
+                                   else f"Soll {_tv_num(sp, 1 if sp % 1 else 0)}°" if sp is not None else ""),
                           "info": " · ".join(extra),
+                          "t": round(float(t), 1) if t is not None else None,
+                          "ref": round(float(mark), 1) if mark is not None else None,
+                          "hum": round(float(rm["humidity"])) if isinstance(rm.get("humidity"), (int, float)) else None,
                           "tone": ("warn" if (rm.get("windows_open") or 0) > 0 or air == "warn"
-                                   else "cold" if t is not None and sp is not None and t <= sp - 1.5
+                                   else "cold" if t is not None and ref is not None and t <= ref - 1.5
                                    else "heat" if rm.get("heating") is True else "plain")})
 
     # upcoming dates (no bin entries – those are tiles above)
@@ -13996,8 +14023,17 @@ def compute_tv(rooms: list, window_since: dict, outdoor_c, fr: dict | None, hp: 
         if len(ev_rows) >= 8:
             break
 
+    # raw power for the animated flow picture (the texts stay in "flow")
+    live_out = None
+    if P:
+        live_out = {"pv_w": round(P["pv"]), "load_w": round(live["load_w"]) if live.get("load_w") is not None else None,
+                    "batt_w": round(live["batt_w"]) if live.get("batt_w") is not None else None,
+                    "grid_w": round(live["grid_w"]) if live.get("grid_w") is not None else None,
+                    "soc": live.get("soc"),
+                    "hp_w": round(hp.get("power_w") or 0) if hp_live else None}
+
     nowdt = datetime.fromtimestamp(now)
-    return {"ok": True, "ts": int(now), "stand": nowdt.strftime("%H:%M"),
+    return {"ok": True, "ts": int(now), "stand": nowdt.strftime("%H:%M"), "live": live_out,
             "header": {"outdoor": f"{_tv_num(outdoor_c)}°" if outdoor_c is not None else "",
                        "status": "🚪 Abwesend" if away else "🏠 Zuhause",
                        "hp": (f"WP {HP_MODE_DE.get(str(hp.get('mode') or '').lower(), '')}".strip()

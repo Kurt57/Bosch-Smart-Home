@@ -50,6 +50,9 @@ struct RootView: View {
                     showSettings = false
                     model.start()
                 }
+                .preferredColorScheme(.dark)
             }
+            // glass and text colours are made for a dark room, whatever tvOS is set to
+            .preferredColorScheme(.dark)
     }
 }

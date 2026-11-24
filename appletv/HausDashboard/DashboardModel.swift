@@ -27,6 +27,7 @@ struct TVTile: Decodable, Identifiable {
     let value: String
     let sub: String?
     let tone: String?
+    let pct: Double?            // 0 … 1 for shares (autark, Eigenverbrauch) – drawn as a ring
 }
 
 struct TVRoom: Decodable, Identifiable {
@@ -36,6 +37,20 @@ struct TVRoom: Decodable, Identifiable {
     let soll: String?
     let info: String?
     let tone: String?
+    let t: Double?              // °C, for the thermometer bar
+    let ref: Double?            // the wish (or a real setpoint) – marker on the bar
+    let hum: Double?
+}
+
+/// Power right now in W, for the animated flow picture. Fronius signs:
+/// battery > 0 discharging, < 0 charging; grid > 0 import, < 0 export.
+struct TVLive: Decodable {
+    let pv_w: Double?
+    let load_w: Double?
+    let batt_w: Double?
+    let grid_w: Double?
+    let soc: Double?
+    let hp_w: Double?
 }
 
 struct TVEvent: Decodable, Identifiable {
@@ -49,7 +64,9 @@ struct TVEvent: Decodable, Identifiable {
 
 struct TVPayload: Decodable {
     let ok: Bool?
+    let ts: Int?
     let stand: String?
+    let live: TVLive?
     let header: TVHeader?
     let alerts: [TVAlert]?
     let more: Int?
