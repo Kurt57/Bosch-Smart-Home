@@ -43,8 +43,9 @@ Du brauchst **Xcode** (kostenlos im Mac App Store) und eine **Apple-ID**.
    Team wählen; falls der Bundle Identifier schon vergeben ist, einen eigenen eintragen
    (z. B. `de.deinname.hausdashboard`).
 3. **Apple TV koppeln:** Apple TV und Mac im selben Netz. Auf dem Apple TV: Einstellungen → Fernbedienungen
-   und Geräte → **Entfernte App und Geräte**. In Xcode: Window → **Devices and Simulators** → das Apple TV
-   auswählen und den angezeigten Code eingeben.
+   und Geräte → **Remote-App und Geräte** öffnen und den Bildschirm offen lassen. In Xcode: Window →
+   **Devices and Simulators** → links unter „Discovered“ das Apple TV auswählen → **Pair** → den Code vom
+   Fernseher eingeben. Beim ersten Mal bereitet Xcode das Apple TV einige Minuten für die Entwicklung vor.
 4. Oben in Xcode das Apple TV als Ziel wählen und ▶︎ **Run**. Beim ersten Start die Adresse der Bridge
    eintragen – dieselbe wie am iPhone (z. B. `192.168.2.20:8090`, `mac-name.local:8090` oder die
    Tailscale-Adresse). Tippen geht auch übers iPhone: Es meldet sich mit einer Tastatur für das Apple TV.
