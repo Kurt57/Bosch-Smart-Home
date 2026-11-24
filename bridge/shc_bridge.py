@@ -11065,6 +11065,155 @@ def _tv_ticker(news: dict, fb: dict, now: float) -> list:
     return [{"id": f"t{i}", **x} for i, x in enumerate(out)]
 
 
+# ---- "Sonne & Wetter" for the TV: today and the next two days ----------------
+# The same forecast as the PV tab (Open-Meteo for the location set in the app,
+# bhe_pv_lat/lon) and the same calibration: the yield the installation made of
+# the sun on the last days, applied to the forecast irradiation.
+TV_WX_AGE = 900                          # s: the forecast is looked at every 15 min
+
+
+def _wx_kind(d: dict) -> tuple:
+    """How sunny a day is – by the share of daylight with sunshine, as in the PV
+    tab – plus rain/snow worth knowing: (emoji, text, share 0…1 | None)."""
+    sun, dl = d.get("sun_h"), d.get("daylight_h")
+    r = sun / dl if sun is not None and dl else None
+    if r is None:
+        ic, txt = "🌡️", "ohne Sonnendaten"
+    elif r >= 0.6:
+        ic, txt = "☀️", "sonnig"
+    elif r >= 0.35:
+        ic, txt = "🌤️", "heiter"
+    elif r >= 0.12:
+        ic, txt = "⛅", "wechselhaft"
+    else:
+        ic, txt = "☁️", "trüb"
+    if (d.get("snow_cm") or 0) >= 0.5:
+        ic, txt = "🌨️", txt + ", Schnee"
+    elif (d.get("rain_mm") or 0) >= 1:
+        txt += ", Regen"
+        if r is not None and r < 0.35:
+            ic = "🌧️"
+    elif d.get("code") in (45, 48):
+        txt += ", Nebel"
+    return ic, txt, (round(min(1.0, max(0.0, r)), 3) if r is not None else None)
+
+
+def _tv_weather_raw(ctx, st: dict | None):
+    """The forecast for the TV – the last good copy; a new one is fetched in the
+    background, so a slow weather service never holds up the screen."""
+    def num(k):
+        try:
+            v = float((st or {}).get(k))
+            return v if math.isfinite(v) else None
+        except (TypeError, ValueError):
+            return None
+    lat, lon = num("bhe_pv_lat"), num("bhe_pv_lon")
+    if ctx.mode != "demo" and (lat is None or lon is None):
+        return None
+    key = "demo" if ctx.mode == "demo" else f"{lat:.3f},{lon:.3f}"
+    ent = ctx.tv_wx_cache.get(key)
+    if ent is None or time.time() - ent["ts"] > TV_WX_AGE:
+        def run():
+            ctx.tv_wx_cache[key] = {"ts": time.time(), "data": compute_pv_weather(ctx, lat, lon, days=1)}
+        if ctx.mode == "demo" and ent is None:
+            try:
+                run()                         # demo: no network – at once
+            except Exception:
+                pass
+        else:
+            _bg_refresh(ctx, "tvwx", run)
+    ent = ctx.tv_wx_cache.get(key)
+    return ent["data"] if ent else None
+
+
+def _tv_sun_tip(hours: list, now: float, days: list) -> str | None:
+    """Today's sunniest three hours still to come – the time for the washing
+    machine & co. – or, when today has little sun left, a sunny tomorrow."""
+    h_now = datetime.fromtimestamp(now).hour
+    g = {}
+    for x in hours or []:
+        try:
+            g[int(x["h"])] = float(x.get("ghi") or 0)
+        except (KeyError, TypeError, ValueError):
+            continue
+    best, best_h = 0.0, None
+    for h in range(h_now, 22):
+        s = g.get(h, 0.0) + g.get(h + 1, 0.0) + g.get(h + 2, 0.0)
+        if s > best:
+            best, best_h = s, h
+    if best_h is not None and best / 3 >= 150:          # a fair share of full sun
+        when = f"jetzt bis {best_h + 3} Uhr" if best_h <= h_now else f"{best_h}–{best_h + 3} Uhr"
+        return f"☀️ Heute am meisten Sonne {when} – gut für Waschmaschine, Spülmaschine & Co."
+    d0 = next((x for x in days if x["label"] == "Heute"), None)
+    d1 = next((x for x in days if x["label"] == "Morgen"), None)
+    if d1 and d1.get("pv_kwh") and (d1.get("share") or 0) >= 0.35:
+        sunnier = not d0 or not d0.get("pv_kwh") or d1["pv_kwh"] >= 1.5 * d0["pv_kwh"]
+        late = not any(g.get(h, 0.0) > 50 for h in range(h_now, 24))
+        if sunnier or late:
+            return (f"☀️ Morgen {d1['text'].split(',')[0]}, ≈ {_tv_num(d1['pv_kwh'], 1)} kWh erwartet – "
+                    "Wäsche & Co. am besten morgen Mittag.")
+    return None
+
+
+def tv_weather(ctx, st: dict | None, now: float) -> dict | None:
+    """'Sonne & Wetter' for the TV: today and the next two days – the sky,
+    sunshine as a share of daylight, the yield the installation should make of
+    it – and a tip when to run the big appliances."""
+    w = _tv_weather_raw(ctx, st)
+    if not w or w.get("ok") is False:
+        return None
+    today = datetime.fromtimestamp(now).date()
+    f = (w.get("calib") or {}).get("f")
+    days = []
+    for d in w.get("daily") or []:
+        try:
+            day = datetime.strptime(d["day"], "%Y-%m-%d").date()
+        except (KeyError, TypeError, ValueError):
+            continue
+        k = (day - today).days
+        if not 0 <= k <= 2:
+            continue
+        ic, txt, share = _wx_kind(d)
+        exp = round(d["rad_kwh"] * f, 1) if f and d.get("rad_kwh") is not None else None
+        days.append({"id": d["day"], "label": {0: "Heute", 1: "Morgen"}.get(k, TV_WEEKDAYS[day.weekday()]),
+                     "icon": ic, "text": txt,
+                     "temp": (f"{_tv_num(d['tmin'])}° / {_tv_num(d['tmax'])}°"
+                              if d.get("tmin") is not None and d.get("tmax") is not None else ""),
+                     "sun": ("" if d.get("sun_h") is None else "kaum Sonne" if d["sun_h"] < 0.1
+                             else f"{_tv_num(d['sun_h'], 1)} h Sonne"),
+                     "share": share, "pv_kwh": exp,
+                     "pv": f"≈ {_tv_num(exp, 1)} kWh" if exp is not None else ""})
+    if not days:
+        return None
+    top = max([x["pv_kwh"] for x in days if x["pv_kwh"]] or [0])
+    for x in days:                       # the bars: against the sunniest of the three days
+        x["pv_frac"] = round(x["pv_kwh"] / top, 3) if top and x["pv_kwh"] else None
+    return {"days": days, "tip": _tv_sun_tip(w.get("hours") or [], now, days),
+            "note": None if f else "Ertrag: nach ein paar Tagen mit PV-Daten"}
+
+
+def _tv_weather_hooks(out: dict, fr: dict | None) -> None:
+    """Where the forecast fits into what is already on the first screen: the sky
+    next to the outdoor temperature, and 'Sonne erzeugt' measured against the
+    yield the forecast promised for today (a bar that fills during the day)."""
+    wx = out.get("weather") or {}
+    d0 = next((d for d in wx.get("days") or [] if d.get("label") == "Heute"), None)
+    if not d0:
+        return
+    if isinstance(out.get("header"), dict):
+        out["header"]["sky"] = d0["icon"]
+    fr = fr or {}
+    td = ((fr.get("today") or {}).get("today") or {}) if fr.get("connected") else {}
+    made, exp = td.get("pv_kwh"), d0.get("pv_kwh")
+    if made is None or not exp or exp < 0.5:
+        return
+    for t in out.get("today") or []:
+        if t.get("id") == "pv":
+            t["bar"] = round(min(1.0, made / exp), 3)
+            t["sub"] = (f"von ≈ {_tv_num(exp, 1)} kWh erwartet" if made < exp
+                        else f"mehr als erwartet (≈ {_tv_num(exp, 1)} kWh)")
+
+
 def compute_calendar(ctx, days: int = 7, force: bool = False, settings: dict | None = None) -> dict:
     """Events of all configured calendars from today 00:00 for `days` days –
     plus the matches of the football teams chosen in Setup (settings)."""
@@ -11227,6 +11376,7 @@ class Runtime:
         self.news_cache = {}            # feed url -> {"ts", "items", "title", "error"}
         self.football_cache = {}        # team id -> {"ts", "next", "last", "error"}
         self.radio_now_cache = {}       # stream url -> {"ts", "out"}: what plays (radio_now)
+        self.tv_wx_cache = {}           # location -> {"ts", "data"}: the TV's "Sonne & Wetter"
         self.cover_cache = {}           # "artist|title" -> {"ts", "url"}: album covers (iTunes)
         self._bg_lock = threading.Lock()
         self._bg_running: set = set()   # background refreshes in flight (news, football)
@@ -11799,11 +11949,17 @@ class Handler(BaseHTTPRequestHandler):
                 cal = compute_calendar(self.ctx, 7, settings=st)       # with the football matches
             except Exception:
                 cal = None
-            out = compute_tv(rooms, wsince, hp.get("outdoor_c"), self._fronius_payload(), hp, cal, st, now)
+            fr = self._fronius_payload()
+            out = compute_tv(rooms, wsince, hp.get("outdoor_c"), fr, hp, cal, st, now)
             try:
                 out["routines"] = compute_routines(self.store, st, now)["routines"]
             except Exception:
                 out["routines"] = []
+            try:
+                out["weather"] = tv_weather(self.ctx, st, now)
+                _tv_weather_hooks(out, fr)
+            except Exception:
+                out["weather"] = None
             try:
                 news = news_snapshot(self.ctx, st)
                 fb = football_snapshot(self.ctx, st)
@@ -14684,8 +14840,8 @@ def icy_title(url: str, timeout: float = 8.0) -> dict:
                          "application/x-mpegurl", "audio/x-scpls") \
                     or urlparse(final).path.lower().endswith((".m3u", ".m3u8", ".pls")):
                 text = f.read(65536).decode("utf-8", "replace")
-                if "#EXT-X-" in text:            # HLS: titles travel inside the segments
-                    return {"meta": False, "song": None, "name": name, "reason": "hls"}
+                if "#EXT-X-" in text:            # HLS: titles travel in the playlist or the segments
+                    return {**_hls_title(final, text, timeout), "name": name}
                 m = re.search(r"(?im)^(?:File\d+=)?\s*(https?://\S+)", text)
                 if not m:
                     return {"meta": False, "song": None, "name": name, "reason": "playlist"}
@@ -14718,6 +14874,177 @@ def icy_title(url: str, timeout: float = 8.0) -> dict:
             f.close()
             sock.close()
     return {"meta": False, "song": None, "name": name, "reason": "playlist"}
+
+
+def _hls_title(url: str, text: str, timeout: float) -> dict:
+    """Titles in an HLS stream, where the Apple TV finds them too: in the playlist
+    (#EXTINF:…,title="…" or "Artist - Title") or as ID3 tags in the newest
+    segments (packed audio inline, MPEG-TS in its metadata stream)."""
+    from urllib.parse import urljoin
+
+    def lines(t):
+        return [x.strip() for x in t.splitlines() if x.strip()]
+
+    if "#EXT-X-STREAM-INF" in text:          # a master playlist: the smallest variant is enough
+        ls, best = lines(text), None
+        for i, x in enumerate(ls):
+            if x.startswith("#EXT-X-STREAM-INF"):
+                nxt = next((y for y in ls[i + 1:] if not y.startswith("#")), None)
+                m = re.search(r"BANDWIDTH=(\d+)", x)
+                bw = int(m.group(1)) if m else 0
+                if nxt and (best is None or bw < best[0]):
+                    best = (bw, urljoin(url, nxt))
+        if not best:
+            return {"meta": False, "song": None, "reason": "hls"}
+        url = best[1]
+        text = _http_get(url, timeout=timeout, max_bytes=500_000).decode("utf-8", "replace")
+    segs, info = [], None
+    for x in lines(text):
+        if x.startswith("#EXTINF:"):
+            info = x[8:]
+        elif not x.startswith("#"):
+            segs.append((info, urljoin(url, x)))
+            info = None
+    if not segs:
+        return {"meta": False, "song": None, "reason": "hls"}
+    song = _extinf_song(segs[-1][0])
+    if song:
+        return {"meta": True, "song": song, "reason": None}
+    read = 0
+    for _info, seg in reversed(segs[-2:]):   # the newest two segments (a few seconds each)
+        try:
+            data = _http_get(seg, timeout=timeout, max_bytes=4_000_000)
+        except Exception:
+            continue
+        read += 1
+        song = _id3_song(_segment_id3(data))
+        if song:
+            return {"meta": True, "song": song, "reason": None}
+    return {"meta": False, "song": None, "reason": "hls-none" if read else "hls"}
+
+
+def _extinf_song(info: str | None) -> str | None:
+    """A title in '#EXTINF:10,title="…",artist="…"' or '#EXTINF:10,Artist - Title'
+    (a station's name or 'no desc' there is no song)."""
+    rest = (info or "").partition(",")[2].strip()
+    m = re.search(r'title="([^"]*)"', rest)
+    if m:
+        t = m.group(1).strip()
+        a = re.search(r'artist="([^"]*)"', rest)
+        if a and a.group(1).strip() and " - " not in t:
+            t = a.group(1).strip() + " - " + t
+        return t[:200] or None
+    return rest[:200] if " - " in rest else None
+
+
+def _segment_id3(data: bytes) -> dict:
+    """ID3 frames of one HLS segment: packed audio carries the tags inline, an
+    MPEG-TS segment in its metadata stream (PES 0xBD / 0xFC)."""
+    if len(data) >= 376 and data[0] == 0x47 and data[188] == 0x47:
+        return _id3_frames(_ts_metadata(data))
+    return _id3_frames(data)
+
+
+def _ts_metadata(data: bytes) -> bytes:
+    """The payloads of an MPEG-TS segment's metadata PES packets, joined."""
+    pes: dict = {}
+    keep: dict = {}
+    out = bytearray()
+
+    def body(p: bytes) -> bytes:
+        return p[9 + p[8]:] if len(p) > 9 else b""
+
+    for i in range(0, len(data) - 187, 188):
+        p = data[i:i + 188]
+        if p[0] != 0x47:
+            continue
+        pid = ((p[1] & 0x1F) << 8) | p[2]
+        afc = (p[3] >> 4) & 0x3
+        off = 4 + (1 + p[4] if afc in (2, 3) else 0)
+        if afc in (0, 2) or off >= 188:
+            continue
+        pl = p[off:]
+        if p[1] & 0x40:                          # a new PES starts on this PID
+            if keep.get(pid):
+                out += body(bytes(pes.get(pid, b"")))
+            keep[pid] = len(pl) > 3 and pl[:3] == b"\x00\x00\x01" and pl[3] in (0xBD, 0xFC)
+            pes[pid] = bytearray(pl) if keep[pid] else bytearray()
+        elif keep.get(pid):
+            pes[pid] += pl
+    for pid, buf in pes.items():
+        if keep.get(pid):
+            out += body(bytes(buf))
+    return bytes(out)
+
+
+def _id3_text(b: bytes) -> str:
+    """An ID3 text frame (its first byte names the encoding); NULs kept, they
+    separate a TXXX's description from its value."""
+    if not b:
+        return ""
+    enc, raw = b[0], b[1:]
+    try:
+        if enc == 1:
+            return raw.decode("utf-16")
+        if enc == 2:
+            return raw.decode("utf-16-be")
+        if enc == 3:
+            return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode("latin-1", "replace")
+    return _icy_decode(raw)                  # "Latin-1" – often really UTF-8 or Turkish Windows
+
+
+def _id3_frames(buf: bytes) -> dict:
+    """Text frames of all ID3v2 tags in buf – later tags win (the newest title);
+    TXXX frames as 'TXXX:description'."""
+    out: dict = {}
+    i = buf.find(b"ID3")
+    while i != -1 and i + 10 <= len(buf):
+        ver, flags, sz = buf[i + 3], buf[i + 5], buf[i + 6:i + 10]
+        if ver not in (2, 3, 4) or buf[i + 4] == 0xFF or any(x & 0x80 for x in sz):
+            i = buf.find(b"ID3", i + 3)
+            continue
+        size = (sz[0] << 21) | (sz[1] << 14) | (sz[2] << 7) | sz[3]
+        tag = buf[i + 10:i + 10 + size]
+        if flags & 0x40 and ver >= 3 and len(tag) >= 4:          # an extended header: skip it
+            e = tag[:4]
+            tag = tag[int.from_bytes(e, "big") + 4:] if ver == 3 else \
+                tag[(e[0] << 21) | (e[1] << 14) | (e[2] << 7) | e[3]:]
+        hl, j = (6 if ver == 2 else 10), 0
+        while j + hl <= len(tag):
+            if ver == 2:
+                fid = {"TT2": "TIT2", "TP1": "TPE1", "TXX": "TXXX"}.get(tag[j:j + 3].decode("latin-1"),
+                                                                          tag[j:j + 3].decode("latin-1"))
+                fsz = int.from_bytes(tag[j + 3:j + 6], "big")
+            else:
+                fid = tag[j:j + 4].decode("latin-1")
+                r = tag[j + 4:j + 8]
+                fsz = ((r[0] << 21) | (r[1] << 14) | (r[2] << 7) | r[3]) if ver == 4 else int.from_bytes(r, "big")
+            if not re.fullmatch(r"[A-Z0-9]{3,4}", fid) or fsz <= 0 or j + hl + fsz > len(tag):
+                break
+            if fid.startswith("T"):
+                s = _id3_text(tag[j + hl:j + hl + fsz])
+                if fid == "TXXX":
+                    desc, _, val = s.partition("\x00")
+                    out["TXXX:" + desc.strip().lower()] = val.split("\x00")[0].strip()
+                else:
+                    out[fid] = s.split("\x00")[0].strip()
+            j += hl + fsz
+        i = buf.find(b"ID3", i + 10 + size)
+    return out
+
+
+def _id3_song(fr: dict) -> str | None:
+    """'Artist - Title' from ID3 frames: TPE1 + TIT2, else a StreamTitle-like TXXX."""
+    title, artist = fr.get("TIT2"), fr.get("TPE1")
+    if title and artist:
+        return f"{artist} - {title}"[:200]
+    for k in ("TXXX:streamtitle", "TXXX:title", "TXXX:song"):
+        v = fr.get(k)
+        if v and " - " in v:
+            return v[:200]
+    return title[:200] if title and " - " in title else None
 
 
 def _song_parts(song: str | None) -> tuple:
@@ -14794,6 +15121,11 @@ def radio_now(ctx, url: str, fresh: bool = False) -> dict:
         r, err = {}, f"Sender nicht erreichbar ({exc.strerror or exc})"
     except Exception as exc:
         r, err = {}, str(exc)[:160]
+    seen = now if r.get("song") else (ent or {}).get("seen", 0)
+    if r.get("reason") == "hls-none" and ((ent or {}).get("out") or {}).get("song") and now - seen < 480:
+        # HLS stations often put the title only into the segment where the song
+        # changes – keep the last one for a while instead of losing it
+        r = {**r, "meta": True, "song": ent["out"]["song"], "reason": None}
     song = r.get("song")
     artist, title = _song_parts(song)
     cover = None
@@ -14807,7 +15139,7 @@ def radio_now(ctx, url: str, fresh: bool = False) -> dict:
            "error": err}
     if len(ctx.radio_now_cache) > 30:
         ctx.radio_now_cache.clear()
-    ctx.radio_now_cache[url] = {"ts": now, "out": out}
+    ctx.radio_now_cache[url] = {"ts": now, "out": out, "seen": seen}
     return out
 
 

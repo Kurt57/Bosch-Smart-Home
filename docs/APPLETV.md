@@ -17,14 +17,33 @@ Punkte laufen in Flussrichtung, schneller bei mehr Leistung –, **Heute** (erze
 Eigenverbrauch mit Ring, Netzbezug, Einspeisung, gespart – mit „+ ≈ … € im Akku“, solange heute Geladenes noch
 nicht verbraucht ist), die **Räume** mit Thermometer-Balken (weißer Strich =
 deine Wunschtemperatur) und die nächsten **Termine**. Glaskarten über einem langsam wandernden Farblicht, das
-warm wird, sobald die Sonne das Haus versorgt; Zahlen rollen beim Aktualisieren auf den neuen Wert. Sie rechnet
+warm wird, sobald die Sonne das Haus versorgt (oder ein ruhiges Farbschema, siehe unten); Zahlen rollen beim Aktualisieren auf den neuen Wert. Sie rechnet
 nichts selbst: Alle 15 Sekunden holt sie `GET /api/tv` von der Bridge, dort steht alles fertig formuliert
 (dieselben Regeln wie im Wohn-Dashboard, z. B. die Fenster-Blinkschwelle und der Tonnen-Vorlauf aus dem Setup).
 Der Bildschirmschoner bleibt aus, solange die App offen ist (abschaltbar, siehe unten). ▶︎❙❙ auf der
 Fernbedienung lädt sofort neu; ein Klick auf die Mitte der Fernbedienung öffnet die Einstellungen
-(⚙︎ oben rechts: Adresse der Bridge, „Bildschirm anlassen“). Damit alles ohne Blättern auf den Fernseher passt,
+(⚙︎ oben rechts: Adresse der Bridge, „Bildschirm anlassen“, Farbschema). Damit alles ohne Blättern auf den Fernseher passt,
 zeigt die App höchstens 2 Hinweis-Kacheln (weitere als Zeile „+ N weitere: …“), 9 Räume und so viele Termine,
 wie darunter Platz haben.
+
+**Farbschema 🎨:** In den Einstellungen (⚙︎) rechts – nach rechts wischen – wählst du das Aussehen; es wirkt
+sofort und bleibt auf dem Apple TV gespeichert. *Aurora* ist das ursprüngliche (wanderndes Farblicht hinter
+Milchglas), *Aurora sanft* dasselbe Licht halb so stark mit fast deckenden Karten. Ganz ohne Schimmer und ohne
+wanderndes Licht: *Nacht* (Anthrazit), *Graphit* (kühles Blaugrau), *Wald* (tiefes Grün) und *Kamin* (warmes Braun) –
+matte Karten, ein ruhiger Verlauf mit einem schwachen Licht in den oberen Ecken, das ein wenig warm wird, wenn die
+Sonne das Haus versorgt. Die Statusfarben (grün = gut, orange = Achtung) bleiben überall gleich.
+
+**Tachos:** Der Akku hat im Energiefluss einen Ring für seinen Ladestand (grün ab halb voll, orange darunter, rot
+unter einem Fünftel); lädt er, läuft ein heller Funke den Ring entlang. Bei „Sonne erzeugt“ zeigt ein Balken, wie
+viel vom heute erwarteten Ertrag schon da ist („von ≈ 12 kWh erwartet“), und neben „außen 4°“ steht das Wetter
+des Tages als Symbol.
+
+**Sonne & Wetter ☀️ (ganz unten):** Heute, morgen und übermorgen: wie der Himmel wird (sonnig, heiter,
+wechselhaft, trüb, mit Regen/Schnee), die Temperaturen, die Sonne als Tacho (Anteil der hellen Stunden mit
+Sonnenschein) und der **erwartete PV-Ertrag** als Balken – aus der Wettervorhersage und dem, was deine Anlage an den
+letzten Tagen aus der Sonne gemacht hat (dieselbe Rechnung wie im PV-Tab; braucht den Standort im PV-Setup). Darunter
+ein Tipp, z. B. „Heute am meisten Sonne 11–14 Uhr – gut für Waschmaschine, Spülmaschine & Co.“ oder, wenn heute nicht
+mehr viel kommt, „Morgen sonnig, ≈ 18 kWh erwartet“.
 
 **Kinder-Routine 🧒:** Läuft eine Routine (z. B. die Abendroutine, eingerichtet in der App unter Setup →
 *Kinder-Routine*), steht sie als erste Karte **unterhalb der ersten Seite** – die Kinder nebeneinander, je Kind eine
@@ -37,7 +56,7 @@ Wohn-Dashboard (die Bridge führt sie). Wer alles geschafft hat, bekommt Konfett
 (nichts rutscht mehr oben heraus): Kopfzeile, Hinweise, Energie, Heute, rechts Radio, Räume und – wenn noch Platz
 ist – die nächsten Termine, ganz unten ein **Laufband** mit Fußball-Ergebnissen, den nächsten Spielen und
 Schlagzeilen. Alles Weitere liegt darunter – **nach unten wischen**: die Kinder-Routine (während sie läuft), alle
-Termine (mit den Fußballspielen) und die Nachrichten. Jede dieser Karten leuchtet auf, wenn der Fokus auf ihr liegt,
+Termine (mit den Fußballspielen), die Nachrichten und ganz unten **Sonne & Wetter** (siehe unten). Jede dieser Karten leuchtet auf, wenn der Fokus auf ihr liegt,
 und die Seite rollt mit; nach oben wischen führt zurück.
 
 **Fußball ⚽ und Nachrichten 📰:** Mannschaften (Vereine und Nationalmannschaften) und Nachrichten-Feeds stellst du in
@@ -57,7 +76,9 @@ und sucht das Cover über Apples öffentliche iTunes-Suche (gesendet werden nur 
 genommen, wenn der gefundene Interpret passt – bei Moderation, Werbung oder Sendernamen steht das Senderlogo da.
 Schickt ein Sender keine Titel, gibt es auch kein Cover. Ob dein Sender Titel schickt, siehst du im Setup: bei
 *Meine Sender* auf 🎵 tippen – dort steht, was gerade läuft und ob ein Cover gefunden wurde. Bei Sendern im
-HLS-Format liest nur das Apple TV selbst die Titel (falls welche mitkommen). Gefunden werden die
+HLS-Format (z. B. KRAL FM) liest die Bridge die Titel aus der Playlist oder aus den ID3-Angaben in den neuesten
+Teilen des Streams – so wie das Apple TV; manche HLS-Sender schicken den Titel nur beim Liedwechsel, die Bridge
+merkt sich den letzten dann ein paar Minuten. Gefunden werden die
 Sender im freien Verzeichnis [radio-browser.info](https://www.radio-browser.info) (Suche im Setup, z. B.
 „Metropol FM“, mit ▶︎ zum Probehören am Handy); feste Stream-Adressen sind nicht eingebaut, weil Sender sie ab und
 zu ändern. Verlässt du die App, stoppt das Radio. Die Lautstärke regelst du wie gewohnt am Fernseher.

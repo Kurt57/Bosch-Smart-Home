@@ -21,9 +21,13 @@ struct RootView: View {
     @StateObject private var radio = RadioPlayer()
     @AppStorage("bridgeURL") private var bridgeURL: String = ""
     @AppStorage("keepAwake") private var keepAwake: Bool = true
+    /// the colour scheme (Einstellungen → Farbschema), kept on this Apple TV
+    @AppStorage("tvTheme") private var themeName: String = TVTheme.aurora.rawValue
     @State private var showSettings = false
     @State private var confettiTick = 0
     @Environment(\.scenePhase) private var scenePhase
+
+    private var theme: TVTheme { TVTheme(rawValue: themeName) ?? .aurora }
 
     var body: some View {
         DashboardView(model: model, radio: radio, openSettings: { showSettings = true }, confettiTick: confettiTick)
@@ -50,12 +54,14 @@ struct RootView: View {
                 Task { await model.load() }
             }
             .fullScreenCover(isPresented: $showSettings) {
-                SettingsView(bridgeURL: $bridgeURL, keepAwake: $keepAwake) {
+                SettingsView(bridgeURL: $bridgeURL, keepAwake: $keepAwake, themeName: $themeName) {
                     showSettings = false
                     model.start()
                 }
+                .environment(\.tvTheme, theme)
                 .preferredColorScheme(.dark)
             }
+            .environment(\.tvTheme, theme)
             // glass and text colours are made for a dark room, whatever tvOS is set to
             .preferredColorScheme(.dark)
     }

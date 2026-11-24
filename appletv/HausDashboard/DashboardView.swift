@@ -23,6 +23,115 @@ private enum Palette {
     static let partyGold = Color(red: 1.0, green: 0.80, blue: 0.25)
 }
 
+// MARK: - Colour schemes (Einstellungen → Farbschema)
+
+/// How the app looks. "Aurora" is the original: drifting coloured light behind
+/// frosted glass. The others are calmer – the light halved, or no drifting light
+/// at all and matt cards that let nothing shimmer through – in other colours.
+/// Chosen in the settings (⚙︎), kept on this Apple TV.
+enum TVTheme: String, CaseIterable, Identifiable {
+    case aurora, auroraSoft, night, graphite, forest, ember
+
+    var id: String { rawValue }
+
+    var name: String {
+        switch self {
+        case .aurora: return "Aurora"
+        case .auroraSoft: return "Aurora sanft"
+        case .night: return "Nacht"
+        case .graphite: return "Graphit"
+        case .forest: return "Wald"
+        case .ember: return "Kamin"
+        }
+    }
+
+    var note: String {
+        switch self {
+        case .aurora: return "Farblicht hinter Milchglas – wie bisher"
+        case .auroraSoft: return "dasselbe Licht, halb so stark, Karten fast deckend"
+        case .night: return "Anthrazit, ruhig, ohne Schimmer"
+        case .graphite: return "kühles Blaugrau, matt"
+        case .forest: return "tiefes Grün, matt"
+        case .ember: return "warmes Braun wie Glut, matt"
+        }
+    }
+
+    /// strength of the drifting colour light (0: none – a still background)
+    var glow: Double {
+        switch self {
+        case .aurora: return 1
+        case .auroraSoft: return 0.45
+        default: return 0
+        }
+    }
+
+    /// the screen from top to bottom
+    var top: Color {
+        switch self {
+        case .aurora, .auroraSoft: return Color(red: 0.02, green: 0.03, blue: 0.06)
+        case .night: return Color(red: 0.045, green: 0.047, blue: 0.055)
+        case .graphite: return Color(red: 0.085, green: 0.11, blue: 0.145)
+        case .forest: return Color(red: 0.035, green: 0.095, blue: 0.075)
+        case .ember: return Color(red: 0.12, green: 0.07, blue: 0.045)
+        }
+    }
+
+    var bottom: Color {
+        switch self {
+        case .aurora, .auroraSoft: return Color(red: 0.02, green: 0.03, blue: 0.06)
+        case .night: return Color(red: 0.012, green: 0.012, blue: 0.016)
+        case .graphite: return Color(red: 0.035, green: 0.045, blue: 0.062)
+        case .forest: return Color(red: 0.012, green: 0.04, blue: 0.032)
+        case .ember: return Color(red: 0.045, green: 0.025, blue: 0.018)
+        }
+    }
+
+    /// matt card colour – nil: frosted glass, the light shines through
+    var card: Color? {
+        switch self {
+        case .aurora: return nil
+        case .auroraSoft: return Color(red: 0.07, green: 0.08, blue: 0.11).opacity(0.84)
+        case .night: return Color(red: 0.095, green: 0.10, blue: 0.115)
+        case .graphite: return Color(red: 0.125, green: 0.15, blue: 0.19)
+        case .forest: return Color(red: 0.065, green: 0.135, blue: 0.11)
+        case .ember: return Color(red: 0.165, green: 0.105, blue: 0.075)
+        }
+    }
+
+    /// the thin line around the cards
+    var stroke: Color {
+        switch self {
+        case .aurora: return Color.white.opacity(0.10)
+        case .auroraSoft, .graphite: return Color.white.opacity(0.08)
+        case .night: return Color.white.opacity(0.07)
+        case .forest: return Color(red: 0.55, green: 0.95, blue: 0.75).opacity(0.10)
+        case .ember: return Color(red: 1.0, green: 0.78, blue: 0.55).opacity(0.10)
+        }
+    }
+
+    /// the faint, still light in the top corner of the calm schemes
+    var light: Color {
+        switch self {
+        case .aurora, .auroraSoft, .night: return Color(red: 0.42, green: 0.70, blue: 1.0)
+        case .graphite: return Color(red: 0.55, green: 0.72, blue: 0.95)
+        case .forest: return Color(red: 0.33, green: 0.86, blue: 0.58)
+        case .ember: return Color(red: 1.0, green: 0.62, blue: 0.30)
+        }
+    }
+}
+
+private struct TVThemeKey: EnvironmentKey {
+    static let defaultValue: TVTheme = .aurora
+}
+
+extension EnvironmentValues {
+    /// the colour scheme chosen in the settings
+    var tvTheme: TVTheme {
+        get { self[TVThemeKey.self] }
+        set { self[TVThemeKey.self] = newValue }
+    }
+}
+
 private func tileLabel(_ tile: TVTile) -> String {
     guard let icon = tile.icon, !icon.isEmpty else { return tile.label }
     return icon + " " + tile.label
@@ -72,12 +181,29 @@ private func burnInShift(_ date: Date) -> CGSize {
 }
 
 extension View {
-    /// Frosted glass – the coloured light behind the card shines through.
+    /// The cards: frosted glass in Aurora (the coloured light behind shines
+    /// through), a matt colour in the calm schemes.
     func glassCard(_ radius: CGFloat = 26) -> some View {
-        self
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.10), lineWidth: 1))
+        modifier(CardSurface(radius: radius))
+    }
+}
+
+private struct CardSurface: ViewModifier {
+    let radius: CGFloat
+    @Environment(\.tvTheme) private var theme
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        if let card = theme.card {
+            content
+                .background(card, in: shape)
+                .overlay(shape.strokeBorder(theme.stroke, lineWidth: 1))
+        } else {
+            content
+                .background(.ultraThinMaterial, in: shape)
+                .overlay(shape.strokeBorder(theme.stroke, lineWidth: 1))
+        }
     }
 }
 
@@ -110,31 +236,57 @@ private struct Ring: View {
 
 // MARK: - Background
 
-/// Slowly drifting colour light behind the glass: warmer while the sun covers
-/// the house, cool blue otherwise – pink, violet and gold on a party day. The
-/// motion also protects OLED screens.
+/// Aurora: slowly drifting colour light behind the glass – warmer while the sun
+/// covers the house, cool blue otherwise, pink, violet and gold on a party day
+/// (the motion also protects OLED screens). The calm schemes: a still gradient
+/// with a faint light in the top corners – a little warmer while the sun
+/// supplies the house, festive on a party day.
 struct AmbientBackground: View {
     let warmth: Double            // 0 … 1
     var party = false
+    @Environment(\.tvTheme) private var theme
     @State private var drift = false
 
     var body: some View {
+        if theme.glow > 0 {
+            auroraLight(theme.glow)
+        } else {
+            stillLight
+        }
+    }
+
+    private func auroraLight(_ strength: Double) -> some View {
         let first = party ? Palette.partyPink : Palette.sun
         let second = party ? Palette.partyPurple : Color(red: 0.16, green: 0.42, blue: 1.0)
         let third = party ? Palette.partyGold : Color(red: 0.58, green: 0.32, blue: 1.0)
         let warm = party ? 0.75 : warmth
-        Color(red: 0.02, green: 0.03, blue: 0.06)
-            .overlay(blob(first, opacity: 0.06 + 0.30 * warm, size: 1500)
+        return theme.top
+            .overlay(blob(first, opacity: (0.06 + 0.30 * warm) * strength, size: 1500)
                 .offset(x: drift ? 600 : 380, y: drift ? -300 : -430))
-            .overlay(blob(second, opacity: 0.30 - 0.12 * warm, size: 1400)
+            .overlay(blob(second, opacity: (0.30 - 0.12 * warm) * strength, size: 1400)
                 .offset(x: drift ? -620 : -400, y: drift ? 380 : 230))
-            .overlay(blob(third, opacity: party ? 0.20 : 0.16, size: 1200)
+            .overlay(blob(third, opacity: (party ? 0.20 : 0.16) * strength, size: 1200)
                 .offset(x: drift ? -40 : 220, y: drift ? -40 : 120))
             .animation(.easeInOut(duration: 4), value: warmth)
             .animation(.easeInOut(duration: 3), value: party)
             .onAppear {
                 withAnimation(.easeInOut(duration: 50).repeatForever(autoreverses: true)) { drift = true }
             }
+            // switched to a calm scheme and back: the light starts drifting again
+            .onDisappear { drift = false }
+    }
+
+    private var stillLight: some View {
+        LinearGradient(colors: [theme.top, theme.bottom], startPoint: .top, endPoint: .bottom)
+            .overlay(RadialGradient(colors: [(party ? Palette.partyPink : theme.light).opacity(party ? 0.20 : 0.09),
+                                             Color.clear],
+                                    center: .topLeading, startRadius: 0, endRadius: 1300))
+            .overlay(RadialGradient(colors: [(party ? Palette.partyGold : Palette.sun)
+                                                .opacity(party ? 0.14 : 0.12 * warmth),
+                                             Color.clear],
+                                    center: .topTrailing, startRadius: 0, endRadius: 1100))
+            .animation(.easeInOut(duration: 4), value: warmth)
+            .animation(.easeInOut(duration: 3), value: party)
     }
 
     private func blob(_ color: Color, opacity: Double, size: CGFloat) -> some View {
@@ -301,6 +453,152 @@ private struct MoreSections: View {
                     }
                 }
             }
+            // new things come last – "Sonne & Wetter" with its gauges
+            if let weather = payload.weather, !weather.days.isEmpty {
+                FocusCard {
+                    WeatherCard(weather: weather)
+                }
+            }
+        }
+    }
+}
+
+/// Sun and weather today and the next two days: the sky, the sunshine as a
+/// gauge (share of the daylight), the yield the PV system should make of it as
+/// a bar – and a tip when to run the washing machine & co.
+private struct WeatherCard: View {
+    let weather: TVWeather
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            SectionTitle(text: "Sonne & Wetter")
+            HStack(alignment: .top, spacing: 18) {
+                ForEach(weather.days) { day in
+                    WeatherDayView(day: day)
+                }
+            }
+            if let tip = weather.tip, !tip.isEmpty {
+                Text(tip)
+                    .font(.system(size: 23, weight: .semibold))
+                    .foregroundStyle(Palette.sun)
+                    .lineLimit(2)
+            } else if let note = weather.note, !note.isEmpty {
+                Text(note)
+                    .font(.system(size: 19))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassCard()
+    }
+}
+
+private struct WeatherDayView: View {
+    let day: TVWeatherDay
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(day.label.uppercased())
+                .font(.system(size: 16, weight: .bold))
+                .tracking(1.2)
+                .foregroundStyle(Palette.house)
+            HStack(spacing: 14) {
+                Text(day.icon)
+                    .font(.system(size: 52))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(day.text)
+                        .font(.system(size: 22, weight: .semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                    if let temp = day.temp, !temp.isEmpty {
+                        Text(temp)
+                            .font(.system(size: 20))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            HStack(alignment: .center, spacing: 16) {
+                if let share = day.share {
+                    ArcGauge(fraction: share, color: Palette.sun, label: "\(Int((share * 100).rounded())) %")
+                        .frame(width: 74, height: 74)
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    if let sun = day.sun, !sun.isEmpty {
+                        Text(sun)
+                            .font(.system(size: 18))
+                            .foregroundStyle(.secondary)
+                    }
+                    if let pv = day.pv, !pv.isEmpty {
+                        Text("Ertrag " + pv)
+                            .font(.system(size: 22, weight: .bold, design: .rounded))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
+                        if let f = day.pv_frac {
+                            GaugeBar(fraction: f, color: Palette.sun)
+                                .frame(width: 160, height: 7)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Color.white.opacity(0.05)))
+    }
+}
+
+/// A small speedometer: a 270° arc filled to `fraction`, the value inside. It
+/// sweeps up from zero when it appears and rolls to every new value.
+private struct ArcGauge: View {
+    let fraction: Double
+    let color: Color
+    let label: String
+    @State private var shown: Double = 0
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .trim(from: 0, to: 0.75)
+                .stroke(Color.white.opacity(0.10), style: StrokeStyle(lineWidth: 8, lineCap: .round))
+                .rotationEffect(.degrees(135))
+            Circle()
+                .trim(from: 0, to: 0.75 * CGFloat(min(1, max(0, shown))))
+                .stroke(color, style: StrokeStyle(lineWidth: 8, lineCap: .round))
+                .rotationEffect(.degrees(135))
+            Text(label)
+                .font(.system(size: 19, weight: .bold, design: .rounded))
+                .monospacedDigit()
+        }
+        .onAppear {
+            withAnimation(.easeOut(duration: 1.4)) { shown = fraction }
+        }
+        .onChange(of: fraction) { _, value in
+            withAnimation(.easeInOut(duration: 1.0)) { shown = value }
+        }
+    }
+}
+
+/// A thin bar filled to `fraction` – grows from zero when it appears.
+private struct GaugeBar: View {
+    let fraction: Double
+    let color: Color
+    @State private var shown: Double = 0
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.white.opacity(0.10))
+                Capsule()
+                    .fill(color)
+                    .frame(width: max(geo.size.height, geo.size.width * CGFloat(min(1, max(0, shown)))))
+            }
+        }
+        .onAppear {
+            withAnimation(.easeOut(duration: 1.2)) { shown = fraction }
+        }
+        .onChange(of: fraction) { _, value in
+            withAnimation(.easeInOut(duration: 1.0)) { shown = value }
         }
     }
 }
@@ -438,8 +736,7 @@ private struct Chip: View {
             .font(.system(size: 22, weight: .medium))
             .padding(.horizontal, 16)
             .padding(.vertical, 7)
-            .background(.ultraThinMaterial, in: Capsule())
-            .overlay(Capsule().strokeBorder(Color.white.opacity(0.10), lineWidth: 1))
+            .glassCard(24)              // a capsule in the colour scheme's card style
     }
 }
 
@@ -525,9 +822,15 @@ struct HeaderView: View {
             VStack(alignment: .trailing, spacing: 10) {
                 if let outdoor = header?.outdoor, !outdoor.isEmpty {
                     HStack(spacing: 10) {
-                        Image(systemName: "thermometer.medium")
-                            .font(.system(size: 30, weight: .semibold))
-                            .foregroundStyle(Palette.house)
+                        // today's sky (from the forecast) – or the thermometer while none is known
+                        if let sky = header?.sky, !sky.isEmpty {
+                            Text(sky)
+                                .font(.system(size: 34))
+                        } else {
+                            Image(systemName: "thermometer.medium")
+                                .font(.system(size: 30, weight: .semibold))
+                                .foregroundStyle(Palette.house)
+                        }
                         Text("außen " + outdoor)
                             .font(.system(size: 38, weight: .semibold, design: .rounded))
                             .contentTransition(.numericText())
@@ -720,6 +1023,12 @@ struct EnergyFlowView: View {
                 if let t = tile("batt") {
                     FlowNode(icon: "🔋", color: Palette.green, active: abs(live.batt_w ?? 0) > 30, size: 82)
                         .position(batt)
+                    if let soc = live.soc {
+                        // the charge as a gauge around the battery
+                        SocRing(soc: soc, charging: (live.batt_w ?? 0) < -30)
+                            .frame(width: 102, height: 102)
+                            .position(batt)
+                    }
                     FlowCaption(tile: t, alignment: .trailing)
                         .frame(width: 250, alignment: .trailing)
                         .position(x: batt.x - 66 - 125, y: batt.y)
@@ -789,6 +1098,45 @@ private struct FlowLines: View {
                                      with: .color(e.color))
                         d += gap
                     }
+                }
+            }
+        }
+    }
+}
+
+/// The battery's charge as a ring around its node: green from half full, orange
+/// below, red under a fifth. It rolls to a new value; while the battery charges a
+/// bright spark runs along the filled part.
+private struct SocRing: View {
+    let soc: Double                 // 0 … 100 %
+    let charging: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var fraction: CGFloat {
+        CGFloat(min(100, max(0, soc)) / 100)
+    }
+
+    private var color: Color {
+        soc >= 50 ? Palette.green : soc >= 20 ? Palette.warn : Color(red: 1.0, green: 0.38, blue: 0.38)
+    }
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(Color.white.opacity(0.10), lineWidth: 6)
+            Circle()
+                .trim(from: 0, to: fraction)
+                .stroke(color, style: StrokeStyle(lineWidth: 6, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+                .animation(.easeInOut(duration: 1.2), value: fraction)
+            if charging && !reduceMotion && fraction > 0.03 {
+                TimelineView(.animation(minimumInterval: 1.0 / 30)) { context in
+                    let t = context.date.timeIntervalSinceReferenceDate
+                    let head = CGFloat((t / 2.4).truncatingRemainder(dividingBy: 1)) * fraction
+                    Circle()
+                        .trim(from: max(0, head - 0.05), to: head)
+                        .stroke(Color.white.opacity(0.85), style: StrokeStyle(lineWidth: 6, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
                 }
             }
         }
@@ -890,6 +1238,12 @@ struct TileView: View {
                     Ring(fraction: p, color: Palette.green)
                         .frame(width: 24, height: 24)
                 }
+            }
+            if let b = tile.bar {
+                // the sun made so far against what the forecast promised for today
+                GaugeBar(fraction: b, color: Palette.sun)
+                    .frame(height: 6)
+                    .padding(.vertical, 2)
             }
             if let sub = tile.sub, !sub.isEmpty {
                 Text(sub)

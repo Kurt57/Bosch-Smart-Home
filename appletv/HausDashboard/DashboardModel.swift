@@ -10,6 +10,7 @@ struct TVHeader: Decodable {
     let outdoor: String?
     let status: String?
     let hp: String?
+    let sky: String?            // today's weather as an emoji, next to the outdoor temperature
 }
 
 struct TVAlert: Decodable, Identifiable {
@@ -29,6 +30,7 @@ struct TVTile: Decodable, Identifiable {
     let sub: String?
     let tone: String?
     let pct: Double?            // 0 … 1 for shares (autark, Eigenverbrauch) – drawn as a ring
+    let bar: Double?            // 0 … 1 progress (sun made today against the forecast) – a bar
 }
 
 struct TVRoom: Decodable, Identifiable {
@@ -117,7 +119,28 @@ struct TVPayload: Decodable {
     let radio: [TVRadioStation]?
     let news: [TVNews]?
     let ticker: [TVTickerItem]?
+    let weather: TVWeather?
     let note: String?
+}
+
+/// "Sonne & Wetter": today and the next two days, and a tip when to run the
+/// big appliances.
+struct TVWeather: Decodable {
+    let days: [TVWeatherDay]
+    let tip: String?
+    let note: String?
+}
+
+struct TVWeatherDay: Decodable, Identifiable {
+    let id: String
+    let label: String           // Heute, Morgen, weekday
+    let icon: String
+    let text: String            // sonnig, heiter, wechselhaft, trüb (+ Regen/Schnee/Nebel)
+    let temp: String?           // "2° / 7°"
+    let sun: String?            // "4,2 h Sonne"
+    let share: Double?          // 0 … 1: sunshine as a share of daylight
+    let pv: String?             // "≈ 12,4 kWh" expected from the PV system
+    let pv_frac: Double?        // 0 … 1 against the sunniest of the three days
 }
 
 /// A headline from the feeds chosen in Setup.
