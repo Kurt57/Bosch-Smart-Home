@@ -109,6 +109,16 @@ enum TVTheme: String, CaseIterable, Identifiable {
         }
     }
 
+    /// how much the halos shine – around the active circles of the energy flow,
+    /// the birthday banner, the blurred radio cover (1 = Aurora)
+    var halo: Double {
+        switch self {
+        case .aurora: return 1
+        case .auroraSoft: return 0.55
+        default: return 0.2
+        }
+    }
+
     /// the faint, still light in the top corner of the calm schemes
     var light: Color {
         switch self {
@@ -276,13 +286,13 @@ struct AmbientBackground: View {
             .onDisappear { drift = false }
     }
 
+    // calm: no pink on a birthday (the banner says it) – a faint gold at most
     private var stillLight: some View {
         LinearGradient(colors: [theme.top, theme.bottom], startPoint: .top, endPoint: .bottom)
-            .overlay(RadialGradient(colors: [(party ? Palette.partyPink : theme.light).opacity(party ? 0.20 : 0.09),
-                                             Color.clear],
+            .overlay(RadialGradient(colors: [theme.light.opacity(0.08), Color.clear],
                                     center: .topLeading, startRadius: 0, endRadius: 1300))
             .overlay(RadialGradient(colors: [(party ? Palette.partyGold : Palette.sun)
-                                                .opacity(party ? 0.14 : 0.12 * warmth),
+                                                .opacity(party ? 0.05 : 0.10 * warmth),
                                              Color.clear],
                                     center: .topTrailing, startRadius: 0, endRadius: 1100))
             .animation(.easeInOut(duration: 4), value: warmth)
@@ -1148,16 +1158,22 @@ private struct FlowNode: View {
     let color: Color
     let active: Bool
     let size: CGFloat
+    @Environment(\.tvTheme) private var theme
 
     var body: some View {
         ZStack {
-            Circle().fill(.ultraThinMaterial)
+            if theme.card == nil {
+                Circle().fill(.ultraThinMaterial)          // glass, as the cards
+            } else {
+                Circle().fill(Color.white.opacity(0.04))     // matt, as the cards
+            }
             Circle().fill(color.opacity(active ? 0.22 : 0.06))
             Circle().strokeBorder(color.opacity(active ? 0.9 : 0.3), lineWidth: 3)
             Text(icon).font(.system(size: size * 0.42))
         }
         .frame(width: size, height: size)
-        .shadow(color: color.opacity(active ? 0.55 : 0), radius: active ? 18 : 0)
+        // the halo of an active circle – strong in Aurora, faint in the calm schemes
+        .shadow(color: color.opacity(active ? 0.55 * theme.halo : 0), radius: active ? 18 : 0)
     }
 }
 
@@ -1474,6 +1490,7 @@ struct NowPlayingCard: View {
 /// The cover, big and blurred, as light behind the card.
 private struct CoverGlow: View {
     let url: URL?
+    @Environment(\.tvTheme) private var theme
 
     var body: some View {
         ZStack {
@@ -1486,7 +1503,7 @@ private struct CoverGlow: View {
                     }
                 }
                 .blur(radius: 36)
-                .opacity(0.6)
+                .opacity(0.6 * max(0.35, theme.halo))
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
@@ -1838,6 +1855,7 @@ struct PartyBanner: View {
     let party: TVParty
     @State private var wiggle = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.tvTheme) private var theme
 
     var body: some View {
         HStack(spacing: 18) {
@@ -1869,7 +1887,7 @@ struct PartyBanner: View {
                                                                 Palette.partyPurple.opacity(0.8)],
                                                        startPoint: .leading, endPoint: .trailing),
                                         lineWidth: 2))
-        .shadow(color: Palette.partyPink.opacity(0.35), radius: 26)
+        .shadow(color: Palette.partyPink.opacity(0.35 * theme.halo), radius: 26)
         .onAppear {
             guard !reduceMotion else { return }
             withAnimation(.easeInOut(duration: 1.3).repeatForever(autoreverses: true)) { wiggle = true }

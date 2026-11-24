@@ -31,11 +31,14 @@ sofort und bleibt auf dem Apple TV gespeichert. *Aurora* ist das ursprüngliche 
 Milchglas), *Aurora sanft* dasselbe Licht halb so stark mit fast deckenden Karten. Ganz ohne Schimmer und ohne
 wanderndes Licht: *Nacht* (Anthrazit), *Graphit* (kühles Blaugrau), *Wald* (tiefes Grün) und *Kamin* (warmes Braun) –
 matte Karten, ein ruhiger Verlauf mit einem schwachen Licht in den oberen Ecken, das ein wenig warm wird, wenn die
-Sonne das Haus versorgt. Die Statusfarben (grün = gut, orange = Achtung) bleiben überall gleich.
+Sonne das Haus versorgt; das Leuchten um die Kreise im Energiefluss, um das Geburtstagsbanner und hinter dem
+Radio-Cover ist dort nur noch ein Hauch, und an Feiertagen färbt sich der Hintergrund nicht pink. Die Statusfarben
+(grün = gut, orange = Achtung) bleiben überall gleich.
 
 **Tachos:** Der Akku hat im Energiefluss einen Ring für seinen Ladestand (grün ab halb voll, orange darunter, rot
 unter einem Fünftel); lädt er, läuft ein heller Funke den Ring entlang. Bei „Sonne erzeugt“ zeigt ein Balken, wie
-viel vom heute erwarteten Ertrag schon da ist („von ≈ 12 kWh erwartet“), und neben „außen 4°“ steht das Wetter
+viel vom heute erwarteten Ertrag schon da ist („von ≈ 12 kWh“, ist er erreicht: „Prognose ≈ 12 kWh“), und neben
+„außen 4°“ steht das Wetter
 des Tages als Symbol.
 
 **Sonne & Wetter ☀️ (ganz unten):** Heute, morgen und übermorgen: wie der Himmel wird (sonnig, heiter,

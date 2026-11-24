@@ -11210,8 +11210,8 @@ def _tv_weather_hooks(out: dict, fr: dict | None) -> None:
     for t in out.get("today") or []:
         if t.get("id") == "pv":
             t["bar"] = round(min(1.0, made / exp), 3)
-            t["sub"] = (f"von ≈ {_tv_num(exp, 1)} kWh erwartet" if made < exp
-                        else f"mehr als erwartet (≈ {_tv_num(exp, 1)} kWh)")
+            # short – the tile is narrow; the bar shows how far along it is
+            t["sub"] = f"von ≈ {_tv_num(exp, 1)} kWh" if made < exp else f"Prognose ≈ {_tv_num(exp, 1)} kWh"
 
 
 def compute_calendar(ctx, days: int = 7, force: bool = False, settings: dict | None = None) -> dict:
