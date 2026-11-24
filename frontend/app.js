@@ -94,8 +94,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v229';   // short tag shown always-on in the header
-const APP_VERSION = 'v229 · 2026-11-24 · Apple TV: Die erste Seite passt jetzt genau auf den Fernseher – vorher war sie höher als der Bildschirm, tvOS hat sie mittig gesetzt und oben abgeschnitten. Ganz unten ein Laufband mit Fußball-Ergebnissen, den nächsten Spielen und Schlagzeilen; nach unten wischen zeigt alle Termine (mit Fußball), die Nachrichten und während der Routine die Räume. Senderknöpfe in einer Reihe, Routine-Aufgaben einzeilig. Neu im Setup: „⚽ Fußball im Kalender“ – Vereine und Nationalmannschaften suchen (auch auf Deutsch, z. B. „Türkei“), bis zu 8; ihre Spiele kommen aus dem freien Verzeichnis TheSportsDB als Termine ins Wohn-Dashboard und aufs Apple TV, eine Stunde vorher als Hinweis. „📰 Nachrichten“ – Vorschläge (tagesschau, Deutschlandfunk, SPIEGEL, ZEIT, kicker, NTV, Hürriyet, BBC) oder eine eigene RSS-/Atom-Adresse, jede wird vor dem Übernehmen geprüft; im Wohn-Dashboard stehen die neuesten Schlagzeilen. ' +
+const APP_BUILD = 'v230';   // short tag shown always-on in the header
+const APP_VERSION = 'v230 · 2026-11-24 · Apple TV: Die Räume bleiben rechts oben; die Kinder-Routine steht, solange sie läuft, als erste Karte unterhalb der ersten Seite (Kinder nebeneinander), oben bei den Hinweisen steht „Abendroutine: 3 von 12 erledigt – zum Abhaken nach unten wischen“. „Läuft gerade“ mit Cover jetzt auch an Feiertagen – dann etwas kleiner unter den Senderknöpfen. Den Songtitel liest jetzt die Bridge selbst aus dem Stream (auch ältere Shoutcast-Sender und Playlists, türkische Buchstaben richtig) und sucht das Cover; die TV-App fragt sie alle 20 Sekunden und sofort, wenn der Titel wechselt. Neu im Setup bei „Meine Sender“: 🎵 zeigt, was gerade läuft und ob ein Cover gefunden wurde – oder dass der Sender keine Titel schickt. Termine rechts oben erscheinen nur noch, wenn sie ganz hineinpassen (kein abgeschnittener Kasten mehr). ' +
+  'v229 · 2026-11-24 · Apple TV: Die erste Seite passt jetzt genau auf den Fernseher – vorher war sie höher als der Bildschirm, tvOS hat sie mittig gesetzt und oben abgeschnitten. Ganz unten ein Laufband mit Fußball-Ergebnissen, den nächsten Spielen und Schlagzeilen; nach unten wischen zeigt alle Termine (mit Fußball), die Nachrichten und während der Routine die Räume. Senderknöpfe in einer Reihe, Routine-Aufgaben einzeilig. Neu im Setup: „⚽ Fußball im Kalender“ – Vereine und Nationalmannschaften suchen (auch auf Deutsch, z. B. „Türkei“), bis zu 8; ihre Spiele kommen aus dem freien Verzeichnis TheSportsDB als Termine ins Wohn-Dashboard und aufs Apple TV, eine Stunde vorher als Hinweis. „📰 Nachrichten“ – Vorschläge (tagesschau, Deutschlandfunk, SPIEGEL, ZEIT, kicker, NTV, Hürriyet, BBC) oder eine eigene RSS-/Atom-Adresse, jede wird vor dem Übernehmen geprüft; im Wohn-Dashboard stehen die neuesten Schlagzeilen. ' +
   'v228 · 2026-11-24 · Apple TV: „Läuft gerade“-Karte oben in der Mitte, sobald Radio läuft – Cover (über Apples iTunes-Suche anhand von Interpret und Titel, nur bei passendem Interpreten), sonst das Senderlogo; Titel, Interpret, Equalizer-Balken, das Cover unscharf als Farblicht. Senderlogos kommen aus dem Verzeichnis und stehen auch im Setup. Außerdem: Kinder-Routine rechts statt der Räume (Energie bleibt sichtbar), Fokus der Fernbedienung erreicht die Häkchen und startet auf der ersten offenen Aufgabe, Geburtstagsbanner anklickbar für neues Konfetti. ' +
   'v227 · 2026-11-24 ·Radio auf dem Apple TV 📻: Setup → „Radio auf dem Apple TV“ – Sender suchen (freies Verzeichnis radio-browser.info, z. B. „Metropol FM“), mit ▶︎ am Handy probehören, mit ＋ übernehmen (bis zu 6; Stream-Adresse auch selbst eintragbar). Die Apple-TV-App zeigt sie rechts oben als Knöpfe und spielt sie selbst – das Dashboard bleibt vorne; darunter der laufende Titel, wenn der Sender ihn mitschickt. ' +
   'v226 · 2026-11-24 ·Kinder-Routine 🧒: Abhakliste je Kind (Setup → Kinder-Routine: zwei Namen mit Tier-Symbol, Uhrzeit, Aufgaben – „Name: Aufgabe“ gilt nur für ein Kind). Zur Abendzeit im Wohn-Dashboard mit großen Tippflächen und auf dem Apple TV zum Abhaken mit der Fernbedienung (dort statt des Energieflusses); die Bridge führt die Häkchen, alle Geräte zeigen denselben Stand. Wer fertig ist, bekommt Konfetti, ein Lob und einen ⭐ (geschaffte Abende der letzten 7 Tage). Zum Ausprobieren: „Heute zum Testen den ganzen Tag zeigen“ und „Häkchen von heute löschen“. Apple TV: Einstellungsseite mit eigenem Hintergrund. ' +
@@ -4084,6 +4085,7 @@ function renderRadioSetup() {
   const box = $('rdo-list'); if (!box) return;
   const L = radioList(), play = u => (_radioPlaying === u ? '■' : '▶︎');
   box.innerHTML = L.length ? L.map((s, i) => `<div class="rdo-row">${radioLogo(s.logo)}<span class="rdo-n"><b>${esc(s.name)}</b><small>${esc(s.url)}</small></span>` +
+      `<button class="btn sec" data-rdo-now="${i}" aria-label="Was läuft? Titel und Cover prüfen">🎵</button>` +
       `<button class="btn sec" data-rdo-play="${esc(s.url)}" aria-label="Probehören">${play(s.url)}</button>` +
       `<button class="btn sec" data-rdo-del="${i}" aria-label="Entfernen">✕</button></div>`).join('')
     : '<div class="note">Noch kein Sender – oben suchen, z. B. „Metropol FM“.</div>';
@@ -4116,13 +4118,37 @@ function radioPreview(url) {
     .catch(() => { if (_radioPlaying === url) _radioPlaying = ''; if (note) note.textContent = '⚠︎ Dieser Stream spielt hier nicht – einen anderen Treffer probieren.'; renderRadioSetup(); });
   renderRadioSetup();
 }
+// 🎵: what a station plays now – the bridge reads the title from the stream and
+// looks for the cover, exactly what the Apple TV shows; says so when a stream
+// sends no titles (then there can be no cover, only the station's logo)
+async function radioNowCheck(st) {
+  const box = $('rdo-now'); if (!box || !st) return;
+  box.innerHTML = `<div class="note">🎵 ${esc(st.name)}: frage den Stream …</div>`;
+  let r = null;
+  try { r = await api('/api/radio/now?fresh=1&url=' + encodeURIComponent(st.url)); } catch (e) {}
+  if (!r) { box.innerHTML = '<div class="note">Nur möglich, wenn die Seite von der Bridge geöffnet ist (Bridge ab v230).</div>'; return; }
+  const img = r.cover || st.logo;
+  const pic = /^https?:\/\/[^\s"'<>]+$/i.test(img || '')
+    ? `<img class="rdo-cover${r.cover ? '' : ' rdo-cover-logo'}" src="${esc(img)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">` : '';
+  let text;
+  if (!r.ok) text = `⚠︎ ${esc(r.error || 'Stream nicht lesbar')}`;
+  else if (r.song) text = `<b>${esc(r.title || r.song)}</b>${r.artist ? `<span>${esc(r.artist)}</span>` : ''}` +
+    `<small>${r.cover ? '✅ Cover gefunden – so erscheint es auf dem Apple TV.'
+      : 'Kein Cover gefunden (bei Moderation, Werbung oder Sendernamen normal) – das Apple TV zeigt dann das Senderlogo.'}</small>`;
+  else if (r.reason === 'hls') text = 'Dieser Sender sendet im HLS-Format – seine Titel liest nur das Apple TV selbst (falls er welche mitschickt).';
+  else if (r.reason === 'empty') text = 'Der Sender schickt gerade keinen Titel (z. B. Nachrichten oder Werbung) – in ein paar Minuten noch einmal prüfen.';
+  else text = '⚠︎ Dieser Stream schickt keine Songtitel – ohne Titel gibt es kein Cover, das Apple TV zeigt dann das Senderlogo.';
+  box.innerHTML = `<div class="rdo-now">${pic}<div class="rdo-now-t"><small class="rdo-now-h">🎵 ${esc(st.name)} – läuft gerade</small>${text}</div></div>`;
+}
 function initRadioSetup() {
   const s = $('rdo-search'); if (s) s.addEventListener('click', radioSearch);
   const q = $('rdo-q'); if (q) q.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); radioSearch(); } });
   const card = $('radio-card'); if (card) card.addEventListener('click', e => {
     const pl = e.target.closest('[data-rdo-play]'), ad = e.target.closest('[data-rdo-add]'), de = e.target.closest('[data-rdo-del]');
+    const nw = e.target.closest('[data-rdo-now]');
     const note = $('rdo-note'), L = radioList();
-    if (pl) radioPreview(pl.dataset.rdoPlay);
+    if (nw) radioNowCheck(L[+nw.dataset.rdoNow]);
+    else if (pl) radioPreview(pl.dataset.rdoPlay);
     else if (ad) {
       const st = _radioFound[+ad.dataset.rdoAdd]; if (!st) return;
       if (L.some(x => x.url === st.url)) { if (note) note.textContent = 'Den Sender gibt es schon in deiner Liste.'; return; }

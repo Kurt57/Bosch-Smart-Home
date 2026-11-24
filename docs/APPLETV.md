@@ -27,18 +27,18 @@ zeigt die App höchstens 2 Hinweis-Kacheln (weitere als Zeile „+ N weitere: �
 wie darunter Platz haben.
 
 **Kinder-Routine 🧒:** Läuft eine Routine (z. B. die Abendroutine, eingerichtet in der App unter Setup →
-*Kinder-Routine*), steht rechts statt der Raumliste je Kind eine Abhakliste (die Energie links bleibt sichtbar;
-ein Raum, um den man sich kümmern sollte, erscheint weiter als Hinweis-Kachel). Der Fokus der Fernbedienung
-startet auf der ersten offenen Aufgabe, sonst vom ⚙︎ nach unten wischen. Klicken hakt ab, noch einmal klicken nimmt
-den Haken zurück. Die Liste ist dieselbe wie im Wohn-Dashboard (die Bridge führt sie). Wer alles geschafft hat,
-bekommt Konfetti und einen ⭐.
+*Kinder-Routine*), steht sie als erste Karte **unterhalb der ersten Seite** – die Kinder nebeneinander, je Kind eine
+Abhakliste. Die erste Seite bleibt wie immer (Energie, Räume); oben bei den Hinweisen steht dann „🌙 Abendroutine:
+3 von 12 erledigt – zum Abhaken nach unten wischen“. Von den Senderknöpfen aus einmal nach unten wischen landet auf
+den Aufgaben. Klicken hakt ab, noch einmal klicken nimmt den Haken zurück. Die Liste ist dieselbe wie im
+Wohn-Dashboard (die Bridge führt sie). Wer alles geschafft hat, bekommt Konfetti und einen ⭐.
 
 **Platz auf dem Fernseher – erste Seite und „weiter unten“:** Die erste Seite ist genau so hoch wie der Bildschirm
-(nichts rutscht mehr oben heraus): Kopfzeile, Hinweise, Energie, Heute, rechts Radio und Räume bzw. Routine, ganz
-unten ein **Laufband** mit Fußball-Ergebnissen, den nächsten Spielen und Schlagzeilen. Alles Weitere liegt darunter –
-**nach unten wischen**: alle Termine (mit den Fußballspielen), die Nachrichten und, während die Routine läuft, die
-Räume. Jede dieser Karten leuchtet auf, wenn der Fokus auf ihr liegt, und die Seite rollt mit; nach oben wischen
-führt zurück.
+(nichts rutscht mehr oben heraus): Kopfzeile, Hinweise, Energie, Heute, rechts Radio, Räume und – wenn noch Platz
+ist – die nächsten Termine, ganz unten ein **Laufband** mit Fußball-Ergebnissen, den nächsten Spielen und
+Schlagzeilen. Alles Weitere liegt darunter – **nach unten wischen**: die Kinder-Routine (während sie läuft), alle
+Termine (mit den Fußballspielen) und die Nachrichten. Jede dieser Karten leuchtet auf, wenn der Fokus auf ihr liegt,
+und die Seite rollt mit; nach oben wischen führt zurück.
 
 **Fußball ⚽ und Nachrichten 📰:** Mannschaften (Vereine und Nationalmannschaften) und Nachrichten-Feeds stellst du in
 der App im Setup ein (siehe [DASHBOARD.md](DASHBOARD.md)). Die Spiele stehen bei den Terminen und kündigen sich eine
@@ -47,11 +47,17 @@ Stunde vorher als Hinweis an; Ergebnisse der letzten drei Tage und die nächsten
 **Radio 📻:** Sender, die du in der App unter Setup → *Radio auf dem Apple TV* eingetragen hast, stehen rechts
 oben als Knöpfe. Hinwischen und klicken spielt den Sender in der App selbst – das Dashboard bleibt vorne;
 noch einmal klicken stoppt. Oben in der Mitte erscheint dann eine **„Läuft gerade“-Karte**: Cover, Titel und
-Interpret, kleine Equalizer-Balken und das Cover unscharf als Farblicht dahinter. Streams schicken meist nur den
-Titeltext („Interpret – Titel“), kein Bild; das Cover sucht die App deshalb über Apples öffentliche iTunes-Suche
-(gesendet werden nur Interpret und Titel) und nimmt es nur, wenn der gefundene Interpret passt – sonst zeigt sie
-das Senderlogo aus dem Verzeichnis. An einem Feiertag gehört die Mitte dem Glückwunsch, der Titel steht dann
-unter den Senderknöpfen. Gefunden werden die
+Interpret, kleine Equalizer-Balken und das Cover unscharf als Farblicht dahinter. An einem Feiertag gehört die Mitte
+dem Glückwunsch – die Karte steht dann etwas kleiner (mit Cover) unter den Senderknöpfen.
+
+*Woher Titel und Cover kommen:* Streams schicken nur den Titeltext („Interpret – Titel“, die sogenannten
+ICY-Metadaten), kein Bild – und manche Sender gar keinen. Die **Bridge** liest den Titel selbst aus dem Stream (eine
+kurze Verbindung, wenige KB, alle 20 Sekunden während das Radio läuft; türkische Buchstaben werden richtig gelesen)
+und sucht das Cover über Apples öffentliche iTunes-Suche (gesendet werden nur Interpret und Titel). Das Cover wird nur
+genommen, wenn der gefundene Interpret passt – bei Moderation, Werbung oder Sendernamen steht das Senderlogo da.
+Schickt ein Sender keine Titel, gibt es auch kein Cover. Ob dein Sender Titel schickt, siehst du im Setup: bei
+*Meine Sender* auf 🎵 tippen – dort steht, was gerade läuft und ob ein Cover gefunden wurde. Bei Sendern im
+HLS-Format liest nur das Apple TV selbst die Titel (falls welche mitkommen). Gefunden werden die
 Sender im freien Verzeichnis [radio-browser.info](https://www.radio-browser.info) (Suche im Setup, z. B.
 „Metropol FM“, mit ▶︎ zum Probehören am Handy); feste Stream-Adressen sind nicht eingebaut, weil Sender sie ab und
 zu ändern. Verlässt du die App, stoppt das Radio. Die Lautstärke regelst du wie gewohnt am Fernseher.

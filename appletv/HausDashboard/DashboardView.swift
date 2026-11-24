@@ -155,8 +155,6 @@ struct DashboardView: View {
     var confettiTick = 0
     /// clicks on the birthday banner – confetti again
     @State private var partyTaps = 0
-    /// where the remote's focus starts: the first open task of a running routine
-    @Namespace private var focusNS
 
     /// 0 … 1: how much of the house the sun covers right now (warms the light).
     private var warmth: Double {
@@ -183,10 +181,22 @@ struct DashboardView: View {
         return n
     }
 
+    /// While the children's routine runs (its card lies below the first screen):
+    /// a hint among the alerts – how far they are, and where to tick off.
+    private func routineHint(_ payload: TVPayload) -> [TVAlert] {
+        guard let routine = payload.routines?.first, routine.all_done != true else { return [] }
+        let done = routine.kids.reduce(0) { $0 + $1.done }
+        let total = routine.kids.reduce(0) { $0 + $1.total }
+        let until = routine.to.map { "bis " + $0 + " Uhr · " } ?? ""
+        return [TVAlert(id: "routine-hint", level: "info", icon: routine.emoji ?? "✅",
+                        title: "\(routine.title): \(done) von \(total) erledigt",
+                        detail: until + "zum Abhaken nach unten wischen", blink: nil)]
+    }
+
     // The first screen is exactly as high as the TV – nothing gets pushed off the
-    // top any more. Everything else (all dates with the football matches, the
-    // news, the rooms while the routine has their place) lies below it: swipe
-    // down and the page scrolls along with the remote's focus.
+    // top any more. Everything else (the children's routine while it runs, all
+    // dates with the football matches, the news) lies below it: swipe down and
+    // the page scrolls along with the remote's focus.
     var body: some View {
         GeometryReader { geo in
             ScrollView(.vertical, showsIndicators: false) {
@@ -196,11 +206,12 @@ struct DashboardView: View {
                     }
                     .frame(height: geo.size.height)
                     if let payload = model.payload {
-                        MoreSections(payload: payload, showRooms: payload.routines?.first != nil)
-                            .padding(.bottom, 40)
+                        MoreSections(payload: payload) { routine, kid, item in
+                            Task { await model.toggleRoutine(routine: routine, kid: kid, item: item) }
+                        }
+                        .padding(.bottom, 40)
                     }
                 }
-                .focusScope(focusNS)
             }
             .scrollClipDisabled()
         }
@@ -219,7 +230,7 @@ struct DashboardView: View {
                 HStack(alignment: .top, spacing: 36) {
                     // energy always stays in view
                     VStack(alignment: .leading, spacing: 22) {
-                        AlertsView(alerts: payload.alerts ?? [], more: payload.more ?? 0)
+                        AlertsView(alerts: (payload.alerts ?? []) + routineHint(payload), more: payload.more ?? 0)
                         if let live = payload.live, !(payload.flow ?? []).isEmpty {
                             EnergyFlowCard(live: live, tiles: payload.flow ?? [], note: payload.note)
                         } else {
@@ -233,17 +244,11 @@ struct DashboardView: View {
                     // so swiping down from the top right always lands on it
                     VStack(alignment: .leading, spacing: 22) {
                         if !(payload.radio ?? []).isEmpty || radio.playingID != nil {
+                            // on a birthday the banner has the header: what plays sits here then
                             RadioBar(stations: payload.radio ?? [], radio: radio, showsTitle: payload.party != nil)
                         }
-                        if let routine = payload.routines?.first {
-                            // while the children's routine runs it takes the place of the rooms
-                            // (a room that needs attention still shows up as a tile on the left)
-                            RoutineCard(routine: routine, focusNS: focusNS) { kid, item in
-                                Task { await model.toggleRoutine(routine: routine.id, kid: kid, item: item) }
-                            }
-                        } else {
-                            RoomsView(rooms: payload.rooms ?? [])
-                        }
+                        // the rooms always stay up here; the routine (a few hours a day) is below
+                        RoomsView(rooms: payload.rooms ?? [])
                         EventsView(events: payload.events ?? [])
                     }
                     .frame(width: 620, alignment: .topLeading)
@@ -272,14 +277,18 @@ struct DashboardView: View {
 // MARK: - Below the first screen
 
 /// Reached by swiping down: every card can take the remote's focus, so the
-/// page scrolls along. All dates (with the football matches), the news, and
-/// the rooms while the children's routine uses their place above.
+/// page scrolls along. First the children's routine while it runs (one swipe
+/// down lands on its tasks), then all dates (with the football matches) and
+/// the news.
 private struct MoreSections: View {
     let payload: TVPayload
-    let showRooms: Bool
+    let toggle: (String, String, String) -> Void          // routine, kid, item
 
     var body: some View {
         VStack(alignment: .leading, spacing: 28) {
+            if let routine = payload.routines?.first {
+                RoutineCard(routine: routine) { kid, item in toggle(routine.id, kid, item) }
+            }
             HStack(alignment: .top, spacing: 36) {
                 if !(payload.events ?? []).isEmpty {
                     FocusCard {
@@ -291,12 +300,6 @@ private struct MoreSections: View {
                         NewsCard(news: payload.news ?? [])
                     }
                 }
-            }
-            if showRooms && !(payload.rooms ?? []).isEmpty {
-                FocusCard {
-                    RoomsView(rooms: payload.rooms ?? [])
-                }
-                .frame(maxWidth: 900, alignment: .leading)
             }
         }
     }
@@ -1015,6 +1018,8 @@ struct EventsView: View {
                 EventsCard(events: Array(events.prefix(6)))
                 EventsCard(events: Array(events.prefix(4)))
                 EventsCard(events: Array(events.prefix(2)))
+                // too little room left: nothing rather than a cut-off card (all dates are below)
+                Color.clear.frame(height: 0)
             }
             .frame(maxHeight: .infinity, alignment: .top)
         }
@@ -1062,6 +1067,8 @@ struct EventsCard: View {
 struct NowPlayingCard: View {
     let station: TVRadioStation
     @ObservedObject var radio: RadioPlayer
+    /// the small one under the station buttons (on a birthday the banner has the header)
+    var compact = false
 
     private var parts: (artist: String?, title: String) {
         RadioPlayer.split(radio.nowPlaying ?? "")
@@ -1072,38 +1079,39 @@ struct NowPlayingCard: View {
     }
 
     var body: some View {
-        HStack(spacing: 18) {
+        let side: CGFloat = compact ? 76 : 104
+        HStack(spacing: compact ? 14 : 18) {
             CoverView(url: art, isLogo: radio.cover == nil)
-                .frame(width: 104, height: 104)
-            VStack(alignment: .leading, spacing: 4) {
+                .frame(width: side, height: side)
+            VStack(alignment: .leading, spacing: compact ? 2 : 4) {
                 HStack(spacing: 8) {
                     EqualizerBars()
                         .frame(width: 22, height: 16)
                     Text("LÄUFT GERADE · " + station.name.uppercased())
-                        .font(.system(size: 15, weight: .bold))
+                        .font(.system(size: compact ? 13 : 15, weight: .bold))
                         .tracking(1.2)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
                 Text(parts.artist == nil ? (radio.nowPlaying ?? station.name) : parts.title)
-                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                    .font(.system(size: compact ? 23 : 28, weight: .bold, design: .rounded))
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
                 if let artist = parts.artist {
                     Text(artist)
-                        .font(.system(size: 22, weight: .medium))
+                        .font(.system(size: compact ? 18 : 22, weight: .medium))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)
                 }
             }
-            .frame(maxWidth: 520, alignment: .leading)
+            .frame(maxWidth: compact ? CGFloat.infinity : 520, alignment: .leading)
         }
-        .padding(.leading, 12)
-        .padding(.trailing, 26)
-        .padding(.vertical, 12)
+        .padding(.leading, compact ? 8 : 12)
+        .padding(.trailing, compact ? 16 : 26)
+        .padding(.vertical, compact ? 8 : 12)
         .background(CoverGlow(url: radio.cover))
-        .glassCard(28)
+        .glassCard(compact ? 22 : 28)
         .animation(.easeInOut(duration: 0.6), value: radio.cover)
         .animation(.easeInOut(duration: 0.4), value: radio.nowPlaying)
     }
@@ -1191,17 +1199,20 @@ private struct EqualizerBars: View {
 }
 
 /// The stations from the app's Setup as buttons: click plays, click again stops.
-/// What plays stands in the header; here only when the header is taken (party).
+/// What plays stands in the header; here – small, with the cover – only when the
+/// header is taken (birthday banner).
 struct RadioBar: View {
     let stations: [TVRadioStation]
     @ObservedObject var radio: RadioPlayer
     var showsTitle = true
 
     private var line: String? {
-        if let problem = radio.problem { return "⚠︎ " + problem }
+        radio.problem.map { "⚠︎ " + $0 }
+    }
+
+    private var playing: TVRadioStation? {
         guard showsTitle, let id = radio.playingID else { return nil }
-        let name = stations.first(where: { $0.id == id })?.name ?? "Radio"
-        return "📻 " + name + " · " + (radio.nowPlaying ?? "läuft")
+        return stations.first(where: { $0.id == id })
     }
 
     var body: some View {
@@ -1240,8 +1251,10 @@ struct RadioBar: View {
             if let line {
                 Text(line)
                     .font(.system(size: 19, weight: .medium))
-                    .foregroundStyle(radio.problem == nil ? Color.secondary : Color.orange)
+                    .foregroundStyle(Color.orange)
                     .lineLimit(1)
+            } else if let playing {
+                NowPlayingCard(station: playing, radio: radio, compact: true)
             }
         }
     }
@@ -1274,24 +1287,12 @@ private struct RadioChipBody: View {
 
 // MARK: - Kinder-Routine
 
-/// The children's checklist (e.g. the evening routine) in the right column, under
-/// the gear: one block per child, the tasks two by two, every task a button –
-/// select it with the remote and click to tick it off. The remote starts on the
-/// first open task.
+/// The children's checklist (e.g. the evening routine) – the first card below the
+/// first screen while it runs: the children side by side, their tasks two by two,
+/// every task a button – swipe down, select it with the remote, click to tick it off.
 struct RoutineCard: View {
     let routine: TVRoutine
-    let focusNS: Namespace.ID
     let toggle: (String, String) -> Void          // kid, item
-
-    /// "kid/item" of the task the remote should start on: the first one not done
-    private var firstOpen: String? {
-        for kid in routine.kids {
-            if let item = kid.items.first(where: { !$0.done }) {
-                return kid.id + "/" + item.id
-            }
-        }
-        return nil
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -1307,8 +1308,11 @@ struct RoutineCard: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
             }
-            ForEach(routine.kids) { kid in
-                KidBlock(kid: kid, focusNS: focusNS, preferred: firstOpen) { item in toggle(kid.id, item) }
+            // the children side by side – below the first screen there is the whole width
+            HStack(alignment: .top, spacing: 16) {
+                ForEach(routine.kids) { kid in
+                    KidBlock(kid: kid) { item in toggle(kid.id, item) }
+                }
             }
         }
         .padding(20)
@@ -1320,8 +1324,6 @@ struct RoutineCard: View {
 
 private struct KidBlock: View {
     let kid: TVRoutineKid
-    let focusNS: Namespace.ID
-    let preferred: String?
     let toggle: (String) -> Void
     private let maxItems = 8
     private let columns = [GridItem(.flexible(), spacing: 10, alignment: .topLeading),
@@ -1361,7 +1363,6 @@ private struct KidBlock: View {
                     }
                     .buttonStyle(RoutineItemStyle())
                     .focusEffectDisabled()
-                    .prefersDefaultFocus(preferred == kid.id + "/" + item.id, in: focusNS)
                 }
             }
             if kid.items.count > maxItems {
@@ -1389,7 +1390,7 @@ private struct RoutineItemLabel: View {
             if let e = item.emoji, !e.isEmpty {
                 Text(e).font(.system(size: 24))
             }
-            // one line – the routine has to fit on the first screen
+            // one line per task – the card stays compact
             Text(item.text)
                 .font(.system(size: 22, weight: .semibold))
                 .strikethrough(item.done)

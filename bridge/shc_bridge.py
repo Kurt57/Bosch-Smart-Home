@@ -11226,6 +11226,8 @@ class Runtime:
         self.wx_cache = {}              # weather for the PV views: {"key", "ts", "hourly", "error"}
         self.news_cache = {}            # feed url -> {"ts", "items", "title", "error"}
         self.football_cache = {}        # team id -> {"ts", "next", "last", "error"}
+        self.radio_now_cache = {}       # stream url -> {"ts", "out"}: what plays (radio_now)
+        self.cover_cache = {}           # "artist|title" -> {"ts", "url"}: album covers (iTunes)
         self._bg_lock = threading.Lock()
         self._bg_running: set = set()   # background refreshes in flight (news, football)
         self._cal_lock = threading.Lock()
@@ -13471,6 +13473,19 @@ class Handler(BaseHTTPRequestHandler):
                 except RuntimeError as exc:
                     return self._send_json({"ok": False, "error": str(exc), "teams": []})
                 return self._send_json({"ok": True, "teams": found})
+            if path == "/api/radio/now":
+                # what a station plays and the album cover – the Apple TV asks by the
+                # station's id while it plays, Setup by the stream address
+                sid, url, name = qs.get("id", [""])[0].strip(), qs.get("url", [""])[0].strip(), None
+                if sid:
+                    hit = next((s for s in _tv_radio(self._settings_load()) if s["id"] == sid), None)
+                    if not hit:
+                        return self._send_json({"ok": False, "error": "Sender nicht (mehr) in der Liste"})
+                    url, name = hit["url"], hit["name"]
+                if not URL_RX.match(url):
+                    return self._send_json({"ok": False, "error": "Stream-Adresse fehlt"}, 400)
+                return self._send_json({**radio_now(self.ctx, url, fresh=qs.get("fresh", [""])[0] == "1"),
+                                        "station": name})
             if path == "/api/radio/search":
                 try:
                     found = radio_search(qs.get("q", [""])[0], self.cfg.get("radio_browser_base") or None)
@@ -14590,6 +14605,209 @@ def radio_search(q: str, base: str | None = None, timeout: float = 8.0) -> list:
                     else ""})
         if len(out) >= 15:
             break
+    return out
+
+
+# ---- What the radio plays: the stream's own title (ICY) and the album cover ----
+# Streams carry the title in their ICY metadata. The Apple TV does not show it for
+# every stream (and reads Turkish letters wrongly), so the bridge reads it itself,
+# the way radio players do – one short connection of a few KB – and looks the
+# cover up in Apple's iTunes search (only artist and title are sent there).
+RADIO_NOW_AGE = 15                     # s a title read from a stream is reused
+ITUNES_SEARCH = "https://itunes.apple.com/search"
+_NAME_STOP = {"the", "and", "feat", "with", "von", "und", "der", "die", "das", "les", "los", "ile"}
+
+
+def _icy_decode(raw: bytes) -> str:
+    """Stream titles name no character set: UTF-8 when it is valid, else the
+    Turkish Windows set (for German letters the same as the Western one)."""
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode("cp1254", "replace")
+
+
+def _icy_open(url: str, timeout: float):
+    """GET a stream asking for ICY titles – follows redirects and copes with the
+    old 'ICY 200 OK' answer. Returns (reader, socket, headers, final url)."""
+    from urllib.parse import urljoin
+    for _ in range(5):
+        u = urlparse(url)
+        if u.scheme not in ("http", "https") or not u.hostname:
+            raise RuntimeError("keine http(s)-Adresse")
+        sock = socket.create_connection((u.hostname, u.port or (443 if u.scheme == "https" else 80)),
+                                        timeout=timeout)
+        try:
+            if u.scheme == "https":
+                sock = ssl.create_default_context().wrap_socket(sock, server_hostname=u.hostname)
+            path = quote(u.path or "/", safe="/%:@!$&'()*+,;=-._~") + ("?" + u.query if u.query else "")
+            sock.sendall((f"GET {path} HTTP/1.0\r\nHost: {u.netloc.rpartition('@')[2]}\r\n"
+                          "User-Agent: EnergieBridge/1.0\r\nIcy-MetaData: 1\r\nAccept: */*\r\n"
+                          "Connection: close\r\n\r\n").encode("latin-1", "replace"))
+            f = sock.makefile("rb")
+            status = f.readline(512).decode("latin-1", "replace").split()
+            headers: dict = {}
+            for _ in range(100):
+                line = f.readline(8192)
+                if not line or line in (b"\r\n", b"\n"):
+                    break
+                k, _, v = line.decode("latin-1", "replace").partition(":")
+                headers[k.strip().lower()] = v.strip()
+            code = int(status[1]) if len(status) > 1 and status[1].isdigit() else 0
+        except Exception:
+            sock.close()
+            raise
+        if code in (301, 302, 303, 307, 308) and headers.get("location"):
+            f.close()
+            sock.close()
+            url = urljoin(url, headers["location"])
+            continue
+        if code != 200:
+            f.close()
+            sock.close()
+            raise RuntimeError(f"der Stream antwortet mit {code or 'Unbekanntem'}")
+        return f, sock, headers, url
+    raise RuntimeError("zu viele Weiterleitungen")
+
+
+def icy_title(url: str, timeout: float = 8.0) -> dict:
+    """The title a stream plays right now, from its ICY metadata:
+    {"meta": stream sends titles at all, "song": "Artist - Title" | None,
+     "name": the station's own name, "reason": why there is none}."""
+    name = None
+    for _ in range(3):                   # a playlist (.m3u / .pls) points to the stream
+        f, sock, headers, final = _icy_open(url, timeout)
+        try:
+            ctype = headers.get("content-type", "").split(";")[0].strip().lower()
+            name = " ".join(_icy_decode(headers.get("icy-name", "").encode("latin-1", "replace")).split())[:60] or name
+            if ctype in ("audio/x-mpegurl", "audio/mpegurl", "application/vnd.apple.mpegurl",
+                         "application/x-mpegurl", "audio/x-scpls") \
+                    or urlparse(final).path.lower().endswith((".m3u", ".m3u8", ".pls")):
+                text = f.read(65536).decode("utf-8", "replace")
+                if "#EXT-X-" in text:            # HLS: titles travel inside the segments
+                    return {"meta": False, "song": None, "name": name, "reason": "hls"}
+                m = re.search(r"(?im)^(?:File\d+=)?\s*(https?://\S+)", text)
+                if not m:
+                    return {"meta": False, "song": None, "name": name, "reason": "playlist"}
+                url = m.group(1)
+                continue
+            try:
+                metaint = int(headers.get("icy-metaint") or 0)
+            except ValueError:
+                metaint = 0
+            if not 0 < metaint <= 1_000_000:
+                return {"meta": False, "song": None, "name": name, "reason": "no-icy"}
+            block = b""
+            for _ in range(2):               # some servers send an empty block first
+                left = metaint
+                while left > 0:
+                    chunk = f.read(min(left, 65536))
+                    if not chunk:
+                        raise RuntimeError("der Stream bricht ab")
+                    left -= len(chunk)
+                n = f.read(1)
+                if not n:
+                    raise RuntimeError("der Stream bricht ab")
+                block = f.read(n[0] * 16) if n[0] else b""
+                if block.strip(b"\0"):
+                    break
+            m = re.search(rb"StreamTitle='(.*?)';", block, re.S) or re.search(rb"StreamTitle='([^\0]*)", block, re.S)
+            song = " ".join(_icy_decode(m.group(1)).replace("\0", " ").split())[:200] if m else ""
+            return {"meta": True, "song": song or None, "name": name, "reason": None if song else "empty"}
+        finally:
+            f.close()
+            sock.close()
+    return {"meta": False, "song": None, "name": name, "reason": "playlist"}
+
+
+def _song_parts(song: str | None) -> tuple:
+    """'Artist - Title' (the usual stream title) → (artist, title); else (None, song)."""
+    for sep in (" - ", " – ", " — "):
+        a, s, t = (song or "").partition(sep)
+        if s and a.strip() and t.strip():
+            return a.strip(), t.strip()
+    return None, song
+
+
+def _name_fold(s) -> str:
+    return " ".join(_ascii_fold(str(s or "")).casefold().split())
+
+
+def _names_match(have: str, want: str) -> bool:
+    """Same artist? Folded names contain each other or share a real word."""
+    if not have or not want:
+        return False
+    if have in want or want in have:
+        return True
+    words = lambda s: {w for w in re.split(r"[^0-9a-z]+", s) if len(w) >= 3 and w not in _NAME_STOP}
+    return bool(words(have) & words(want))
+
+
+def itunes_cover(artist: str, title: str, base: str | None = None, timeout: float = 5.0) -> str | None:
+    """The album cover from Apple's iTunes search – only when the artist found
+    matches the one the station named (slogans and ads get no stray cover)."""
+    from urllib.parse import urlencode
+    want = _name_fold(artist)
+    if not want:
+        return None
+    for country in ("DE", "TR"):
+        q = urlencode({"term": f"{artist} {title or ''}".strip()[:120], "media": "music", "entity": "song",
+                       "limit": "5", "country": country})
+        try:
+            data = json.loads(_http_get(f"{base or ITUNES_SEARCH}?{q}", timeout=timeout, max_bytes=600_000) or b"{}")
+        except Exception:
+            continue
+        for hit in (data or {}).get("results") or [] if isinstance(data, dict) else []:
+            if not isinstance(hit, dict):
+                continue
+            art = str(hit.get("artworkUrl100") or "")
+            if URL_RX.match(art) and _names_match(_name_fold(hit.get("artistName")), want):
+                return art.replace("100x100bb", "600x600bb")
+    return None
+
+
+def _radio_cover(ctx, artist: str, title: str) -> str | None:
+    key = _name_fold(artist) + "|" + _name_fold(title)
+    hit = ctx.cover_cache.get(key)
+    if hit and time.time() - hit["ts"] < (6 * 3600 if hit["url"] else 900):
+        return hit["url"]
+    url = itunes_cover(artist, title, ctx.cfg.get("itunes_base") or None)
+    if len(ctx.cover_cache) > 300:
+        ctx.cover_cache.clear()
+    ctx.cover_cache[key] = {"ts": time.time(), "url": url}
+    return url
+
+
+def radio_now(ctx, url: str, fresh: bool = False) -> dict:
+    """What a station plays right now and the cover (kept a few seconds, so
+    several screens asking cost one connection)."""
+    now = time.time()
+    ent = ctx.radio_now_cache.get(url)
+    if ent and now - ent["ts"] < (5 if fresh else RADIO_NOW_AGE):
+        return ent["out"]
+    err = None
+    try:
+        r = icy_title(url, timeout=8)
+    except (socket.timeout, TimeoutError):
+        r, err = {}, "der Sender antwortet nicht (Zeitüberschreitung)"
+    except OSError as exc:
+        r, err = {}, f"Sender nicht erreichbar ({exc.strerror or exc})"
+    except Exception as exc:
+        r, err = {}, str(exc)[:160]
+    song = r.get("song")
+    artist, title = _song_parts(song)
+    cover = None
+    if artist:
+        cover = _radio_cover(ctx, artist, title)
+        if cover is None and title and _radio_cover(ctx, title, artist):   # some send "Title - Artist"
+            artist, title = title, artist
+            cover = _radio_cover(ctx, artist, title)
+    out = {"ok": err is None, "meta": r.get("meta"), "song": song, "artist": artist, "title": title,
+           "cover": cover, "name": r.get("name"), "reason": r.get("reason") if err is None else "error",
+           "error": err}
+    if len(ctx.radio_now_cache) > 30:
+        ctx.radio_now_cache.clear()
+    ctx.radio_now_cache[url] = {"ts": now, "out": out}
     return out
 
 

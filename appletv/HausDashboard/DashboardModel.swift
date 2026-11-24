@@ -136,6 +136,13 @@ struct TVTickerItem: Decodable, Identifiable {
     let text: String
 }
 
+/// What a station plays, as the bridge read it from the stream (GET /api/radio/now).
+struct RadioNowAnswer: Decodable {
+    let song: String?
+    let cover: String?
+    let meta: Bool?
+}
+
 /// A radio station from the app's Setup (found via radio-browser.info).
 struct TVRadioStation: Decodable, Identifiable {
     let id: String
@@ -169,6 +176,10 @@ final class RadioPlayer: NSObject, ObservableObject, AVPlayerItemMetadataOutputP
     private var statusObservation: NSKeyValueObservation?
     private var coverTask: Task<Void, Never>?
     private var coverCache: [String: URL] = [:]
+    /// asks the bridge what plays – it reads the stream's titles itself and finds the cover
+    private var bridgeTask: Task<Void, Never>?
+    /// the bridge knows this station's titles: the stream's own then only says "changed"
+    private var bridgeKnows = false
 
     /// Click on a station: play it – or stop it, when it is the one playing.
     func toggle(_ station: TVRadioStation) {
@@ -206,6 +217,10 @@ final class RadioPlayer: NSObject, ObservableObject, AVPlayerItemMetadataOutputP
         nowPlaying = nil
         problem = nil
         newPlayer.play()
+        let id = station.id
+        Task { @MainActor [weak self] in
+            self?.followBridge(id, fresh: true)
+        }
     }
 
     func stop() {
@@ -214,6 +229,9 @@ final class RadioPlayer: NSObject, ObservableObject, AVPlayerItemMetadataOutputP
         statusObservation = nil
         coverTask?.cancel()
         coverTask = nil
+        bridgeTask?.cancel()
+        bridgeTask = nil
+        bridgeKnows = false
         playingID = nil
         nowPlaying = nil
         cover = nil
@@ -242,6 +260,81 @@ final class RadioPlayer: NSObject, ObservableObject, AVPlayerItemMetadataOutputP
             }
             self.cover = found
         }
+    }
+
+    /// While a station plays: every 20 s – and right after the stream says the song
+    /// changed – ask the bridge what plays and for the cover.
+    @MainActor private func followBridge(_ stationID: String, fresh: Bool) {
+        bridgeTask?.cancel()
+        bridgeTask = Task { @MainActor [weak self] in
+            var fresh = fresh
+            while !Task.isCancelled {
+                let answer = await RadioPlayer.askBridge(stationID, fresh: fresh)
+                guard !Task.isCancelled, let self, self.playingID == stationID else { return }
+                if let answer {
+                    self.applyBridge(answer)
+                }
+                fresh = false
+                // a stream without titles (or a bridge that cannot tell) is asked less often
+                let seconds: UInt64 = answer?.meta == true ? 20 : 120
+                try? await Task.sleep(nanoseconds: seconds * 1_000_000_000)
+            }
+        }
+    }
+
+    /// The bridge's answer: when it can read the stream's titles, its title and
+    /// cover win; otherwise the stream's own titles (as the Apple TV gets them) stay.
+    @MainActor private func applyBridge(_ answer: RadioNowAnswer) {
+        guard answer.meta == true else {
+            bridgeKnows = false
+            return
+        }
+        bridgeKnows = true
+        let song = answer.song?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if song.isEmpty {                          // news, talk, ads: just the station
+            if nowPlaying != nil {
+                nowPlaying = nil
+                coverTask?.cancel()
+                cover = nil
+            }
+            return
+        }
+        let art = answer.cover.flatMap { URL(string: $0) }
+        if song != nowPlaying {
+            nowPlaying = song
+            coverTask?.cancel()
+            cover = art
+        } else if let art, cover != art {
+            cover = art
+        }
+    }
+
+    /// GET /api/radio/now?id=… (nil when the bridge does not answer – an older
+    /// bridge, say; then the stream's own titles are shown).
+    nonisolated static func askBridge(_ stationID: String, fresh: Bool) async -> RadioNowAnswer? {
+        let raw = UserDefaults.standard.string(forKey: "bridgeURL") ?? ""
+        let path = "/api/radio/now?id=" + stationID + (fresh ? "&fresh=1" : "")
+        guard let url = DashboardModel.endpoint(raw, path: path) else { return nil }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 15
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        guard let result = try? await URLSession.shared.data(for: request),
+              (result.1 as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+        return try? JSONDecoder().decode(RadioNowAnswer.self, from: result.0)
+    }
+
+    /// Stream titles carry no character set and arrive read as Latin-1: UTF-8
+    /// titles then look garbled ("Ã¼" for "ü"), Turkish Windows ones show "Þ"/"ý"
+    /// for "Ş"/"ı" – both are put right here.
+    nonisolated static func repair(_ text: String) -> String {
+        for encoding in [String.Encoding.isoLatin1, .windowsCP1252] {
+            if let bytes = text.data(using: encoding), bytes.contains(where: { $0 >= 0xC2 && $0 <= 0xF4 }),
+               let fixed = String(data: bytes, encoding: .utf8), fixed != text {
+                return fixed
+            }
+        }
+        let turkish: [Character: Character] = ["Þ": "Ş", "þ": "ş", "Ð": "Ğ", "ð": "ğ", "Ý": "İ", "ý": "ı"]
+        return String(text.map { turkish[$0] ?? $0 })
     }
 
     /// "Artist - Title" (the usual stream title) → its parts; anything else is
@@ -302,17 +395,38 @@ final class RadioPlayer: NSObject, ObservableObject, AVPlayerItemMetadataOutputP
     nonisolated func metadataOutput(_ output: AVPlayerItemMetadataOutput,
                                     didOutputTimedMetadataGroups groups: [AVTimedMetadataGroup],
                                     from track: AVPlayerItemTrack?) {
+        // ICY streams send "StreamTitle"; others (HLS) title and artist apart
+        var streamTitle: String?
         var title: String?
-        for group in groups where title == nil {
+        var artist: String?
+        var other: String?
+        for group in groups {
             for item in group.items {
-                if let text = item.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
-                    title = text
-                    break
+                guard let raw = item.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !raw.isEmpty else { continue }
+                let text = RadioPlayer.repair(raw)
+                if item.identifier == .icyMetadataStreamTitle {
+                    streamTitle = streamTitle ?? text
+                } else if item.commonKey == .commonKeyTitle {
+                    title = title ?? text
+                } else if item.commonKey == .commonKeyArtist {
+                    artist = artist ?? text
+                } else if item.identifier != .icyMetadataStreamURL {
+                    other = other ?? text
                 }
             }
         }
+        var found = streamTitle
+        if found == nil, let title {
+            found = artist.map { $0 + " - " + title } ?? title
+        }
+        let text = found ?? other
         Task { @MainActor in
-            self.setNowPlaying(title)
+            if self.bridgeKnows, let id = self.playingID {
+                self.followBridge(id, fresh: true)      // the song changed – the bridge reads it right
+            } else {
+                self.setNowPlaying(text)
+            }
         }
     }
 }
@@ -390,7 +504,7 @@ final class DashboardModel: ObservableObject {
     }
 
     /// "192.168.2.20", "mac.local:8090", "http://…/" → http://…:8090/api/tv
-    static func endpoint(_ raw: String, path: String = "/api/tv") -> URL? {
+    nonisolated static func endpoint(_ raw: String, path: String = "/api/tv") -> URL? {
         var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if s.isEmpty { return nil }
         let lower = s.lowercased()
