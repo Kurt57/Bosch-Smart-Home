@@ -12348,6 +12348,7 @@ class Handler(BaseHTTPRequestHandler):
             self.ctx.fr_state["identity"] = {k: v for k, v in ident.items() if k != "flow"}
             self.ctx.fr_state["live"] = ident.get("flow")
         self.ctx.calc_clear("pv")
+        self.ctx.calc_clear("pvday")
         self.ctx.calc_clear("house")
         return self._send_json({"ok": True, "identity": ident, "demo": self.ctx.mode == "demo"})
 
@@ -12993,6 +12994,19 @@ class Handler(BaseHTTPRequestHandler):
                 except ValueError:
                     pdays = 30
                 price, feedin = self._pv_prices(qs)
+                # one finished day to page through (PV tab): the same day math with
+                # that day's end as "now" – its 15-min curve, strings and totals
+                pday = qs.get("day", [""])[0]
+                if pday and pday < _local_day(int(time.time())):
+                    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", pday):
+                        return self._send_json({"ok": False, "error": "day=JJJJ-MM-TT erwartet."}, 400)
+                    try:
+                        d_end = _day_bounds(pday)[1] - 1
+                    except ValueError:
+                        return self._send_json({"ok": False, "error": "day=JJJJ-MM-TT erwartet."}, 400)
+                    return self._send_json(self.ctx.calc_get(
+                        ("pvday", pday, price, feedin), 600,
+                        lambda: {**compute_pv(self.store, 1, price, feedin, now=d_end), "day": pday}))
                 return self._send_json(self.ctx.calc_get(
                     ("pv", pdays, price, feedin), 60,
                     lambda: compute_pv(self.store, pdays, price, feedin)))

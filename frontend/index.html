@@ -126,6 +126,11 @@
   #hist-day #hist-day-label{flex:1; text-align:center; font-weight:700; font-size:14px}
   #hist-day button{flex:0 0 auto; width:auto; padding:8px 16px; margin:0; font-size:15px}
   #hist-day button:disabled{opacity:.35}
+  .pvdn{display:flex; gap:8px; align-items:center; margin:0 0 10px}
+  .pvdn[hidden]{display:none}
+  .pvdn .pvdn-l{flex:1; text-align:center; font-weight:700; font-size:14px}
+  .pvdn button{flex:0 0 auto; width:auto; padding:8px 16px; margin:0; font-size:15px}
+  .pvdn button:disabled{opacity:.35}
   #hist-custom{display:flex; gap:8px; margin:-4px 0 12px}
   #hist-custom[hidden]{display:none}
   .seg button{flex:1; border:none; background:transparent; color:var(--muted);
@@ -1351,12 +1356,13 @@
     <div class="card" id="pvr-hist-card" hidden>
       <h2><span class="info" data-info="pv-hist" role="button" aria-label="Info">i</span>📊 Erzeugung &amp; Verbrauch <span class="r" id="pvr-hist-head"></span></h2>
       <div class="seg" id="pvr-range" style="margin-bottom:10px">
-        <button data-d="1">Heute</button>
+        <button data-d="1">Tag</button>
         <button data-d="7">7 T</button>
         <button data-d="30" class="on">30 T</button>
         <button data-d="90">90 T</button>
         <button data-d="365">Jahr</button>
       </div>
+      <div class="pvdn" id="pvr-daynav" hidden></div>
       <div id="pvr-kpi"></div>
       <h2 style="font-size:14px;margin-top:14px">Wohin ging der Sonnenstrom?</h2>
       <div id="pvr-daily"></div>
@@ -1380,12 +1386,13 @@
       <h2><span class="info" data-info="pv-str" role="button" aria-label="Info">i</span>🧵 String-Vergleich <span class="r" id="pvr-str-head"></span></h2>
       <div id="pvr-str-live"></div>
       <div style="display:flex;align-items:center;gap:8px;margin-top:14px">
-        <h2 style="font-size:14px;margin:0;flex:1">Heute im Tagesverlauf</h2>
+        <h2 style="font-size:14px;margin:0;flex:1" id="pvr-str-day-h">Heute im Tagesverlauf</h2>
         <div class="seg" id="pvr-str-norm" style="padding:3px" hidden>
           <button data-n="0" class="on" style="padding:4px 10px;white-space:nowrap">kW</button>
           <button data-n="1" style="padding:4px 10px;white-space:nowrap">je kWp</button>
         </div>
       </div>
+      <div class="pvdn" id="pvr-str-daynav" style="margin-top:8px"></div>
       <div id="pvr-str-day"></div>
       <div class="legend" id="pvr-str-day-legend"></div>
       <h2 style="font-size:14px;margin-top:14px" id="pvr-str-daily-h">Tageswerte im Zeitraum</h2>

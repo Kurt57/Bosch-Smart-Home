@@ -19,10 +19,13 @@ Was du danach siehst:
   Wetterart (sonnig, heiter, wechselhaft, trüb; Regen/Schnee), **Sonnenstunden** von den Stunden
   Tageslicht, **Bewölkung**, Temperatur und dem **erwarteten Ertrag** (siehe „Wie gerechnet
   wird“). Im Verlauf („Erzeugung & Verbrauch“) unter den PV-Balken die **Sonnenstunden je Tag**
-  (bzw. je Stunde bei „Heute“, je Monat beim Jahr) genau darunter, das Wetter im Tooltip jedes
+  (bzw. je Stunde beim Zeitraum „Tag“, je Monat beim Jahr) genau darunter, das Wetter im Tooltip jedes
   Balkens und eine Zusammenfassung (Sonnenstunden, Bewölkung, sonnige/wechselhafte/trübe Tage,
   sonnigster und trübster Tag mit ihrem Ertrag).
-* **Zeitraum „Heute“** im Verlauf: dieselben Kennzahlen für heute, die Balken je Stunde.
+* **Zeitraum „Tag“** im Verlauf: dieselben Kennzahlen für einen Tag, die Balken je Stunde. Mit
+  **◀ ▶** blätterst du durch die Tage (bis zum ersten gespeicherten), „→ heute“ springt zurück.
+  Für frühere Tage steht das Tageswetter da (Wetter je Stunde gibt es nur für heute); ein Tag ohne
+  gespeicherte Werte wird benannt.
 * **PV-Planer → 🔬 Theorie vs. Praxis** (unter „PV-Nutzung pro Monat“): je Monat, was der Planer für
   deine Anlage erwartet, neben dem, was sie gemessen gemacht hat – vier Balken pro Monat (PV
   Theorie/Praxis aufgeteilt in direkt genutzt, in die Batterie, eingespeist; Verbrauch
@@ -178,8 +181,10 @@ hat zwei). Die Karte zeigt:
 * **Jetzt:** Leistung, Spannung und Strom je String, Anteil an der Summe und – sobald die kWp
   je String bekannt sind – Watt je kWp. Nachts bleibt an den Modulen eine kleine Spannung ohne
   Strom (z. B. 70 V und 49 V bei 0 A) – das ist normal.
-* **Heute im Tagesverlauf:** beide Strings als Kurven (Viertelstunden), umschaltbar auf
-  **je kWp**, damit unterschiedlich große Strings vergleichbar werden.
+* **Tagesverlauf:** beide Strings als Kurven (Viertelstunden), umschaltbar auf
+  **je kWp**, damit unterschiedlich große Strings vergleichbar werden. Mit **◀ ▶** durch die Tage
+  blättern – derselbe Tag wie in „Erzeugung & Verbrauch“; steht dort der Zeitraum „Tag“, gelten
+  auch Tabelle und Hinweise für diesen Tag.
 * **Tageswerte** (beim Jahr: Monatswerte) je String und eine Tabelle über den gewählten
   Zeitraum: Energie und Anteil, kWp, **kWh je kWp**, Spitzenleistung, **„erzeugt im Mittel
   um“** (Schwerpunkt der Tageserzeugung – Ostdächer liefern früher, Westdächer später) und die

@@ -94,8 +94,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v221';   // short tag shown always-on in the header
-const APP_VERSION = 'v221 · 2026-11-22 · Smart Meter als Gesamtverbrauch – überall: Seit der PV-Anlage zählt dein Stromzähler nur noch den Netzbezug, den ganzen Hausverbrauch misst der Smart Meter. Übersicht (14 Tage), Heute (Summe, Stunden, Kreis), Verlauf (Tage, Monate, Tagesansicht je Stunde, Anteile mit Jahreshochrechnung) und Profil (Tagesprofil, Wochentage, Wärmekarte) zeigen jetzt das ganze Haus – aufgeteilt in Wärmepumpe, Smart-Home-Geräte und grau „nicht einzeln gemessen“. Prognosen, Börse und Konzept rechnen den Haushalt aus den letzten vollständigen Smart-Meter-Tagen (Haus minus Wärmepumpe) statt aus den Zählerablesungen. Setup → 🔢 Stromzähler & Smart Meter: Ablesungen mit Uhrzeit und optional Einspeisung (2.8.0); die App vergleicht jeden Zeitraum mit dem Smart Meter (✓ bis 2 %, ≈ erklärbar durch fehlende Uhrzeit, ⚠︎ darüber; Tippfehler werden erkannt). Behoben: Verlauf „Tag“ brach ab (zwei gleichnamige Funktionen); die Tagesansicht zeigt jetzt auch Wärmepumpe und Rest. ' +
+const APP_BUILD = 'v222';   // short tag shown always-on in the header
+const APP_VERSION = 'v222 · 2026-11-24 · PV: Durch Tage blättern – in „Erzeugung & Verbrauch“ (Zeitraum „Tag“, bisher „Heute“) und im „String-Vergleich“ mit ◀ ▶ und „→ heute“. Beide Karten zeigen denselben Tag: Kennzahlen, Sonnenstrom und Strombezug je Stunde, die String-Kurven im 15-Minuten-Raster und (im Zeitraum „Tag“) die String-Tabelle mit Hinweisen; dazu das Tageswetter. Die Bridge rechnet einen früheren Tag mit derselben Tagesrechnung wie heute (GET /api/pv?days=1&day=…). Tage ohne gespeicherte Werte werden benannt. ' +
+  'v221 · 2026-11-22 · Smart Meter als Gesamtverbrauch – überall: Seit der PV-Anlage zählt dein Stromzähler nur noch den Netzbezug, den ganzen Hausverbrauch misst der Smart Meter. Übersicht (14 Tage), Heute (Summe, Stunden, Kreis), Verlauf (Tage, Monate, Tagesansicht je Stunde, Anteile mit Jahreshochrechnung) und Profil (Tagesprofil, Wochentage, Wärmekarte) zeigen jetzt das ganze Haus – aufgeteilt in Wärmepumpe, Smart-Home-Geräte und grau „nicht einzeln gemessen“. Prognosen, Börse und Konzept rechnen den Haushalt aus den letzten vollständigen Smart-Meter-Tagen (Haus minus Wärmepumpe) statt aus den Zählerablesungen. Setup → 🔢 Stromzähler & Smart Meter: Ablesungen mit Uhrzeit und optional Einspeisung (2.8.0); die App vergleicht jeden Zeitraum mit dem Smart Meter (✓ bis 2 %, ≈ erklärbar durch fehlende Uhrzeit, ⚠︎ darüber; Tippfehler werden erkannt). Behoben: Verlauf „Tag“ brach ab (zwei gleichnamige Funktionen); die Tagesansicht zeigt jetzt auch Wärmepumpe und Rest. ' +
   'v220 · 2026-11-22 · PV-Tab: neue Kachel „Verbrauch heute“ (im Verlauf „Verbrauch“ für den gewählten Zeitraum) – derselbe Wert wie „Verbrauch“ in Fronius Solar.web, zum direkten Vergleich. Eigenverbrauch und Autarkie runden nicht mehr auf „100 %“ (oder „0 %“), wenn es nicht genau so ist: 99,6 % Eigenverbrauch bei 0,1 kWh Einspeisung steht jetzt als 99,6 % da (auch im Wohn-Dashboard und auf dem Apple TV). ' +
   'v219 · 2026-11-21 · Apple TV: Das Wohn-Dashboard gibt es als eigene Apple-TV-App (Ordner appletv/, Anleitung docs/APPLETV.md – einmal mit Xcode aufs Apple TV spielen). Sie zeigt Uhr, Außentemperatur, Hinweise (Fenster offen, lüften, zu kalt, Termin gleich, Tonnen, Batterie lädt aus dem Netz, PV/Wärmepumpe ohne Werte), Energie jetzt, Heute, Räume und die nächsten Termine – fertig formuliert von der Bridge (neu: GET /api/tv, dieselben Regeln wie im Wohn-Dashboard, 20 s zwischengespeichert). Veraltete Wärmepumpen-Werte zeigt sie als „–“ statt als Stand von vor einer Stunde. Hinweis im Setup → Wohn-Dashboard. ' +
   'v218 · 2026-11-21 · Wohn-Dashboard: neuer Bereich „🎵 Musik“ mit deinen YouTube-Music-Playlists als Kacheln (Setup → Musik: Playlist-Link einfügen, Titel und Bild holt die Bridge bei öffentlichen Playlists selbst, private benennst du; Reihenfolge und Name änderbar; gilt auf allen Geräten). Antippen öffnet die Playlist in der YouTube-Music-App – HomePod dort per Cast/AirPlay. Optional Ein-Tipp über iOS-Kurzbefehle: HomePod im Dashboard wählen, das Dashboard startet „Musik Wohnzimmer“ o. ä. mit der Playlist. Abspielen/Steuern direkt aus dem Dashboard gibt es nicht – YouTube Music bietet dafür keine Schnittstelle. ' +
@@ -14172,7 +14173,7 @@ function wxHourTip(w) {
     (w.temp != null ? `, ${fmt(w.temp, 0)} °C` : '');
 }
 // sunshine per bar (same bars as "Wohin ging der Sonnenstrom?", so they line up)
-function paintPvSun(R, items, wxBy, wxH, useMonths, oneDay) {
+function paintPvSun(R, items, wxBy, wxH, useMonths, oneDay, dayKey) {
   const wrap = $('pvr-sun-wrap'); if (!wrap) return;
   const W = STATE.pvwx;
   if (!W || W.ok === false || !(W.daily || []).length) { wrap.hidden = true; return; }
@@ -14190,19 +14191,21 @@ function paintPvSun(R, items, wxBy, wxH, useMonths, oneDay) {
     rows = items.map(d => { const w = wxBy[d.day]; if (w) with_++;
       return { label: d.label, full: d.full, values: { sun: w ? w.sun_h || 0 : 0, rest: w ? Math.max(0, (w.daylight_h || 0) - (w.sun_h || 0)) : 0 } }; });
   }
-  if (!with_) { wrap.hidden = true; return; }
+  // a past day: no weather per hour (only today has it) – its daily weather still says how sunny it was
+  const dayW = oneDay ? wxBy[dayKey || _hpdDateStr(new Date())] : null;
+  if (!with_ && !dayW) { wrap.hidden = true; return; }
   wrap.hidden = false;
-  $('pvr-sun-h').textContent = oneDay ? '☀️ Sonne je Stunde laut Wetterdienst' : '☀️ Sonnenstunden laut Wetterdienst';
+  $('pvr-sun-h').textContent = oneDay ? (with_ ? '☀️ Sonne je Stunde laut Wetterdienst' : '☀️ Sonne laut Wetterdienst') : '☀️ Sonnenstunden laut Wetterdienst';
   const ser = [{ key: 'sun', color: '#f6b93b', label: 'Sonne' }, { key: 'rest', color: '#3a4766', label: 'Tageslicht ohne Sonne' }];
-  $('pvr-sun').innerHTML = stackedBar(rows, ser, { h: 120, unit });
-  $('pvr-sun-legend').innerHTML = legendHtml(ser.map(x => ({ label: x.label, color: x.color })));
+  $('pvr-sun').innerHTML = with_ ? stackedBar(rows, ser, { h: 120, unit }) : '';
+  $('pvr-sun-legend').innerHTML = with_ ? legendHtml(ser.map(x => ({ label: x.label, color: x.color }))) : '';
   // summary for the range: sunshine, cloud cover, kinds of days, best and worst day
   const ds = oneDay ? [] : (R.daily || []).map(d => ({ d, w: wxBy[d.day] })).filter(x => x.w && x.w.sun_h != null);
   let txt = '';
   if (oneDay) {
-    const w = wxBy[_hpdDateStr(new Date())], k = wxKind(w);
-    if (k) txt = `${k.ic} Heute ${k.txt}: ${fmt(w.sun_h, 1)} von ${fmt(w.daylight_h, 1)} h Tageslicht mit Sonne` +
-      (w.cloud != null ? `, Bewölkung Ø ${fmt(w.cloud, 0)} %` : '') + ' (für den ganzen Tag, inkl. Vorhersage).';
+    const w = dayW, k = wxKind(w);
+    if (k) txt = `${k.ic} ${dayKey ? 'Am ' + longDay(dayKey) : 'Heute'} ${k.txt}: ${fmt(w.sun_h, 1)} von ${fmt(w.daylight_h, 1)} h Tageslicht mit Sonne` +
+      (w.cloud != null ? `, Bewölkung Ø ${fmt(w.cloud, 0)} %` : '') + (dayKey ? '.' : ' (für den ganzen Tag, inkl. Vorhersage).');
   } else if (ds.length) {
     const sun = ds.reduce((a, x) => a + x.w.sun_h, 0), cl = ds.filter(x => x.w.cloud != null);
     const kinds = { sun: 0, mix: 0, dull: 0 }; ds.forEach(x => { const k = wxKind(x.w); if (k && kinds[k.cls] != null) kinds[k.cls]++; });
@@ -14218,13 +14221,75 @@ function paintPvSun(R, items, wxBy, wxH, useMonths, oneDay) {
   $('pvr-sun-note').innerHTML = txt + ` <span style="color:var(--muted)">Quelle: ${W.demo ? 'Demo-Wetter' : 'Open-Meteo (Wettermodell für deinen Standort, keine Messstation)'}.</span>`;
 }
 
+/* ---- PV: one day to page through – shared by "Erzeugung & Verbrauch" (range
+   "Tag") and the string comparison. STATE.pvDay null = today (live values). */
+function pvDayKey() { return STATE.pvDay || ymdLocal(new Date()); }
+function pvDayIsToday() { return !STATE.pvDay || STATE.pvDay >= ymdLocal(new Date()); }
+function pvFirstDay() {
+  const s = (STATE.fr && STATE.fr.today && STATE.fr.today.since) || (STATE.pv && STATE.pv.since);
+  return s ? ymdLocal(new Date(s * 1000)) : null;
+}
+function pvDayShift(n) {
+  const t = new Date(pvDayKey() + 'T12:00'); t.setDate(t.getDate() + n);
+  const k = ymdLocal(t), first = pvFirstDay();
+  STATE.pvDay = k >= ymdLocal(new Date()) ? null : (first && k < first ? first : k);
+}
+function pvDayNavHtml() {
+  const k = pvDayKey(), today = pvDayIsToday(), first = pvFirstDay();
+  const rel = dayLabelRel(new Date(k + 'T00:00'));
+  const lbl = today ? 'Heute' : (/^(gestern|vorgestern)$/.test(rel) ? rel[0].toUpperCase() + rel.slice(1) + ' · ' : '') + longDay(k);
+  return `<button class="btn sec" data-pvd="-1" aria-label="voriger Tag"${first && k <= first ? ' disabled' : ''}>◀</button>` +
+    `<div class="pvdn-l">${lbl}${today ? '' : ' <a href="#" data-pvd="0" style="font-weight:500;font-size:12px;color:var(--accent);margin-left:6px">→ heute</a>'}</div>` +
+    `<button class="btn sec" data-pvd="1" aria-label="nächster Tag"${today ? ' disabled' : ''}>▶</button>`;
+}
+const _pvDayBusy = {}, _pvDayFail = {};
+async function loadPvDay(day) {
+  STATE.pvDayData = STATE.pvDayData || {};
+  if (STATE.pvDayData[day] || _pvDayBusy[day] || Date.now() - (_pvDayFail[day] || 0) < 20000) return;
+  _pvDayBusy[day] = true;
+  let ok = false;
+  try {
+    const r = await api('/api/pv?days=1&day=' + day);
+    if (r && r.ok) {
+      STATE.pvDayData[day] = r; ok = true;
+      const keys = Object.keys(STATE.pvDayData);              // keep the last 20 days in memory
+      if (keys.length > 20) delete STATE.pvDayData[keys[0]];
+    }
+  } catch (e) { /* tried again with the next paint, not before 20 s */ }
+  finally { delete _pvDayBusy[day]; }
+  if (!ok) { _pvDayFail[day] = Date.now(); return; }
+  if (day === STATE.pvDay) { paintPvHist(); renderPvStrings(); }
+}
+// the selected day's evaluation: today the live one, else the fetched day (null while loading)
+function pvDayResult() {
+  if (pvDayIsToday()) return (STATE.fr && STATE.fr.today) || null;
+  const R = (STATE.pvDayData || {})[STATE.pvDay];
+  if (!R) loadPvDay(STATE.pvDay);
+  return R || null;
+}
+
 function paintPvHist() {
-  const R = STATE.pv, F = STATE.fr || {}, kp = $('pvr-kpi'); if (!kp || !R) return;
+  const F = STATE.fr || {}, kp = $('pvr-kpi'); if (!kp) return;
   const ids = ['pvr-daily', 'pvr-daily-legend', 'pvr-src', 'pvr-src-legend', 'pvr-typ', 'pvr-typ-legend', 'pvr-months', 'pvr-hist-note'];
+  // range "Tag": the selected day (◀ ▶), today with the live values
+  const dayMode = STATE.pvDays === 1, pastDay = dayMode && !pvDayIsToday();
+  const dn = $('pvr-daynav'); if (dn) { dn.hidden = !dayMode; if (dayMode) dn.innerHTML = pvDayNavHtml(); }
+  const R = pastDay ? pvDayResult() : STATE.pv;
+  if (!R) {
+    if (pastDay) {
+      kp.innerHTML = `<div class="note">Lade ${longDay(STATE.pvDay)} …</div>`;
+      ids.forEach(id => { const e = $(id); if (e) e.innerHTML = ''; });
+      const sw = $('pvr-sun-wrap'); if (sw) sw.hidden = true;
+    }
+    return;
+  }
   if (R.empty) {
-    kp.innerHTML = '<div class="note">Im Zeitraum gibt es noch keine gespeicherten Werte – die Bridge speichert ab der Verbindung jede Minute einen Wert.</div>';
+    kp.innerHTML = pastDay
+      ? `<div class="note">Für ${longDay(STATE.pvDay)} sind keine Werte gespeichert – die Bridge oder der Wechselrichter war an dem Tag nicht erreichbar.</div>`
+      : '<div class="note">Im Zeitraum gibt es noch keine gespeicherten Werte – die Bridge speichert ab der Verbindung jede Minute einen Wert.</div>';
     ids.forEach(id => { const e = $(id); if (e) e.innerHTML = ''; });
-    $('pvr-hist-head').textContent = '';
+    const sw = $('pvr-sun-wrap'); if (sw) sw.hidden = true;
+    $('pvr-hist-head').textContent = pastDay ? longDay(STATE.pvDay) : '';
     renderPvStrings(); renderPvChecks();
     return;
   }
@@ -14240,12 +14305,13 @@ function paintPvHist() {
   kp.innerHTML = `<div class="pvk">${k}</div>`;
   const first = R.daily.length ? R.daily[0].day : null, last = R.daily.length ? R.daily[R.daily.length - 1].day : null;
   const oneDay = R.days === 1;
-  $('pvr-hist-head').innerHTML = first ? `<span style="color:var(--muted)">${oneDay ? 'heute' : dayLabel(first) + '–' + dayLabel(last)}</span>` : '';
+  $('pvr-hist-head').innerHTML = first ? `<span style="color:var(--muted)">${oneDay ? (pastDay ? longDay(first) : 'heute') : dayLabel(first) + '–' + dayLabel(last)}</span>` : '';
   // bars per day – per hour for "Heute", per month for the year view – with
   // the weather of that day/hour in the tooltip
   const useMonths = R.days > 120;
   const wxBy = {}; ((STATE.pvwx && STATE.pvwx.daily) || []).forEach(w => { wxBy[w.day] = w; });
-  const wxH = {}; ((STATE.pvwx && STATE.pvwx.hours) || []).forEach(w => { wxH[w.h] = w; });
+  // the weather per hour exists for today only
+  const wxH = {}; if (!pastDay) ((STATE.pvwx && STATE.pvwx.hours) || []).forEach(w => { wxH[w.h] = w; });
   const items = oneDay ? pvHourItems(R).map(x => Object.assign(x, { full: x.full + wxHourTip(wxH[x.h]) }))
     : useMonths ? R.monthly.map(m => Object.assign({}, m, { label: MON[+m.month.slice(5, 7) - 1], full: MON[+m.month.slice(5, 7) - 1] + ' ' + m.month.slice(0, 4) }))
     : R.daily.map(d => Object.assign({}, d, { label: dayLabel(d.day).slice(0, 3),
@@ -14270,7 +14336,7 @@ function paintPvHist() {
     $('pvr-src').innerHTML = '<div class="note">Ohne Smart Meter keine Aufteilung nach Netz und eigenem Strom.</div>';
     $('pvr-src-legend').innerHTML = '';
   }
-  paintPvSun(R, items, wxBy, wxH, useMonths, oneDay);
+  paintPvSun(R, items, wxBy, wxH, useMonths, oneDay, pastDay ? STATE.pvDay : null);
   // "Heute": the hourly bars above already are the day; no typical day, no months
   // (style, not the hidden attribute: .legend sets its own display)
   ['pvr-typ-h', 'pvr-typ', 'pvr-typ-legend', 'pvr-months'].forEach(id => { const e = $(id); if (e) e.style.display = oneDay ? 'none' : ''; });
@@ -14493,9 +14559,11 @@ function pvStrLive(F, cfg, K) {
 }
 
 // today in 15-min steps: one line per string (kW, or W per kWp)
-function pvStrDayChart(series, norm, K) {
+// dayKey: the day shown ('YYYY-MM-DD', default today) – the "now" line only today
+function pvStrDayChart(series, norm, K, dayKey) {
   const h = 170, pad = 30, padR = 8, top = 12, base = h - 22, n = 96;
-  const mid = new Date(); mid.setHours(0, 0, 0, 0);
+  const isToday = !dayKey || dayKey === ymdLocal(new Date());
+  const mid = isToday ? new Date() : new Date(dayKey + 'T00:00'); mid.setHours(0, 0, 0, 0);
   const t0 = mid.getTime() / 1000;
   const pts = new Array(n).fill(null);
   (series || []).forEach(p => { const i = Math.round((p.t - t0) / 900); if (i >= 0 && i < n) pts[i] = p; });
@@ -14519,7 +14587,7 @@ function pvStrDayChart(series, norm, K) {
   };
   let labels = '';
   for (let hh = 0; hh <= 24; hh += 3) labels += `<text class="axis" x="${X(Math.min(n - 1, hh * 4)).toFixed(1)}" y="${h - 8}" text-anchor="middle">${hh}</text>`;
-  const now = Math.min(n - 1, Math.max(0, Math.round((Date.now() / 1000 - t0) / 900)));
+  const now = isToday ? Math.min(n - 1, Math.max(0, Math.round((Date.now() / 1000 - t0) / 900))) : n - 1;
   const f = v => v == null ? '–' : (norm ? fmt(v, 0) + ' W/kWp' : kwOrW(v * 1000));
   const tips = pts.map((p, i) => {
     const hh = String(Math.floor(i / 4)).padStart(2, '0') + ':' + String((i % 4) * 15).padStart(2, '0');
@@ -14531,7 +14599,7 @@ function pvStrDayChart(series, norm, K) {
   });
   return svg(h, gridLines(h, top, base, pad, max, { step: sc.step, unit: norm ? 'W/kWp' : 'kW' }) +
     [0, 1].map(k => `<path d="${path(k)}" fill="none" stroke="${STR_COL[k]}" stroke-width="2.3" stroke-linejoin="round"/>`).join('') +
-    `<line x1="${X(now).toFixed(1)}" y1="${top}" x2="${X(now).toFixed(1)}" y2="${base}" stroke="var(--muted)" stroke-width="1" stroke-dasharray="2 3" opacity=".6"/>` +
+    (isToday ? `<line x1="${X(now).toFixed(1)}" y1="${top}" x2="${X(now).toFixed(1)}" y2="${base}" stroke="var(--muted)" stroke-width="1" stroke-dasharray="2 3" opacity=".6"/>` : '') +
     labels, { kind: 'area', pad, padR, n, h, tips });
 }
 
@@ -14703,7 +14771,10 @@ function pvStrForm(cfg) {
 
 function renderPvStrings() {
   const card = $('pvr-str-card'); if (!card) return;
-  const F = STATE.fr, R = STATE.pv;
+  const F = STATE.fr;
+  const DR = pvDayResult(), pastDay = !pvDayIsToday();
+  // the table and notes follow the range above – in range "Tag" the selected day
+  const R = STATE.pvDays === 1 && pastDay ? DR : STATE.pv;
   const live = (pvInv1(F).strings || []).filter(s => s.n === 1 || s.n === 2);
   const S = R && !R.empty ? R.strings : null;
   if (!F || !F.connected || !(live.length >= 2 || (S && S.mpp2_kwh != null))) { card.hidden = true; return; }
@@ -14714,9 +14785,13 @@ function renderPvStrings() {
   const ns = $('pvr-str-norm');
   if (ns) { ns.hidden = !K; ns.querySelectorAll('button').forEach(b => b.classList.toggle('on', (b.dataset.n === '1') === norm)); }
   $('pvr-str-live').innerHTML = pvStrLive(F, cfg, K);
-  const ser = (F.today && F.today.series) || [];
+  const sdh = $('pvr-str-day-h'); if (sdh) sdh.textContent = pastDay ? 'Tagesverlauf ' + longDay(pvDayKey()) : 'Heute im Tagesverlauf';
+  const sdn = $('pvr-str-daynav'); if (sdn) sdn.innerHTML = pvDayNavHtml();
+  const ser = (DR && DR.series) || [];
   const hasSer = ser.some(p => p.mpp1_w != null || p.mpp2_w != null);
-  $('pvr-str-day').innerHTML = hasSer ? pvStrDayChart(ser, norm, K)
+  $('pvr-str-day').innerHTML = hasSer ? pvStrDayChart(ser, norm, K, pastDay ? pvDayKey() : null)
+    : pastDay && !DR ? `<div class="note">Lade ${longDay(pvDayKey())} …</div>`
+    : pastDay ? '<div class="note">Für diesen Tag gibt es keine String-Werte.</div>'
     : '<div class="note">Die String-Kurven füllen sich ab der ersten gespeicherten Minute mit String-Werten.</div>';
   $('pvr-str-day-legend').innerHTML = hasSer ? legendHtml([0, 1].map(i => ({ label: 'String ' + (i + 1) + (cfg[i].name ? ' · ' + cfg[i].name : ''), color: STR_COL[i] }))) : '';
   const hd = $('pvr-str-head');
@@ -15061,6 +15136,15 @@ function initPvReal() {
       if (STATE.pvwx && STATE.pvwx.days < STATE.pvDays) loadPvWeather(true);     // weather for the longer range
     });
   }
+  // ◀ ▶ / → heute: page through days (shared by both cards)
+  const vpv = $('v-pv');
+  if (vpv) vpv.addEventListener('click', e => {
+    const b = e.target.closest('[data-pvd]'); if (!b || b.disabled) return;
+    e.preventDefault();
+    const n = +b.dataset.pvd;
+    if (n === 0) STATE.pvDay = null; else pvDayShift(n);
+    paintPvHist(); renderPvStrings();
+  });
   const pc = $('pvr-card');
   if (pc) {
     pc.addEventListener('click', e => {
