@@ -14,7 +14,8 @@ Die App zeigt Uhr, Außentemperatur, Zuhause/Abwesend, **Hinweise** (Fenster off
 Termin in der nächsten Stunde, Mülltonnen, Batterie lädt aus dem Netz, PV/Wärmepumpe ohne Werte),
 **Energie jetzt** als bewegtes Bild – das Haus in der Mitte, Sonne, Batterie, Netz und Wärmepumpe drumherum,
 Punkte laufen in Flussrichtung, schneller bei mehr Leistung –, **Heute** (erzeugt, verbraucht, autark und
-Eigenverbrauch mit Ring, Netzbezug, Einspeisung, gespart), die **Räume** mit Thermometer-Balken (weißer Strich =
+Eigenverbrauch mit Ring, Netzbezug, Einspeisung, gespart – mit „+ ≈ … € im Akku“, solange heute Geladenes noch
+nicht verbraucht ist), die **Räume** mit Thermometer-Balken (weißer Strich =
 deine Wunschtemperatur) und die nächsten **Termine**. Glaskarten über einem langsam wandernden Farblicht, das
 warm wird, sobald die Sonne das Haus versorgt; Zahlen rollen beim Aktualisieren auf den neuen Wert. Sie rechnet
 nichts selbst: Alle 15 Sekunden holt sie `GET /api/tv` von der Bridge, dort steht alles fertig formuliert

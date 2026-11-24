@@ -9797,6 +9797,34 @@ def _pv_cnt_ok(a: dict) -> bool:
     return a["gap"] < 1800 and not a["cnt_bad"] and a["rows"] > 0 and a["cnt_rows"] >= 0.9 * a["rows"]
 
 
+PV_BATT_OUT_EFF = 0.95     # of the energy in the cells, about this much reaches the house (inverter losses)
+
+
+def pv_batt_pending(td: dict | None, details: dict | None, price: float, settings: dict | None = None) -> dict | None:
+    """What today's charging still holds: "gespart" counts battery energy only
+    once it supplies the house (consumption − import), so whatever was put in
+    today and not used yet raises the figure later – this evening, or tomorrow
+    if it is still in the battery at midnight. Net change of the battery level
+    since the day's first row × its size; None when nothing is pending or the
+    size is unknown (inverter details, else the size entered in the PV setup)."""
+    if not td:
+        return None
+    s0, s1 = td.get("soc_start"), td.get("soc_end")
+    if s0 is None or s1 is None or float(s1) <= float(s0):
+        return None
+    cap = ((details or {}).get("storage") or {}).get("capacity_wh")
+    if not cap:
+        try:
+            cap = float((settings or {}).get("bhe_pv_batt")) * 1000.0
+        except (TypeError, ValueError):
+            cap = None
+    if not cap or float(cap) <= 0:
+        return None
+    kwh = (float(s1) - float(s0)) / 100.0 * float(cap) / 1000.0 * PV_BATT_OUT_EFF
+    return {"kwh": round(kwh, 2), "eur": round(kwh * price, 2), "soc_start": round(float(s0), 1),
+            "soc_now": round(float(s1), 1), "cap_kwh": round(float(cap) / 1000.0, 2)}
+
+
 def _pv_day_result(a: dict, price: float, feedin: float) -> dict:
     """Energies of one day (kWh) + rates and money. Import/export come from the
     smart meter's counters when the day has no data gap (exact), otherwise from
@@ -9817,7 +9845,9 @@ def _pv_day_result(a: dict, price: float, feedin: float) -> dict:
            "mpp1_u": round(a["vw1"] / a["wv1"], 1) if a["wv1"] > 20 else None,
            "mpp2_u": round(a["vw2"] / a["wv2"], 1) if a["wv2"] > 20 else None,
            # share of a typical day's PV hours with data (1 = complete day)
-           "pv_cov": round(a["pv_cov"], 3)}
+           "pv_cov": round(a["pv_cov"], 3),
+           # battery level at the day's first and last row (→ pv_batt_pending)
+           "soc_start": a["soc0"], "soc_end": a["soc1"]}
     if a["has_load"]:
         load = a["load"]
         self_wh = max(0.0, a["pv"] - exp)
@@ -12285,6 +12315,11 @@ class Handler(BaseHTTPRequestHandler):
                                                  lambda: compute_pv(self.store, 1, price, feedin))
             except Exception as exc:
                 out["today_error"] = str(exc)
+            try:      # charged today, not used yet – "gespart" grows by this once the battery supplies the house
+                out["batt_pending"] = pv_batt_pending((out.get("today") or {}).get("today"), out.get("details"),
+                                                      price, self._settings_load())
+            except Exception:
+                out["batt_pending"] = None
             try:      # month / since connection: heavier, so refreshed every 10 min
                 out["money"] = self.ctx.calc_get(("pvmoney", 0, price, feedin), 600,
                                                  lambda: compute_pv_money(self.store, price, feedin))
@@ -13983,9 +14018,10 @@ def compute_tv(rooms: list, window_since: dict, outdoor_c, fr: dict | None, hp: 
     td = ((fr.get("today") or {}).get("today") or {}) if fr.get("connected") else {}
     today_tiles = []
     if td.get("load_kwh") is not None:
-        def tt(i, label, val, pct=None):
+        def tt(i, label, val, pct=None, sub=None):
             today_tiles.append({"id": i, "label": label, "value": val,
-                                **({"pct": round(float(pct), 3)} if pct is not None else {})})
+                                **({"pct": round(float(pct), 3)} if pct is not None else {}),
+                                **({"sub": sub} if sub else {})})
         if td.get("pv_kwh") is not None:
             tt("pv", "Sonne erzeugt", f"{_tv_num(td['pv_kwh'], 1)} kWh")
         tt("use", "Verbraucht", f"{_tv_num(td['load_kwh'], 1)} kWh")
@@ -13998,7 +14034,9 @@ def compute_tv(rooms: list, window_since: dict, outdoor_c, fr: dict | None, hp: 
         if td.get("exp_kwh") is not None:
             tt("exp", "Eingespeist", f"{_tv_num(td['exp_kwh'], 1)} kWh")
         if td.get("saved_eur") is not None:
-            tt("eur", "Gespart", f"{_tv_num(td['saved_eur'], 2)} €")
+            bp = fr.get("batt_pending") or {}
+            tt("eur", "Gespart", f"{_tv_num(td['saved_eur'], 2)} €",
+               sub=f"+ ≈ {_tv_num(bp['eur'], 2)} € im Akku" if (bp.get("eur") or 0) >= 0.05 else None)
 
     # rooms
     room_rows = []

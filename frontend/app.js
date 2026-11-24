@@ -94,8 +94,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v224';   // short tag shown always-on in the header
-const APP_VERSION = 'v224 · 2026-11-24 · Feier-Modus 🎉: An Geburtstagen und Jahrestagen zeigen Wohn-Dashboard, Haus-Dashboard und Apple TV einen Glückwunsch mit Konfetti (beim Öffnen, alle 10 Minuten, beim Antippen bzw. mit ▶︎❙❙), dazu ein Farblicht in Partyfarben; die App grüßt am Feiertag einmal pro Gerät. Einschalten unter Setup → Wohn-Dashboard → Feier-Modus („Heute feiern“, eigener Glückwunsch möglich) oder von selbst durch einen ganztägigen Kalendertermin mit „Geburtstag“, „Birthday“, „Doğum Günü“, „Jahrestag“, „Hochzeitstag“ oder 🎂. Endet um Mitternacht; „Beenden“ schaltet ihn für den Tag ab. Mit „Bewegung reduzieren“ ohne Konfetti. ' +
+const APP_BUILD = 'v225';   // short tag shown always-on in the header
+const APP_VERSION = 'v225 · 2026-11-24 · „gespart“ mit Akku-Anteil: Strom, der heute in den Akku ging und noch nicht verbraucht ist, steht jetzt neben „gespart“ als „+ ≈ … € im Akku“ – auf dem Apple TV (ohne neuen App-Build, kommt von der Bridge), im Wohn-Dashboard, im PV-Tab und in der Geldzeile des Banners. „gespart“ zählt Akku-Strom erst, wenn er das Haus versorgt; der Hinweis zeigt, um wie viel der Wert noch wächst (Ladestand-Zuwachs seit Mitternacht × Akkugröße × 95 % × Arbeitspreis). ' +
+  'v224 · 2026-11-24 · Feier-Modus 🎉: An Geburtstagen und Jahrestagen zeigen Wohn-Dashboard, Haus-Dashboard und Apple TV einen Glückwunsch mit Konfetti (beim Öffnen, alle 10 Minuten, beim Antippen bzw. mit ▶︎❙❙), dazu ein Farblicht in Partyfarben; die App grüßt am Feiertag einmal pro Gerät. Einschalten unter Setup → Wohn-Dashboard → Feier-Modus („Heute feiern“, eigener Glückwunsch möglich) oder von selbst durch einen ganztägigen Kalendertermin mit „Geburtstag“, „Birthday“, „Doğum Günü“, „Jahrestag“, „Hochzeitstag“ oder 🎂. Endet um Mitternacht; „Beenden“ schaltet ihn für den Tag ab. Mit „Bewegung reduzieren“ ohne Konfetti. ' +
   'v223 · 2026-11-24 · Apple TV aufgehübscht: Glaskarten über einem wandernden Farblicht (warm, wenn die Sonne das Haus versorgt), Uhr und Zahlen rollen auf neue Werte, „Energie jetzt“ als bewegtes Flussbild (Haus in der Mitte, Punkte laufen in Flussrichtung), Ringe für Autarkie und Eigenverbrauch, Thermometer-Balken je Raum, Zahnrad ohne große Fokusfläche. „Zu kalt“ misst jetzt gegen deine Wunschtemperatur aus dem Abgleich, sonst gegen das Thermostat-Soll, aber höchstens 22 °C – ein Thermostat auf 25 °C ist bei Wärmepumpen meist ein offenes Ventil (Apple TV und Wohn-Dashboard). ' +
   'v222 · 2026-11-24 · PV: Durch Tage blättern – in „Erzeugung & Verbrauch“ (Zeitraum „Tag“, bisher „Heute“) und im „String-Vergleich“ mit ◀ ▶ und „→ heute“. Beide Karten zeigen denselben Tag: Kennzahlen, Sonnenstrom und Strombezug je Stunde, die String-Kurven im 15-Minuten-Raster und (im Zeitraum „Tag“) die String-Tabelle mit Hinweisen; dazu das Tageswetter. Die Bridge rechnet einen früheren Tag mit derselben Tagesrechnung wie heute (GET /api/pv?days=1&day=…). Tage ohne gespeicherte Werte werden benannt. ' +
   'v221 · 2026-11-22 · Smart Meter als Gesamtverbrauch – überall: Seit der PV-Anlage zählt dein Stromzähler nur noch den Netzbezug, den ganzen Hausverbrauch misst der Smart Meter. Übersicht (14 Tage), Heute (Summe, Stunden, Kreis), Verlauf (Tage, Monate, Tagesansicht je Stunde, Anteile mit Jahreshochrechnung) und Profil (Tagesprofil, Wochentage, Wärmekarte) zeigen jetzt das ganze Haus – aufgeteilt in Wärmepumpe, Smart-Home-Geräte und grau „nicht einzeln gemessen“. Prognosen, Börse und Konzept rechnen den Haushalt aus den letzten vollständigen Smart-Meter-Tagen (Haus minus Wärmepumpe) statt aus den Zählerablesungen. Setup → 🔢 Stromzähler & Smart Meter: Ablesungen mit Uhrzeit und optional Einspeisung (2.8.0); die App vergleicht jeden Zeitraum mit dem Smart Meter (✓ bis 2 %, ≈ erklärbar durch fehlende Uhrzeit, ⚠︎ darüber; Tippfehler werden erkannt). Behoben: Verlauf „Tag“ brach ab (zwei gleichnamige Funktionen); die Tagesansicht zeigt jetzt auch Wärmepumpe und Rest. ' +
@@ -3181,6 +3182,13 @@ function kioskWashAdvice() {
 }
 
 /* ---- dashboard: cumulative values of the day (autarky ring + tiles) -------- */
+// charged into the battery today and not used yet: "gespart" counts it once the
+// battery supplies the house (bridge: pv_batt_pending) – so the figure still grows
+function battPendingEur() {
+  const F = STATE.fr, bp = F && F.connected && F.batt_pending;
+  return bp && bp.eur >= 0.05 ? bp.eur : null;
+}
+const BATT_PENDING_TIP = 'Heute in den Akku geladen und noch nicht verbraucht – wird zu „gespart“ gezählt, sobald der Akku das Haus versorgt (heute Abend oder nach Mitternacht am nächsten Tag).';
 function kioskTodayData() {
   const F = STATE.fr, d = F && F.connected && F.today && F.today.today;
   return d && d.load_kwh != null ? d : null;
@@ -3222,7 +3230,8 @@ function renderKioskToday() {
     tile('🏠', kw(d.load_kwh), 'verbraucht', d.hp_kwh != null && d.hp_kwh >= 0.1
       ? `Wärmepumpe ${kw(d.hp_kwh)}${d.hp_sun_share != null ? `, ${fmt(d.hp_sun_share * 100, 0)}\u00a0% Sonne` : ''}` : ''),
     tile('🔌', kw(d.imp_kwh), 'aus dem Netz', (d.exp_kwh || 0) >= 0.05 ? `${kw(d.exp_kwh)} eingespeist` : ''),
-    tile('💶', eur(d.saved_eur || 0), 'gespart', (d.feed_eur || 0) >= 0.005 ? `davon ${eur(d.feed_eur)} Einspeisung` : ''),
+    tile('💶', eur(d.saved_eur || 0), 'gespart', [battPendingEur() != null ? `+\u00a0≈\u00a0${eur(battPendingEur())} im\u00a0Akku` : '',
+      (d.feed_eur || 0) >= 0.005 ? `davon ${eur(d.feed_eur)} Einspeisung` : ''].filter(Boolean).join(' · ')),
   ];
   const soc = L.soc != null ? L.soc : null;
   if (soc != null) tiles.push(tile('🔋', fmt(soc, 0) + ' %', 'Batterie', d.soc_min != null ? `heute\u00a0${fmt(d.soc_min, 0)}–${fmt(Math.max(d.soc_max, soc), 0)}\u00a0%` : ''));
@@ -3256,7 +3265,8 @@ function kioskPvMoney() {
     line: `☀️ PV heute: <b>${e(t.self_eur)}</b> gespart` + ((t.feed_eur || 0) >= 0.005 ? ` + <b>${e(t.feed_eur)}</b> Einspeisung` : ''),
     sub: `Eigenverbrauch ${fmt(Math.max(0, (t.load_kwh || 0) - (t.imp_kwh || 0)), 1)} kWh × ${fmt(m.price * 100, 0)} ct · ` +
       `eingespeist ${fmt(t.exp_kwh || 0, 1)} kWh × ${fmt(m.feedin * 100, 1)} ct` +
-      (t.autarky != null ? ` · Autarkie ${fmt(t.autarky * 100, 0)} %` : '') + (parts.length ? ' · ' + parts.join(' · ') : '') +
+      (t.autarky != null ? ` · Autarkie ${fmt(t.autarky * 100, 0)} %` : '') +
+      (battPendingEur() != null ? ` · im Akku noch ≈ ${e(battPendingEur())}` : '') + (parts.length ? ' · ' + parts.join(' · ') : '') +
       (F.demo ? ' · Demo-Anlage' : '') };
 }
 // map a rating level (good/ok/warn/na) to a theme-aware kiosk colour token
@@ -13919,7 +13929,8 @@ function pvTodayKpis(T, L, MNY) {
   if (d.load_kwh != null) {
     h += tile(kwh(d.load_kwh, 1), 'Verbrauch heute') + tile(pctQ(d.autarky), 'Autarkie') + tile(pctQ(d.self_rate), 'Eigenverbrauch') +
       tile(kwh(d.exp_kwh, 1), 'eingespeist') + tile(kwh(d.imp_kwh, 1), 'Netzbezug') +
-      tile(money(d.saved_eur), 'gespart heute' + (d.feed_eur ? ` <span style="opacity:.8">(${eur(d.self_eur)} + ${eur(d.feed_eur)} Einsp.)</span>` : ''));
+      tile(money(d.saved_eur), 'gespart heute' + (d.feed_eur ? ` <span style="opacity:.8">(${eur(d.self_eur)} + ${eur(d.feed_eur)} Einsp.)</span>` : '') +
+        (battPendingEur() != null ? `<br><span style="opacity:.8" title="${esc(BATT_PENDING_TIP)}">+ ≈ ${eur(battPendingEur())} noch im Akku</span>` : ''));
     if (MNY && MNY.month && MNY.month.days > 1) h += tile(money(MNY.month.saved_eur), 'gespart diesen Monat');
     if (MNY && MNY.total && MNY.total.days > ((MNY.month && MNY.month.days) || 0))
       h += tile(money(MNY.total.saved_eur), `gespart seit ${new Date(MNY.since * 1000).toLocaleDateString('de-DE', { day: 'numeric', month: 'numeric', year: '2-digit' })}`);

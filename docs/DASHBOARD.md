@@ -22,7 +22,8 @@ Adresse öffnen (z. B. `http://<bridge>:8090/#dash`) und zum Homescreen hinzufü
 * **Heute** (mit PV-Anlage und Smart Meter): ein Ring mit der **Autarkie** – dem Anteil deines
   Verbrauchs, der nicht aus dem Netz kam – und daneben der Wert von gestern. Kacheln: **Sonne**
   (kWh, wie viel davon selbst genutzt), **verbraucht** (mit Wärmepumpe und ihrem Sonnenanteil),
-  **aus dem Netz** (und eingespeist), **gespart** (€, davon Einspeisung), **Batterie** (jetzt und
+  **aus dem Netz** (und eingespeist), **gespart** (€, davon Einspeisung; dazu „+ ≈ … € im Akku“, solange heute
+  Geladenes noch nicht verbraucht ist – siehe [FRONIUS.md](FRONIUS.md#so-rechnet-gespart)), **Batterie** (jetzt und
   heute min–max) und **CO₂ vermieden** (Sonnenstrom × CO₂-Gehalt des Netzstroms in derselben
   Stunde, dasselbe Modell wie im Tab Börse – eine Schätzung). Darunter 7 Tage, Monat, seit
   Anschluss und der beste Sonnentag. Auf breiten Bildschirmen (iPad quer) neben dem Energiefluss.

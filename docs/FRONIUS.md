@@ -63,6 +63,19 @@ Was du danach siehst:
   (gehört bei GEN24 mit Batterie praktisch immer dazu). Ohne ihn sieht der Wechselrichter nur
   die Erzeugung – die App zeigt dann nur die PV-Werte.
 
+## So rechnet „gespart“
+
+**gespart = (Hausverbrauch − Netzbezug) × Arbeitspreis + Einspeisung × Einspeisevergütung** (beides aus dem Setup).
+
+* Strom, der in den **Akku** geht, zählt erst, wenn er wieder herauskommt und das Haus versorgt – dann steigt
+  „gespart“ (meist am Abend). Was heute geladen und noch nicht verbraucht ist, steht daneben als
+  **„+ ≈ … € im Akku“**: Zuwachs des Ladestands seit Mitternacht × Akkugröße (vom Wechselrichter, sonst aus dem
+  PV-Setup) × 95 % (Wandlungsverluste) × Arbeitspreis.
+* Was um Mitternacht noch im Akku ist, zählt am nächsten Tag – Monat und „seit Anschluss“ stimmen trotzdem.
+* **Eingespeister** Strom bringt nur die Vergütung, nicht den Arbeitspreis; Lade-/Entladeverluste des Akkus
+  (grob 5–10 %) sparen nichts. Deshalb ergeben z. B. 10 kWh Sonne selten volle 10 × Arbeitspreis.
+* Lief die Bridge zeitweise nicht (Mac im Ruhezustand), fehlen diese Stunden – der PV-Tab zeigt sie als Lücke.
+
 ## Schritt für Schritt
 
 1. **IP-Adresse des Wechselrichters herausfinden:** in der Geräteliste deines Routers
