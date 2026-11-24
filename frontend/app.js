@@ -94,8 +94,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v223';   // short tag shown always-on in the header
-const APP_VERSION = 'v223 · 2026-11-24 · Apple TV aufgehübscht: Glaskarten über einem wandernden Farblicht (warm, wenn die Sonne das Haus versorgt), Uhr und Zahlen rollen auf neue Werte, „Energie jetzt“ als bewegtes Flussbild (Haus in der Mitte, Punkte laufen in Flussrichtung), Ringe für Autarkie und Eigenverbrauch, Thermometer-Balken je Raum, Zahnrad ohne große Fokusfläche. „Zu kalt“ misst jetzt gegen deine Wunschtemperatur aus dem Abgleich, sonst gegen das Thermostat-Soll, aber höchstens 22 °C – ein Thermostat auf 25 °C ist bei Wärmepumpen meist ein offenes Ventil (Apple TV und Wohn-Dashboard). ' +
+const APP_BUILD = 'v224';   // short tag shown always-on in the header
+const APP_VERSION = 'v224 · 2026-11-24 · Feier-Modus 🎉: An Geburtstagen und Jahrestagen zeigen Wohn-Dashboard, Haus-Dashboard und Apple TV einen Glückwunsch mit Konfetti (beim Öffnen, alle 10 Minuten, beim Antippen bzw. mit ▶︎❙❙), dazu ein Farblicht in Partyfarben; die App grüßt am Feiertag einmal pro Gerät. Einschalten unter Setup → Wohn-Dashboard → Feier-Modus („Heute feiern“, eigener Glückwunsch möglich) oder von selbst durch einen ganztägigen Kalendertermin mit „Geburtstag“, „Birthday“, „Doğum Günü“, „Jahrestag“, „Hochzeitstag“ oder 🎂. Endet um Mitternacht; „Beenden“ schaltet ihn für den Tag ab. Mit „Bewegung reduzieren“ ohne Konfetti. ' +
+  'v223 · 2026-11-24 · Apple TV aufgehübscht: Glaskarten über einem wandernden Farblicht (warm, wenn die Sonne das Haus versorgt), Uhr und Zahlen rollen auf neue Werte, „Energie jetzt“ als bewegtes Flussbild (Haus in der Mitte, Punkte laufen in Flussrichtung), Ringe für Autarkie und Eigenverbrauch, Thermometer-Balken je Raum, Zahnrad ohne große Fokusfläche. „Zu kalt“ misst jetzt gegen deine Wunschtemperatur aus dem Abgleich, sonst gegen das Thermostat-Soll, aber höchstens 22 °C – ein Thermostat auf 25 °C ist bei Wärmepumpen meist ein offenes Ventil (Apple TV und Wohn-Dashboard). ' +
   'v222 · 2026-11-24 · PV: Durch Tage blättern – in „Erzeugung & Verbrauch“ (Zeitraum „Tag“, bisher „Heute“) und im „String-Vergleich“ mit ◀ ▶ und „→ heute“. Beide Karten zeigen denselben Tag: Kennzahlen, Sonnenstrom und Strombezug je Stunde, die String-Kurven im 15-Minuten-Raster und (im Zeitraum „Tag“) die String-Tabelle mit Hinweisen; dazu das Tageswetter. Die Bridge rechnet einen früheren Tag mit derselben Tagesrechnung wie heute (GET /api/pv?days=1&day=…). Tage ohne gespeicherte Werte werden benannt. ' +
   'v221 · 2026-11-22 · Smart Meter als Gesamtverbrauch – überall: Seit der PV-Anlage zählt dein Stromzähler nur noch den Netzbezug, den ganzen Hausverbrauch misst der Smart Meter. Übersicht (14 Tage), Heute (Summe, Stunden, Kreis), Verlauf (Tage, Monate, Tagesansicht je Stunde, Anteile mit Jahreshochrechnung) und Profil (Tagesprofil, Wochentage, Wärmekarte) zeigen jetzt das ganze Haus – aufgeteilt in Wärmepumpe, Smart-Home-Geräte und grau „nicht einzeln gemessen“. Prognosen, Börse und Konzept rechnen den Haushalt aus den letzten vollständigen Smart-Meter-Tagen (Haus minus Wärmepumpe) statt aus den Zählerablesungen. Setup → 🔢 Stromzähler & Smart Meter: Ablesungen mit Uhrzeit und optional Einspeisung (2.8.0); die App vergleicht jeden Zeitraum mit dem Smart Meter (✓ bis 2 %, ≈ erklärbar durch fehlende Uhrzeit, ⚠︎ darüber; Tippfehler werden erkannt). Behoben: Verlauf „Tag“ brach ab (zwei gleichnamige Funktionen); die Tagesansicht zeigt jetzt auch Wärmepumpe und Rest. ' +
   'v220 · 2026-11-22 · PV-Tab: neue Kachel „Verbrauch heute“ (im Verlauf „Verbrauch“ für den gewählten Zeitraum) – derselbe Wert wie „Verbrauch“ in Fronius Solar.web, zum direkten Vergleich. Eigenverbrauch und Autarkie runden nicht mehr auf „100 %“ (oder „0 %“), wenn es nicht genau so ist: 99,6 % Eigenverbrauch bei 0,1 kWh Einspeisung steht jetzt als 99,6 % da (auch im Wohn-Dashboard und auf dem Apple TV). ' +
@@ -3438,7 +3439,8 @@ function kioskSetting(k) {
 async function kioskPullSettings() {
   try {
     const r = await api('/api/settings'), srv = (r && r.settings) || {}, unsent = _unsentGet();
-    ['bhe_kiosk_win_s', 'bhe_kiosk_bin_days', 'bhe_school_plan', 'bhe_school_title', 'bhe_music'].forEach(k => {
+    ['bhe_kiosk_win_s', 'bhe_kiosk_bin_days', 'bhe_school_plan', 'bhe_school_title', 'bhe_music',
+     'bhe_party_date', 'bhe_party_text', 'bhe_party_off', 'bhe_party_auto'].forEach(k => {
       if (srv[k] != null && !(k in unsent)) { try { localStorage.setItem(k, srv[k]); _lastSynced[k] = srv[k]; } catch (e) {} }
     });
   } catch (e) { /* keep the local values */ }
@@ -3768,6 +3770,141 @@ function renderKioskCal() {
     (html || '<div class="k-sub">Keine Termine in den nächsten 7 Tagen.</div>') +
     errs.map(c => `<div class="k-sub" style="font-size:12px;margin-top:8px;color:var(--kb-amber)">⚠︎ ${esc(c.name || 'Kalender')}: ${esc(c.error)}</div>`).join('');
 }
+/* ---- Feier-Modus: Geburtstag & Co. – Glückwunsch-Banner und Konfetti ------------
+ * Same rules as the bridge's _tv_party() (the Apple TV gets it from there): by
+ * hand in Setup for one day (bhe_party_date + greeting bhe_party_text), or an
+ * all-day calendar entry today called "Geburtstag …", "Birthday", "Doğum Günü",
+ * "Jahrestag", "Hochzeitstag" or with 🎂 (off: bhe_party_auto = '0'). "Beenden"
+ * writes the day to bhe_party_off. Synced like every setting, so the wall iPad
+ * and the TV celebrate too; at midnight it is over by itself. */
+const PARTY_RX = /geburtstag|birthday|do[gğ]um\s*g[uü]n[uü]|jahrestag|hochzeitstag|🎂|🥳/iu;
+const PARTY_ANNIV_RX = /jahrestag|hochzeitstag/i;
+const PARTY_TEXT_MAX = 80;
+function partyGet(k) { try { return localStorage.getItem('bhe_party_' + k) || ''; } catch (e) { return ''; } }
+function partySet(k, v) { try { localStorage.setItem('bhe_party_' + k, String(v)); } catch (e) {} }
+const partyClean = s => Array.from(String(s || '').replace(/\s+/g, ' ').trim()).slice(0, PARTY_TEXT_MAX).join('').trim();
+function partyToday(cal) {
+  const day = ymdLocal(new Date());
+  if (partyGet('off') === day) return null;
+  if (partyGet('date') === day)
+    return { title: partyClean(partyGet('text')) || 'Alles Gute zum Geburtstag!', sub: 'Heute wird gefeiert', emoji: '🎂', source: 'manual' };
+  if (partyGet('auto') === '0') return null;
+  const hits = [];
+  (((cal || _kioskCal) || {}).events || []).forEach(e => {
+    const t = String(e.title || '').replace(/\s+/g, ' ').trim(), first = e.start_day || '';
+    if (e.all_day && t && PARTY_RX.test(t) && first <= day && day <= (e.end_day || first) && !hits.includes(t)) hits.push(t);
+  });
+  if (!hits.length) return null;
+  return { title: hits.slice(0, 3).join(' · '), sub: 'Heute wird gefeiert',
+    emoji: hits.every(t => PARTY_ANNIV_RX.test(t)) ? '🥂' : '🎂', source: 'calendar' };
+}
+// emoji inside the gradient text would be painted as gradient silhouettes – they get their own colour
+const PARTY_EMOJI_RUN = /(\p{Extended_Pictographic}(?:\uFE0F|\u200D\p{Extended_Pictographic}|[\u{1F3FB}-\u{1F3FF}])*)/gu;
+const partyTitleHtml = t => esc(t).replace(PARTY_EMOJI_RUN, '<span class="pt-e">$1</span>');
+function partyHtml(P) {
+  return `<span class="pt-emo" aria-hidden="true">${esc(P.emoji)}</span><span class="pt-txt"><b>${partyTitleHtml(P.title)}</b>` +
+    `<small>${esc(P.sub)} 🎉 · antippen für Konfetti</small></span><span class="pt-emo pt-emo2" aria-hidden="true">🎉</span>`;
+}
+// Konfetti: one canvas over everything (catches no taps), drawn only while pieces
+// fly. 'burst' = two cannons from the lower corners, 'rain' = a shower from above.
+// Linear air drag, so the pieces shoot up fast and then flutter down slowly.
+const CONFETTI_COLORS = ['#ff375f', '#ff9f0a', '#ffd60a', '#30d158', '#64d2ff', '#0a84ff', '#bf5af2', '#ff6ec7', '#ffffff'];
+let _cf = null;
+function confettiReduced() { try { return matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) { return false; } }
+function confetti(kind) {
+  if (confettiReduced() || document.hidden) return false;
+  let c = $('confetti');
+  if (!c) {
+    c = document.createElement('canvas'); c.id = 'confetti'; c.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(c);
+  }
+  const W = innerWidth, H = innerHeight, dpr = Math.min(2, devicePixelRatio || 1);
+  if (c.width !== Math.round(W * dpr) || c.height !== Math.round(H * dpr)) { c.width = Math.round(W * dpr); c.height = Math.round(H * dpr); }
+  const st = _cf || (_cf = { parts: [], raf: 0, t: 0, W, H, dpr });
+  Object.assign(st, { W, H, dpr });
+  const n = Math.round(Math.max(110, Math.min(240, W * H / 7000)));
+  const S = Math.max(0.85, Math.min(1.7, Math.min(W, H) / 650));        // piece size
+  const R = Math.random;
+  const add = (x, y, deg, spread, v0, delay) => {
+    const a = (deg + (R() - 0.5) * spread) * Math.PI / 180, v = v0 * (0.55 + R() * 0.6), sh = R();
+    st.parts.push({ x0: x, y0: y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, t: -delay, k: 3 + R() * 1.4,
+      rot: R() * 6.28, vr: (R() - 0.5) * 11, flip: R() * 6.28, vf: 5 + R() * 9, sw: R() * 6.28, swa: (14 + R() * 26) * S,
+      w: (6 + R() * 6) * S, h: (9 + R() * 9) * S, shape: sh < 0.2 ? 'streamer' : sh < 0.42 ? 'dot' : 'rect',
+      col: CONFETTI_COLORS[(R() * CONFETTI_COLORS.length) | 0] });
+  };
+  if (kind === 'rain') for (let i = 0; i < n; i++) add(R() * W, -10 - R() * H * 0.3, 90, 40, H * 0.1, R() * 2.2);
+  else {
+    const v0 = H * 3.7;                       // with the drag below: up to ~70 % of the height
+    for (let i = 0; i < n / 2; i++) { add(-8, H * 0.95, -61, 28, v0, R() * 0.25); add(W + 8, H * 0.95, -119, 28, v0, R() * 0.25); }
+  }
+  c.style.display = 'block';
+  if (!st.raf) { st.t = performance.now(); st.raf = requestAnimationFrame(confettiFrame); }
+  return true;
+}
+function confettiFrame(now) {
+  const st = _cf, c = $('confetti');
+  if (!st || !c) return;
+  const dt = Math.min(0.05, Math.max(0, (now - st.t) / 1000)); st.t = now;
+  const { H, dpr } = st, G = H * 1.15;          // gravity; each piece has its own air drag k (1/s)
+  const ctx = c.getContext('2d');
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, c.width, c.height);
+  const keep = [];
+  for (const p of st.parts) {
+    p.t += dt;
+    if (p.t < 0) { keep.push(p); continue; }
+    const K = p.k, VT = G / K, e = Math.exp(-K * p.t), t = p.t;   // closed form: exact at any frame rate
+    const x = p.x0 + p.vx / K * (1 - e) + Math.sin(p.sw + t * 2.6) * p.swa * Math.min(1, t / 1.2);
+    const y = p.y0 + VT * t + (p.vy - VT) / K * (1 - e);
+    const life = t > 7.5 ? 0 : t > 6.5 ? 7.5 - t : 1;
+    if (y > H + 40 || life <= 0) continue;
+    keep.push(p);
+    const fl = Math.cos(p.flip + p.vf * t);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.translate(x, y); ctx.rotate(p.rot + p.vr * t); ctx.scale(1, Math.max(0.12, Math.abs(fl)));
+    ctx.globalAlpha = life * (0.72 + 0.28 * Math.abs(fl));
+    ctx.fillStyle = p.col;
+    if (p.shape === 'dot') { ctx.beginPath(); ctx.arc(0, 0, p.w * 0.42, 0, 6.2832); ctx.fill(); }
+    else if (p.shape === 'streamer') ctx.fillRect(-p.w * 0.17, -p.h * 0.9, p.w * 0.34, p.h * 1.8);
+    else ctx.fillRect(-p.w / 2, -p.h * 0.31, p.w, p.h * 0.62);
+  }
+  ctx.globalAlpha = 1;
+  st.parts = keep;
+  if (keep.length) st.raf = requestAnimationFrame(confettiFrame);
+  else { st.raf = 0; ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, c.width, c.height); c.style.display = 'none'; }
+}
+// A party on a dashboard: the banner, cannons when it starts (or the dashboard
+// opens), a shower every 10 minutes while it lasts.
+let _partyKey = '', _partyT = null;
+function partyShow(el, P) {
+  if (el) {
+    el.hidden = !P;
+    if (P) { const h = partyHtml(P); if (el.innerHTML !== h) el.innerHTML = h; }
+  }
+  const key = P ? P.source + ':' + P.title : '';
+  if (key && key !== _partyKey) setTimeout(() => confetti('burst'), 500);
+  _partyKey = key;
+  if (key && !_partyT) _partyT = setInterval(() => { if (kioskOpen() || houseOpen()) confetti('rain'); }, 10 * 60 * 1000);
+  if (!key && _partyT) { clearInterval(_partyT); _partyT = null; }
+}
+function partyStop() { _partyKey = ''; if (_partyT) { clearInterval(_partyT); _partyT = null; } }
+// the app itself: on the day set in Setup a greeting and one burst per device
+function partyGreetApp() {
+  const P = partyToday(null);
+  if (!P || P.source !== 'manual' || kioskOpen() || houseOpen()) return;
+  const day = ymdLocal(new Date());
+  try { if (localStorage.getItem('party_seen') === day) return; localStorage.setItem('party_seen', day); } catch (e) { return; }
+  partyToast(P);
+  confetti('burst');
+}
+function partyToast(P) {
+  let t = $('party-toast');
+  if (!t) { t = document.createElement('div'); t.id = 'party-toast'; t.setAttribute('role', 'status'); document.body.appendChild(t); }
+  t.innerHTML = `<span>${esc(P.emoji)}</span><b>${esc(P.title)}</b><span>🎉</span>`;
+  t.classList.remove('out'); t.hidden = false;
+  clearTimeout(partyToast._t); clearTimeout(partyToast._t2);
+  partyToast._t = setTimeout(() => { t.classList.add('out'); partyToast._t2 = setTimeout(() => { t.hidden = true; }, 600); }, 6500);
+}
+
 function paintKiosk() {
   const rooms = _kioskRooms || [];
   // away toggle button state
@@ -3790,6 +3927,10 @@ function paintKiosk() {
     ban.className = out ? out.level : '';
     ban.innerHTML = out ? `${out.line}<div class="b-sub">${out.sub}</div>` : '';     // nothing to say → no banner
   }
+  try {
+    partyShow($('kiosk-party'), partyToday());
+    const kk = $('kiosk'); if (kk) kk.classList.toggle('party', !!_partyKey);
+  } catch (e) { console.error(e); }
   try { renderKioskAlerts(); } catch (e) { console.error(e); }
   try { renderKioskCal(); } catch (e) { console.error(e); }
   try { renderKioskSchool(); } catch (e) { console.error(e); }
@@ -3880,6 +4021,7 @@ function openKiosk() {
   const k = $('kiosk'); if (!k) return;
   if (houseOpen()) closeHouse();
   k.hidden = false;
+  partyStop();                                   // opening it on a party day fires the cannons again
   applyKioskTheme(kioskTheme());
   try { if (location.hash !== '#dash') history.replaceState(null, '', '#dash'); } catch (e) {}
   kioskTick(); paintKiosk(); kioskLoadData();
@@ -3888,6 +4030,7 @@ function openKiosk() {
 }
 function closeKiosk() {
   const k = $('kiosk'); if (k) k.hidden = true;
+  partyStop();
   clearInterval(_kioskClockT); clearInterval(_kioskDataT); _kioskClockT = _kioskDataT = null;
   clearTimeout(_kioskWinT); _kioskWinT = null;
   try { const m = document.querySelector('meta[name="theme-color"]'); if (m) m.setAttribute('content', '#0b1220'); } catch (e) {}
@@ -4116,6 +4259,7 @@ function paintHouse() {
     st.classList.toggle('bad', !live);
   }
   const bk = $('h2-backup'); if (bk) bk.classList.toggle('on', !!(live && live.backup_mode));
+  try { partyShow($('h2-party'), partyToday()); } catch (e) { console.error(e); }
   const hs = $('h2-house'); if (hs) hs.innerHTML = h2HouseSvg();
   const c = $('h2-card'); if (c) c.innerHTML = h2Daily();
   const ft = $('h2-foot');
@@ -4131,12 +4275,15 @@ function h2Msg(html) {
 async function h2LoadData() {
   try { const a = await api('/api/analytics?days=2'); if (a && a.live) _h2Live = a.live; } catch (e) { /* wallbox optional */ }
   try { await loadFronius(true); } catch (e) {}
+  try { await kioskPullSettings(); } catch (e) {}       // Feier-Modus: settings from the phone …
+  try { await kioskLoadCal(); } catch (e) {}            // … and birthdays in the calendar
   paintHouse();
 }
 function openHouse() {
   const h = $('house2'); if (!h) return;
   if (kioskOpen()) closeKiosk();
   h.hidden = false;
+  partyStop();
   try { const m = document.querySelector('meta[name="theme-color"]'); if (m) m.setAttribute('content', '#f5f6f7'); } catch (e) {}
   try { if (location.hash !== '#dash2') history.replaceState(null, '', '#dash2'); } catch (e) {}
   paintHouse(); h2LoadData();
@@ -4144,6 +4291,7 @@ function openHouse() {
 }
 function closeHouse(to) {
   const h = $('house2'); if (h) h.hidden = true;
+  partyStop();
   clearInterval(_h2T); _h2T = null;
   const pop = $('h2-pop'); if (pop) pop.hidden = true;
   try { const m = document.querySelector('meta[name="theme-color"]'); if (m) m.setAttribute('content', '#0b1220'); } catch (e) {}
@@ -4223,6 +4371,7 @@ function initHouse() {
       return;
     }
     if (e.target.closest('#h2-more')) { const pop = $('h2-pop'); if (pop) pop.hidden = !pop.hidden; return; }
+    if (e.target.closest('#h2-party')) { confetti('burst'); return; }
     if (e.target.closest('#h2-backup')) {
       const L = frLiveNow();
       h2Msg(!L ? 'Notstrom-Status unbekannt – der Wechselrichter liefert gerade keine Werte.'
@@ -12746,6 +12895,7 @@ function init() {
     try { localStorage.setItem('bhe_kiosk_away', _kioskAway ? '1' : '0'); } catch (e) {}
     paintKiosk();
   });
+  const kp = $('kiosk-party'); if (kp) kp.addEventListener('click', () => confetti('burst'));
   const km = $('kiosk-music'); if (km) km.addEventListener('click', e => {      // HomePod chips (per device)
     const r = e.target.closest('[data-mroom]'); if (!r) return;
     e.preventDefault();
@@ -15302,6 +15452,7 @@ async function calClear() {
   renderCalSetup();
 }
 function renderDashSetup() {
+  try { renderPartySetup().catch(e => console.error(e)); } catch (e) { console.error(e); }
   const w = $('dash-win-s'), b = $('dash-bin-days'); if (!w || !b) return;
   if (document.activeElement !== w) w.value = String(kioskSetting('win_s'));
   if (document.activeElement !== b) b.value = String(kioskSetting('bin_days'));
@@ -15309,7 +15460,67 @@ function renderDashSetup() {
   if (note) note.innerHTML = `Fenster blinkt nach <b>${s >= 60 ? fmtMin(Math.floor(s / 60)) + (s % 60 ? ' ' + Math.round(s % 60) + ' s' : '') : s + ' s'}</b> · ` +
     `Tonnen-Hinweis <b>${kioskSetting('bin_days') === 1 ? 'am Vorabend' : kioskSetting('bin_days') + ' Abende vorher'}</b> (ab 16 Uhr).`;
 }
+// Setup → Feier-Modus (rules: partyToday)
+let _partyCalPeek = null;          // { ts, next } – the next birthday in the calendar, looked up at most every 10 min
+async function partyPeekCal() {
+  if (_partyCalPeek && Date.now() - _partyCalPeek.ts < 600000) return _partyCalPeek;
+  let r = null; try { r = await api('/api/calendar?days=31'); } catch (e) { /* no calendar → no hint */ }
+  const today = ymdLocal(new Date());
+  const ev = ((r && r.events) || []).filter(e => e.all_day && PARTY_RX.test(e.title || '') && (e.start_day || '') > today);
+  _partyCalPeek = { ts: Date.now(), cal: r, next: ev[0] || null };
+  return _partyCalPeek;
+}
+async function renderPartySetup() {
+  const note = $('party-note'), tx = $('party-text'), au = $('party-auto'); if (!note) return;
+  if (tx && document.activeElement !== tx) tx.value = partyGet('text');
+  if (au) au.checked = partyGet('auto') !== '0';
+  const day = ymdLocal(new Date()), off = partyGet('off') === day, on = partyGet('date') === day;
+  const bOff = $('party-off');
+  const paint = (P, peek) => {
+    if (bOff) bOff.hidden = !P;
+    if (P) {
+      note.innerHTML = `🎉 <b>Heute wird gefeiert:</b> „${esc(P.title)}“` +
+        (P.source === 'calendar' ? ' (aus dem Kalender)' : '') + ' – bis Mitternacht.';
+      return;
+    }
+    const nx = peek && peek.next && au && au.checked
+      ? ` Nächster im Kalender: <b>${esc(peek.next.title)}</b> am ${esc(dayLabel(peek.next.start_day))} – feiert dann von selbst.` : '';
+    note.innerHTML = (off ? 'Heute ausgeschaltet.' : 'Aus.') + nx;
+  };
+  paint(partyToday(_partyCalPeek && _partyCalPeek.cal), _partyCalPeek);
+  if (on || off) return;
+  const peek = await partyPeekCal();
+  paint(partyToday(peek.cal), peek);
+}
+function initPartySetup() {
+  const tx = $('party-text'), au = $('party-auto');
+  const changed = () => {
+    renderPartySetup();
+    if (kioskOpen()) { try { paintKiosk(); } catch (e) {} }
+    if (houseOpen()) { try { paintHouse(); } catch (e) {} }
+  };
+  if (tx) tx.addEventListener('input', () => { partySet('text', partyClean(tx.value)); if (kioskOpen()) { try { paintKiosk(); } catch (e) {} } });
+  if (tx) tx.addEventListener('change', changed);
+  if (au) au.addEventListener('change', () => { partySet('auto', au.checked ? '1' : '0'); changed(); });
+  const on = $('party-on'); if (on) on.addEventListener('click', () => {
+    if (tx) partySet('text', partyClean(tx.value));
+    partySet('date', ymdLocal(new Date())); partySet('off', '');
+    _flushSettingsNow();                       // the TV asks the bridge – send it right away
+    changed();
+    const P = partyToday(null); if (P) partyToast(P);
+    confetti('burst');
+  });
+  const off = $('party-off'); if (off) off.addEventListener('click', () => {
+    partySet('date', ''); partySet('off', ymdLocal(new Date()));
+    _flushSettingsNow();
+    changed();
+  });
+  const t = $('party-test'); if (t) t.addEventListener('click', () => {
+    if (!confetti('burst')) { const n = $('party-note'); if (n) n.textContent = 'Konfetti ist aus, weil „Bewegung reduzieren“ in den Bedienungshilfen eingeschaltet ist.'; }
+  });
+}
 function initDashSetup() {
+  initPartySetup();
   const w = $('dash-win-s'), b = $('dash-bin-days');
   const save = (k, v) => { try { localStorage.setItem('bhe_kiosk_' + k, String(v)); } catch (e) {} renderDashSetup();
     if (kioskOpen()) { try { paintKiosk(); } catch (e) {} } };
@@ -15696,3 +15907,5 @@ async function bootApp() {
   }
 }
 document.addEventListener('DOMContentLoaded', bootApp);
+// Feier-Modus: on the day set in Setup, a greeting with confetti (once per device)
+document.addEventListener('DOMContentLoaded', () => setTimeout(() => { try { partyGreetApp(); } catch (e) {} }, 2500));

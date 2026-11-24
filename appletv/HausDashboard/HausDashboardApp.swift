@@ -21,10 +21,11 @@ struct RootView: View {
     @AppStorage("bridgeURL") private var bridgeURL: String = ""
     @AppStorage("keepAwake") private var keepAwake: Bool = true
     @State private var showSettings = false
+    @State private var confettiTick = 0
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
-        DashboardView(model: model, openSettings: { showSettings = true })
+        DashboardView(model: model, openSettings: { showSettings = true }, confettiTick: confettiTick)
             .onAppear {
                 // a wall display: no screen saver while the dashboard is open (switchable)
                 UIApplication.shared.isIdleTimerDisabled = keepAwake
@@ -43,6 +44,7 @@ struct RootView: View {
                 UIApplication.shared.isIdleTimerDisabled = on
             }
             .onPlayPauseCommand {
+                confettiTick += 1               // on a party day: confetti again
                 Task { await model.load() }
             }
             .fullScreenCover(isPresented: $showSettings) {

@@ -86,6 +86,18 @@ Mehrere Kalender: eine Adresse pro Zeile. Die Adressen stehen nur in `bridge/con
 Kalender alle 15 Minuten (`bridge/calendar_ics.py`, nur lesend; Wiederholungen, Ausnahmen,
 ganztägige Termine und Zeitzonen werden berücksichtigt).
 
+## Feier-Modus (Geburtstag, Jahrestag)
+
+Setup → **🖥️ Wohn-Dashboard** → *🎉 Feier-Modus*: Glückwunsch eintippen (optional) → **„Heute feiern“**.
+Dann zeigen Wohn-Dashboard, Haus-Dashboard und Apple TV den Glückwunsch mit **Konfetti** (beim Öffnen,
+alle 10 Minuten und beim Antippen des Banners); im Wohn-Dashboard leuchtet der Hintergrund in Partyfarben, die
+App selbst grüßt am Feiertag einmal pro Gerät. Von selbst feiert das Dashboard an einem **ganztägigen
+Kalendertermin** mit „Geburtstag“, „Birthday“, „Doğum Günü“, „Jahrestag“, „Hochzeitstag“ oder 🎂 im Namen
+(abschaltbar: „Geburtstage aus dem Kalender automatisch feiern“). **„Beenden“** schaltet ihn für den Tag ab,
+um Mitternacht endet er ohnehin. Der Text wird wie die übrigen Einstellungen in der Bridge gespeichert
+(`bhe_party_text`, `bhe_party_date`, `bhe_party_off`, `bhe_party_auto`) – nichts davon steht im Repository.
+Mit „Bewegung reduzieren“ in den Bedienungshilfen gibt es den Glückwunsch ohne Konfetti.
+
 ## Apple TV
 
 Das Wohn-Dashboard gibt es auch als eigene **Apple-TV-App** (Ordner `appletv/`, Daten über `GET /api/tv`) –

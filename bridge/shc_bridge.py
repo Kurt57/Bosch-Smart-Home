@@ -13738,6 +13738,40 @@ def _tv_cold_ref(room: str, setpoint, targets: dict):
     return min(float(setpoint), TV_COLD_CAP), "setpoint"
 
 
+# Feier-Modus: a birthday (or anniversary) turns the dashboards festive – a
+# banner and confetti. Switched on by hand in Setup for one day (bhe_party_date
+# + the greeting bhe_party_text), or by an all-day calendar entry today whose
+# title says so (off with bhe_party_auto = "0"). "Beenden" in Setup writes the
+# day to bhe_party_off. The web dashboard applies the same rules (partyToday).
+PARTY_RX = re.compile(r"geburtstag|birthday|do[gğ]um\s*g[uü]n[uü]|jahrestag|hochzeitstag|🎂|🥳", re.I)
+PARTY_ANNIV_RX = re.compile(r"jahrestag|hochzeitstag", re.I)
+PARTY_TEXT_MAX = 80
+
+
+def _tv_party(st: dict, events: list, day: str) -> dict | None:
+    """What is celebrated today (day = YYYY-MM-DD, local) – None on an ordinary day."""
+    if str(st.get("bhe_party_off") or "") == day:
+        return None
+    if str(st.get("bhe_party_date") or "") == day:
+        text = " ".join(str(st.get("bhe_party_text") or "").split())[:PARTY_TEXT_MAX]
+        return {"title": text or "Alles Gute zum Geburtstag!", "sub": "Heute wird gefeiert", "emoji": "🎂",
+                "source": "manual"}
+    if str(st.get("bhe_party_auto") or "1") == "0":
+        return None
+    hits = []
+    for e in events or []:
+        t = " ".join(str(e.get("title") or "").split())
+        first = e.get("start_day") or ""
+        if e.get("all_day") and t and PARTY_RX.search(t) and first <= day <= (e.get("end_day") or first):
+            if t not in hits:
+                hits.append(t)
+    if not hits:
+        return None
+    anniv = all(PARTY_ANNIV_RX.search(t) for t in hits)
+    return {"title": " · ".join(hits[:3]), "sub": "Heute wird gefeiert", "emoji": "🥂" if anniv else "🎂",
+            "source": "calendar"}
+
+
 def _tv_pct(x) -> str:
     """A share in whole % – but never "100 %" or "0 %" unless it is exactly that."""
     p = 100.0 * float(x)
@@ -14040,6 +14074,7 @@ def compute_tv(rooms: list, window_since: dict, outdoor_c, fr: dict | None, hp: 
                               if hp_live and (hp.get("power_w") or 0) > 40 else "")},
             "alerts": A[:8], "more": max(0, len(A) - 8), "flow": flow, "today": today_tiles,
             "rooms": room_rows, "events": ev_rows,
+            "party": _tv_party(st, events, today.strftime("%Y-%m-%d")),
             "note": "" if P or not fr.get("connected") else "Wechselrichter ohne aktuelle Werte"}
 
 

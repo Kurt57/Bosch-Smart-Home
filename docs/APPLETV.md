@@ -29,6 +29,14 @@ wie darunter Platz haben.
 aber höchstens 22 °C: Steht ein Thermostat auf 25 °C, ist das bei einer Wärmepumpe meist ein absichtlich offenes
 Ventil, kein Wunsch. Gemeldet wird ab 1,5 K darunter (gleiche Regel im Wohn-Dashboard).
 
+**Feier-Modus 🎉:** An einem Geburtstag oder Jahrestag steht oben in der Mitte ein Glückwunsch, das Farblicht
+wird pink, violett und gold, und Konfetti fliegt – beim Start aus den unteren Ecken, alle 10 Minuten als
+Schauer von oben und jedes Mal, wenn du ▶︎❙❙ drückst. Eingeschaltet wird er in der App unter Setup →
+🖥️ Wohn-Dashboard → *Feier-Modus* („Heute feiern“, mit eigenem Glückwunsch) oder von selbst durch einen
+ganztägigen Kalendertermin mit „Geburtstag“, „Birthday“, „Doğum Günü“, „Jahrestag“, „Hochzeitstag“ oder 🎂 im
+Namen. Um Mitternacht ist er vorbei. Mit „Bewegung reduzieren“ (Bedienungshilfen) gibt es den Glückwunsch ohne
+Konfetti. Das braucht die Bridge ab v224 und die neu gebaute App (Xcode → ▶︎ Run).
+
 Nur Standard-Schnittstellen von tvOS (SwiftUI, ab tvOS 17). Die erste Fassung lief im tvOS-Simulator; ändert
 sich der Code, ohne dass ich ihn bauen kann (kein Mac hier), bitte Fehlermeldungen von Xcode weitergeben.
 

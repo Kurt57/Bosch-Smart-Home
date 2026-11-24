@@ -62,6 +62,14 @@ struct TVEvent: Decodable, Identifiable {
     let now: Bool?
 }
 
+/// Feier-Modus: a birthday or anniversary (set in the app's Setup, or an
+/// all-day calendar entry today) – a greeting in the header and confetti.
+struct TVParty: Decodable, Equatable {
+    let title: String
+    let sub: String?
+    let emoji: String?
+}
+
 struct TVPayload: Decodable {
     let ok: Bool?
     let ts: Int?
@@ -74,6 +82,7 @@ struct TVPayload: Decodable {
     let today: [TVTile]?
     let rooms: [TVRoom]?
     let events: [TVEvent]?
+    let party: TVParty?
     let note: String?
 }
 

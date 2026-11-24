@@ -298,6 +298,47 @@
   #kiosk-banner.amber{color:var(--kb-amber); background:var(--kb-amber-bg); border:1px solid var(--kb-amber-bd)}
   #kiosk-banner.red{color:var(--kb-red); background:var(--kb-red-bg); border:1px solid var(--kb-red-bd)}
   #kiosk-banner.blue{color:var(--kb-blue); background:var(--kb-blue-bg); border:1px solid var(--kb-blue-bd)}
+  /* Feier-Modus: party light, greeting banner, confetti canvas, toast */
+  #kiosk.party{background:radial-gradient(1100px 560px at 6% -8%, rgba(255,55,95,.22), transparent 62%),
+    radial-gradient(1000px 560px at 94% -6%, rgba(191,90,242,.22), transparent 62%),
+    radial-gradient(900px 520px at 50% 110%, rgba(255,214,10,.10), transparent 62%), var(--k-bg)}
+  #kiosk[data-ktheme="light"].party{background:radial-gradient(1100px 560px at 6% -8%, rgba(255,55,95,.13), transparent 62%),
+    radial-gradient(1000px 560px at 94% -6%, rgba(191,90,242,.13), transparent 62%), var(--k-bg)}
+  .party-banner{display:flex; align-items:center; gap:16px; cursor:pointer; -webkit-tap-highlight-color:transparent;
+    -webkit-user-select:none; user-select:none; border-radius:24px; padding:16px 22px;
+    background:linear-gradient(115deg, rgba(255,55,95,.24), rgba(191,90,242,.22) 50%, rgba(255,159,10,.20));
+    border:1px solid rgba(255,255,255,.16)}
+  .party-banner[hidden]{display:none}
+  .party-banner:active{transform:scale(.985)}
+  #kiosk-party{margin:16px 0 0}
+  .pt-emo{font-size:44px; line-height:1; flex:none; animation:pt-bob 2.6s ease-in-out infinite; transform-origin:50% 90%}
+  .pt-emo2{animation-delay:-1.3s}
+  .pt-txt{flex:1; min-width:0; display:flex; flex-direction:column; gap:4px}
+  .pt-txt b{font-size:30px; font-weight:800; letter-spacing:-.02em; line-height:1.15; overflow-wrap:anywhere;
+    background:linear-gradient(90deg,#ff6b8b,#ffd60a 30%,#ff9f0a 50%,#d68cff 75%,#ff6b8b); background-size:200% 100%;
+    -webkit-background-clip:text; background-clip:text; color:transparent; animation:pt-shine 7s linear infinite}
+  .pt-txt b .pt-e{color:#fff; -webkit-text-fill-color:#fff}
+  .pt-txt small{font-size:15px; font-weight:500; opacity:.8}
+  #kiosk[data-ktheme="light"] .party-banner{background:linear-gradient(115deg,#ffe1e8,#f1e4ff 50%,#fff0d6); border-color:rgba(0,0,0,.05)}
+  #kiosk[data-ktheme="light"] .pt-txt b,#h2-party .pt-txt b{background-image:linear-gradient(90deg,#e0245e,#c25e00 30%,#d9480f 50%,#8e44ad 75%,#e0245e)}
+  #h2-party{max-width:1120px; margin:10px auto 0; padding:12px 16px; border-radius:18px; color:#1c1c1e;
+    background:linear-gradient(115deg,#ffe1e8,#f1e4ff 50%,#fff0d6); border:1px solid rgba(0,0,0,.05); box-shadow:0 1px 3px rgba(0,0,0,.06)}
+  #h2-party .pt-emo{font-size:32px} #h2-party .pt-txt b{font-size:21px} #h2-party .pt-txt small{font-size:13px}
+  @keyframes pt-bob{0%,100%{transform:rotate(-8deg) translateY(0)} 50%{transform:rotate(8deg) translateY(-4px)}}
+  @keyframes pt-shine{to{background-position:200% 0}}
+  #confetti{position:fixed; inset:0; width:100%; height:100%; pointer-events:none; z-index:1000; display:none}
+  #party-toast{position:fixed; left:50%; top:calc(12px + var(--safe-t)); transform:translateX(-50%); z-index:1001;
+    display:flex; align-items:center; gap:10px; max-width:calc(100vw - 32px); box-sizing:border-box; padding:12px 18px;
+    border-radius:999px; background:rgba(28,28,30,.92); color:#fff; font-size:16px; box-shadow:0 10px 30px rgba(0,0,0,.35);
+    -webkit-backdrop-filter:blur(16px); backdrop-filter:blur(16px); animation:pt-in .5s cubic-bezier(.2,.9,.3,1.2) both;
+    transition:opacity .5s, transform .5s}
+  #party-toast[hidden]{display:none}
+  #party-toast b{white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0}
+  #party-toast.out{opacity:0; transform:translate(-50%,-20px)}
+  @keyframes pt-in{from{opacity:0; transform:translate(-50%,-24px) scale(.9)}}
+  #party-setup{margin-top:14px; padding-top:12px; border-top:1px solid var(--line)}
+  #party-setup h3{margin:0 0 6px; font-size:15px}
+  @media (prefers-reduced-motion: reduce){ .pt-emo,.pt-txt b,#party-toast{animation:none} }
   #kiosk-rooms{display:grid; grid-template-columns:repeat(auto-fill,minmax(158px,1fr)); gap:14px}
   .kroom{background:var(--k-card); border:.5px solid var(--k-sep); border-radius:22px; padding:16px 17px;
     box-shadow:var(--k-shadow); -webkit-backdrop-filter:var(--k-blur); backdrop-filter:var(--k-blur)}
@@ -2023,6 +2064,25 @@
       <div class="note" style="margin-top:6px; line-height:1.6">Standard: <b>600 s</b> (10 min) und <b>1 Abend</b>. Zum Testen
         z. B. <b>1 Sekunde</b> – der Hinweis blinkt dann, sobald die Bridge das offene Fenster bemerkt hat (je nach Abfrage
         bis etwa eine Minute). <a href="#" id="dash-reset" onclick="return false">Auf Standard zurücksetzen</a></div>
+      <div id="party-setup">
+        <h3>🎉 Feier-Modus</h3>
+        <div class="note" style="line-height:1.6; margin-bottom:8px">
+          Geburtstag oder Jahrestag? Dann zeigen <b>Wohn-Dashboard</b>, <b>Apple TV</b> und die App einen Glückwunsch mit
+          <b>Konfetti</b> – den ganzen Tag, um Mitternacht ist er vorbei. Von selbst bei einem <b>ganztägigen
+          Kalendertermin</b> mit „Geburtstag“, „Birthday“, „Doğum Günü“, „Jahrestag“, „Hochzeitstag“ oder 🎂 im Namen.
+          Der Text bleibt in der Bridge (wie die übrigen Einstellungen).
+        </div>
+        <label for="party-text">Glückwunsch (optional)</label>
+        <input id="party-text" maxlength="80" autocomplete="off" placeholder="z. B. Alles Gute zum Geburtstag, Liebling! 🎂">
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px">
+          <button class="btn" id="party-on" style="width:auto; margin-top:0">🎉 Heute feiern</button>
+          <button class="btn sec" id="party-off" style="width:auto; margin-top:0">Beenden</button>
+          <button class="btn sec" id="party-test" style="width:auto; margin-top:0">Konfetti testen</button>
+        </div>
+        <label style="display:flex; align-items:center; gap:8px; margin-top:12px; cursor:pointer"><input type="checkbox" id="party-auto"
+          style="width:auto; margin:0"> Geburtstage aus dem Kalender automatisch feiern</label>
+        <div class="note" id="party-note" style="margin-top:8px"></div>
+      </div>
     </div>
 
     <div class="card" id="school-card">
@@ -2425,6 +2485,7 @@
     <button id="kiosk-theme" aria-label="Hell/Dunkel">🌙</button>
     <button id="kiosk-exit" aria-label="Schließen">✕</button>
   </div>
+  <div id="kiosk-party" class="party-banner" hidden role="button" aria-label="Glückwunsch – antippen für Konfetti"></div>
   <div id="kiosk-alerts"></div>
   <div id="kiosk-warn"></div>
   <div id="kiosk-banner"></div>
@@ -2455,6 +2516,7 @@
       <a href="#" data-h2go="app">← Zur App</a>
     </div>
   </div>
+  <div id="h2-party" class="party-banner" hidden role="button" aria-label="Glückwunsch – antippen für Konfetti"></div>
   <div id="h2-msg" hidden></div>
   <div id="h2-main">
     <div id="h2-house"></div>

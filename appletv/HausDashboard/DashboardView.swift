@@ -17,6 +17,10 @@ private enum Palette {
     static let heatPump = Color(red: 1.0, green: 0.50, blue: 0.32)
     static let cold = Color(red: 0.40, green: 0.85, blue: 1.0)
     static let warn = Color(red: 1.0, green: 0.66, blue: 0.25)
+    // Feier-Modus
+    static let partyPink = Color(red: 1.0, green: 0.27, blue: 0.55)
+    static let partyPurple = Color(red: 0.62, green: 0.33, blue: 1.0)
+    static let partyGold = Color(red: 1.0, green: 0.80, blue: 0.25)
 }
 
 private func tileLabel(_ tile: TVTile) -> String {
@@ -107,20 +111,27 @@ private struct Ring: View {
 // MARK: - Background
 
 /// Slowly drifting colour light behind the glass: warmer while the sun covers
-/// the house, cool blue otherwise. The motion also protects OLED screens.
+/// the house, cool blue otherwise – pink, violet and gold on a party day. The
+/// motion also protects OLED screens.
 struct AmbientBackground: View {
     let warmth: Double            // 0 … 1
+    var party = false
     @State private var drift = false
 
     var body: some View {
+        let first = party ? Palette.partyPink : Palette.sun
+        let second = party ? Palette.partyPurple : Color(red: 0.16, green: 0.42, blue: 1.0)
+        let third = party ? Palette.partyGold : Color(red: 0.58, green: 0.32, blue: 1.0)
+        let warm = party ? 0.75 : warmth
         Color(red: 0.02, green: 0.03, blue: 0.06)
-            .overlay(blob(Palette.sun, opacity: 0.06 + 0.30 * warmth, size: 1500)
+            .overlay(blob(first, opacity: 0.06 + 0.30 * warm, size: 1500)
                 .offset(x: drift ? 600 : 380, y: drift ? -300 : -430))
-            .overlay(blob(Color(red: 0.16, green: 0.42, blue: 1.0), opacity: 0.30 - 0.12 * warmth, size: 1400)
+            .overlay(blob(second, opacity: 0.30 - 0.12 * warm, size: 1400)
                 .offset(x: drift ? -620 : -400, y: drift ? 380 : 230))
-            .overlay(blob(Color(red: 0.58, green: 0.32, blue: 1.0), opacity: 0.16, size: 1200)
+            .overlay(blob(third, opacity: party ? 0.20 : 0.16, size: 1200)
                 .offset(x: drift ? -40 : 220, y: drift ? -40 : 120))
             .animation(.easeInOut(duration: 4), value: warmth)
+            .animation(.easeInOut(duration: 3), value: party)
             .onAppear {
                 withAnimation(.easeInOut(duration: 50).repeatForever(autoreverses: true)) { drift = true }
             }
@@ -139,6 +150,8 @@ struct AmbientBackground: View {
 struct DashboardView: View {
     @ObservedObject var model: DashboardModel
     var openSettings: () -> Void
+    /// counts Play/Pause presses – on a party day each one fires confetti
+    var confettiTick = 0
 
     /// 0 … 1: how much of the house the sun covers right now (warms the light).
     private var warmth: Double {
@@ -151,13 +164,15 @@ struct DashboardView: View {
             page.offset(burnInShift(context.date))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(AmbientBackground(warmth: warmth).ignoresSafeArea())
+        .background(AmbientBackground(warmth: warmth, party: model.payload?.party != nil).ignoresSafeArea())
+        .overlay(ConfettiLayer(partyID: model.payload?.party?.title, tick: confettiTick))
     }
 
     @ViewBuilder private var page: some View {
         VStack(alignment: .leading, spacing: 24) {
             HeaderView(header: model.payload?.header, stand: model.payload?.stand,
-                       error: model.error, lastOK: model.lastOK, openSettings: openSettings)
+                       error: model.error, lastOK: model.lastOK, openSettings: openSettings,
+                       party: model.payload?.party)
             if let payload = model.payload {
                 HStack(alignment: .top, spacing: 36) {
                     VStack(alignment: .leading, spacing: 22) {
@@ -233,6 +248,7 @@ struct HeaderView: View {
     let error: String?
     let lastOK: Date?
     let openSettings: () -> Void
+    let party: TVParty?
 
     private var statusLine: String {
         if let e = error {
@@ -262,7 +278,14 @@ struct HeaderView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            Spacer()
+            .layoutPriority(1)
+            if let party {
+                Spacer(minLength: 12)
+                PartyBanner(party: party)
+                Spacer(minLength: 12)
+            } else {
+                Spacer()
+            }
             VStack(alignment: .trailing, spacing: 10) {
                 if let outdoor = header?.outdoor, !outdoor.isEmpty {
                     HStack(spacing: 10) {
@@ -283,6 +306,7 @@ struct HeaderView: View {
                     .foregroundStyle(error == nil ? Color.secondary : Color.orange)
                     .lineLimit(1)
             }
+            .layoutPriority(1)
             Button(action: openSettings) {
                 Image(systemName: "gearshape.fill")
                     .font(.system(size: 26))
@@ -794,5 +818,212 @@ struct EventsCard: View {
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
         .glassCard()
+    }
+}
+
+// MARK: - Feier-Modus
+
+/// The greeting in party colours. Emoji keep their own colours – inside the
+/// gradient they would turn into flat silhouettes.
+private func partyTitle(_ s: String) -> Text {
+    let gradient = LinearGradient(colors: [Color(red: 1.0, green: 0.48, blue: 0.62), Palette.partyGold,
+                                           Color(red: 0.84, green: 0.55, blue: 1.0)],
+                                  startPoint: .leading, endPoint: .trailing)
+    func isEmoji(_ c: Character) -> Bool {
+        guard let first = c.unicodeScalars.first else { return false }
+        return first.properties.isEmojiPresentation || (c.unicodeScalars.count > 1 && first.properties.isEmoji)
+    }
+    func piece(_ text: String, emoji: Bool) -> Text {
+        emoji ? Text(verbatim: text).foregroundStyle(Color.white) : Text(verbatim: text).foregroundStyle(gradient)
+    }
+    var result = Text(verbatim: "")
+    var run = ""
+    var runIsEmoji = false
+    for c in s {
+        let e = isEmoji(c)
+        if !run.isEmpty && e != runIsEmoji {
+            result = result + piece(run, emoji: runIsEmoji)
+            run = ""
+        }
+        run.append(c)
+        runIsEmoji = e
+    }
+    if !run.isEmpty {
+        result = result + piece(run, emoji: runIsEmoji)
+    }
+    return result
+}
+
+/// Birthday (or anniversary) greeting in the middle of the header.
+struct PartyBanner: View {
+    let party: TVParty
+    @State private var wiggle = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        HStack(spacing: 18) {
+            Text(party.emoji ?? "🎉")
+                .font(.system(size: 58))
+                .rotationEffect(.degrees(wiggle ? 9 : -9), anchor: .bottom)
+            VStack(alignment: .leading, spacing: 2) {
+                partyTitle(party.title)
+                    .font(.system(size: 42, weight: .heavy, design: .rounded))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+                if let sub = party.sub, !sub.isEmpty {
+                    Text(sub + " 🎉")
+                        .font(.system(size: 22, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+        }
+        .padding(.leading, 22)
+        .padding(.trailing, 32)
+        .padding(.vertical, 12)
+        .background(LinearGradient(colors: [Palette.partyPink.opacity(0.30), Palette.partyPurple.opacity(0.26),
+                                            Palette.partyGold.opacity(0.22)],
+                                   startPoint: .leading, endPoint: .trailing),
+                    in: Capsule())
+        .background(.ultraThinMaterial, in: Capsule())
+        .overlay(Capsule().strokeBorder(LinearGradient(colors: [Palette.partyPink.opacity(0.8), Palette.partyGold.opacity(0.8),
+                                                                Palette.partyPurple.opacity(0.8)],
+                                                       startPoint: .leading, endPoint: .trailing),
+                                        lineWidth: 2))
+        .shadow(color: Palette.partyPink.opacity(0.35), radius: 26)
+        .onAppear {
+            guard !reduceMotion else { return }
+            withAnimation(.easeInOut(duration: 1.3).repeatForever(autoreverses: true)) { wiggle = true }
+        }
+    }
+}
+
+/// One volley of confetti: when it started, its random seed, and whether it
+/// rains from above (the shower every ten minutes) or shoots from the corners.
+struct ConfettiShot: Equatable {
+    let start: Date
+    let seed: Double
+    let rain: Bool
+}
+
+/// Confetti over the whole page on a party day: cannons from the lower corners
+/// when the party starts (or the app opens) and on Play/Pause, a shower from
+/// above every ten minutes. Drawn only while pieces fly; nothing with
+/// "Bewegung reduzieren" switched on.
+struct ConfettiLayer: View {
+    let partyID: String?
+    let tick: Int
+    @State private var shot: ConfettiShot? = nil
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        ZStack {
+            if let shot {
+                TimelineView(.animation) { context in
+                    Canvas { ctx, size in
+                        ConfettiPainter.draw(in: &ctx, size: size, shot: shot,
+                                             t: context.date.timeIntervalSince(shot.start))
+                    }
+                }
+            }
+        }
+        .allowsHitTesting(false)
+        .ignoresSafeArea()
+        .task(id: partyID) {
+            guard partyID != nil, !reduceMotion else {
+                shot = nil
+                return
+            }
+            try? await Task.sleep(for: .seconds(1))
+            var rain = false
+            while !Task.isCancelled {
+                fire(rain: rain)
+                rain = true
+                try? await Task.sleep(for: .seconds(600))
+            }
+        }
+        .onChange(of: tick) { _, _ in
+            if partyID != nil && !reduceMotion { fire(rain: false) }
+        }
+    }
+
+    private func fire(rain: Bool) {
+        let next = ConfettiShot(start: Date(), seed: Double.random(in: 0..<1000), rain: rain)
+        shot = next
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(ConfettiPainter.duration))
+            if shot == next { shot = nil }
+        }
+    }
+}
+
+/// Draws one volley at time t. Every piece is a closed-form throw with linear
+/// air drag – it shoots up fast, then flutters down slowly, turning and
+/// flipping – so a frame needs no stored state and never drifts.
+enum ConfettiPainter {
+    static let duration: Double = 8
+    static let count = 170
+    static let colors: [Color] = [
+        Color(red: 1.0, green: 0.22, blue: 0.37), Color(red: 1.0, green: 0.62, blue: 0.04),
+        Color(red: 1.0, green: 0.84, blue: 0.04), Color(red: 0.19, green: 0.82, blue: 0.35),
+        Color(red: 0.39, green: 0.82, blue: 1.0), Color(red: 0.04, green: 0.52, blue: 1.0),
+        Color(red: 0.75, green: 0.35, blue: 0.95), Color(red: 1.0, green: 0.43, blue: 0.78), .white
+    ]
+
+    /// Stable pseudo-random number 0 ..< 1 for piece i, property k.
+    static func rnd(_ i: Int, _ k: Int, _ seed: Double) -> Double {
+        let x = sin(Double(i) * 12.9898 + Double(k) * 78.233 + seed) * 43758.5453
+        return x - x.rounded(.down)
+    }
+
+    static func draw(in ctx: inout GraphicsContext, size: CGSize, shot: ConfettiShot, t: Double) {
+        let width = Double(size.width)
+        let height = Double(size.height)
+        let gravity = height * 1.15
+        let scale = max(0.85, min(1.7, min(width, height) / 650))
+        for i in 0..<count {
+            let r: (Int) -> Double = { Self.rnd(i, $0, shot.seed) }
+            let tt = t - (shot.rain ? r(0) * 2.2 : r(0) * 0.25)
+            if tt <= 0 { continue }
+            var x0 = 0.0, y0 = 0.0, angle = 0.0, speed = 0.0
+            if shot.rain {
+                x0 = r(1) * width
+                y0 = -10 - r(2) * height * 0.3
+                angle = (90 + (r(3) - 0.5) * 40) * .pi / 180
+                speed = height * 0.1 * (0.55 + r(4) * 0.6)
+            } else {
+                let left = i % 2 == 0
+                x0 = left ? -8 : width + 8
+                y0 = height * 0.95
+                angle = ((left ? -61.0 : -119.0) + (r(3) - 0.5) * 28) * .pi / 180
+                speed = height * 3.7 * (0.55 + r(4) * 0.6)
+            }
+            let drag = 3 + r(5) * 1.4
+            let terminal = gravity / drag
+            let decay = exp(-drag * tt)
+            let sway = sin(r(6) * 6.28 + tt * 2.6) * (14 + r(7) * 26) * scale * min(1, tt / 1.2)
+            let x = x0 + cos(angle) * speed / drag * (1 - decay) + sway
+            let y = y0 + terminal * tt + (sin(angle) * speed - terminal) / drag * (1 - decay)
+            if y > height + 40 || tt >= duration { continue }
+            let life = tt > duration - 1 ? duration - tt : 1
+            let flip = cos(r(10) * 6.28 + (5 + r(11) * 9) * tt)
+            let w = (6 + r(12) * 6) * scale
+            let h = (9 + r(13) * 9) * scale
+            let color = colors[Int(r(14) * Double(colors.count)) % colors.count]
+            var c = ctx
+            c.translateBy(x: x, y: y)
+            c.rotate(by: .radians(r(8) * 6.28 + (r(9) - 0.5) * 11 * tt))
+            c.scaleBy(x: 1, y: max(0.12, abs(flip)))
+            c.opacity = life * (0.72 + 0.28 * abs(flip))
+            let shape = r(15)
+            if shape < 0.2 {            // streamer
+                c.fill(Path(CGRect(x: -w * 0.17, y: -h * 0.9, width: w * 0.34, height: h * 1.8)), with: .color(color))
+            } else if shape < 0.42 {    // dot
+                c.fill(Path(ellipseIn: CGRect(x: -w * 0.42, y: -w * 0.42, width: w * 0.84, height: w * 0.84)),
+                       with: .color(color))
+            } else {                    // paper square
+                c.fill(Path(CGRect(x: -w / 2, y: -h * 0.31, width: w, height: h * 0.62)), with: .color(color))
+            }
+        }
     }
 }
