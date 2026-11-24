@@ -18,6 +18,7 @@ struct HausDashboardApp: App {
 
 struct RootView: View {
     @StateObject private var model = DashboardModel()
+    @StateObject private var radio = RadioPlayer()
     @AppStorage("bridgeURL") private var bridgeURL: String = ""
     @AppStorage("keepAwake") private var keepAwake: Bool = true
     @State private var showSettings = false
@@ -25,7 +26,7 @@ struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
-        DashboardView(model: model, openSettings: { showSettings = true }, confettiTick: confettiTick)
+        DashboardView(model: model, radio: radio, openSettings: { showSettings = true }, confettiTick: confettiTick)
             .onAppear {
                 // a wall display: no screen saver while the dashboard is open (switchable)
                 UIApplication.shared.isIdleTimerDisabled = keepAwake
@@ -38,6 +39,7 @@ struct RootView: View {
                     model.start()
                 } else if phase == .background {
                     model.stop()
+                    radio.stop()                // tvOS would pause it anyway – keep the buttons honest
                 }
             }
             .onChange(of: keepAwake) { _, on in

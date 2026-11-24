@@ -32,6 +32,13 @@ Aufgabe wischen und klicken – abgehakt; noch einmal klicken nimmt den Haken zu
 Wohn-Dashboard (die Bridge führt sie). Wer alles geschafft hat, bekommt Konfetti und einen ⭐. Während die Liste
 zu sehen ist, liegt der Fokus meist auf einer Aufgabe – für die Einstellungen nach oben rechts zum ⚙︎ wischen.
 
+**Radio 📻:** Sender, die du in der App unter Setup → *Radio auf dem Apple TV* eingetragen hast, stehen rechts
+oben als Knöpfe. Hinwischen und klicken spielt den Sender in der App selbst – das Dashboard bleibt vorne;
+noch einmal klicken stoppt. Darunter steht der laufende Titel, wenn der Sender ihn mitschickt. Gefunden werden die
+Sender im freien Verzeichnis [radio-browser.info](https://www.radio-browser.info) (Suche im Setup, z. B.
+„Metropol FM“, mit ▶︎ zum Probehören am Handy); feste Stream-Adressen sind nicht eingebaut, weil Sender sie ab und
+zu ändern. Verlässt du die App, stoppt das Radio. Die Lautstärke regelst du wie gewohnt am Fernseher.
+
 **„Zu kalt“** misst gegen deine **Wunschtemperatur** je Raum (Wärme → Abgleich), sonst gegen das Thermostat-Soll –
 aber höchstens 22 °C: Steht ein Thermostat auf 25 °C, ist das bei einer Wärmepumpe meist ein absichtlich offenes
 Ventil, kein Wunsch. Gemeldet wird ab 1,5 K darunter (gleiche Regel im Wohn-Dashboard).
@@ -87,8 +94,11 @@ Tools wie Sideloadly oder atvloadly können das Erneuern übernehmen (Drittanbie
   und YouTube Music bietet keine Schnittstelle zum Abspielen in fremden Apps. Damit Musik läuft, während das
   Dashboard zu sehen ist: Musik am iPhone/iPad in der YouTube-Music-App starten und per **AirPlay an den
   HomePod** schicken (im Wohn-Dashboard über die Musik-Kacheln, siehe [DASHBOARD.md](DASHBOARD.md)). Das Apple TV
-  ist daran nicht beteiligt und zeigt weiter das Dashboard; die App selbst macht keinen Ton und unterbricht
-  nichts.
+  ist daran nicht beteiligt und zeigt weiter das Dashboard. Direkt auf dem Fernseher geht dagegen **Radio**
+  (siehe oben).
+* **Apple Music:** Es gibt keine offizielle Schnittstelle für „läuft gerade auf meinem iPhone“; die Apple-Music-API
+  kennt nur „zuletzt gehört“, und dafür bräuchte die App den MusicKit-Dienst (kostenpflichtiges
+  Apple-Developer-Programm) und ein Apple-Music-Abo. Deshalb nicht eingebaut.
 
 * Die Bridge nimmt nur Verbindungen aus dem Heimnetz bzw. per VPN an (siehe
   [FERNZUGRIFF.md](FERNZUGRIFF.md)) – das Apple TV steht ja im Heimnetz.

@@ -364,6 +364,13 @@
   .krt-it.done .tx{text-decoration:line-through}
   .krt-it.done .bx{background:var(--kb-green, var(--good, #30d158)); border-color:transparent}
   .krt-it.busy{opacity:.7}
+  /* Radio (Setup) */
+  .rdo-row{display:flex; align-items:center; gap:8px; padding:8px 0; border-bottom:1px solid var(--line)}
+  .rdo-row:last-child{border-bottom:none}
+  .rdo-n{flex:1; min-width:0}
+  .rdo-n b{display:block; font-size:15px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .rdo-n small{display:block; font-size:12px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .rdo-row .btn{width:auto; margin-top:0; padding:8px 12px; flex:none}
   #party-setup{margin-top:14px; padding-top:12px; border-top:1px solid var(--line)}
   #party-setup h3{margin:0 0 6px; font-size:15px}
   @media (prefers-reduced-motion: reduce){ .pt-emo,.pt-txt b,#party-toast{animation:none} }
@@ -2146,6 +2153,32 @@
       </div>
       <div class="note" id="krt-note" style="margin-top:8px"></div>
       <div id="krt-preview" style="margin-top:10px"></div>
+    </div>
+
+    <div class="card" id="radio-card">
+      <h2>📻 Radio auf dem Apple TV</h2>
+      <div class="note" style="line-height:1.6; margin-bottom:10px">
+        Sender, die die <b>Apple-TV-App</b> selbst abspielt – das Dashboard bleibt dabei vorne. Auf dem Fernseher in der
+        Senderleiste rechts oben auswählen und klicken, noch einmal klicken stoppt. Gesucht wird im freien
+        Senderverzeichnis <b>radio-browser.info</b>; die Bridge schickt dorthin nur den Suchbegriff.
+      </div>
+      <div style="display:flex; gap:8px">
+        <input id="rdo-q" autocomplete="off" enterkeyhint="search" placeholder="Sender suchen, z. B. Metropol FM" style="flex:1">
+        <button class="btn" id="rdo-search" style="width:auto; margin-top:0">Suchen</button>
+      </div>
+      <div id="rdo-found" style="margin-top:8px"></div>
+      <label style="margin-top:12px">Meine Sender (höchstens 6)</label>
+      <div id="rdo-list"></div>
+      <details style="margin-top:10px"><summary>Stream-Adresse selbst eintragen</summary>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:6px">
+          <input id="rdo-name" maxlength="40" autocomplete="off" placeholder="Name" style="flex:1; min-width:120px">
+          <input id="rdo-url" inputmode="url" autocapitalize="off" autocomplete="off" spellcheck="false" placeholder="https://…"
+            style="flex:2; min-width:180px">
+          <button class="btn sec" id="rdo-add" style="width:auto; margin-top:0">Hinzufügen</button>
+        </div>
+      </details>
+      <audio id="rdo-audio" preload="none"></audio>
+      <div class="note" id="rdo-note" style="margin-top:8px"></div>
     </div>
 
     <div class="card" id="school-card">

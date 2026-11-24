@@ -94,8 +94,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v226';   // short tag shown always-on in the header
-const APP_VERSION = 'v226 · 2026-11-24 · Kinder-Routine 🧒: Abhakliste je Kind (Setup → Kinder-Routine: zwei Namen mit Tier-Symbol, Uhrzeit, Aufgaben – „Name: Aufgabe“ gilt nur für ein Kind). Zur Abendzeit im Wohn-Dashboard mit großen Tippflächen und auf dem Apple TV zum Abhaken mit der Fernbedienung (dort statt des Energieflusses); die Bridge führt die Häkchen, alle Geräte zeigen denselben Stand. Wer fertig ist, bekommt Konfetti, ein Lob und einen ⭐ (geschaffte Abende der letzten 7 Tage). Zum Ausprobieren: „Heute zum Testen den ganzen Tag zeigen“ und „Häkchen von heute löschen“. Apple TV: Einstellungsseite mit eigenem Hintergrund. ' +
+const APP_BUILD = 'v227';   // short tag shown always-on in the header
+const APP_VERSION = 'v227 · 2026-11-24 · Radio auf dem Apple TV 📻: Setup → „Radio auf dem Apple TV“ – Sender suchen (freies Verzeichnis radio-browser.info, z. B. „Metropol FM“), mit ▶︎ am Handy probehören, mit ＋ übernehmen (bis zu 6; Stream-Adresse auch selbst eintragbar). Die Apple-TV-App zeigt sie rechts oben als Knöpfe und spielt sie selbst – das Dashboard bleibt vorne; darunter der laufende Titel, wenn der Sender ihn mitschickt. ' +
+  'v226 · 2026-11-24 ·Kinder-Routine 🧒: Abhakliste je Kind (Setup → Kinder-Routine: zwei Namen mit Tier-Symbol, Uhrzeit, Aufgaben – „Name: Aufgabe“ gilt nur für ein Kind). Zur Abendzeit im Wohn-Dashboard mit großen Tippflächen und auf dem Apple TV zum Abhaken mit der Fernbedienung (dort statt des Energieflusses); die Bridge führt die Häkchen, alle Geräte zeigen denselben Stand. Wer fertig ist, bekommt Konfetti, ein Lob und einen ⭐ (geschaffte Abende der letzten 7 Tage). Zum Ausprobieren: „Heute zum Testen den ganzen Tag zeigen“ und „Häkchen von heute löschen“. Apple TV: Einstellungsseite mit eigenem Hintergrund. ' +
   'v225 · 2026-11-24 ·„gespart“ mit Akku-Anteil: Strom, der heute in den Akku ging und noch nicht verbraucht ist, steht jetzt neben „gespart“ als „+ ≈ … € im Akku“ – auf dem Apple TV (ohne neuen App-Build, kommt von der Bridge), im Wohn-Dashboard, im PV-Tab und in der Geldzeile des Banners. „gespart“ zählt Akku-Strom erst, wenn er das Haus versorgt; der Hinweis zeigt, um wie viel der Wert noch wächst (Ladestand-Zuwachs seit Mitternacht × Akkugröße × 95 % × Arbeitspreis). ' +
   'v224 · 2026-11-24 · Feier-Modus 🎉: An Geburtstagen und Jahrestagen zeigen Wohn-Dashboard, Haus-Dashboard und Apple TV einen Glückwunsch mit Konfetti (beim Öffnen, alle 10 Minuten, beim Antippen bzw. mit ▶︎❙❙), dazu ein Farblicht in Partyfarben; die App grüßt am Feiertag einmal pro Gerät. Einschalten unter Setup → Wohn-Dashboard → Feier-Modus („Heute feiern“, eigener Glückwunsch möglich) oder von selbst durch einen ganztägigen Kalendertermin mit „Geburtstag“, „Birthday“, „Doğum Günü“, „Jahrestag“, „Hochzeitstag“ oder 🎂. Endet um Mitternacht; „Beenden“ schaltet ihn für den Tag ab. Mit „Bewegung reduzieren“ ohne Konfetti. ' +
   'v223 · 2026-11-24 · Apple TV aufgehübscht: Glaskarten über einem wandernden Farblicht (warm, wenn die Sonne das Haus versorgt), Uhr und Zahlen rollen auf neue Werte, „Energie jetzt“ als bewegtes Flussbild (Haus in der Mitte, Punkte laufen in Flussrichtung), Ringe für Autarkie und Eigenverbrauch, Thermometer-Balken je Raum, Zahnrad ohne große Fokusfläche. „Zu kalt“ misst jetzt gegen deine Wunschtemperatur aus dem Abgleich, sonst gegen das Thermostat-Soll, aber höchstens 22 °C – ein Thermostat auf 25 °C ist bei Wärmepumpen meist ein offenes Ventil (Apple TV und Wohn-Dashboard). ' +
@@ -2951,13 +2952,13 @@ const VIEW_RENDERS = {
   borse: ['renderBorse', 'renderCarbon', 'renderSmart'],
   konzept: ['renderKonzept'],
   settings: ['renderSettings', 'renderMeter', 'renderFroniusSetup', 'renderCalSetup', 'renderAwbSetup', 'renderDashSetup', 'renderSchoolSetup',
-    'renderRoutineSetup'],
+    'renderRoutineSetup', 'renderRadioSetup'],
 };
 // the order renderAll() always used (some renders build on earlier ones)
 const RENDER_ORDER = ['renderOverview', 'paintNowLine', 'renderToday', 'renderHistory', 'renderHeatpump', 'renderProfile', 'renderPv',
   'renderSettings', 'renderAppliances', 'renderMeter', 'renderBorse', 'renderCarbon', 'renderSmart', 'renderKonzept',
   'renderHa', 'renderDarkLoad', 'renderSwitches', 'renderHeatExtras', 'renderFlow', 'renderPvReal', 'renderFroniusSetup',
-  'renderCalSetup', 'renderAwbSetup', 'renderDashSetup', 'renderSchoolSetup', 'renderRoutineSetup'];
+  'renderCalSetup', 'renderAwbSetup', 'renderDashSetup', 'renderSchoolSetup', 'renderRoutineSetup', 'renderRadioSetup'];
 const _viewStale = {};                 // view -> Set of render names waiting for that view
 function activeView() { const el = document.querySelector('.view.on'); return el ? el.id.replace(/^v-/, '') : 'overview'; }
 function _runRender(name) {
@@ -4047,6 +4048,91 @@ function initRoutineSetup() {
     const b = e.target.closest('.krt-it'); if (!b) return;
     const r = await routineTap(b, true);
     if (r && !_routineBusy) p.innerHTML = (r.routines || []).map(routineHtml).join('');
+  });
+}
+
+/* ---- Radio auf dem Apple TV: Sender (bhe_radio, synced), Suche über die Bridge ----
+ * The Apple TV app plays them itself, so the dashboard stays in front. The
+ * search goes to radio-browser.info through the bridge (only the search words);
+ * ▶︎ here plays a station on this device, to hear whether the stream works. */
+const RADIO_LS = 'bhe_radio', RADIO_MAX = 6;
+let _radioFound = [], _radioPlaying = '';
+function radioList() {
+  let a = null; try { a = JSON.parse(localStorage.getItem(RADIO_LS) || '[]'); } catch (e) {}
+  return Array.isArray(a) ? a.filter(s => s && s.name && /^https?:\/\//i.test(s.url || '')).slice(0, RADIO_MAX) : [];
+}
+async function radioSave(list) {
+  const v = JSON.stringify(list.slice(0, RADIO_MAX).map(s => ({ name: String(s.name).slice(0, 40), url: s.url })));
+  try { localStorage.setItem(RADIO_LS, v); } catch (e) {}
+  try { await postJSON('/api/settings', { settings: { [RADIO_LS]: v } }); } catch (e) { /* the sweep sends it again */ }
+  renderRadioSetup();
+}
+function radioMeta(s) {
+  return [s.codec, s.bitrate ? `${s.bitrate} kbit/s` : '', s.country].filter(Boolean).join(' · ') || s.url;
+}
+function renderRadioSetup() {
+  const box = $('rdo-list'); if (!box) return;
+  const L = radioList(), play = u => (_radioPlaying === u ? '■' : '▶︎');
+  box.innerHTML = L.length ? L.map((s, i) => `<div class="rdo-row"><span class="rdo-n"><b>${esc(s.name)}</b><small>${esc(s.url)}</small></span>` +
+      `<button class="btn sec" data-rdo-play="${esc(s.url)}" aria-label="Probehören">${play(s.url)}</button>` +
+      `<button class="btn sec" data-rdo-del="${i}" aria-label="Entfernen">✕</button></div>`).join('')
+    : '<div class="note">Noch kein Sender – oben suchen, z. B. „Metropol FM“.</div>';
+  const f = $('rdo-found');
+  if (f) f.innerHTML = _radioFound.map((s, i) => `<div class="rdo-row"><span class="rdo-n"><b>${esc(s.name)}</b><small>${esc(radioMeta(s))}</small></span>` +
+    `<button class="btn sec" data-rdo-play="${esc(s.url)}" aria-label="Probehören">${play(s.url)}</button>` +
+    `<button class="btn" data-rdo-add="${i}" aria-label="Übernehmen">＋</button></div>`).join('');
+}
+async function radioSearch() {
+  const q = String(($('rdo-q') || {}).value || '').trim(), note = $('rdo-note');
+  if (q.length < 2) { if (note) note.textContent = 'Bitte mindestens zwei Buchstaben eingeben.'; return; }
+  if (note) note.textContent = 'Suche …';
+  try {
+    const r = await api('/api/radio/search?q=' + encodeURIComponent(q));
+    _radioFound = (r && r.stations) || [];
+    if (note) note.textContent = r && r.ok === false ? '⚠︎ ' + (r.error || 'Suche fehlgeschlagen')
+      : _radioFound.length ? `${_radioFound.length} Treffer – ▶︎ zum Probehören, ＋ zum Übernehmen.`
+      : 'Nichts gefunden – anders schreiben oder die Stream-Adresse unten selbst eintragen.';
+  } catch (e) { if (note) note.textContent = 'Nur möglich, wenn die Seite von der Bridge geöffnet ist.'; }
+  renderRadioSetup();
+}
+function radioPreview(url) {
+  const a = $('rdo-audio'), note = $('rdo-note'); if (!a) return;
+  if (_radioPlaying === url) {
+    a.pause(); a.removeAttribute('src'); a.load(); _radioPlaying = ''; renderRadioSetup(); return;
+  }
+  _radioPlaying = url; a.src = url;
+  const p = a.play();
+  if (p && p.then) p.then(() => { if (note) note.textContent = '▶︎ läuft hier auf diesem Gerät – klingt es gut, mit ＋ übernehmen.'; })
+    .catch(() => { if (_radioPlaying === url) _radioPlaying = ''; if (note) note.textContent = '⚠︎ Dieser Stream spielt hier nicht – einen anderen Treffer probieren.'; renderRadioSetup(); });
+  renderRadioSetup();
+}
+function initRadioSetup() {
+  const s = $('rdo-search'); if (s) s.addEventListener('click', radioSearch);
+  const q = $('rdo-q'); if (q) q.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); radioSearch(); } });
+  const card = $('radio-card'); if (card) card.addEventListener('click', e => {
+    const pl = e.target.closest('[data-rdo-play]'), ad = e.target.closest('[data-rdo-add]'), de = e.target.closest('[data-rdo-del]');
+    const note = $('rdo-note'), L = radioList();
+    if (pl) radioPreview(pl.dataset.rdoPlay);
+    else if (ad) {
+      const st = _radioFound[+ad.dataset.rdoAdd]; if (!st) return;
+      if (L.some(x => x.url === st.url)) { if (note) note.textContent = 'Den Sender gibt es schon in deiner Liste.'; return; }
+      if (L.length >= RADIO_MAX) { if (note) note.textContent = `Höchstens ${RADIO_MAX} Sender – erst einen entfernen.`; return; }
+      radioSave(L.concat([{ name: st.name, url: st.url }]));
+      if (note) note.textContent = `✅ ${st.name} übernommen – auf dem Apple TV in spätestens einer halben Minute.`;
+    } else if (de) {
+      const i = +de.dataset.rdoDel, gone = L[i];
+      if (gone && _radioPlaying === gone.url) radioPreview(gone.url);
+      radioSave(L.filter((x, k) => k !== i));
+    }
+  });
+  const add = $('rdo-add'); if (add) add.addEventListener('click', () => {
+    const name = String($('rdo-name').value || '').replace(/\s+/g, ' ').trim(), url = String($('rdo-url').value || '').trim();
+    const note = $('rdo-note'), L = radioList();
+    if (!name || !/^https?:\/\/[^\s"'<>]+$/i.test(url)) { if (note) note.textContent = 'Bitte Name und eine Adresse mit http:// oder https:// eintragen.'; return; }
+    if (L.length >= RADIO_MAX) { if (note) note.textContent = `Höchstens ${RADIO_MAX} Sender – erst einen entfernen.`; return; }
+    radioSave(L.filter(x => x.url !== url).concat([{ name, url }]));
+    $('rdo-name').value = ''; $('rdo-url').value = '';
+    if (note) note.textContent = `✅ ${name} eingetragen.`;
   });
 }
 
@@ -15786,6 +15872,7 @@ function initMusicSetup() {
 function initCalSetup() {
   initDashSetup();
   initRoutineSetup();
+  initRadioSetup();
   initSchoolSetup();
   initMusicSetup();
   const b = $('cal-save'); if (b) b.addEventListener('click', calSave);

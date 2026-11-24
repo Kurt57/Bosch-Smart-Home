@@ -149,6 +149,7 @@ struct AmbientBackground: View {
 
 struct DashboardView: View {
     @ObservedObject var model: DashboardModel
+    @ObservedObject var radio: RadioPlayer
     var openSettings: () -> Void
     /// counts Play/Pause presses – on a party day each one fires confetti
     var confettiTick = 0
@@ -207,6 +208,9 @@ struct DashboardView: View {
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     VStack(alignment: .leading, spacing: 22) {
+                        if !(payload.radio ?? []).isEmpty || radio.playingID != nil {
+                            RadioBar(stations: payload.radio ?? [], radio: radio)
+                        }
                         RoomsView(rooms: payload.rooms ?? [])
                         EventsView(events: payload.events ?? [])
                     }
@@ -838,6 +842,83 @@ struct EventsCard: View {
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
         .glassCard()
+    }
+}
+
+// MARK: - Radio
+
+/// The stations from the app's Setup as buttons: click plays, click again stops.
+/// Below, the song now playing, when the station sends it.
+struct RadioBar: View {
+    let stations: [TVRadioStation]
+    @ObservedObject var radio: RadioPlayer
+
+    private var line: String? {
+        if let problem = radio.problem { return "⚠︎ " + problem }
+        guard let id = radio.playingID else { return nil }
+        let name = stations.first(where: { $0.id == id })?.name ?? "Radio"
+        return "📻 " + name + " · " + (radio.nowPlaying ?? "läuft")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 12, alignment: .leading)],
+                      alignment: .leading, spacing: 12) {
+                ForEach(stations) { station in
+                    Button {
+                        radio.toggle(station)
+                    } label: {
+                        Label(station.name, systemImage: radio.playingID == station.id ? "stop.fill" : "play.fill")
+                            .font(.system(size: 21, weight: .semibold))
+                            .lineLimit(1)
+                    }
+                    .buttonStyle(RadioChipStyle(active: radio.playingID == station.id))
+                    .focusEffectDisabled()
+                }
+                // a station deleted in Setup while it plays can still be stopped
+                if let id = radio.playingID, !stations.contains(where: { $0.id == id }) {
+                    Button {
+                        radio.stop()
+                    } label: {
+                        Label("Stopp", systemImage: "stop.fill")
+                            .font(.system(size: 21, weight: .semibold))
+                    }
+                    .buttonStyle(RadioChipStyle(active: true))
+                    .focusEffectDisabled()
+                }
+            }
+            if let line {
+                Text(line)
+                    .font(.system(size: 19, weight: .medium))
+                    .foregroundStyle(radio.problem == nil ? Color.secondary : Color.orange)
+                    .lineLimit(1)
+            }
+        }
+    }
+}
+
+private struct RadioChipStyle: ButtonStyle {
+    let active: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        RadioChipBody(configuration: configuration, active: active)
+    }
+}
+
+private struct RadioChipBody: View {
+    let configuration: ButtonStyleConfiguration
+    let active: Bool
+    @Environment(\.isFocused) private var isFocused
+
+    var body: some View {
+        configuration.label
+            .padding(.horizontal, 18)
+            .padding(.vertical, 10)
+            .background(Capsule().fill(active ? Palette.green.opacity(isFocused ? 0.6 : 0.38)
+                                              : Color.white.opacity(isFocused ? 0.24 : 0.07)))
+            .overlay(Capsule().strokeBorder(Color.white.opacity(0.10), lineWidth: 1))
+            .scaleEffect(configuration.isPressed ? 0.95 : (isFocused ? 1.05 : 1))
+            .animation(.easeOut(duration: 0.15), value: isFocused)
     }
 }
 

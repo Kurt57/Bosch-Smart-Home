@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import SwiftUI
 
@@ -113,7 +114,92 @@ struct TVPayload: Decodable {
     let events: [TVEvent]?
     let party: TVParty?
     let routines: [TVRoutine]?
+    let radio: [TVRadioStation]?
     let note: String?
+}
+
+/// A radio station from the app's Setup (found via radio-browser.info).
+struct TVRadioStation: Decodable, Identifiable {
+    let id: String
+    let name: String
+    let url: String
+}
+
+/// Plays a radio stream inside the app, so the dashboard stays in front. The
+/// song now playing comes from the stream itself (Icecast/Shoutcast titles),
+/// when the station sends it.
+@MainActor
+final class RadioPlayer: NSObject, ObservableObject, AVPlayerItemMetadataOutputPushDelegate {
+    @Published private(set) var playingID: String?
+    @Published private(set) var nowPlaying: String?
+    @Published private(set) var problem: String?
+    private var player: AVPlayer?
+    private var statusObservation: NSKeyValueObservation?
+
+    /// Click on a station: play it – or stop it, when it is the one playing.
+    func toggle(_ station: TVRadioStation) {
+        if playingID == station.id {
+            stop()
+        } else {
+            play(station)
+        }
+    }
+
+    func play(_ station: TVRadioStation) {
+        stop()
+        guard let url = URL(string: station.url) else {
+            problem = "Die Adresse von \(station.name) ist ungültig."
+            return
+        }
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
+        try? AVAudioSession.sharedInstance().setActive(true)
+        let item = AVPlayerItem(url: url)
+        let output = AVPlayerItemMetadataOutput(identifiers: nil)
+        output.setDelegate(self, queue: DispatchQueue.main)
+        item.add(output)
+        let name = station.name
+        statusObservation = item.observe(\.status, options: [.new]) { [weak self] observed, _ in
+            let failed = observed.status == .failed
+            Task { @MainActor in
+                guard failed, let self else { return }
+                self.stop()
+                self.problem = "\(name) spielt gerade nicht – der Sender ist nicht erreichbar."
+            }
+        }
+        let newPlayer = AVPlayer(playerItem: item)
+        player = newPlayer
+        playingID = station.id
+        nowPlaying = nil
+        problem = nil
+        newPlayer.play()
+    }
+
+    func stop() {
+        player?.pause()
+        player = nil
+        statusObservation = nil
+        playingID = nil
+        nowPlaying = nil
+        problem = nil
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+
+    nonisolated func metadataOutput(_ output: AVPlayerItemMetadataOutput,
+                                    didOutputTimedMetadataGroups groups: [AVTimedMetadataGroup],
+                                    from track: AVPlayerItemTrack?) {
+        var title: String?
+        for group in groups where title == nil {
+            for item in group.items {
+                if let text = item.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
+                    title = text
+                    break
+                }
+            }
+        }
+        Task { @MainActor in
+            self.nowPlaying = title
+        }
+    }
 }
 
 @MainActor

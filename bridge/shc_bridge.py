@@ -54,7 +54,7 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
@@ -13006,6 +13006,12 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/routine":
                 return self._send_json(compute_routines(self.store, self._settings_load(),
                                                         include_all=qs.get("all", ["0"])[0] == "1"))
+            if path == "/api/radio/search":
+                try:
+                    found = radio_search(qs.get("q", [""])[0], self.cfg.get("radio_browser_base") or None)
+                except RuntimeError as exc:
+                    return self._send_json({"ok": False, "error": str(exc), "stations": []})
+                return self._send_json({"ok": True, "stations": found})
             if path == "/api/products":
                 prods = self.store.products_list() or PRODUCT_CATALOG
                 return self._send_json({"products": prods,
@@ -14041,6 +14047,81 @@ def _tv_party(st: dict, events: list, day: str) -> dict | None:
             "source": "calendar"}
 
 
+# Radio on the Apple TV: the stations come from Setup (bhe_radio: [{name, url}]),
+# found there with radio_search() in the free directory radio-browser.info – no
+# stream address is built in, since stations move their streams now and then.
+RADIO_MAX = 6
+RADIO_BROWSER = ("https://de1.api.radio-browser.info", "https://de2.api.radio-browser.info",
+                 "https://fi1.api.radio-browser.info")
+
+
+def _tv_radio(st: dict | None) -> list:
+    """The stations for the TV's radio bar (http/https streams only)."""
+    try:
+        raw = json.loads((st or {}).get("bhe_radio") or "[]")
+    except (TypeError, ValueError):
+        return []
+    out = []
+    for s in raw if isinstance(raw, list) else []:
+        if not isinstance(s, dict):
+            continue
+        url = str(s.get("url") or "").strip()
+        name = " ".join(str(s.get("name") or "").split())[:40]
+        if name and re.match(r"^https?://[^\s\"'<>]+$", url) and all(x["url"] != url for x in out):
+            out.append({"id": "r" + hashlib.sha1(url.encode("utf-8")).hexdigest()[:8], "name": name, "url": url})
+        if len(out) >= RADIO_MAX:
+            break
+    return out
+
+
+def radio_search(q: str, base: str | None = None, timeout: float = 8.0) -> list:
+    """Stations whose name matches q, from radio-browser.info (only the search
+    words are sent), the most listened first; streams that were down at the
+    directory's last check are left out."""
+    q = " ".join(str(q or "").split())[:60]
+    if len(q) < 2:
+        return []
+    path = "/json/stations/search?" + "&".join(
+        f"{k}={v}" for k, v in (("name", quote(q)), ("limit", "25"), ("hidebroken", "true"),
+                                ("order", "clickcount"), ("reverse", "true")))
+    data, last = None, None
+    for b in ([base] if base else RADIO_BROWSER):
+        u = urlparse(b)
+        try:
+            if u.scheme == "http":
+                conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=timeout)
+            else:
+                conn = http.client.HTTPSConnection(u.hostname, u.port or 443, timeout=timeout,
+                                                   context=ssl.create_default_context())
+            conn.request("GET", path, headers={"User-Agent": "EnergieBridge/1.0", "Accept": "application/json"})
+            resp = conn.getresponse()
+            body = resp.read()
+            conn.close()
+            if resp.status != 200:
+                raise RuntimeError(f"HTTP {resp.status}")
+            data = json.loads(body.decode("utf-8", "replace"))
+            break
+        except Exception as exc:            # next mirror
+            last = exc
+    if data is None:
+        raise RuntimeError(f"Senderverzeichnis nicht erreichbar ({last})")
+    out, seen = [], set()
+    for s in data if isinstance(data, list) else []:
+        if not isinstance(s, dict):
+            continue
+        url = str(s.get("url_resolved") or s.get("url") or "").strip()
+        if not re.match(r"^https?://[^\s\"'<>]+$", url) or url in seen:
+            continue
+        seen.add(url)
+        out.append({"name": " ".join(str(s.get("name") or "").split())[:60] or "Sender", "url": url,
+                    "codec": str(s.get("codec") or "")[:12], "bitrate": int(s.get("bitrate") or 0),
+                    "country": str(s.get("countrycode") or s.get("country") or "")[:20],
+                    "homepage": str(s.get("homepage") or "")[:200]})
+        if len(out) >= 15:
+            break
+    return out
+
+
 def _tv_pct(x) -> str:
     """A share in whole % – but never "100 %" or "0 %" unless it is exactly that."""
     p = 100.0 * float(x)
@@ -14347,6 +14428,7 @@ def compute_tv(rooms: list, window_since: dict, outdoor_c, fr: dict | None, hp: 
             "alerts": A[:8], "more": max(0, len(A) - 8), "flow": flow, "today": today_tiles,
             "rooms": room_rows, "events": ev_rows,
             "party": _tv_party(st, events, today.strftime("%Y-%m-%d")),
+            "radio": _tv_radio(st),
             "note": "" if P or not fr.get("connected") else "Wechselrichter ohne aktuelle Werte"}
 
 
