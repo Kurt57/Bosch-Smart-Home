@@ -102,7 +102,7 @@ Mit „Bewegung reduzieren“ in den Bedienungshilfen gibt es den Glückwunsch o
 ## Fußball im Kalender
 
 Setup → **⚽ Fußball im Kalender**: Mannschaft suchen (Vereine und Nationalmannschaften; Nationalmannschaften
-auch auf Deutsch, z. B. „Türkei“; türkische Buchstaben gehen) → mit ＋ übernehmen, bis zu 8. Die Bridge holt die
+auch auf Deutsch, z. B. „Türkei“ oder „turkei“, und so angezeigt; türkische Buchstaben gehen) → mit ＋ übernehmen, bis zu 8. Die Bridge holt die
 nächsten und die letzten Spiele alle 3 Stunden aus dem freien Verzeichnis **TheSportsDB** (gesendet werden nur der
 Name bei der Suche bzw. die Nummer der Mannschaft) und trägt sie als Termine ein: im Wohn-Dashboard und auf dem
 Apple TV, eine Stunde vorher als Hinweis; auf dem Apple TV laufen Ergebnisse und nächste Spiele durchs Laufband.

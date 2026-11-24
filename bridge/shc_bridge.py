@@ -10657,7 +10657,40 @@ FOOTBALL_NAMES = {
     "griechenland": "Greece", "ungarn": "Hungary", "tschechien": "Czech Republic", "marokko": "Morocco",
     "rumänien": "Romania", "serbien": "Serbia", "albanien": "Albania", "georgien": "Georgia",
     "aserbaidschan": "Azerbaijan", "bosnien": "Bosnia and Herzegovina", "mexiko": "Mexico",
+    "slowakei": "Slovakia", "slowenien": "Slovenia", "irland": "Ireland", "nordirland": "Northern Ireland",
+    "island": "Iceland", "finnland": "Finland", "bulgarien": "Bulgaria", "zypern": "Cyprus",
+    "nordmazedonien": "North Macedonia", "kolumbien": "Colombia", "ägypten": "Egypt", "tunesien": "Tunisia",
+    "algerien": "Algeria", "kamerun": "Cameroon", "kanada": "Canada", "australien": "Australia",
+    "südkorea": "South Korea", "katar": "Qatar", "russland": "Russia",
 }
+# …and back: the directory's English names of national teams shown in German
+FOOTBALL_DE = {
+    "Turkey": "Türkei", "Türkiye": "Türkei", "Germany": "Deutschland", "Austria": "Österreich",
+    "Switzerland": "Schweiz", "France": "Frankreich", "Spain": "Spanien", "Italy": "Italien",
+    "Netherlands": "Niederlande", "Belgium": "Belgien", "Croatia": "Kroatien", "Poland": "Polen",
+    "Scotland": "Schottland", "Denmark": "Dänemark", "Sweden": "Schweden", "Norway": "Norwegen",
+    "Brazil": "Brasilien", "Argentina": "Argentinien", "Greece": "Griechenland", "Hungary": "Ungarn",
+    "Czech Republic": "Tschechien", "Czechia": "Tschechien", "Morocco": "Marokko", "Romania": "Rumänien",
+    "Serbia": "Serbien", "Albania": "Albanien", "Georgia": "Georgien", "Azerbaijan": "Aserbaidschan",
+    "Bosnia and Herzegovina": "Bosnien-Herzegowina", "Mexico": "Mexiko", "Slovakia": "Slowakei",
+    "Slovenia": "Slowenien", "Ireland": "Irland", "Republic of Ireland": "Irland",
+    "Northern Ireland": "Nordirland", "Iceland": "Island", "Finland": "Finnland", "Bulgaria": "Bulgarien",
+    "Cyprus": "Zypern", "North Macedonia": "Nordmazedonien", "Colombia": "Kolumbien", "Egypt": "Ägypten",
+    "Tunisia": "Tunesien", "Algeria": "Algerien", "Cameroon": "Kamerun", "Canada": "Kanada",
+    "Australia": "Australien", "South Korea": "Südkorea", "Qatar": "Katar", "Russia": "Russland",
+    "Ukraine": "Ukraine", "England": "England", "Wales": "Wales", "Portugal": "Portugal",
+}
+
+
+def football_de(name: str) -> str:
+    """'Turkey' → 'Türkei', 'Germany Women' → 'Deutschland Frauen'; clubs stay as they are."""
+    name = " ".join(str(name or "").split())
+    if name in FOOTBALL_DE:
+        return FOOTBALL_DE[name]
+    base, _, suffix = name.rpartition(" ")
+    if suffix == "Women" and base in FOOTBALL_DE:
+        return FOOTBALL_DE[base] + " Frauen"
+    return name
 
 
 def _http_get(url: str, timeout: float = 10.0, max_bytes: int = 3_000_000) -> bytes:
@@ -10850,8 +10883,10 @@ def football_search(q: str, base: str | None = None) -> list:
     if len(q) < 2:
         return []
     cands = [q]
-    if FOOTBALL_NAMES.get(q.lower()):
-        cands.insert(0, FOOTBALL_NAMES[q.lower()])
+    key = _ascii_fold(q).lower()             # "Türkei", "turkei", "TÜRKEI" alike
+    en = FOOTBALL_NAMES.get(q.lower()) or next((v for k, v in FOOTBALL_NAMES.items() if _ascii_fold(k) == key), None)
+    if en:
+        cands.insert(0, en)
     if _ascii_fold(q) not in cands:
         cands.append(_ascii_fold(q))
     out, seen, last, answered = [], set(), None, False
@@ -10870,8 +10905,9 @@ def football_search(q: str, base: str | None = None) -> list:
                 continue
             seen.add(tid)
             badge = str(t.get("strBadge") or t.get("strTeamBadge") or "")
-            out.append({"id": tid, "name": " ".join(str(t.get("strTeam") or "").split())[:60],
-                        "league": str(t.get("strLeague") or "")[:60], "country": str(t.get("strCountry") or "")[:40],
+            name, country = football_de(t.get("strTeam"))[:60], football_de(t.get("strCountry"))[:40]
+            out.append({"id": tid, "name": name, "league": str(t.get("strLeague") or "")[:60],
+                        "country": "" if country == name else country,     # a national team: no "Türkei · Türkei"
                         "badge": badge if URL_RX.match(badge) else ""})
         if len(out) >= 12:
             break
@@ -10906,7 +10942,8 @@ def _fb_event(e) -> dict | None:
             return int(v)
         except (TypeError, ValueError):
             return None
-    return {"id": str(e["idEvent"]), "home": str(e["strHomeTeam"])[:60], "away": str(e["strAwayTeam"])[:60],
+    return {"id": str(e["idEvent"]), "home": football_de(e["strHomeTeam"])[:60],
+            "away": football_de(e["strAwayTeam"])[:60],
             "league": str(e.get("strLeague") or "")[:60], "ts": ts,
             "hs": score(e.get("intHomeScore")), "as": score(e.get("intAwayScore")),
             "status": str(e.get("strStatus") or "")[:30]}
