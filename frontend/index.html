@@ -364,6 +364,18 @@
   .krt-it.done .tx{text-decoration:line-through}
   .krt-it.done .bx{background:var(--kb-green, var(--good, #30d158)); border-color:transparent}
   .krt-it.busy{opacity:.7}
+  /* Nachrichten im Wohn-Dashboard */
+  #kiosk-news:not(:empty){margin:16px 0; border-radius:22px; padding:18px 20px; background:var(--k-card);
+    box-shadow:var(--k-shadow)}
+  #kiosk-news .kn-row{display:flex; gap:12px; align-items:baseline; padding:9px 0; border-top:1px solid var(--k-sep)}
+  #kiosk-news .kn-row:first-of-type{border-top:none}
+  #kiosk-news .kn-src{flex:none; min-width:92px; font-size:12px; font-weight:700; letter-spacing:.06em;
+    text-transform:uppercase; color:var(--kb-blue)}
+  #kiosk-news .kn-t{flex:1; font-size:17px; line-height:1.3}
+  #kiosk-news .kn-ago{flex:none; font-size:13px; color:var(--k-sub)}
+  .nws-chip{border:1px solid var(--line); background:var(--card2); color:var(--ink); border-radius:999px;
+    padding:6px 12px; font-size:13px; cursor:pointer}
+  .nws-chip.on{opacity:.45}
   /* Radio (Setup) */
   .rdo-row{display:flex; align-items:center; gap:8px; padding:8px 0; border-bottom:1px solid var(--line)}
   .rdo-row:last-child{border-bottom:none}
@@ -2156,6 +2168,42 @@
       <div id="krt-preview" style="margin-top:10px"></div>
     </div>
 
+    <div class="card" id="football-card">
+      <h2>⚽ Fußball im Kalender</h2>
+      <div class="note" style="line-height:1.6; margin-bottom:10px">
+        Die Spiele deiner Mannschaften – Vereine und <b>Nationalmannschaften</b> – erscheinen als Termine im
+        Wohn-Dashboard und auf dem Apple TV (eine Stunde vorher als Hinweis), Ergebnisse im Laufband. Gesucht wird im
+        freien Verzeichnis <b>TheSportsDB</b>; die Bridge schickt dorthin nur den Mannschaftsnamen bzw. ihre Nummer.
+        Nationalmannschaften gehen auch auf Deutsch („Türkei“, „Deutschland“).
+      </div>
+      <div style="display:flex; gap:8px">
+        <input id="fbl-q" autocomplete="off" enterkeyhint="search" placeholder="Mannschaft suchen, z. B. Galatasaray" style="flex:1">
+        <button class="btn" id="fbl-search" style="width:auto; margin-top:0">Suchen</button>
+      </div>
+      <div id="fbl-found" style="margin-top:8px"></div>
+      <label style="margin-top:12px">Meine Mannschaften (höchstens 8)</label>
+      <div id="fbl-list"></div>
+      <div class="note" id="fbl-note" style="margin-top:8px"></div>
+    </div>
+
+    <div class="card" id="news-card">
+      <h2>📰 Nachrichten</h2>
+      <div class="note" style="line-height:1.6; margin-bottom:10px">
+        Schlagzeilen aus RSS-Feeds – im Wohn-Dashboard als Liste, auf dem Apple TV im Laufband und weiter unten als
+        Liste. Die Bridge holt sie alle 15 Minuten. Vorschläge antippen oder eine Feed-Adresse eintragen; vor dem
+        Übernehmen wird jeder Feed geprüft.
+      </div>
+      <div id="nws-presets" style="display:flex; gap:6px; flex-wrap:wrap"></div>
+      <div style="display:flex; gap:8px; margin-top:10px">
+        <input id="nws-url" inputmode="url" autocapitalize="off" autocomplete="off" spellcheck="false"
+          placeholder="Feed-Adresse (RSS/Atom), https://…" style="flex:1">
+        <button class="btn" id="nws-add" style="width:auto; margin-top:0">Prüfen &amp; übernehmen</button>
+      </div>
+      <label style="margin-top:12px">Meine Feeds (höchstens 6)</label>
+      <div id="nws-list"></div>
+      <div class="note" id="nws-note" style="margin-top:8px"></div>
+    </div>
+
     <div class="card" id="radio-card">
       <h2>📻 Radio auf dem Apple TV</h2>
       <div class="note" style="line-height:1.6; margin-bottom:10px">
@@ -2591,6 +2639,7 @@
     <div id="kiosk-cal"></div>
     <div id="kiosk-school"></div>
   </div>
+  <div id="kiosk-news"></div>
   <div id="kiosk-music"></div>
   <div id="kiosk-energy">
     <div id="kiosk-flow"></div>

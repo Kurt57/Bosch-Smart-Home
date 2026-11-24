@@ -99,6 +99,26 @@ um Mitternacht endet er ohnehin. Der Text wird wie die übrigen Einstellungen in
 (`bhe_party_text`, `bhe_party_date`, `bhe_party_off`, `bhe_party_auto`) – nichts davon steht im Repository.
 Mit „Bewegung reduzieren“ in den Bedienungshilfen gibt es den Glückwunsch ohne Konfetti.
 
+## Fußball im Kalender
+
+Setup → **⚽ Fußball im Kalender**: Mannschaft suchen (Vereine und Nationalmannschaften; Nationalmannschaften
+auch auf Deutsch, z. B. „Türkei“; türkische Buchstaben gehen) → mit ＋ übernehmen, bis zu 8. Die Bridge holt die
+nächsten und die letzten Spiele alle 3 Stunden aus dem freien Verzeichnis **TheSportsDB** (gesendet werden nur der
+Name bei der Suche bzw. die Nummer der Mannschaft) und trägt sie als Termine ein: im Wohn-Dashboard und auf dem
+Apple TV, eine Stunde vorher als Hinweis; auf dem Apple TV laufen Ergebnisse und nächste Spiele durchs Laufband.
+Anstoßzeiten kommen aus dem Verzeichnis in UTC und werden in Ortszeit gezeigt. Live-Spielstände bietet der freie
+Zugang nicht – das Ergebnis steht da, sobald das Verzeichnis es hat. Ob der freie Zugang alle Spiele einer
+Mannschaft liefert, legt der Anbieter fest; im Setup siehst du sofort, ob die Suche klappt.
+
+## Nachrichten
+
+Setup → **📰 Nachrichten**: einen Vorschlag antippen (tagesschau, Deutschlandfunk, SPIEGEL, ZEIT, kicker, NTV,
+Hürriyet, BBC) oder eine RSS-/Atom-Adresse eintragen – jeder Feed wird vor dem Übernehmen geprüft (die Vorschläge
+sind Adressen, die die Sender veröffentlichen; ändert einer seine Adresse, meldet die Prüfung das). Bis zu 6 Feeds;
+die Bridge holt sie alle 15 Minuten im Hintergrund (`GET /api/news`) und behält nur Titel, Link und Zeit. Im
+Wohn-Dashboard steht eine Liste der neuesten Schlagzeilen, auf dem Apple TV laufen sie durchs Laufband und stehen
+weiter unten als Liste. Feeds mit DOCTYPE-Angabe werden aus Sicherheitsgründen nicht gelesen.
+
 ## Kinder-Routine
 
 Setup → **🧒 Kinder-Routine**: einschalten, zwei Namen (mit Tier-Symbol), Uhrzeit (Abendroutine, Standard

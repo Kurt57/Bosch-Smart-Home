@@ -183,18 +183,34 @@ struct DashboardView: View {
         return n
     }
 
+    // The first screen is exactly as high as the TV – nothing gets pushed off the
+    // top any more. Everything else (all dates with the football matches, the
+    // news, the rooms while the routine has their place) lies below it: swipe
+    // down and the page scrolls along with the remote's focus.
     var body: some View {
-        TimelineView(.everyMinute) { context in
-            page.offset(burnInShift(context.date))
+        GeometryReader { geo in
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 36) {
+                    TimelineView(.everyMinute) { context in
+                        page.offset(burnInShift(context.date))
+                    }
+                    .frame(height: geo.size.height)
+                    if let payload = model.payload {
+                        MoreSections(payload: payload, showRooms: payload.routines?.first != nil)
+                            .padding(.bottom, 40)
+                    }
+                }
+                .focusScope(focusNS)
+            }
+            .scrollClipDisabled()
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(AmbientBackground(warmth: warmth, party: model.payload?.party != nil).ignoresSafeArea())
         .overlay(ConfettiLayer(partyID: model.payload?.party?.title, tick: confettiTick + partyTaps,
                                celebrate: finishedKids))
     }
 
     @ViewBuilder private var page: some View {
-        VStack(alignment: .leading, spacing: 24) {
+        VStack(alignment: .leading, spacing: 20) {
             HeaderView(header: model.payload?.header, stand: model.payload?.stand,
                        error: model.error, lastOK: model.lastOK, openSettings: openSettings,
                        party: model.payload?.party, partyTap: { partyTaps += 1 },
@@ -212,7 +228,7 @@ struct DashboardView: View {
                         }
                         TileSection(title: "Heute", tiles: payload.today ?? [], big: false, note: nil)
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .frame(maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .topLeading)
                     // the column under the gear: everything the remote can select lives here,
                     // so swiping down from the top right always lands on it
                     VStack(alignment: .leading, spacing: 22) {
@@ -231,12 +247,18 @@ struct DashboardView: View {
                         EventsView(events: payload.events ?? [])
                     }
                     .frame(width: 620, alignment: .topLeading)
-                    .frame(maxHeight: .infinity, alignment: .top)
+                    .frame(minHeight: 0, maxHeight: .infinity, alignment: .top)
                     .focusSection()
                 }
-                .frame(maxHeight: .infinity, alignment: .top)
+                // min + max height: the columns take the room that is left and never
+                // grow past it (that used to push the whole page up and off the TV)
+                .frame(minHeight: 0, maxHeight: .infinity, alignment: .top)
+                .clipped()
                 // numbers roll to their new value on every refresh
                 .animation(.easeInOut(duration: 0.6), value: payload.ts ?? 0)
+                if let items = payload.ticker, !items.isEmpty {
+                    TickerBand(items: items)
+                }
             } else {
                 Text(model.error ?? "Verbinde mit der Bridge …")
                     .font(.system(size: 34, weight: .semibold))
@@ -244,7 +266,162 @@ struct DashboardView: View {
                 Spacer(minLength: 0)
             }
         }
-        .focusScope(focusNS)
+    }
+}
+
+// MARK: - Below the first screen
+
+/// Reached by swiping down: every card can take the remote's focus, so the
+/// page scrolls along. All dates (with the football matches), the news, and
+/// the rooms while the children's routine uses their place above.
+private struct MoreSections: View {
+    let payload: TVPayload
+    let showRooms: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 28) {
+            HStack(alignment: .top, spacing: 36) {
+                if !(payload.events ?? []).isEmpty {
+                    FocusCard {
+                        EventsCard(events: Array((payload.events ?? []).prefix(12)))
+                    }
+                }
+                if !(payload.news ?? []).isEmpty {
+                    FocusCard {
+                        NewsCard(news: payload.news ?? [])
+                    }
+                }
+            }
+            if showRooms && !(payload.rooms ?? []).isEmpty {
+                FocusCard {
+                    RoomsView(rooms: payload.rooms ?? [])
+                }
+                .frame(maxWidth: 900, alignment: .leading)
+            }
+        }
+    }
+}
+
+/// A card the remote can land on – that is how a tvOS page scrolls (the focus
+/// moves, the scroll view follows). Nothing to click; it just lights up.
+private struct FocusCard<Content: View>: View {
+    @FocusState private var focused: Bool
+    private let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        content
+            .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .strokeBorder(Color.white.opacity(focused ? 0.6 : 0), lineWidth: 3))
+            .scaleEffect(focused ? 1.015 : 1)
+            .shadow(color: Color.black.opacity(focused ? 0.35 : 0), radius: 18, y: 8)
+            .focusable()
+            .focused($focused)
+            .focusEffectDisabled()
+            .animation(.easeOut(duration: 0.2), value: focused)
+    }
+}
+
+/// The newest headlines of the feeds chosen in Setup.
+private struct NewsCard: View {
+    let news: [TVNews]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            SectionTitle(text: "Nachrichten")
+            ForEach(Array(news.prefix(10))) { item in
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 10) {
+                        Text(item.source.uppercased())
+                            .font(.system(size: 15, weight: .bold))
+                            .tracking(1.1)
+                            .foregroundStyle(Palette.house)
+                        if let ago = item.ago, !ago.isEmpty {
+                            Text(ago)
+                                .font(.system(size: 15))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Text(item.title)
+                        .font(.system(size: 22, weight: .medium))
+                        .lineLimit(2)
+                }
+                .padding(.vertical, 2)
+            }
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassCard()
+    }
+}
+
+/// The running band at the foot of the first screen: football results and the
+/// next matches, then the headlines – right to left, like a news channel's crawl
+/// (the motion also keeps OLED screens from burning in).
+private struct TickerBand: View {
+    let items: [TVTickerItem]
+    @State private var rowWidth: CGFloat = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private let speed = 60.0          // points per second
+    private let gap: CGFloat = 90
+
+    var body: some View {
+        GeometryReader { geo in
+            TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reduceMotion)) { context in
+                let cycle = Double(rowWidth + gap)
+                let travelled = context.date.timeIntervalSinceReferenceDate * speed
+                let x: CGFloat = (reduceMotion || rowWidth <= 0) ? 0
+                    : -CGFloat(travelled.truncatingRemainder(dividingBy: cycle))
+                HStack(spacing: gap) {
+                    row
+                    row
+                }
+                .offset(x: x)
+                .frame(width: geo.size.width, height: geo.size.height, alignment: .leading)
+            }
+        }
+        .frame(height: 52)
+        .clipped()
+        .glassCard(26)
+        .onPreferenceChange(TickerWidthKey.self) { width in
+            rowWidth = width
+        }
+    }
+
+    private var row: some View {
+        HStack(spacing: 44) {
+            ForEach(items) { item in
+                HStack(spacing: 10) {
+                    Text(item.icon ?? "•")
+                        .font(.system(size: 22))
+                    if let source = item.source, !source.isEmpty {
+                        Text(source.uppercased())
+                            .font(.system(size: 16, weight: .bold))
+                            .tracking(1.1)
+                            .foregroundStyle(Palette.house)
+                    }
+                    Text(item.text)
+                        .font(.system(size: 22, weight: .medium))
+                }
+                .fixedSize()
+            }
+        }
+        .padding(.horizontal, 24)
+        .fixedSize()
+        .background(GeometryReader { g in
+            Color.clear.preference(key: TickerWidthKey.self, value: g.size.width)
+        })
+    }
+}
+
+private struct TickerWidthKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }
 
@@ -1029,31 +1206,37 @@ struct RadioBar: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 12, alignment: .leading)],
-                      alignment: .leading, spacing: 12) {
-                ForEach(stations) { station in
-                    Button {
-                        radio.toggle(station)
-                    } label: {
-                        Label(station.name, systemImage: radio.playingID == station.id ? "stop.fill" : "play.fill")
-                            .font(.system(size: 21, weight: .semibold))
-                            .lineLimit(1)
+            // one row – it scrolls sideways when there are more stations than fit
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 12) {
+                    ForEach(stations) { station in
+                        Button {
+                            radio.toggle(station)
+                        } label: {
+                            Label(station.name, systemImage: radio.playingID == station.id ? "stop.fill" : "play.fill")
+                                .font(.system(size: 21, weight: .semibold))
+                                .lineLimit(1)
+                                .fixedSize()
+                        }
+                        .buttonStyle(RadioChipStyle(active: radio.playingID == station.id))
+                        .focusEffectDisabled()
                     }
-                    .buttonStyle(RadioChipStyle(active: radio.playingID == station.id))
-                    .focusEffectDisabled()
-                }
-                // a station deleted in Setup while it plays can still be stopped
-                if let id = radio.playingID, !stations.contains(where: { $0.id == id }) {
-                    Button {
-                        radio.stop()
-                    } label: {
-                        Label("Stopp", systemImage: "stop.fill")
-                            .font(.system(size: 21, weight: .semibold))
+                    // a station deleted in Setup while it plays can still be stopped
+                    if let id = radio.playingID, !stations.contains(where: { $0.id == id }) {
+                        Button {
+                            radio.stop()
+                        } label: {
+                            Label("Stopp", systemImage: "stop.fill")
+                                .font(.system(size: 21, weight: .semibold))
+                        }
+                        .buttonStyle(RadioChipStyle(active: true))
+                        .focusEffectDisabled()
                     }
-                    .buttonStyle(RadioChipStyle(active: true))
-                    .focusEffectDisabled()
                 }
+                .padding(.vertical, 6)
+                .padding(.horizontal, 4)
             }
+            .scrollClipDisabled()
             if let line {
                 Text(line)
                     .font(.system(size: 19, weight: .medium))
@@ -1206,13 +1389,13 @@ private struct RoutineItemLabel: View {
             if let e = item.emoji, !e.isEmpty {
                 Text(e).font(.system(size: 24))
             }
+            // one line – the routine has to fit on the first screen
             Text(item.text)
                 .font(.system(size: 22, weight: .semibold))
                 .strikethrough(item.done)
                 .foregroundStyle(item.done ? Color.secondary : Color.primary)
-                .lineLimit(2)
-                .minimumScaleFactor(0.8)
-                .multilineTextAlignment(.leading)
+                .lineLimit(1)
+                .minimumScaleFactor(0.65)
             Spacer(minLength: 0)
         }
     }
@@ -1233,7 +1416,7 @@ private struct RoutineItemBody: View {
     var body: some View {
         configuration.label
             .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.vertical, 7)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(Color.white.opacity(isFocused ? 0.26 : 0.06)))

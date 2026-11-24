@@ -33,6 +33,17 @@ startet auf der ersten offenen Aufgabe, sonst vom ⚙︎ nach unten wischen. Kli
 den Haken zurück. Die Liste ist dieselbe wie im Wohn-Dashboard (die Bridge führt sie). Wer alles geschafft hat,
 bekommt Konfetti und einen ⭐.
 
+**Platz auf dem Fernseher – erste Seite und „weiter unten“:** Die erste Seite ist genau so hoch wie der Bildschirm
+(nichts rutscht mehr oben heraus): Kopfzeile, Hinweise, Energie, Heute, rechts Radio und Räume bzw. Routine, ganz
+unten ein **Laufband** mit Fußball-Ergebnissen, den nächsten Spielen und Schlagzeilen. Alles Weitere liegt darunter –
+**nach unten wischen**: alle Termine (mit den Fußballspielen), die Nachrichten und, während die Routine läuft, die
+Räume. Jede dieser Karten leuchtet auf, wenn der Fokus auf ihr liegt, und die Seite rollt mit; nach oben wischen
+führt zurück.
+
+**Fußball ⚽ und Nachrichten 📰:** Mannschaften (Vereine und Nationalmannschaften) und Nachrichten-Feeds stellst du in
+der App im Setup ein (siehe [DASHBOARD.md](DASHBOARD.md)). Die Spiele stehen bei den Terminen und kündigen sich eine
+Stunde vorher als Hinweis an; Ergebnisse der letzten drei Tage und die nächsten Spiele laufen durchs Laufband.
+
 **Radio 📻:** Sender, die du in der App unter Setup → *Radio auf dem Apple TV* eingetragen hast, stehen rechts
 oben als Knöpfe. Hinwischen und klicken spielt den Sender in der App selbst – das Dashboard bleibt vorne;
 noch einmal klicken stoppt. Oben in der Mitte erscheint dann eine **„Läuft gerade“-Karte**: Cover, Titel und

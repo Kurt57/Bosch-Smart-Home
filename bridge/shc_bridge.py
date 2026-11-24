@@ -10635,8 +10635,412 @@ def _pv_weather_calib(ctx, wx_days: list, now: int) -> dict | None:
     return {"f": round(sum(p for p, _r in pairs) / rad, 2) if rad > 0 else None, "days": len(pairs)}
 
 
-def compute_calendar(ctx, days: int = 7, force: bool = False) -> dict:
-    """Events of all configured calendars from today 00:00 for `days` days."""
+# --------------------------------------------------------------------------- #
+# Nachrichten and Fußball for the dashboards – both chosen in Setup (synced
+# settings bhe_news / bhe_football), both fetched by the bridge in a background
+# thread, so a slow site never holds up a screen: the answer is always the last
+# good copy, refreshed when it is older than its max age.
+# --------------------------------------------------------------------------- #
+URL_RX = re.compile(r"^https?://[^\s\"'<>]+$")
+NEWS_MAX_AGE = 900                       # headlines: every 15 min
+NEWS_MAX_FEEDS = 6
+FOOTBALL_MAX_AGE = 3 * 3600              # fixtures and results: every 3 h (a free service – be gentle)
+FOOTBALL_MAX_TEAMS = 8
+SPORTSDB_BASE = "https://www.thesportsdb.com/api/v1/json/123"    # TheSportsDB, public free key
+# German names of national teams → the English ones the directory uses
+FOOTBALL_NAMES = {
+    "türkei": "Turkey", "türkiye": "Turkey", "turkiye": "Turkey", "deutschland": "Germany",
+    "österreich": "Austria", "schweiz": "Switzerland", "frankreich": "France", "spanien": "Spain",
+    "italien": "Italy", "niederlande": "Netherlands", "holland": "Netherlands", "belgien": "Belgium",
+    "kroatien": "Croatia", "polen": "Poland", "schottland": "Scotland", "dänemark": "Denmark",
+    "schweden": "Sweden", "norwegen": "Norway", "brasilien": "Brazil", "argentinien": "Argentina",
+    "griechenland": "Greece", "ungarn": "Hungary", "tschechien": "Czech Republic", "marokko": "Morocco",
+    "rumänien": "Romania", "serbien": "Serbia", "albanien": "Albania", "georgien": "Georgia",
+    "aserbaidschan": "Azerbaijan", "bosnien": "Bosnia and Herzegovina", "mexiko": "Mexico",
+}
+
+
+def _http_get(url: str, timeout: float = 10.0, max_bytes: int = 3_000_000) -> bytes:
+    """GET an http/https address (up to 3 redirects) for feeds and directories."""
+    from urllib.parse import urljoin
+    for _ in range(4):
+        u = urlparse(url)
+        if u.scheme == "https":
+            conn = http.client.HTTPSConnection(u.hostname, u.port or 443, timeout=timeout,
+                                               context=ssl.create_default_context())
+        elif u.scheme == "http":
+            conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=timeout)
+        else:
+            raise RuntimeError("nur http/https")
+        conn.request("GET", (u.path or "/") + (("?" + u.query) if u.query else ""),
+                     headers={"User-Agent": "EnergieBridge/1.0", "Accept": "*/*"})
+        resp = conn.getresponse()
+        if resp.status in (301, 302, 303, 307, 308) and resp.getheader("Location"):
+            url = urljoin(url, resp.getheader("Location"))
+            conn.close()
+            continue
+        body = resp.read(max_bytes + 1)
+        conn.close()
+        if resp.status != 200:
+            raise RuntimeError(f"HTTP {resp.status}")
+        if len(body) > max_bytes:
+            raise RuntimeError("Antwort zu groß")
+        return body
+    raise RuntimeError("zu viele Weiterleitungen")
+
+
+def _bg_refresh(ctx, key: str, fn):
+    """Run fn() in a background thread – unless one for key is already running."""
+    with ctx._bg_lock:
+        if key in ctx._bg_running:
+            return
+        ctx._bg_running.add(key)
+
+    def run():
+        try:
+            fn()
+        except Exception:
+            pass
+        finally:
+            with ctx._bg_lock:
+                ctx._bg_running.discard(key)
+    threading.Thread(target=run, daemon=True).start()
+
+
+def _strip_html(s: str) -> str:
+    import html as _html
+    return " ".join(_html.unescape(re.sub(r"<[^>]+>", " ", s or "")).split())
+
+
+def _feed_ts(s) -> int | None:
+    """RSS (RFC 822) or Atom (ISO 8601) date → epoch seconds."""
+    s = str(s or "").strip()
+    if not s:
+        return None
+    try:
+        import email.utils as _eu
+        return int(_eu.parsedate_to_datetime(s).timestamp())
+    except Exception:
+        pass
+    try:
+        d = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        return int((d if d.tzinfo else d.replace(tzinfo=timezone.utc)).timestamp())
+    except ValueError:
+        return None
+
+
+def parse_feed(data: bytes) -> tuple:
+    """RSS 2.0 / RSS 1.0 / Atom → (feed title, [{title, link, ts}]). Documents
+    with a DOCTYPE are refused – entity tricks could blow up the parser."""
+    import xml.etree.ElementTree as ET
+    if b"<!doctype" in data[:4096].lower() or b"<!entity" in data[:65536].lower():
+        raise RuntimeError("Feed mit DOCTYPE – aus Sicherheitsgründen nicht gelesen")
+    try:
+        root = ET.fromstring(data)
+    except ET.ParseError as exc:
+        raise RuntimeError("kein RSS- oder Atom-Feed") from exc
+
+    def local(el):
+        return el.tag.rsplit("}", 1)[-1].lower() if isinstance(el.tag, str) else ""
+
+    def child(el, *names):
+        for c in el:
+            if local(c) in names:
+                if local(c) == "link" and c.get("href"):
+                    return c.get("href")
+                return (c.text or "").strip()
+        return ""
+    feed_title = ""
+    for el in root.iter():
+        if local(el) in ("channel", "feed"):
+            feed_title = _strip_html(child(el, "title"))
+            break
+    if not feed_title and local(root) == "feed":
+        feed_title = _strip_html(child(root, "title"))
+    items = []
+    for el in root.iter():
+        if local(el) not in ("item", "entry"):
+            continue
+        title = _strip_html(child(el, "title"))
+        if title:
+            link = child(el, "link")
+            items.append({"title": title[:220], "link": link if URL_RX.match(link or "") else "",
+                          "ts": _feed_ts(child(el, "pubdate", "published", "updated", "date"))})
+    return feed_title[:80], items
+
+
+def _news_feeds(st: dict | None) -> list:
+    try:
+        raw = json.loads((st or {}).get("bhe_news") or "[]")
+    except (TypeError, ValueError):
+        return []
+    out = []
+    for f in raw if isinstance(raw, list) else []:
+        if isinstance(f, dict):
+            url = str(f.get("url") or "").strip()
+            if URL_RX.match(url) and all(x["url"] != url for x in out):
+                out.append({"url": url, "name": " ".join(str(f.get("name") or "").split())[:40]
+                            or (urlparse(url).hostname or "Nachrichten")})
+        if len(out) >= NEWS_MAX_FEEDS:
+            break
+    return out
+
+
+def news_check(url: str) -> dict:
+    """Setup: can this feed be read? Its title and the first headlines."""
+    if not URL_RX.match(str(url or "").strip()):
+        return {"ok": False, "error": "Bitte eine Adresse mit http:// oder https:// angeben."}
+    try:
+        title, items = parse_feed(_http_get(url.strip(), timeout=10))
+    except Exception as exc:
+        return {"ok": False, "error": f"Feed nicht lesbar: {exc}"}
+    if not items:
+        return {"ok": False, "error": "Der Feed enthält keine Schlagzeilen."}
+    return {"ok": True, "title": title, "items": [i["title"] for i in items[:5]]}
+
+
+def news_snapshot(ctx, st: dict | None, wait: bool = False) -> dict:
+    """The newest headlines of all feeds (each refreshed every 15 min)."""
+    feeds = _news_feeds(st)
+    now = time.time()
+    stale = [f for f in feeds if now - (ctx.news_cache.get(f["url"]) or {}).get("ts", 0) > NEWS_MAX_AGE]
+    if stale:
+        def refresh(fs=stale):
+            for f in fs:
+                try:
+                    title, items = parse_feed(_http_get(f["url"], timeout=8))
+                    ctx.news_cache[f["url"]] = {"ts": time.time(), "items": items, "title": title, "error": None}
+                except Exception as exc:
+                    old = ctx.news_cache.get(f["url"]) or {}
+                    ctx.news_cache[f["url"]] = {"ts": time.time(), "items": old.get("items") or [],
+                                                "title": old.get("title") or "", "error": str(exc)[:160]}
+        if wait:
+            refresh()
+        else:
+            _bg_refresh(ctx, "news", refresh)
+    items, errors = [], []
+    for f in feeds:
+        ent = ctx.news_cache.get(f["url"]) or {}
+        items.extend({**it, "source": f["name"]} for it in (ent.get("items") or [])[:15])
+        if ent.get("error"):
+            errors.append({"name": f["name"], "error": ent["error"]})
+    items.sort(key=lambda x: -(x.get("ts") or 0))
+    seen, out = set(), []
+    for it in items:
+        k = it["title"].lower()
+        if k not in seen:
+            seen.add(k)
+            out.append(it)
+        if len(out) >= 30:
+            break
+    return {"ok": True, "feeds": [f["name"] for f in feeds], "items": out, "errors": errors,
+            "loading": bool(stale) and not wait and not out, "ts": int(now)}
+
+
+def _ascii_fold(s: str) -> str:
+    import unicodedata
+    s = s.replace("ı", "i").replace("İ", "I")
+    return unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode()
+
+
+def football_search(q: str, base: str | None = None) -> list:
+    """Teams (clubs and national teams) whose name matches q – German names of
+    national teams and Turkish letters are understood (Türkei, Beşiktaş …)."""
+    q = " ".join(str(q or "").split())[:40]
+    if len(q) < 2:
+        return []
+    cands = [q]
+    if FOOTBALL_NAMES.get(q.lower()):
+        cands.insert(0, FOOTBALL_NAMES[q.lower()])
+    if _ascii_fold(q) not in cands:
+        cands.append(_ascii_fold(q))
+    out, seen, last, answered = [], set(), None, False
+    for c in cands:
+        try:
+            data = json.loads(_http_get(f"{base or SPORTSDB_BASE}/searchteams.php?t={quote(c)}", timeout=8) or b"{}")
+            answered = True
+        except Exception as exc:
+            last = exc
+            continue
+        for t in (data or {}).get("teams") or []:
+            if not isinstance(t, dict) or str(t.get("strSport") or "Soccer") != "Soccer":
+                continue
+            tid = str(t.get("idTeam") or "")
+            if not tid.isdigit() or tid in seen:
+                continue
+            seen.add(tid)
+            badge = str(t.get("strBadge") or t.get("strTeamBadge") or "")
+            out.append({"id": tid, "name": " ".join(str(t.get("strTeam") or "").split())[:60],
+                        "league": str(t.get("strLeague") or "")[:60], "country": str(t.get("strCountry") or "")[:40],
+                        "badge": badge if URL_RX.match(badge) else ""})
+        if len(out) >= 12:
+            break
+    if not answered:
+        raise RuntimeError(f"Fußball-Verzeichnis nicht erreichbar ({last})")
+    return out[:12]
+
+
+def _utc_ts(s) -> int | None:
+    s = str(s or "").strip()
+    if not s:
+        return None
+    try:
+        d = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return int((d if d.tzinfo else d.replace(tzinfo=timezone.utc)).timestamp())
+
+
+def _fb_event(e) -> dict | None:
+    """One match from TheSportsDB (times there are UTC)."""
+    if not isinstance(e, dict) or not e.get("idEvent"):
+        return None
+    ts = _utc_ts(e.get("strTimestamp"))
+    if ts is None and e.get("dateEvent"):
+        ts = _utc_ts(f"{e['dateEvent']}T{str(e.get('strTime') or '00:00:00')[:8]}")
+    if ts is None or not e.get("strHomeTeam") or not e.get("strAwayTeam"):
+        return None
+
+    def score(v):
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return None
+    return {"id": str(e["idEvent"]), "home": str(e["strHomeTeam"])[:60], "away": str(e["strAwayTeam"])[:60],
+            "league": str(e.get("strLeague") or "")[:60], "ts": ts,
+            "hs": score(e.get("intHomeScore")), "as": score(e.get("intAwayScore")),
+            "status": str(e.get("strStatus") or "")[:30]}
+
+
+def _football_teams(st: dict | None) -> list:
+    try:
+        raw = json.loads((st or {}).get("bhe_football") or "[]")
+    except (TypeError, ValueError):
+        return []
+    out = []
+    for t in raw if isinstance(raw, list) else []:
+        if isinstance(t, dict) and str(t.get("id") or "").isdigit() and all(x["id"] != str(t["id"]) for x in out):
+            out.append({"id": str(t["id"]), "name": " ".join(str(t.get("name") or "").split())[:60] or "Team"})
+        if len(out) >= FOOTBALL_MAX_TEAMS:
+            break
+    return out
+
+
+def football_snapshot(ctx, st: dict | None, wait: bool = False) -> dict:
+    """Next and last matches of the chosen teams (each team refreshed every 3 h)."""
+    teams = _football_teams(st)
+    base = ctx.cfg.get("sportsdb_base") or SPORTSDB_BASE
+    now = time.time()
+    stale = [t for t in teams if now - (ctx.football_cache.get(t["id"]) or {}).get("ts", 0) > FOOTBALL_MAX_AGE]
+    if stale:
+        def refresh(ts_=stale):
+            for t in ts_:
+                ent = {"ts": time.time(), "next": [], "last": [], "error": None}
+                try:
+                    nx = json.loads(_http_get(f"{base}/eventsnext.php?id={t['id']}", timeout=8) or b"{}") or {}
+                    ls = json.loads(_http_get(f"{base}/eventslast.php?id={t['id']}", timeout=8) or b"{}") or {}
+                    ent["next"] = [x for x in map(_fb_event, nx.get("events") or []) if x]
+                    ent["last"] = [x for x in map(_fb_event, ls.get("results") or ls.get("events") or []) if x]
+                except Exception as exc:
+                    old = ctx.football_cache.get(t["id"]) or {}
+                    ent.update(next=old.get("next") or [], last=old.get("last") or [], error=str(exc)[:160])
+                ctx.football_cache[t["id"]] = ent
+                if len(ts_) > 1:
+                    time.sleep(0.4)          # the free service allows only a few calls per second
+        if wait:
+            refresh()
+        else:
+            _bg_refresh(ctx, "football", refresh)
+    matches, errors = {}, []
+    for t in teams:
+        ent = ctx.football_cache.get(t["id"]) or {}
+        for e in (ent.get("next") or []) + (ent.get("last") or []):
+            m = matches.setdefault(e["id"], {**e, "teams": []})
+            if t["name"] not in m["teams"]:
+                m["teams"].append(t["name"])
+        if ent.get("error"):
+            errors.append({"name": t["name"], "error": ent["error"]})
+    return {"ok": True, "teams": [t["name"] for t in teams],
+            "matches": sorted(matches.values(), key=lambda e: e["ts"]), "errors": errors, "ts": int(now)}
+
+
+def football_line(m: dict, with_league: bool = True) -> str:
+    """"Galatasaray – Fenerbahçe" or, once played, "Galatasaray 3:1 Fenerbahçe"."""
+    mid = f" {m['hs']}:{m['as']} " if m.get("hs") is not None and m.get("as") is not None else " – "
+    return m["home"] + mid + m["away"] + (f" · {m['league']}" if with_league and m.get("league") else "")
+
+
+def _calendar_add_football(ctx, res: dict, st: dict) -> dict:
+    """The chosen teams' matches as calendar entries (2 h each, colour green)."""
+    fb = football_snapshot(ctx, st)
+    if not fb["matches"]:
+        return res
+    now = int(time.time())
+    d0 = datetime.fromtimestamp(now).replace(hour=0, minute=0, second=0, microsecond=0)
+    w0, w1 = d0.timestamp(), (d0 + timedelta(days=int(res.get("days") or 7))).timestamp()
+    ev = list(res.get("events") or [])
+    n = 0
+    for m in fb["matches"]:
+        if w0 <= m["ts"] < w1:
+            ev.append({"start": m["ts"], "end": m["ts"] + 2 * 3600, "all_day": False,
+                       "title": "⚽ " + football_line(m, with_league=False), "location": m.get("league") or "",
+                       "calendar": "Fußball", "color": "#30d158", "recurring": False, "football": True})
+            n += 1
+    ev.sort(key=lambda x: (x["start"], not x["all_day"], x["title"]))
+    cals = list(res.get("calendars") or [])
+    cals.append({"name": "Fußball (" + ", ".join(fb["teams"][:3]) + ("…" if len(fb["teams"]) > 3 else "") + ")",
+                 "color": "#30d158", "events": n, "error": (fb["errors"][0]["error"] if fb["errors"] else None)})
+    return {**res, "events": ev, "calendars": cals}
+
+
+def _ago_de(ts, now: float) -> str:
+    if not ts:
+        return ""
+    m = max(0, int((now - ts) // 60))
+    return "gerade" if m < 2 else f"vor {m} min" if m < 60 else f"vor {m // 60} h" if m < 24 * 60 else "gestern" \
+        if m < 48 * 60 else datetime.fromtimestamp(ts).strftime("%d.%m.")
+
+
+def _tv_news(news: dict, now: float) -> list:
+    """Headlines for the TV's news section (newest first)."""
+    return [{"id": f"n{i}", "title": it["title"], "source": it.get("source") or "", "ago": _ago_de(it.get("ts"), now)}
+            for i, it in enumerate((news or {}).get("items") or []) if i < 12]
+
+
+def _tv_ticker(news: dict, fb: dict, now: float) -> list:
+    """The TV's running band: football results (3 days), the next matches
+    (7 days, at most 3), then the headlines."""
+    out = []
+    today = datetime.fromtimestamp(now).date()
+    for m in (fb or {}).get("matches") or []:
+        if m.get("hs") is not None and m.get("as") is not None and now - 3 * 86400 <= m["ts"] <= now:
+            out.append({"icon": "⚽", "source": "Ergebnis", "text": football_line(m)})
+    nxt = [m for m in (fb or {}).get("matches") or [] if now - 2 * 3600 <= m["ts"] <= now + 7 * 86400
+           and m.get("hs") is None]
+    for m in nxt[:3]:
+        d = datetime.fromtimestamp(m["ts"])
+        k = (d.date() - today).days
+        when = ("läuft" if m["ts"] <= now else
+                f"{ {0: 'Heute', 1: 'Morgen'}.get(k, TV_WEEKDAYS[d.weekday()]) } {d.strftime('%H:%M')}")
+        out.append({"icon": "⚽", "source": when, "text": football_line(m)})
+    for it in ((news or {}).get("items") or [])[:15]:
+        out.append({"icon": "📰", "source": it.get("source") or "", "text": it["title"]})
+    return [{"id": f"t{i}", **x} for i, x in enumerate(out)]
+
+
+def compute_calendar(ctx, days: int = 7, force: bool = False, settings: dict | None = None) -> dict:
+    """Events of all configured calendars from today 00:00 for `days` days –
+    plus the matches of the football teams chosen in Setup (settings)."""
+    res = _compute_calendar_base(ctx, days, force)
+    if settings:
+        try:
+            res = _calendar_add_football(ctx, res, settings)
+        except Exception:                    # football is a bonus, never the reason a calendar fails
+            pass
+    return res
+
+
+def _compute_calendar_base(ctx, days: int = 7, force: bool = False) -> dict:
     now = int(time.time())
     days = max(1, min(31, int(days)))
     if ctx.mode == "demo":
@@ -10783,6 +11187,10 @@ class Runtime:
         self.cal_cache = {}             # calendar url -> {"ts", "cal", "error"}
         self.awb_cache = {}             # AWB Köln: {"key", "ts", "dates", "error"}
         self.wx_cache = {}              # weather for the PV views: {"key", "ts", "hourly", "error"}
+        self.news_cache = {}            # feed url -> {"ts", "items", "title", "error"}
+        self.football_cache = {}        # team id -> {"ts", "next", "last", "error"}
+        self._bg_lock = threading.Lock()
+        self._bg_running: set = set()   # background refreshes in flight (news, football)
         self._cal_lock = threading.Lock()
         # heavy-analytics result cache: these process every raw sample in
         # Python, so recomputing them on every request/refresh is slow. Cache
@@ -11347,16 +11755,22 @@ class Handler(BaseHTTPRequestHandler):
                     wsince = window_open_since(self.store)
                 except Exception:
                     wsince = {}
+            st = self._settings_load()
             try:
-                cal = compute_calendar(self.ctx, 7)
+                cal = compute_calendar(self.ctx, 7, settings=st)       # with the football matches
             except Exception:
                 cal = None
-            st = self._settings_load()
             out = compute_tv(rooms, wsince, hp.get("outdoor_c"), self._fronius_payload(), hp, cal, st, now)
             try:
                 out["routines"] = compute_routines(self.store, st, now)["routines"]
             except Exception:
                 out["routines"] = []
+            try:
+                news = news_snapshot(self.ctx, st)
+                fb = football_snapshot(self.ctx, st)
+                out["news"], out["ticker"] = _tv_news(news, now), _tv_ticker(news, fb, now)
+            except Exception:
+                out["news"], out["ticker"] = [], []
             return out
         return self.ctx.calc_get(("tv",), 20, build)
 
@@ -13006,6 +13420,20 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/routine":
                 return self._send_json(compute_routines(self.store, self._settings_load(),
                                                         include_all=qs.get("all", ["0"])[0] == "1"))
+            if path == "/api/news":
+                return self._send_json(news_snapshot(self.ctx, self._settings_load(),
+                                                     wait=qs.get("wait", ["0"])[0] == "1"))
+            if path == "/api/news/check":
+                return self._send_json(news_check(qs.get("url", [""])[0]))
+            if path == "/api/football":
+                return self._send_json(football_snapshot(self.ctx, self._settings_load(),
+                                                         wait=qs.get("wait", ["0"])[0] == "1"))
+            if path == "/api/football/search":
+                try:
+                    found = football_search(qs.get("q", [""])[0], self.cfg.get("sportsdb_base") or None)
+                except RuntimeError as exc:
+                    return self._send_json({"ok": False, "error": str(exc), "teams": []})
+                return self._send_json({"ok": True, "teams": found})
             if path == "/api/radio/search":
                 try:
                     found = radio_search(qs.get("q", [""])[0], self.cfg.get("radio_browser_base") or None)
@@ -13039,7 +13467,8 @@ class Handler(BaseHTTPRequestHandler):
                     cdays = int(qs.get("days", ["7"])[0])
                 except ValueError:
                     cdays = 7
-                return self._send_json(compute_calendar(self.ctx, cdays, force=qs.get("refresh", ["0"])[0] == "1"))
+                return self._send_json(compute_calendar(self.ctx, cdays, force=qs.get("refresh", ["0"])[0] == "1",
+                                                        settings=self._settings_load()))
             if path == "/api/awb/streets":
                 if awb_koeln is None:
                     return self._send_json({"ok": False, "error": "AWB-Modul fehlt (bridge/awb_koeln.py)."})

@@ -115,7 +115,25 @@ struct TVPayload: Decodable {
     let party: TVParty?
     let routines: [TVRoutine]?
     let radio: [TVRadioStation]?
+    let news: [TVNews]?
+    let ticker: [TVTickerItem]?
     let note: String?
+}
+
+/// A headline from the feeds chosen in Setup.
+struct TVNews: Decodable, Identifiable {
+    let id: String
+    let title: String
+    let source: String
+    let ago: String?
+}
+
+/// One piece of the running band: a football result or match, or a headline.
+struct TVTickerItem: Decodable, Identifiable {
+    let id: String
+    let icon: String?
+    let source: String?
+    let text: String
 }
 
 /// A radio station from the app's Setup (found via radio-browser.info).

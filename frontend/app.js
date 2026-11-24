@@ -94,8 +94,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v228';   // short tag shown always-on in the header
-const APP_VERSION = 'v228 · 2026-11-24 · Apple TV: „Läuft gerade“-Karte oben in der Mitte, sobald Radio läuft – Cover (über Apples iTunes-Suche anhand von Interpret und Titel, nur bei passendem Interpreten), sonst das Senderlogo; Titel, Interpret, Equalizer-Balken, das Cover unscharf als Farblicht. Senderlogos kommen aus dem Verzeichnis und stehen auch im Setup. Außerdem: Kinder-Routine rechts statt der Räume (Energie bleibt sichtbar), Fokus der Fernbedienung erreicht die Häkchen und startet auf der ersten offenen Aufgabe, Geburtstagsbanner anklickbar für neues Konfetti. ' +
+const APP_BUILD = 'v229';   // short tag shown always-on in the header
+const APP_VERSION = 'v229 · 2026-11-24 · Apple TV: Die erste Seite passt jetzt genau auf den Fernseher – vorher war sie höher als der Bildschirm, tvOS hat sie mittig gesetzt und oben abgeschnitten. Ganz unten ein Laufband mit Fußball-Ergebnissen, den nächsten Spielen und Schlagzeilen; nach unten wischen zeigt alle Termine (mit Fußball), die Nachrichten und während der Routine die Räume. Senderknöpfe in einer Reihe, Routine-Aufgaben einzeilig. Neu im Setup: „⚽ Fußball im Kalender“ – Vereine und Nationalmannschaften suchen (auch auf Deutsch, z. B. „Türkei“), bis zu 8; ihre Spiele kommen aus dem freien Verzeichnis TheSportsDB als Termine ins Wohn-Dashboard und aufs Apple TV, eine Stunde vorher als Hinweis. „📰 Nachrichten“ – Vorschläge (tagesschau, Deutschlandfunk, SPIEGEL, ZEIT, kicker, NTV, Hürriyet, BBC) oder eine eigene RSS-/Atom-Adresse, jede wird vor dem Übernehmen geprüft; im Wohn-Dashboard stehen die neuesten Schlagzeilen. ' +
+  'v228 · 2026-11-24 · Apple TV: „Läuft gerade“-Karte oben in der Mitte, sobald Radio läuft – Cover (über Apples iTunes-Suche anhand von Interpret und Titel, nur bei passendem Interpreten), sonst das Senderlogo; Titel, Interpret, Equalizer-Balken, das Cover unscharf als Farblicht. Senderlogos kommen aus dem Verzeichnis und stehen auch im Setup. Außerdem: Kinder-Routine rechts statt der Räume (Energie bleibt sichtbar), Fokus der Fernbedienung erreicht die Häkchen und startet auf der ersten offenen Aufgabe, Geburtstagsbanner anklickbar für neues Konfetti. ' +
   'v227 · 2026-11-24 ·Radio auf dem Apple TV 📻: Setup → „Radio auf dem Apple TV“ – Sender suchen (freies Verzeichnis radio-browser.info, z. B. „Metropol FM“), mit ▶︎ am Handy probehören, mit ＋ übernehmen (bis zu 6; Stream-Adresse auch selbst eintragbar). Die Apple-TV-App zeigt sie rechts oben als Knöpfe und spielt sie selbst – das Dashboard bleibt vorne; darunter der laufende Titel, wenn der Sender ihn mitschickt. ' +
   'v226 · 2026-11-24 ·Kinder-Routine 🧒: Abhakliste je Kind (Setup → Kinder-Routine: zwei Namen mit Tier-Symbol, Uhrzeit, Aufgaben – „Name: Aufgabe“ gilt nur für ein Kind). Zur Abendzeit im Wohn-Dashboard mit großen Tippflächen und auf dem Apple TV zum Abhaken mit der Fernbedienung (dort statt des Energieflusses); die Bridge führt die Häkchen, alle Geräte zeigen denselben Stand. Wer fertig ist, bekommt Konfetti, ein Lob und einen ⭐ (geschaffte Abende der letzten 7 Tage). Zum Ausprobieren: „Heute zum Testen den ganzen Tag zeigen“ und „Häkchen von heute löschen“. Apple TV: Einstellungsseite mit eigenem Hintergrund. ' +
   'v225 · 2026-11-24 ·„gespart“ mit Akku-Anteil: Strom, der heute in den Akku ging und noch nicht verbraucht ist, steht jetzt neben „gespart“ als „+ ≈ … € im Akku“ – auf dem Apple TV (ohne neuen App-Build, kommt von der Bridge), im Wohn-Dashboard, im PV-Tab und in der Geldzeile des Banners. „gespart“ zählt Akku-Strom erst, wenn er das Haus versorgt; der Hinweis zeigt, um wie viel der Wert noch wächst (Ladestand-Zuwachs seit Mitternacht × Akkugröße × 95 % × Arbeitspreis). ' +
@@ -2953,13 +2954,14 @@ const VIEW_RENDERS = {
   borse: ['renderBorse', 'renderCarbon', 'renderSmart'],
   konzept: ['renderKonzept'],
   settings: ['renderSettings', 'renderMeter', 'renderFroniusSetup', 'renderCalSetup', 'renderAwbSetup', 'renderDashSetup', 'renderSchoolSetup',
-    'renderRoutineSetup', 'renderRadioSetup'],
+    'renderRoutineSetup', 'renderRadioSetup', 'renderFootballSetup', 'renderNewsSetup'],
 };
 // the order renderAll() always used (some renders build on earlier ones)
 const RENDER_ORDER = ['renderOverview', 'paintNowLine', 'renderToday', 'renderHistory', 'renderHeatpump', 'renderProfile', 'renderPv',
   'renderSettings', 'renderAppliances', 'renderMeter', 'renderBorse', 'renderCarbon', 'renderSmart', 'renderKonzept',
   'renderHa', 'renderDarkLoad', 'renderSwitches', 'renderHeatExtras', 'renderFlow', 'renderPvReal', 'renderFroniusSetup',
-  'renderCalSetup', 'renderAwbSetup', 'renderDashSetup', 'renderSchoolSetup', 'renderRoutineSetup', 'renderRadioSetup'];
+  'renderCalSetup', 'renderAwbSetup', 'renderDashSetup', 'renderSchoolSetup', 'renderRoutineSetup', 'renderRadioSetup',
+  'renderFootballSetup', 'renderNewsSetup'];
 const _viewStale = {};                 // view -> Set of render names waiting for that view
 function activeView() { const el = document.querySelector('.view.on'); return el ? el.id.replace(/^v-/, '') : 'overview'; }
 function _runRender(name) {
@@ -3454,7 +3456,8 @@ async function kioskPullSettings() {
   try {
     const r = await api('/api/settings'), srv = (r && r.settings) || {}, unsent = _unsentGet();
     ['bhe_kiosk_win_s', 'bhe_kiosk_bin_days', 'bhe_school_plan', 'bhe_school_title', 'bhe_music',
-     'bhe_party_date', 'bhe_party_text', 'bhe_party_off', 'bhe_party_auto', 'bhe_routine', 'bhe_routine_test'].forEach(k => {
+     'bhe_party_date', 'bhe_party_text', 'bhe_party_off', 'bhe_party_auto', 'bhe_routine', 'bhe_routine_test',
+     'bhe_news', 'bhe_football'].forEach(k => {
       if (srv[k] != null && !(k in unsent)) { try { localStorage.setItem(k, srv[k]); _lastSynced[k] = srv[k]; } catch (e) {} }
     });
   } catch (e) { /* keep the local values */ }
@@ -4143,6 +4146,135 @@ function initRadioSetup() {
   });
 }
 
+/* ---- Fußball im Kalender: Mannschaften (bhe_football), Spiele über die Bridge ----
+ * The bridge looks the teams up in TheSportsDB and puts their matches into the
+ * calendar (wall dashboard, Apple TV, the "in 1 hour" hint) and the TV ticker. */
+const FOOTBALL_LS = 'bhe_football', FOOTBALL_MAX = 8;
+let _fblFound = [];
+function footballList() {
+  let a = null; try { a = JSON.parse(localStorage.getItem(FOOTBALL_LS) || '[]'); } catch (e) {}
+  return Array.isArray(a) ? a.filter(t => t && /^\d+$/.test(String(t.id || '')) && t.name).slice(0, FOOTBALL_MAX) : [];
+}
+async function footballSave(list) {
+  const v = JSON.stringify(list.slice(0, FOOTBALL_MAX).map(t => ({ id: String(t.id), name: String(t.name).slice(0, 60),
+    badge: /^https?:\/\/[^\s"'<>]+$/i.test(t.badge || '') ? t.badge : '', league: String(t.league || '').slice(0, 60) })));
+  try { localStorage.setItem(FOOTBALL_LS, v); } catch (e) {}
+  try { await postJSON('/api/settings', { settings: { [FOOTBALL_LS]: v } }); } catch (e) { /* the sweep sends it again */ }
+  _kioskCal = null;                         // the calendar picks the matches up on its next load
+  renderFootballSetup();
+}
+function renderFootballSetup() {
+  const box = $('fbl-list'); if (!box) return;
+  const L = footballList();
+  box.innerHTML = L.length ? L.map((t, i) => `<div class="rdo-row">${radioLogo(t.badge)}<span class="rdo-n"><b>${esc(t.name)}</b>` +
+      `<small>${esc(t.league || '')}</small></span><button class="btn sec" data-fbl-del="${i}" aria-label="Entfernen">✕</button></div>`).join('')
+    : '<div class="note">Noch keine Mannschaft – oben suchen, z. B. „Türkei“ oder „1. FC Köln“.</div>';
+  const f = $('fbl-found');
+  if (f) f.innerHTML = _fblFound.map((t, i) => `<div class="rdo-row">${radioLogo(t.badge)}<span class="rdo-n"><b>${esc(t.name)}</b>` +
+    `<small>${esc([t.league, t.country].filter(Boolean).join(' · '))}</small></span>` +
+    `<button class="btn" data-fbl-add="${i}" aria-label="Übernehmen">＋</button></div>`).join('');
+}
+async function footballSearch() {
+  const q = String(($('fbl-q') || {}).value || '').trim(), note = $('fbl-note');
+  if (q.length < 2) { if (note) note.textContent = 'Bitte mindestens zwei Buchstaben eingeben.'; return; }
+  if (note) note.textContent = 'Suche …';
+  try {
+    const r = await api('/api/football/search?q=' + encodeURIComponent(q));
+    _fblFound = (r && r.teams) || [];
+    if (note) note.textContent = r && r.ok === false ? '⚠︎ ' + (r.error || 'Suche fehlgeschlagen')
+      : _fblFound.length ? `${_fblFound.length} Treffer – mit ＋ übernehmen.`
+      : 'Nichts gefunden – anders schreiben (Vereine oft auf Englisch, z. B. „Cologne“, „Bayern Munich“).';
+  } catch (e) { if (note) note.textContent = 'Nur möglich, wenn die Seite von der Bridge geöffnet ist.'; }
+  renderFootballSetup();
+}
+function initFootballSetup() {
+  const s = $('fbl-search'); if (s) s.addEventListener('click', footballSearch);
+  const q = $('fbl-q'); if (q) q.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); footballSearch(); } });
+  const card = $('football-card'); if (card) card.addEventListener('click', e => {
+    const ad = e.target.closest('[data-fbl-add]'), de = e.target.closest('[data-fbl-del]'), note = $('fbl-note'), L = footballList();
+    if (ad) {
+      const t = _fblFound[+ad.dataset.fblAdd]; if (!t) return;
+      if (L.some(x => String(x.id) === String(t.id))) { if (note) note.textContent = 'Die Mannschaft ist schon in deiner Liste.'; return; }
+      if (L.length >= FOOTBALL_MAX) { if (note) note.textContent = `Höchstens ${FOOTBALL_MAX} Mannschaften – erst eine entfernen.`; return; }
+      footballSave(L.concat([t]));
+      if (note) note.textContent = `✅ ${t.name} übernommen – die Spiele erscheinen in wenigen Minuten im Kalender.`;
+    } else if (de) {
+      const i = +de.dataset.fblDel; footballSave(L.filter((x, k) => k !== i));
+    }
+  });
+}
+
+/* ---- Nachrichten: RSS/Atom-Feeds (bhe_news), Schlagzeilen über die Bridge ----
+ * Suggestions are only a start – every feed is checked by the bridge before it
+ * is kept (feeds move, and not every site offers one). */
+const NEWS_LS = 'bhe_news', NEWS_MAX = 6;
+const NEWS_PRESETS = [
+  { name: 'tagesschau', url: 'https://www.tagesschau.de/index~rss2.xml' },
+  { name: 'Deutschlandfunk', url: 'https://www.deutschlandfunk.de/nachrichten-100.rss' },
+  { name: 'SPIEGEL', url: 'https://www.spiegel.de/schlagzeilen/index.rss' },
+  { name: 'ZEIT', url: 'https://newsfeed.zeit.de/index' },
+  { name: 'kicker', url: 'https://newsfeed.kicker.de/news/aktuell' },
+  { name: 'NTV (TR)', url: 'https://www.ntv.com.tr/son-dakika.rss' },
+  { name: 'Hürriyet', url: 'https://www.hurriyet.com.tr/rss/anasayfa' },
+  { name: 'BBC', url: 'https://feeds.bbci.co.uk/news/rss.xml' },
+];
+function newsList() {
+  let a = null; try { a = JSON.parse(localStorage.getItem(NEWS_LS) || '[]'); } catch (e) {}
+  return Array.isArray(a) ? a.filter(f => f && /^https?:\/\//i.test(f.url || '')).slice(0, NEWS_MAX) : [];
+}
+async function newsSave(list) {
+  const v = JSON.stringify(list.slice(0, NEWS_MAX).map(f => ({ name: String(f.name || '').slice(0, 40), url: f.url })));
+  try { localStorage.setItem(NEWS_LS, v); } catch (e) {}
+  try { await postJSON('/api/settings', { settings: { [NEWS_LS]: v } }); } catch (e) {}
+  renderNewsSetup();
+}
+function renderNewsSetup() {
+  const box = $('nws-list'); if (!box) return;
+  const L = newsList();
+  box.innerHTML = L.length ? L.map((f, i) => `<div class="rdo-row"><span class="rdo-n"><b>${esc(f.name)}</b><small>${esc(f.url)}</small></span>` +
+      `<button class="btn sec" data-nws-del="${i}" aria-label="Entfernen">✕</button></div>`).join('')
+    : '<div class="note">Noch kein Feed – einen Vorschlag antippen oder eine Adresse eintragen.</div>';
+  const p = $('nws-presets');
+  if (p) p.innerHTML = NEWS_PRESETS.map((f, i) => `<button class="nws-chip${L.some(x => x.url === f.url) ? ' on' : ''}" data-nws-preset="${i}">＋ ${esc(f.name)}</button>`).join('');
+}
+async function newsAdd(url, name) {
+  const note = $('nws-note'), L = newsList();
+  if (!/^https?:\/\/[^\s"'<>]+$/i.test(url || '')) { if (note) note.textContent = 'Bitte eine Adresse mit http:// oder https:// eintragen.'; return; }
+  if (L.some(x => x.url === url)) { if (note) note.textContent = 'Den Feed gibt es schon in deiner Liste.'; return; }
+  if (L.length >= NEWS_MAX) { if (note) note.textContent = `Höchstens ${NEWS_MAX} Feeds – erst einen entfernen.`; return; }
+  if (note) note.textContent = 'Prüfe den Feed …';
+  try {
+    const r = await api('/api/news/check?url=' + encodeURIComponent(url));
+    if (!r || !r.ok) { if (note) note.textContent = '⚠︎ ' + ((r && r.error) || 'Feed nicht lesbar'); return; }
+    await newsSave(L.concat([{ name: name || r.title || new URL(url).hostname, url }]));
+    if (note) note.innerHTML = `✅ <b>${esc(name || r.title || url)}</b> übernommen, z. B.: „${esc((r.items || [])[0] || '')}“`;
+    const u = $('nws-url'); if (u && u.value === url) u.value = '';
+  } catch (e) { if (note) note.textContent = 'Nur möglich, wenn die Seite von der Bridge geöffnet ist.'; }
+}
+function initNewsSetup() {
+  const add = $('nws-add'); if (add) add.addEventListener('click', () => newsAdd(String(($('nws-url') || {}).value || '').trim(), ''));
+  const card = $('news-card'); if (card) card.addEventListener('click', e => {
+    const pr = e.target.closest('[data-nws-preset]'), de = e.target.closest('[data-nws-del]');
+    if (pr) { const f = NEWS_PRESETS[+pr.dataset.nwsPreset]; if (f) newsAdd(f.url, f.name); }
+    else if (de) { const i = +de.dataset.nwsDel; newsSave(newsList().filter((x, k) => k !== i)); }
+  });
+}
+// the wall dashboard: the newest headlines as a list
+let _kioskNews = null;
+async function kioskLoadNews() {
+  if (!newsList().length) { _kioskNews = null; return; }
+  try { const r = await api('/api/news'); if (r && r.ok) _kioskNews = r; } catch (e) { /* keep */ }
+}
+function renderKioskNews() {
+  const el = $('kiosk-news'); if (!el) return;
+  const items = ((_kioskNews && _kioskNews.items) || []).slice(0, 8), now = Date.now() / 1000;
+  const ago = ts => { if (!ts) return ''; const m = Math.max(0, Math.round((now - ts) / 60));
+    return m < 2 ? 'gerade' : m < 60 ? `vor ${m} min` : m < 1440 ? `vor ${Math.round(m / 60)} h` : 'gestern'; };
+  el.innerHTML = items.length ? `<div class="kl-title">📰 Nachrichten</div>` + items.map(it =>
+    `<div class="kn-row"><span class="kn-src">${esc(it.source || '')}</span><span class="kn-t">${esc(it.title)}</span>` +
+    `<span class="kn-ago">${ago(it.ts)}</span></div>`).join('') : '';
+}
+
 function paintKiosk() {
   const rooms = _kioskRooms || [];
   // away toggle button state
@@ -4172,6 +4304,7 @@ function paintKiosk() {
   try { renderKioskAlerts(); } catch (e) { console.error(e); }
   try { renderKioskRoutine(); } catch (e) { console.error(e); }
   try { renderKioskCal(); } catch (e) { console.error(e); }
+  try { renderKioskNews(); } catch (e) { console.error(e); }
   try { renderKioskSchool(); } catch (e) { console.error(e); }
   try { renderKioskMusic(); } catch (e) { console.error(e); }
   try {          // both there → side by side on wide screens
@@ -4236,6 +4369,7 @@ async function kioskLoadData() {
   try { await kioskLoadCal(); } catch (e) {}
   try { await kioskPullSettings(); } catch (e) {}
   try { await routineLoad(); } catch (e) {}
+  try { await kioskLoadNews(); } catch (e) {}
   paintKiosk();
 }
 function kioskTick() {
@@ -15880,6 +16014,8 @@ function initCalSetup() {
   initDashSetup();
   initRoutineSetup();
   initRadioSetup();
+  initFootballSetup();
+  initNewsSetup();
   initSchoolSetup();
   initMusicSetup();
   const b = $('cal-save'); if (b) b.addEventListener('click', calSave);
