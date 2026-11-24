@@ -94,8 +94,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v227';   // short tag shown always-on in the header
-const APP_VERSION = 'v227 · 2026-11-24 · Radio auf dem Apple TV 📻: Setup → „Radio auf dem Apple TV“ – Sender suchen (freies Verzeichnis radio-browser.info, z. B. „Metropol FM“), mit ▶︎ am Handy probehören, mit ＋ übernehmen (bis zu 6; Stream-Adresse auch selbst eintragbar). Die Apple-TV-App zeigt sie rechts oben als Knöpfe und spielt sie selbst – das Dashboard bleibt vorne; darunter der laufende Titel, wenn der Sender ihn mitschickt. ' +
+const APP_BUILD = 'v228';   // short tag shown always-on in the header
+const APP_VERSION = 'v228 · 2026-11-24 · Apple TV: „Läuft gerade“-Karte oben in der Mitte, sobald Radio läuft – Cover (über Apples iTunes-Suche anhand von Interpret und Titel, nur bei passendem Interpreten), sonst das Senderlogo; Titel, Interpret, Equalizer-Balken, das Cover unscharf als Farblicht. Senderlogos kommen aus dem Verzeichnis und stehen auch im Setup. Außerdem: Kinder-Routine rechts statt der Räume (Energie bleibt sichtbar), Fokus der Fernbedienung erreicht die Häkchen und startet auf der ersten offenen Aufgabe, Geburtstagsbanner anklickbar für neues Konfetti. ' +
+  'v227 · 2026-11-24 ·Radio auf dem Apple TV 📻: Setup → „Radio auf dem Apple TV“ – Sender suchen (freies Verzeichnis radio-browser.info, z. B. „Metropol FM“), mit ▶︎ am Handy probehören, mit ＋ übernehmen (bis zu 6; Stream-Adresse auch selbst eintragbar). Die Apple-TV-App zeigt sie rechts oben als Knöpfe und spielt sie selbst – das Dashboard bleibt vorne; darunter der laufende Titel, wenn der Sender ihn mitschickt. ' +
   'v226 · 2026-11-24 ·Kinder-Routine 🧒: Abhakliste je Kind (Setup → Kinder-Routine: zwei Namen mit Tier-Symbol, Uhrzeit, Aufgaben – „Name: Aufgabe“ gilt nur für ein Kind). Zur Abendzeit im Wohn-Dashboard mit großen Tippflächen und auf dem Apple TV zum Abhaken mit der Fernbedienung (dort statt des Energieflusses); die Bridge führt die Häkchen, alle Geräte zeigen denselben Stand. Wer fertig ist, bekommt Konfetti, ein Lob und einen ⭐ (geschaffte Abende der letzten 7 Tage). Zum Ausprobieren: „Heute zum Testen den ganzen Tag zeigen“ und „Häkchen von heute löschen“. Apple TV: Einstellungsseite mit eigenem Hintergrund. ' +
   'v225 · 2026-11-24 ·„gespart“ mit Akku-Anteil: Strom, der heute in den Akku ging und noch nicht verbraucht ist, steht jetzt neben „gespart“ als „+ ≈ … € im Akku“ – auf dem Apple TV (ohne neuen App-Build, kommt von der Bridge), im Wohn-Dashboard, im PV-Tab und in der Geldzeile des Banners. „gespart“ zählt Akku-Strom erst, wenn er das Haus versorgt; der Hinweis zeigt, um wie viel der Wert noch wächst (Ladestand-Zuwachs seit Mitternacht × Akkugröße × 95 % × Arbeitspreis). ' +
   'v224 · 2026-11-24 · Feier-Modus 🎉: An Geburtstagen und Jahrestagen zeigen Wohn-Dashboard, Haus-Dashboard und Apple TV einen Glückwunsch mit Konfetti (beim Öffnen, alle 10 Minuten, beim Antippen bzw. mit ▶︎❙❙), dazu ein Farblicht in Partyfarben; die App grüßt am Feiertag einmal pro Gerät. Einschalten unter Setup → Wohn-Dashboard → Feier-Modus („Heute feiern“, eigener Glückwunsch möglich) oder von selbst durch einen ganztägigen Kalendertermin mit „Geburtstag“, „Birthday“, „Doğum Günü“, „Jahrestag“, „Hochzeitstag“ oder 🎂. Endet um Mitternacht; „Beenden“ schaltet ihn für den Tag ab. Mit „Bewegung reduzieren“ ohne Konfetti. ' +
@@ -4062,7 +4063,8 @@ function radioList() {
   return Array.isArray(a) ? a.filter(s => s && s.name && /^https?:\/\//i.test(s.url || '')).slice(0, RADIO_MAX) : [];
 }
 async function radioSave(list) {
-  const v = JSON.stringify(list.slice(0, RADIO_MAX).map(s => ({ name: String(s.name).slice(0, 40), url: s.url })));
+  const v = JSON.stringify(list.slice(0, RADIO_MAX).map(s => ({ name: String(s.name).slice(0, 40), url: s.url,
+    logo: /^https?:\/\/[^\s"'<>]+$/i.test(s.logo || '') ? s.logo : '' })));
   try { localStorage.setItem(RADIO_LS, v); } catch (e) {}
   try { await postJSON('/api/settings', { settings: { [RADIO_LS]: v } }); } catch (e) { /* the sweep sends it again */ }
   renderRadioSetup();
@@ -4070,15 +4072,20 @@ async function radioSave(list) {
 function radioMeta(s) {
   return [s.codec, s.bitrate ? `${s.bitrate} kbit/s` : '', s.country].filter(Boolean).join(' · ') || s.url;
 }
+// the station's logo from the directory (hidden when it does not load)
+function radioLogo(u) {
+  return /^https?:\/\/[^\s"'<>]+$/i.test(u || '')
+    ? `<img class="rdo-logo" src="${esc(u)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">` : '';
+}
 function renderRadioSetup() {
   const box = $('rdo-list'); if (!box) return;
   const L = radioList(), play = u => (_radioPlaying === u ? '■' : '▶︎');
-  box.innerHTML = L.length ? L.map((s, i) => `<div class="rdo-row"><span class="rdo-n"><b>${esc(s.name)}</b><small>${esc(s.url)}</small></span>` +
+  box.innerHTML = L.length ? L.map((s, i) => `<div class="rdo-row">${radioLogo(s.logo)}<span class="rdo-n"><b>${esc(s.name)}</b><small>${esc(s.url)}</small></span>` +
       `<button class="btn sec" data-rdo-play="${esc(s.url)}" aria-label="Probehören">${play(s.url)}</button>` +
       `<button class="btn sec" data-rdo-del="${i}" aria-label="Entfernen">✕</button></div>`).join('')
     : '<div class="note">Noch kein Sender – oben suchen, z. B. „Metropol FM“.</div>';
   const f = $('rdo-found');
-  if (f) f.innerHTML = _radioFound.map((s, i) => `<div class="rdo-row"><span class="rdo-n"><b>${esc(s.name)}</b><small>${esc(radioMeta(s))}</small></span>` +
+  if (f) f.innerHTML = _radioFound.map((s, i) => `<div class="rdo-row">${radioLogo(s.favicon)}<span class="rdo-n"><b>${esc(s.name)}</b><small>${esc(radioMeta(s))}</small></span>` +
     `<button class="btn sec" data-rdo-play="${esc(s.url)}" aria-label="Probehören">${play(s.url)}</button>` +
     `<button class="btn" data-rdo-add="${i}" aria-label="Übernehmen">＋</button></div>`).join('');
 }
@@ -4117,7 +4124,7 @@ function initRadioSetup() {
       const st = _radioFound[+ad.dataset.rdoAdd]; if (!st) return;
       if (L.some(x => x.url === st.url)) { if (note) note.textContent = 'Den Sender gibt es schon in deiner Liste.'; return; }
       if (L.length >= RADIO_MAX) { if (note) note.textContent = `Höchstens ${RADIO_MAX} Sender – erst einen entfernen.`; return; }
-      radioSave(L.concat([{ name: st.name, url: st.url }]));
+      radioSave(L.concat([{ name: st.name, url: st.url, logo: st.favicon || '' }]));
       if (note) note.textContent = `✅ ${st.name} übernommen – auf dem Apple TV in spätestens einer halben Minute.`;
     } else if (de) {
       const i = +de.dataset.rdoDel, gone = L[i];

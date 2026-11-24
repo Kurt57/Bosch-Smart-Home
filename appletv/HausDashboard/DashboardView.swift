@@ -164,6 +164,12 @@ struct DashboardView: View {
         return min(1, pv / max(300, live.load_w ?? 300))
     }
 
+    /// the station the radio plays (its card sits in the header)
+    private var playingStation: TVRadioStation? {
+        guard let id = radio.playingID else { return nil }
+        return model.payload?.radio?.first(where: { $0.id == id })
+    }
+
     /// children who finished a routine right now (-1 until the first answer, so
     /// opening the app does not count as "just finished")
     private var finishedKids: Int {
@@ -191,7 +197,8 @@ struct DashboardView: View {
         VStack(alignment: .leading, spacing: 24) {
             HeaderView(header: model.payload?.header, stand: model.payload?.stand,
                        error: model.error, lastOK: model.lastOK, openSettings: openSettings,
-                       party: model.payload?.party, partyTap: { partyTaps += 1 })
+                       party: model.payload?.party, partyTap: { partyTaps += 1 },
+                       radio: radio, radioStation: playingStation)
             if let payload = model.payload {
                 HStack(alignment: .top, spacing: 36) {
                     // energy always stays in view
@@ -210,7 +217,7 @@ struct DashboardView: View {
                     // so swiping down from the top right always lands on it
                     VStack(alignment: .leading, spacing: 22) {
                         if !(payload.radio ?? []).isEmpty || radio.playingID != nil {
-                            RadioBar(stations: payload.radio ?? [], radio: radio)
+                            RadioBar(stations: payload.radio ?? [], radio: radio, showsTitle: payload.party != nil)
                         }
                         if let routine = payload.routines?.first {
                             // while the children's routine runs it takes the place of the rooms
@@ -286,6 +293,9 @@ struct HeaderView: View {
     let party: TVParty?
     /// click on the birthday banner
     var partyTap: () -> Void = {}
+    /// the radio, and the station it plays – its card sits in the middle
+    var radio: RadioPlayer? = nil
+    var radioStation: TVRadioStation? = nil
 
     private var statusLine: String {
         if let e = error {
@@ -324,6 +334,10 @@ struct HeaderView: View {
                 }
                 .buttonStyle(PartyBannerStyle())
                 .focusEffectDisabled()
+                Spacer(minLength: 12)
+            } else if let radio, let radioStation {
+                Spacer(minLength: 12)
+                NowPlayingCard(station: radioStation, radio: radio)
                 Spacer(minLength: 12)
             } else {
                 Spacer()
@@ -865,15 +879,150 @@ struct EventsCard: View {
 
 // MARK: - Radio
 
+/// What the radio plays, in the middle of the header: the cover (or the
+/// station's logo), title and artist, small dancing bars – and the cover,
+/// blurred, as a coloured light behind the glass.
+struct NowPlayingCard: View {
+    let station: TVRadioStation
+    @ObservedObject var radio: RadioPlayer
+
+    private var parts: (artist: String?, title: String) {
+        RadioPlayer.split(radio.nowPlaying ?? "")
+    }
+
+    private var art: URL? {
+        radio.cover ?? station.logo.flatMap { URL(string: $0) }
+    }
+
+    var body: some View {
+        HStack(spacing: 18) {
+            CoverView(url: art, isLogo: radio.cover == nil)
+                .frame(width: 104, height: 104)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    EqualizerBars()
+                        .frame(width: 22, height: 16)
+                    Text("LÄUFT GERADE · " + station.name.uppercased())
+                        .font(.system(size: 15, weight: .bold))
+                        .tracking(1.2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Text(parts.artist == nil ? (radio.nowPlaying ?? station.name) : parts.title)
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                if let artist = parts.artist {
+                    Text(artist)
+                        .font(.system(size: 22, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                }
+            }
+            .frame(maxWidth: 520, alignment: .leading)
+        }
+        .padding(.leading, 12)
+        .padding(.trailing, 26)
+        .padding(.vertical, 12)
+        .background(CoverGlow(url: radio.cover))
+        .glassCard(28)
+        .animation(.easeInOut(duration: 0.6), value: radio.cover)
+        .animation(.easeInOut(duration: 0.4), value: radio.nowPlaying)
+    }
+}
+
+/// The cover, big and blurred, as light behind the card.
+private struct CoverGlow: View {
+    let url: URL?
+
+    var body: some View {
+        ZStack {
+            if let url {
+                AsyncImage(url: url) { phase in
+                    if let image = phase.image {
+                        image.resizable().scaledToFill()
+                    } else {
+                        Color.clear
+                    }
+                }
+                .blur(radius: 36)
+                .opacity(0.6)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+    }
+}
+
+/// The cover – or, while none is known, the station's logo on white.
+private struct CoverView: View {
+    let url: URL?
+    let isLogo: Bool
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(isLogo && url != nil ? Color.white.opacity(0.92) : Color.white.opacity(0.08))
+            if let url {
+                AsyncImage(url: url) { phase in
+                    if let image = phase.image {
+                        if isLogo {
+                            image.resizable().scaledToFit().padding(12)
+                        } else {
+                            image.resizable().scaledToFill()
+                        }
+                    } else {
+                        Image(systemName: "radio")
+                            .font(.system(size: 40))
+                            .foregroundStyle(Color.gray)
+                    }
+                }
+                .id(url)
+            } else {
+                Image(systemName: "radio")
+                    .font(.system(size: 40))
+                    .foregroundStyle(Color.secondary)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .shadow(color: Color.black.opacity(0.4), radius: 12, y: 6)
+    }
+}
+
+/// Four little bars dancing while the radio plays (still with "Bewegung reduzieren").
+private struct EqualizerBars: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 15, paused: reduceMotion)) { context in
+            let t = context.date.timeIntervalSinceReferenceDate
+            HStack(alignment: .bottom, spacing: 3) {
+                ForEach(0..<4, id: \.self) { i in
+                    Capsule()
+                        .fill(Palette.green)
+                        .frame(width: 4, height: 16 * barHeight(i, t))
+                }
+            }
+            .frame(maxHeight: .infinity, alignment: .bottom)
+        }
+    }
+
+    private func barHeight(_ i: Int, _ t: Double) -> Double {
+        if reduceMotion { return [0.5, 0.8, 0.6, 0.9][i % 4] }
+        return 0.3 + 0.7 * abs(sin(t * (2.1 + Double(i) * 0.8) + Double(i) * 1.7))
+    }
+}
+
 /// The stations from the app's Setup as buttons: click plays, click again stops.
-/// Below, the song now playing, when the station sends it.
+/// What plays stands in the header; here only when the header is taken (party).
 struct RadioBar: View {
     let stations: [TVRadioStation]
     @ObservedObject var radio: RadioPlayer
+    var showsTitle = true
 
     private var line: String? {
         if let problem = radio.problem { return "⚠︎ " + problem }
-        guard let id = radio.playingID else { return nil }
+        guard showsTitle, let id = radio.playingID else { return nil }
         let name = stations.first(where: { $0.id == id })?.name ?? "Radio"
         return "📻 " + name + " · " + (radio.nowPlaying ?? "läuft")
     }

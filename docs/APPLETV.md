@@ -35,7 +35,12 @@ bekommt Konfetti und einen ⭐.
 
 **Radio 📻:** Sender, die du in der App unter Setup → *Radio auf dem Apple TV* eingetragen hast, stehen rechts
 oben als Knöpfe. Hinwischen und klicken spielt den Sender in der App selbst – das Dashboard bleibt vorne;
-noch einmal klicken stoppt. Darunter steht der laufende Titel, wenn der Sender ihn mitschickt. Gefunden werden die
+noch einmal klicken stoppt. Oben in der Mitte erscheint dann eine **„Läuft gerade“-Karte**: Cover, Titel und
+Interpret, kleine Equalizer-Balken und das Cover unscharf als Farblicht dahinter. Streams schicken meist nur den
+Titeltext („Interpret – Titel“), kein Bild; das Cover sucht die App deshalb über Apples öffentliche iTunes-Suche
+(gesendet werden nur Interpret und Titel) und nimmt es nur, wenn der gefundene Interpret passt – sonst zeigt sie
+das Senderlogo aus dem Verzeichnis. An einem Feiertag gehört die Mitte dem Glückwunsch, der Titel steht dann
+unter den Senderknöpfen. Gefunden werden die
 Sender im freien Verzeichnis [radio-browser.info](https://www.radio-browser.info) (Suche im Setup, z. B.
 „Metropol FM“, mit ▶︎ zum Probehören am Handy); feste Stream-Adressen sind nicht eingebaut, weil Sender sie ab und
 zu ändern. Verlässt du die App, stoppt das Radio. Die Lautstärke regelst du wie gewohnt am Fernseher.

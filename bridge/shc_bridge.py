@@ -14067,8 +14067,10 @@ def _tv_radio(st: dict | None) -> list:
             continue
         url = str(s.get("url") or "").strip()
         name = " ".join(str(s.get("name") or "").split())[:40]
+        logo = str(s.get("logo") or "").strip()
         if name and re.match(r"^https?://[^\s\"'<>]+$", url) and all(x["url"] != url for x in out):
-            out.append({"id": "r" + hashlib.sha1(url.encode("utf-8")).hexdigest()[:8], "name": name, "url": url})
+            out.append({"id": "r" + hashlib.sha1(url.encode("utf-8")).hexdigest()[:8], "name": name, "url": url,
+                        "logo": logo if re.match(r"^https?://[^\s\"'<>]+$", logo) else None})
         if len(out) >= RADIO_MAX:
             break
     return out
@@ -14116,7 +14118,10 @@ def radio_search(q: str, base: str | None = None, timeout: float = 8.0) -> list:
         out.append({"name": " ".join(str(s.get("name") or "").split())[:60] or "Sender", "url": url,
                     "codec": str(s.get("codec") or "")[:12], "bitrate": int(s.get("bitrate") or 0),
                     "country": str(s.get("countrycode") or s.get("country") or "")[:20],
-                    "homepage": str(s.get("homepage") or "")[:200]})
+                    "homepage": str(s.get("homepage") or "")[:200],
+                    # the station's logo (shown on the TV while nothing better is known)
+                    "favicon": fav if re.match(r"^https?://[^\s\"'<>]+$", fav := str(s.get("favicon") or "").strip())
+                    else ""})
         if len(out) >= 15:
             break
     return out

@@ -123,6 +123,17 @@ struct TVRadioStation: Decodable, Identifiable {
     let id: String
     let name: String
     let url: String
+    let logo: String?           // the station's logo from the directory, if it has one
+}
+
+/// Apple's public iTunes search – used only to find the cover of the song the
+/// radio plays (artist and title are sent, nothing else).
+private struct ITunesAnswer: Decodable {
+    struct Hit: Decodable {
+        let artistName: String?
+        let artworkUrl100: String?
+    }
+    let results: [Hit]
 }
 
 /// Plays a radio stream inside the app, so the dashboard stays in front. The
@@ -133,8 +144,13 @@ final class RadioPlayer: NSObject, ObservableObject, AVPlayerItemMetadataOutputP
     @Published private(set) var playingID: String?
     @Published private(set) var nowPlaying: String?
     @Published private(set) var problem: String?
+    /// cover of the song now playing (streams rarely send pictures – it is
+    /// looked up by artist and title); nil → the station's logo is shown
+    @Published private(set) var cover: URL?
     private var player: AVPlayer?
     private var statusObservation: NSKeyValueObservation?
+    private var coverTask: Task<Void, Never>?
+    private var coverCache: [String: URL] = [:]
 
     /// Click on a station: play it – or stop it, when it is the one playing.
     func toggle(_ station: TVRadioStation) {
@@ -178,10 +194,91 @@ final class RadioPlayer: NSObject, ObservableObject, AVPlayerItemMetadataOutputP
         player?.pause()
         player = nil
         statusObservation = nil
+        coverTask?.cancel()
+        coverTask = nil
         playingID = nil
         nowPlaying = nil
+        cover = nil
         problem = nil
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+
+    /// A new title from the stream: show it and look for its cover.
+    private func setNowPlaying(_ text: String?) {
+        guard text != nowPlaying else { return }
+        nowPlaying = text
+        coverTask?.cancel()
+        cover = nil
+        guard let text, let artist = RadioPlayer.split(text).artist else { return }
+        if let known = coverCache[text] {
+            cover = known
+            return
+        }
+        let title = RadioPlayer.split(text).title
+        coverTask = Task { [weak self] in
+            let found = await RadioPlayer.findCover(artist: artist, title: title)
+            guard !Task.isCancelled, let self else { return }
+            if let found {
+                if self.coverCache.count > 60 { self.coverCache.removeAll() }
+                self.coverCache[text] = found
+            }
+            self.cover = found
+        }
+    }
+
+    /// "Artist - Title" (the usual stream title) → its parts; anything else is
+    /// taken as a plain title.
+    nonisolated static func split(_ text: String) -> (artist: String?, title: String) {
+        for separator in [" - ", " – ", " — "] {
+            if let range = text.range(of: separator) {
+                let artist = text[..<range.lowerBound].trimmingCharacters(in: .whitespaces)
+                let title = text[range.upperBound...].trimmingCharacters(in: .whitespaces)
+                if !artist.isEmpty && !title.isEmpty {
+                    return (artist, title)
+                }
+            }
+        }
+        return (nil, text)
+    }
+
+    /// The cover from Apple's iTunes search – only when the artist found matches
+    /// the one the station named (station slogans and ads get no stray cover).
+    nonisolated static func findCover(artist: String, title: String) async -> URL? {
+        let want = fold(artist)
+        if want.isEmpty { return nil }
+        for country in ["DE", "TR"] {
+            var comps = URLComponents(string: "https://itunes.apple.com/search")
+            comps?.queryItems = [
+                URLQueryItem(name: "term", value: artist + " " + title),
+                URLQueryItem(name: "media", value: "music"),
+                URLQueryItem(name: "entity", value: "song"),
+                URLQueryItem(name: "limit", value: "5"),
+                URLQueryItem(name: "country", value: country)
+            ]
+            guard let url = comps?.url,
+                  let result = try? await URLSession.shared.data(from: url),
+                  let answer = try? JSONDecoder().decode(ITunesAnswer.self, from: result.0) else { continue }
+            for hit in answer.results {
+                guard let art = hit.artworkUrl100, let name = hit.artistName else { continue }
+                let have = fold(name)
+                if !have.isEmpty && (have.contains(want) || want.contains(have) || sharesWord(have, want)) {
+                    return URL(string: art.replacingOccurrences(of: "100x100bb", with: "600x600bb"))
+                }
+            }
+        }
+        return nil
+    }
+
+    nonisolated static func fold(_ text: String) -> String {
+        text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    nonisolated static func sharesWord(_ a: String, _ b: String) -> Bool {
+        func words(_ s: String) -> Set<String> {
+            Set(s.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init).filter { $0.count >= 3 })
+        }
+        return !words(a).isDisjoint(with: words(b))
     }
 
     nonisolated func metadataOutput(_ output: AVPlayerItemMetadataOutput,
@@ -197,7 +294,7 @@ final class RadioPlayer: NSObject, ObservableObject, AVPlayerItemMetadataOutputP
             }
         }
         Task { @MainActor in
-            self.nowPlaying = title
+            self.setNowPlaying(title)
         }
     }
 }
