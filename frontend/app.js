@@ -94,8 +94,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v232';   // short tag shown always-on in the header
-const APP_VERSION = 'v232 · 2026-11-24 · Apple TV, ruhige Farbschemas (Nacht, Graphit, Wald, Kamin): weniger Schimmer – das Leuchten um die Kreise im Energiefluss, um das Geburtstagsbanner und hinter dem Radio-Cover ist nur noch ein Hauch, die Kreise sind innen matt wie die Karten, und an Feiertagen färbt sich der Hintergrund nicht mehr pink (höchstens ein Hauch Gold). „Aurora sanft“ leuchtet halb so stark, „Aurora“ bleibt wie gehabt. „Sonne erzeugt“: kürzerer Text („von ≈ 12 kWh“ bzw. „Prognose ≈ 12 kWh“), damit nichts abgeschnitten wird. ' +
+const APP_BUILD = 'v233';   // short tag shown always-on in the header
+const APP_VERSION = 'v233 · 2026-11-25 · Wärme → Effizienz → „Theorie vs. Praxis pro Monat“: neuer, zuschaltbarer Balken „Vorjahr“ (standardmäßig aus) – derselbe Monat ein Jahr früher aus dem HomeCom-Import, graublau neben „Gemessen“. Ist er an, zeigt „Gemessen“ nur dieses Jahr (kein Monat doppelt), dazu die Vorjahres-Summe und ein Vergleich „dieses Jahr gegen Vorjahr“ über dieselben Monate; Vorjahres-Monate aus der Bauphase sind im Tipp-Fenster markiert und zählen beim Vergleich nicht. Ohne Vorjahresdaten ist das Häkchen ausgegraut. ' +
+  'v232 · 2026-11-24 · Apple TV, ruhige Farbschemas (Nacht, Graphit, Wald, Kamin): weniger Schimmer – das Leuchten um die Kreise im Energiefluss, um das Geburtstagsbanner und hinter dem Radio-Cover ist nur noch ein Hauch, die Kreise sind innen matt wie die Karten, und an Feiertagen färbt sich der Hintergrund nicht mehr pink (höchstens ein Hauch Gold). „Aurora sanft“ leuchtet halb so stark, „Aurora“ bleibt wie gehabt. „Sonne erzeugt“: kürzerer Text („von ≈ 12 kWh“ bzw. „Prognose ≈ 12 kWh“), damit nichts abgeschnitten wird. ' +
   'v231 · 2026-11-24 · Apple TV: Farbschema in den Einstellungen (⚙︎, nach rechts wischen) – „Aurora“ wie bisher, „Aurora sanft“ mit halb so starkem Licht, dazu ruhig und ohne Schimmer „Nacht“, „Graphit“, „Wald“ und „Kamin“; wirkt sofort und bleibt auf dem Apple TV. Neue Tachos: Akku-Ladestand als Ring im Energiefluss (mit Funke beim Laden), bei „Sonne erzeugt“ ein Balken gegen den heute erwarteten Ertrag, Wettersymbol neben der Außentemperatur. Ganz unten neu: „Sonne & Wetter“ für heute, morgen, übermorgen mit Sonnen-Tacho, erwartetem PV-Ertrag und Tipp, wann Waschmaschine & Co. am besten laufen. Radio: die Bridge liest Titel jetzt auch aus HLS-Streams (z. B. KRAL FM) – aus der Playlist oder den ID3-Angaben im Stream; 🎵 im Setup sagt, ob einer kam. ' +
   'v230 · 2026-11-24 · Apple TV: Die Räume bleiben rechts oben; die Kinder-Routine steht, solange sie läuft, als erste Karte unterhalb der ersten Seite (Kinder nebeneinander), oben bei den Hinweisen steht „Abendroutine: 3 von 12 erledigt – zum Abhaken nach unten wischen“. „Läuft gerade“ mit Cover jetzt auch an Feiertagen – dann etwas kleiner unter den Senderknöpfen. Den Songtitel liest jetzt die Bridge selbst aus dem Stream (auch ältere Shoutcast-Sender und Playlists, türkische Buchstaben richtig) und sucht das Cover; die TV-App fragt sie alle 20 Sekunden und sofort, wenn der Titel wechselt. Neu im Setup bei „Meine Sender“: 🎵 zeigt, was gerade läuft und ob ein Cover gefunden wurde – oder dass der Sender keine Titel schickt. Termine rechts oben erscheinen nur noch, wenn sie ganz hineinpassen (kein abgeschnittener Kasten mehr). ' +
   'v229 · 2026-11-24 · Apple TV: Die erste Seite passt jetzt genau auf den Fernseher – vorher war sie höher als der Bildschirm, tvOS hat sie mittig gesetzt und oben abgeschnitten. Ganz unten ein Laufband mit Fußball-Ergebnissen, den nächsten Spielen und Schlagzeilen; nach unten wischen zeigt alle Termine (mit Fußball), die Nachrichten und während der Routine die Räume. Senderknöpfe in einer Reihe, Routine-Aufgaben einzeilig. Neu im Setup: „⚽ Fußball im Kalender“ – Vereine und Nationalmannschaften suchen (auch auf Deutsch, z. B. „Türkei“), bis zu 8; ihre Spiele kommen aus dem freien Verzeichnis TheSportsDB als Termine ins Wohn-Dashboard und aufs Apple TV, eine Stunde vorher als Hinweis. „📰 Nachrichten“ – Vorschläge (tagesschau, Deutschlandfunk, SPIEGEL, ZEIT, kicker, NTV, Hürriyet, BBC) oder eine eigene RSS-/Atom-Adresse, jede wird vor dem Übernehmen geprüft; im Wohn-Dashboard stehen die neuesten Schlagzeilen. ' +
@@ -799,7 +800,10 @@ const INFO = {
     'CSV-Monate <b>vor dem Bauphasen-Ende</b> im Setup gelten als Rohbau/Trocknung und werden ausgeblendet) und ' +
     '<b>Erwartet</b> (unser Modell: für Frühjahr–Herbst dein <b>gemessenes Niveau</b> × Saison-Form, für die kalten, ' +
     'noch nicht seriös gemessenen Monate Nov–Feb die <b>Theorie</b>). Sobald du einen echten Winter misst, ersetzt der ' +
-    'den Theorie-Wert automatisch und kalibriert die übrigen kalten Monate. <b>Tippe/fahre über einen Monat</b> für die kWh.',
+    'den Theorie-Wert automatisch und kalibriert die übrigen kalten Monate. <b>Tippe/fahre über einen Monat</b> für die kWh. ' +
+    'Zuschaltbar (standardmäßig aus): <b>Vorjahr</b> – derselbe Monat ein Jahr früher aus dem HomeCom-Import, als vierter, ' +
+    'graublauer Balken neben „Gemessen“. Solange er an ist, zeigt „Gemessen“ nur dieses Jahr; Vorjahres-Monate aus der ' +
+    'Bauphase bleiben sichtbar, sind im Tipp-Fenster markiert und zählen beim Vergleich „dieses Jahr gegen Vorjahr“ nicht mit.',
   'theory-class': () => 'Der <b>spezifische Heizwärmebedarf</b> (kWh je m² und Jahr, nur Heizung) ordnet dein Haus ' +
     'zwischen Passivhaus und unsaniertem Altbau ein. Er kommt aus dem U·A-Modell geteilt durch die beheizte Fläche – ' +
     'ein guter Vergleichsmaßstab, unabhängig von der Hausgröße.',
@@ -1288,6 +1292,21 @@ function hpMeasuredByMonth() {
     });
   }
   return Object.keys(byM).length ? byM : null;
+}
+// The same calendar months one year earlier (Vorjahr) – for the optional fourth
+// bar in "Theorie vs. Praxis pro Monat". From the imported HomeCom history (the
+// heat pump's own monthly counters, complete months); months of the construction
+// phase stay in – it is what was really used then – but are marked (bau).
+function hpPrevYearByMonth() {
+  const im = STATE.hpA && STATE.hpA.imported;
+  const py = new Date().getFullYear() - 1, bauEnd = buildPhaseEnd(), out = {};
+  ((im && im.monthly) || []).forEach(r => {
+    if (!(r.elec_kwh > 0) || String(r.month).length < 7) return;
+    const y = +String(r.month).slice(0, 4), m = +String(r.month).slice(5, 7) - 1;
+    if (y !== py || m < 0 || m > 11) return;
+    out[m] = { kwh: r.elec_kwh, year: y, bau: new Date(y, m, 1) < bauEnd };
+  });
+  return Object.keys(out).length ? out : null;
 }
 // Full-month heat-pump electricity estimate for calendar month m.
 function hpMonthEst(m) {
@@ -9042,6 +9061,30 @@ function buildClass(spec) {
   return ['wenig gedämmter Altbau', '#ef6c4d'];
 }
 let _thmHit = null;
+// "Vorjahr" in the note: where the bars come from, the construction-phase
+// months among them, and this year against last year over the same months.
+function thmPrevNote(vOn, prev, meas, curY) {
+  if (!vOn || !prev) return '';
+  const bau = Object.keys(prev).filter(m => prev[m].bau).map(m => MON[+m]);
+  let cmp = '';
+  if (meas) {
+    let a = 0, b = 0;
+    const same = Object.keys(meas).filter(m => meas[m].year === curY && !meas[m].partial && !meas[m].projected
+      && prev[m] && !prev[m].bau);
+    same.forEach(m => { a += meas[m].kwh; b += prev[m].kwh; });
+    if (same.length && b > 0) {
+      const d = (a - b) / b;
+      cmp = (same.length === 1 ? ` Im <b>${MON[+same[0]]}</b>` :
+        ` Über dieselben ${same.length} Monate (${same.map(m => MON[+m]).join(', ')})`) +
+        ` brauchte die Wärmepumpe <b>${kwh(a, 0)}</b> gegenüber <b>${kwh(b, 0)}</b> im Vorjahr – ` +
+        `<b>${d >= 0 ? '+' : '−'}${fmt(Math.abs(d) * 100, 0)} %</b>.`;
+    }
+  }
+  return ` <span style="color:var(--muted)"><b>Vorjahr ${curY - 1}</b>: dieselben Monate ein Jahr früher aus dem ` +
+    `HomeCom-Import (Strom der Wärmepumpe).` +
+    (bau.length ? ` Darunter Monate der Bauphase (${bau.join(', ')}) – damals lag der Verbrauch z. B. durch ` +
+      `Bautrocknung höher; beim Vergleich mit diesem Jahr zählen sie nicht mit.` : '') + '</span>' + cmp;
+}
 function renderHeatDemand() {
   const card = $('hp-theory-card'); if (!card) return;
   const b = buildData(), r = computeHeat(b), price = STATE.price;
@@ -9129,7 +9172,21 @@ function renderHeatDemand() {
     //  • Erwartet – an experience-based expectation for EVERY month (your measured
     //               annual level × the seasonal shape), so unmeasured months (Nov/Dec)
     //               show a proper forecast bar instead of borrowing last year's number.
-    const measured = hpMeasuredByMonth();
+    const measuredAll = hpMeasuredByMonth();
+    // Vorjahr (off by default): last year's same months. While it is shown,
+    // "Gemessen" keeps to this year – no month appears twice.
+    const prevYear = hpPrevYearByMonth();
+    const vOn = !!prevYear && (() => { const el = $('thm-v'); return el ? el.checked : false; })();
+    const cy0 = new Date().getFullYear();
+    let measured = measuredAll;
+    if (vOn && measuredAll) {
+      measured = {};
+      Object.keys(measuredAll).forEach(k => { if (measuredAll[k].year >= cy0) measured[k] = measuredAll[k]; });
+      if (!Object.keys(measured).length) measured = null;
+    }
+    if ($('thm-v')) $('thm-v').disabled = !prevYear;
+    const vLbl = $('thm-v-label');
+    if (vLbl) vLbl.textContent = prevYear ? `Vorjahr ${cy0 - 1}` : 'Vorjahr (keine Daten)';
     // "Erwartet" = our best per-month model (hpModelMonth) for EVERY month – real-
     // anchored for the shoulder, building-model (theory) for the cold months that
     // have no representative measurement yet. NOT substituting the measured value,
@@ -9140,48 +9197,56 @@ function renderHeatDemand() {
     const curY = new Date().getFullYear();
     const hasPrev = years.some(y => y < curY), hasCur = years.some(y => y >= curY);
     const measLabel = !measured ? 'Gemessen'
-      : hasPrev && !hasCur ? `Vorjahr ${Math.max(...years)}`
-        : hasPrev ? 'Gemessen / Vorjahr' : 'Gemessen';
+      : vOn ? `Gemessen ${curY}`
+        : hasPrev && !hasCur ? `Vorjahr ${Math.max(...years)}`
+          : hasPrev ? 'Gemessen / Vorjahr' : 'Gemessen';
     const lbl = $('thm-p-label'); if (lbl) lbl.textContent = measLabel;
     // checkbox state (persisted); measured checkbox disabled when no data
     const on = id => { const el = $(id); return el ? el.checked : true; };
     const pOn = !!measured && on('thm-p');
-    if ($('thm-p')) $('thm-p').disabled = !measured;
+    if ($('thm-p')) $('thm-p').disabled = !measuredAll;
 
     // high-contrast, well-separated hues (orange / blue / violet)
-    const COLT = '#ff9f40', COLP = '#3d8bff', COLE = '#b07cff';
+    // … and a quiet grey-blue for last year, right next to this year's bar
+    const COLT = '#ff9f40', COLP = '#3d8bff', COLE = '#b07cff', COLV = '#8fa3bf';
+    const vLabel = `Vorjahr ${curY - 1}`;
     const series = [];
     if (on('thm-t')) series.push({ key: 't', color: COLT, label: 'Theorie' });
     if (pOn) series.push({ key: 'p', color: COLP, label: 'Gemessen' });
+    if (vOn) series.push({ key: 'v', color: COLV, label: vLabel });
     if (on('thm-e')) series.push({ key: 'e', color: COLE, label: 'Erwartet' });
     const rows = MON.map((lbl2, m) => ({
       label: lbl2, values: {
         t: theoryMonth[m],
         p: measured && measured[m] ? measured[m].kwh : 0,
+        v: prevYear && prevYear[m] ? prevYear[m].kwh : 0,
         e: expectedMonth[m],
       } }));
     $('hp-theory-month').innerHTML = series.length
       ? `<div class="tmhit" style="touch-action:none">${groupedBar(rows, series, { h: 190 })}</div>`
       : '<div class="note">Alle Reihen ausgeblendet – oben wieder anhaken.</div>';
     // data for the tap/hover tooltip (kWh per bar, only enabled series)
-    _thmHit = { rows, meas: measured, series: series.map(s => ({ key: s.key, color: s.color,
-      label: s.key === 't' ? 'Theorie' : s.key === 'p' ? measLabel : 'Erwartet' })) };
+    _thmHit = { rows, meas: measured, prev: vOn ? prevYear : null, series: series.map(s => ({ key: s.key, color: s.color,
+      label: s.key === 't' ? 'Theorie' : s.key === 'p' ? measLabel : s.key === 'v' ? vLabel : 'Erwartet' })) };
     $('hp-theory-month-legend').innerHTML = legendHtml([
       on('thm-t') ? { color: COLT, label: 'Theorie' } : null,
       pOn ? { color: COLP, label: measLabel } : null,
+      vOn ? { color: COLV, label: vLabel } : null,
       on('thm-e') ? { color: COLE, label: 'Erwartet (Erfahrung)' } : null,
     ].filter(Boolean)) + `<span style="color:var(--muted);font-size:11px;margin-left:6px">tippen für kWh je Monat</span>`;
     // Gesamtverbrauch je Kategorie (Jahressumme), respektiert die Häkchen
     const price = STATE.price;
     const theoTot = theoryMonth.reduce((a, b) => a + b, 0);
     const expTot = expectedMonth.reduce((a, b) => a + b, 0);
-    let measTot = 0, measCnt = 0;
+    let measTot = 0, measCnt = 0, prevTot = 0, prevCnt = 0;
     if (measured) Object.keys(measured).forEach(m => { measTot += measured[m].kwh; measCnt++; });
+    if (vOn) Object.keys(prevYear).forEach(m => { prevTot += prevYear[m].kwh; prevCnt++; });
     const totCard = (c, label, v) => `<div class="kpi sm"><div class="v" style="color:${c}">${kwh(v, 0)}</div>` +
       `<div class="l">${label} · ${money(v * price)}</div></div>`;
     $('hp-theory-month-tot').innerHTML = '<div class="grid3">' +
       (on('thm-t') ? totCard(COLT, 'Theorie / Jahr', theoTot) : '') +
       (pOn ? totCard(COLP, measCnt >= 12 ? measLabel + ' / Jahr' : `${measLabel} (${measCnt} Mon.)`, measTot) : '') +
+      (vOn ? totCard(COLV, prevCnt >= 12 ? vLabel + ' / Jahr' : `${vLabel} (${prevCnt} Mon.)`, prevTot) : '') +
       (on('thm-e') ? totCard(COLE, 'Erwartet / Jahr', expTot) : '') + '</div>';
     // note: compare measured vs theory over the measured months
     if (measured) {
@@ -9198,7 +9263,7 @@ function renderHeatDemand() {
       const partMonth = Object.keys(measured).find(m => measured[m].partial);
       const projMonths = Object.keys(measured).filter(m => measured[m].projected).map(m => MON[+m]);
       $('hp-theory-month-note').innerHTML =
-        'Drei Reihen je Monat – oben ein-/ausblendbar: <b>Theorie</b> (Gebäudemodell), <b>' + esc(measLabel) +
+        (vOn ? 'Vier' : 'Drei') + ' Reihen je Monat – oben ein-/ausblendbar: <b>Theorie</b> (Gebäudemodell), <b>' + esc(measLabel) +
         '</b> (echte Messung, Bauphase vor dem im Setup gesetzten Bauphasen-Ende ausgeblendet) und <b>Erwartet</b> ' +
         '(Frühjahr–Herbst: dein gemessenes Niveau × Saison-Form; <b>Nov–Feb: Theorie</b>, solange kein echter Winter gemessen ist). ' +
         (sT > 0 ? `Über die voll gemessenen Monate liegt die Praxis <b>${totPct >= 0 ? '+' : ''}${fmt(totPct * 100, 0)} %</b> zur Theorie.` : '') +
@@ -9207,7 +9272,11 @@ function renderHeatDemand() {
         (partMonth != null ? ` <span style="color:var(--muted)"><b>${MON[+partMonth]}</b> läuft noch – auf den ganzen Monat <b>hochgerechnet</b> (bisher ${kwh(measured[+partMonth].actual || 0, 0)}).</span>` : '') +
         (projMonths.length ? ` <span style="color:var(--muted)">Nur teilweise gemessen und auf den vollen Monat <b>hochgerechnet</b> (die Bridge lief erst einen Teil des Monats): ${projMonths.join(', ')}.</span>` : '') +
         (prevMonths.length ? ` <span style="color:var(--muted)">Echte Messung aus dem Vorjahr (nach Bauphasen-Ende): ${prevMonths.join(', ')}.</span>` : '') +
-        ` <span style="color:var(--muted)">Sobald du Nov/Dez bzw. Jan/Feb echt misst, ersetzt das die Theorie automatisch.</span>`;
+        ` <span style="color:var(--muted)">Sobald du Nov/Dez bzw. Jan/Feb echt misst, ersetzt das die Theorie automatisch.</span>` +
+        thmPrevNote(vOn, prevYear, measured, curY);
+    } else if (vOn) {
+      $('hp-theory-month-note').innerHTML = 'Reihen: <b>Theorie</b> (Gebäudemodell), <b>Erwartet</b> und ' +
+        `<b>${esc(vLabel)}</b>.` + thmPrevNote(vOn, prevYear, null, curY);
     } else {
       $('hp-theory-month-note').innerHTML = 'Zwei Reihen: <b>Theorie</b> (Gebäudemodell) und <b>Erwartet</b> ' +
         '(aus deinem gemessenen Niveau, saisonal verteilt). Für echte Monatsmesswerte importiere im Setup eine ' +
@@ -13177,7 +13246,7 @@ function init() {
   }
   const hm = $('hp-heat-month'); if (hm) hm.addEventListener('change', renderHeatpump);
   // Theorie/Gemessen/Erwartet series toggles (persisted)
-  [['thm-t', 'bhe_thm_t'], ['thm-p', 'bhe_thm_p'], ['thm-e', 'bhe_thm_e']].forEach(([id, key]) => {
+  [['thm-t', 'bhe_thm_t'], ['thm-p', 'bhe_thm_p'], ['thm-e', 'bhe_thm_e'], ['thm-v', 'bhe_thm_v']].forEach(([id, key]) => {
     const el = $(id); if (!el) return;
     const s = localStorage.getItem(key); if (s !== null) el.checked = s === '1';
     el.addEventListener('change', () => { try { localStorage.setItem(key, el.checked ? '1' : '0'); } catch (e) {} renderHeatDemand(); });
@@ -13198,7 +13267,9 @@ function init() {
       if (t) {
         const parts = _thmHit.series.map(s => {
           const mInfo = s.key === 'p' && _thmHit.meas ? _thmHit.meas[i] : null;
-          const mark = mInfo && (mInfo.projected || mInfo.partial) ? ' <span style="color:var(--muted)">(hochger.)</span>' : '';
+          const vInfo = s.key === 'v' && _thmHit.prev ? _thmHit.prev[i] : null;
+          const mark = mInfo && (mInfo.projected || mInfo.partial) ? ' <span style="color:var(--muted)">(hochger.)</span>'
+            : vInfo && vInfo.bau ? ' <span style="color:var(--muted)">(Bauphase)</span>' : '';
           return `<span style="color:${s.color}">●</span> ${esc(s.label)} <b>${kwh(r.values[s.key] || 0, 0)}</b>${mark}`;
         });
         t.innerHTML = `<b>${esc(r.label)}</b><div class="note" style="margin-top:2px">${parts.join(' · ')}</div>`;
