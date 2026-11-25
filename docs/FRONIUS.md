@@ -36,6 +36,21 @@ Was du danach siehst:
   anteilig. Darunter eine Einordnung des letzten Monats: weniger PV bei trübem Wetter (Vergleich
   der Sonnenstunden mit dem Mittel für den Monat) ist normal, bei normaler Sonne lohnt ein Blick
   auf Verschattung und Ausrichtung; weicht der Verbrauch stark ab, sollte der Planer angepasst werden.
+* **PV-Planer → 💶 Wirtschaftlichkeit · gemessen** (direkt unter „Wirtschaftlichkeit“): dieselbe
+  Rechnung wie die Planer-Karte – Eigenverbrauch × Strompreis, Einspeisung × Vergütung, Netzbezug
+  (Rest), Vorteil pro Jahr, Amortisation –, aber mit den gemessenen Werten von Wechselrichter und
+  Smart Meter. Drei Spalten: **bisher gemessen** (alles seit Messbeginn; der Vorteil deckt sich mit
+  „gespart“ der Bridge), **aufs Jahr** und **Planer** (der Planer mit kWp, Batterie und Ausrichtung
+  der echten Anlage wie bei „Theorie vs. Praxis“; weichen die Eingaben im Planer davon ab, sagt die
+  Karte das). Eigenverbrauch heißt hier: was nicht gekauft werden musste (Verbrauch − Netzbezug),
+  Sonne direkt oder über die Batterie. Solange kein Jahr gemessen ist, wird hochgerechnet:
+  gemessene Monate plus Planer für den Rest des Jahres; die Abweichung Messung ÷ Planer in den
+  gemessenen Monaten wird nur so stark übertragen, wie vom Planer-Jahr schon gemessen ist – ein
+  Novembermonat, in dem der Akku fast alles aufnimmt und kaum etwas eingespeist wird, macht so
+  nicht die Einspeisung des ganzen Jahres zunichte. Unter 28 Tagen steht „noch unsicher“ darüber;
+  ab etwa 330 gemessenen Tagen zählen nur noch die Messwerte (auf 365 Tage gerechnet). Mit einer
+  Investition im Planer zusätzlich ein Balken „seit Messbeginn schon zurückverdient“. Strompreis
+  aus dem Setup, Vergütung und Investition aus dem PV-Planer.
 * **Tab PV → 🧵 String-Vergleich:** die beiden MPP-Tracker (Strings) nebeneinander – jetzt, heute
   als Kurven, je Tag, je kWp, wann sie erzeugen, mit Bewertung (siehe unten).
 * **Tab PV → 🔎 Plausibilitätsprüfung:** passen die gespeicherten Zahlen zueinander? (siehe unten)

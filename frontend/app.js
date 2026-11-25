@@ -94,8 +94,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v234';   // short tag shown always-on in the header
-const APP_VERSION = 'v234 · 2026-11-25 · Wärme → Effizienz: neues Diagramm „🌡️ Strom & Wärme nach Außentemperatur“ – ein Punkt je Tag, waagerecht die mittlere Außentemperatur (links warm, rechts kalt), senkrecht der verbrauchte Strom (rot, linke Achse) und die erzeugte Wärme (gelb, rechte Achse), mit Trendlinien über die Heiztage. Darunter: Strom und Wärme je Grad kälter, ein Tag mit 0 °C und die Arbeitszahl. Zeitraum 90 Tage / 1 Jahr / 2 Jahre, Reihen ausblendbar, Tippen zeigt den Tag. Daten: Zählerstände der Bridge (Tage mit ≥ 80 % Messung) und HomeCom-Import; heute und die Bauphase fehlen. Außerdem: Ein Tipp auf ein Diagramm schließt die Wertanzeige nicht mehr sofort wieder (betraf am Handy alle Diagramme). ' +
+const APP_BUILD = 'v235';   // short tag shown always-on in the header
+const APP_VERSION = 'v235 · 2026-11-25 · PV → direkt unter „Wirtschaftlichkeit“ (Planer) die neue Karte „💶 Wirtschaftlichkeit · gemessen“: dieselbe Rechnung mit den echten Messwerten von Wechselrichter und Smart Meter – Eigenverbrauch (spart …), Einspeisung, Netzbezug (Rest), Vorteil und Amortisation, jeweils „bisher gemessen“, „aufs Jahr“ hochgerechnet und zum Vergleich der Planer mit kWp, Batterie und Ausrichtung deiner echten Anlage. Hochrechnung: gemessene Monate plus Planer für den Rest des Jahres; die gemessene Abweichung zählt nur so stark, wie vom Jahr schon gemessen ist, damit ein paar trübe Wintermonate nicht das ganze Jahr verbiegen. Nach einem Jahr zählen nur noch die Messwerte. Mit eingetragener Investition zusätzlich ein Balken „seit Messbeginn schon zurückverdient“. ' +
+  'v234 · 2026-11-25 · Wärme → Effizienz: neues Diagramm „🌡️ Strom & Wärme nach Außentemperatur“ – ein Punkt je Tag, waagerecht die mittlere Außentemperatur (links warm, rechts kalt), senkrecht der verbrauchte Strom (rot, linke Achse) und die erzeugte Wärme (gelb, rechte Achse), mit Trendlinien über die Heiztage. Darunter: Strom und Wärme je Grad kälter, ein Tag mit 0 °C und die Arbeitszahl. Zeitraum 90 Tage / 1 Jahr / 2 Jahre, Reihen ausblendbar, Tippen zeigt den Tag. Daten: Zählerstände der Bridge (Tage mit ≥ 80 % Messung) und HomeCom-Import; heute und die Bauphase fehlen. Außerdem: Ein Tipp auf ein Diagramm schließt die Wertanzeige nicht mehr sofort wieder (betraf am Handy alle Diagramme). ' +
   'v233 · 2026-11-25 ·Wärme → Effizienz → „Theorie vs. Praxis pro Monat“: neuer, zuschaltbarer Balken „Vorjahr“ (standardmäßig aus) – derselbe Monat ein Jahr früher aus dem HomeCom-Import, graublau neben „Gemessen“. Ist er an, zeigt „Gemessen“ nur dieses Jahr (kein Monat doppelt), dazu die Vorjahres-Summe und ein Vergleich „dieses Jahr gegen Vorjahr“ über dieselben Monate; Vorjahres-Monate aus der Bauphase sind im Tipp-Fenster markiert und zählen beim Vergleich nicht. Ohne Vorjahresdaten ist das Häkchen ausgegraut. ' +
   'v232 · 2026-11-24 · Apple TV, ruhige Farbschemas (Nacht, Graphit, Wald, Kamin): weniger Schimmer – das Leuchten um die Kreise im Energiefluss, um das Geburtstagsbanner und hinter dem Radio-Cover ist nur noch ein Hauch, die Kreise sind innen matt wie die Karten, und an Feiertagen färbt sich der Hintergrund nicht mehr pink (höchstens ein Hauch Gold). „Aurora sanft“ leuchtet halb so stark, „Aurora“ bleibt wie gehabt. „Sonne erzeugt“: kürzerer Text („von ≈ 12 kWh“ bzw. „Prognose ≈ 12 kWh“), damit nichts abgeschnitten wird. ' +
   'v231 · 2026-11-24 · Apple TV: Farbschema in den Einstellungen (⚙︎, nach rechts wischen) – „Aurora“ wie bisher, „Aurora sanft“ mit halb so starkem Licht, dazu ruhig und ohne Schimmer „Nacht“, „Graphit“, „Wald“ und „Kamin“; wirkt sofort und bleibt auf dem Apple TV. Neue Tachos: Akku-Ladestand als Ring im Energiefluss (mit Funke beim Laden), bei „Sonne erzeugt“ ein Balken gegen den heute erwarteten Ertrag, Wettersymbol neben der Außentemperatur. Ganz unten neu: „Sonne & Wetter“ für heute, morgen, übermorgen mit Sonnen-Tacho, erwartetem PV-Ertrag und Tipp, wann Waschmaschine & Co. am besten laufen. Radio: die Bridge liest Titel jetzt auch aus HLS-Streams (z. B. KRAL FM) – aus der Playlist oder den ID3-Angaben im Stream; 🎵 im Setup sagt, ob einer kam. ' +
@@ -546,6 +547,14 @@ const INFO = {
     'Daraus ergeben sich Eigenverbrauch, Autarkie und Einspeisung.',
   'pv-quote': () => '<b>Autarkie</b> = Anteil deines Verbrauchs, der durch PV (inkl. Batterie) gedeckt wird. ' +
     '<b>Eigenverbrauchsquote</b> = Anteil des erzeugten PV-Stroms, den du selbst nutzt statt einzuspeisen.',
+  'pv-econ-live': () => 'Dieselbe Rechnung wie die Karte „Wirtschaftlichkeit“ darüber – aber mit dem, was deine Anlage ' +
+    '<b>wirklich gemessen</b> hat (Wechselrichter + Smart Meter). <b>Eigenverbrauch</b> = Strom, den du nicht kaufen musstest ' +
+    '(Verbrauch − Netzbezug: Sonne direkt oder über die Batterie) mal Strompreis, <b>Einspeisung</b> mal Vergütung, ' +
+    '<b>Netzbezug</b> mal Strompreis. <b>Vorteil</b> = Ersparnis + Vergütung, <b>Amortisation</b> = Investition ÷ Vorteil pro Jahr.<br>' +
+    '<b>bisher</b> = alles seit Messbeginn · <b>aufs Jahr</b> = hochgerechnet · <b>Planer</b> = der PV-Planer mit kWp, Batterie ' +
+    'und Ausrichtung deiner echten Anlage. Solange noch kein ganzes Jahr gemessen ist: gemessene Monate + Planer für den Rest, ' +
+    'korrigiert um die Abweichung in den gemessenen Monaten – aber nur so stark, wie vom Planer-Jahr schon gemessen ist. ' +
+    'So verbiegen ein paar trübe Wintermonate (oder ein sonniger Sommer) nicht das ganze Jahr.',
   'pv-econ': () => 'Für jede Anlagengröße (kWp, X) werden die <b>Netto-Stromkosten/Jahr</b> (Y) durchgerechnet: ' +
     'Netzbezug × Preis − Einspeisung × Vergütung. Unter der <b>0-€-Linie</b> verdienst du netto. Marker: ' +
     '<span style="color:#4da3ff">Wahl</span> = deine Größe, <span style="color:#f6b93b">Deckung</span> = Ertrag = ' +
@@ -11878,6 +11887,7 @@ function renderPv() {
   renderPvMargin();
   renderPvProduct();
   renderPvTheory();
+  renderPvEconLive();
 
   _pvRep = { summer: r.repDay, winter: r.repDayW };
   renderPvDay();
@@ -14755,6 +14765,7 @@ async function loadPvYear() {
   } catch (e) { /* keep the last values */ }
   finally { _pvYearBusy = false; }
   renderPvTheory();
+  renderPvEconLive();
 }
 // the planner with the data of the REAL installation (where known)
 function pvTheoryParams() {
@@ -14828,6 +14839,125 @@ function pvTheoryChart(rows) {
     ` · Verbrauch: Theorie <b>${k(r.th.load)}</b> · Praxis <b>${k(r.pr.load)}</b>` +
     ` · Autarkie: ${r.th.autarky != null ? fmt(r.th.autarky * 100, 0) + ' %' : '–'} → ${r.pr.autarky != null ? fmt(r.pr.autarky * 100, 0) + ' %' : '–'}</div>`);
   return svg(h, gridLines(h, top, base, pad, M, { step: sc.step, unit: 'kWh' }) + bars + labels, { kind: 'bar', pad, n, h, tips });
+}
+/* ---- 💶 Wirtschaftlichkeit · gemessen -----------------------------------------
+ * The planner's economics card with the installation's MEASURED energies
+ * (inverter + smart meter, /api/pv?days=365): own use, feed-in, grid import, in
+ * € with the same prices as the planner. A year: the measured values when ~a
+ * year is measured, else the measured months plus the planner (real kWp,
+ * battery, orientation) for the rest – corrected by the measured deviation only
+ * as far as the planner year is already measured, so a few winter months (or a
+ * sunny summer) can't bend the whole year. */
+function pvEconLive() {
+  const R = STATE.pvYear; if (!R || R.empty || !R.has_meter) return null;
+  const { p, src } = pvTheoryParams();
+  const T = simulatePv(p);
+  // a ticked 60 % cap only trims feed-in: take the same share off every planner month
+  const feedM = T.monthly.reduce((a, t) => a + t.feed, 0);
+  const capF = feedM > 0 ? T.feed_kwh / feedM : 1;
+  const rows = (R.monthly || []).map(m => {
+    const y = +m.month.slice(0, 4), mo = +m.month.slice(5, 7) - 1, dim = new Date(y, mo + 1, 0).getDate();
+    const days = (R.daily || []).filter(d => d.day.startsWith(m.month));
+    // a planner month is a whole average month: count it only for the time that was measured
+    const covPv = Math.min(1, (m.pv_days != null ? m.pv_days : m.days) / dim);
+    const covLoad = Math.min(1, days.reduce((a, d) => a + Math.min(24, d.cov_h || 0), 0) / 24 / dim);
+    const t = T.monthly[mo];
+    // own use = what was not bought (consumption − grid import), as in the planner and the bridge's "gespart"
+    return { month: m.month, mo, dim, covLoad,
+      pr: { self: Math.max(0, (m.load_kwh || 0) - (m.imp_kwh || 0)), feed: m.exp_kwh || 0, grid: m.imp_kwh || 0 },
+      th: { self: t.self * covLoad, feed: t.feed * capF * covPv, grid: t.grid * covLoad } };
+  }).filter(x => x.covLoad > 0.01 && x.pr.self + x.pr.feed + x.pr.grid > 0);
+  if (!rows.length) return null;
+  const K = ['self', 'feed', 'grid'];
+  const sum = w => Object.fromEntries(K.map(k => [k, rows.reduce((a, r) => a + r[w][k], 0)]));
+  const P = sum('pr'), Th = sum('th');
+  const days = rows.reduce((a, r) => a + r.covLoad * r.dim, 0);
+  const full = days >= 330;
+  const plan = { self: T.self_kwh, feed: T.feed_kwh, grid: T.grid_kwh };
+  // measured ÷ planner over the measured months (null: too little to compare → the planner value stands)
+  const ratio = Object.fromEntries(K.map(k => [k, Th[k] > 0.5 ? P[k] / Th[k] : null]));
+  // share of the planner year already measured: the deviation counts that much for the months still to come,
+  // so a few dull (or sunny) months can't bend the whole year – e.g. almost no feed-in in November
+  const wt = Object.fromEntries(K.map(k => [k, plan[k] > 0.5 ? Math.min(1, Th[k] / plan[k]) : 1]));
+  const Y = Object.fromEntries(K.map(k => [k, full ? P[k] * 365 / days
+    : P[k] + Math.max(0, plan[k] - Th[k]) * (1 + ((ratio[k] != null ? ratio[k] : 1) - 1) * wt[k])]));
+  const price = STATE.price, feedin = p.feedin;
+  const money3 = X => { const o = { save: X.self * price, rev: X.feed * feedin, cost: X.grid * price }; o.benefit = o.save + o.rev; return o; };
+  return { rows, P, Pm: money3(P), Y, Ym: money3(Y), plan, planM: money3(plan), days, full, ratio, wt,
+    price, feedin, invest: p.invest, p, src, first: rows[0].month };
+}
+function renderPvEconLive() {
+  const card = $('pv-econ-live-card'); if (!card) return;
+  const F = STATE.fr;
+  if (!F || !F.connected) { card.hidden = true; return; }
+  card.hidden = false;
+  if (!STATE.pvYear || Date.now() - (STATE.pvYearAt || 0) > 10 * 60000) {
+    if (!_pvYearBusy) loadPvYear();
+    if (!STATE.pvYear) return;
+  }
+  const E = pvEconLive();
+  const box = $('pv-econ-live'), back = $('pv-econ-live-back'), nt = $('pv-econ-live-note');
+  if (!E) {
+    $('pv-econ-live-head').innerHTML = '';
+    box.innerHTML = '<div class="note">Noch keine Messwerte mit Smart Meter – die Rechnung erscheint, sobald die Bridge einen Tag gemessen hat.</div>';
+    back.innerHTML = ''; nt.innerHTML = ''; return;
+  }
+  const nDays = Math.round(E.days);
+  $('pv-econ-live-head').innerHTML = `<span style="color:var(--muted)">${nDays} Tag${nDays === 1 ? '' : 'e'}</span>`;
+  const shaky = !E.full && E.days < 28;
+  const sm = t => `<br><small style="color:var(--muted)">${t}</small>`;
+  const k = v => kwh(v, 0), m = v => money(v);
+  const cell = (kw, eur, pre) => `${k(kw)}${sm((pre || '') + m(eur))}`;
+  const amort = ben => (E.invest > 0 && ben > 0 ? `~${fmt(E.invest / ben, 1)} Jahre` : '–');
+  const back0 = E.invest > 0 ? Math.max(0, E.Pm.benefit / E.invest) : null;   // share already paid back
+  box.innerHTML = '<table class="pvt"><tr><th></th>' +
+    `<th>bisher${sm('gemessen')}</th>` +
+    `<th>${E.full ? 'letzte 12 Mon.' : 'aufs Jahr'}${sm(E.full ? 'gemessen' : shaky ? 'noch unsicher' : 'hochgerechnet')}</th>` +
+    `<th>Planer${sm('deine Anlage')}</th></tr>` +
+    `<tr><td>Eigenverbrauch</td><td>${cell(E.P.self, E.Pm.save, 'spart ')}</td><td><b>${cell(E.Y.self, E.Ym.save, 'spart ')}</b></td><td>${cell(E.plan.self, E.planM.save, 'spart ')}</td></tr>` +
+    `<tr><td>Einspeisung</td><td>${cell(E.P.feed, E.Pm.rev)}</td><td><b>${cell(E.Y.feed, E.Ym.rev)}</b></td><td>${cell(E.plan.feed, E.planM.rev)}</td></tr>` +
+    `<tr><td>Netzbezug (Rest)</td><td>${cell(E.P.grid, E.Pm.cost)}</td><td><b>${cell(E.Y.grid, E.Ym.cost)}</b></td><td>${cell(E.plan.grid, E.planM.cost)}</td></tr>` +
+    `<tr><td><b>Vorteil</b></td><td>${m(E.Pm.benefit)}</td><td><b style="color:#4be0b0">${m(E.Ym.benefit)}</b>${sm('pro Jahr')}</td><td>${m(E.planM.benefit)}${sm('pro Jahr')}</td></tr>` +
+    `<tr><td>Amortisation</td><td>${back0 != null ? `${fmt(back0 * 100, back0 < 0.1 ? 1 : 0)} %${sm('zurück')}` : '–'}</td>` +
+    `<td><b>${amort(E.Ym.benefit)}</b></td><td>${amort(E.planM.benefit)}</td></tr></table>`;
+  // what has come back already (since the bridge measures)
+  if (back0 != null) {
+    const f = Math.min(1, back0);
+    const firstDay = new Date(E.first + '-01T12:00:00').toLocaleDateString('de-DE', { month: 'long', year: 'numeric' });
+    back.innerHTML = `<div class="note" style="margin-bottom:6px">Seit Messbeginn (${firstDay}) schon zurückverdient: ` +
+      `<b>${money(E.Pm.benefit)}</b> von ${money(E.invest)}</div>` +
+      `<div style="height:10px;border-radius:5px;background:rgba(127,127,127,.18);overflow:hidden">` +
+      `<div style="height:100%;width:${(f * 100).toFixed(2)}%;min-width:3px;border-radius:5px;background:linear-gradient(90deg,#4be0b0,#3ba9ff)"></div></div>`;
+  } else back.innerHTML = '<div class="note">Für Amortisation und „schon zurückverdient“ die Investition im PV-Planer eintragen.</div>';
+  // how the year was worked out
+  const pct = r => `${r >= 1 ? '+' : '−'}${fmt(Math.abs(r - 1) * 100, 0)} %`;
+  const NAME = { self: 'Eigenverbrauch', feed: 'Einspeisung', grid: 'Netzbezug' };
+  const okK = ['self', 'feed', 'grid'].filter(x => E.ratio[x] != null);
+  const cmp = okK.map(x => `${x === 'self' ? 'dein ' : x === 'grid' ? 'der ' : 'die '}${NAME[x]} <b>${pct(E.ratio[x])}</b>`);
+  const noCmp = ['self', 'feed', 'grid'].filter(x => E.ratio[x] == null).map(x => NAME[x]);
+  const ws = okK.map(x => E.wt[x]), wLo = Math.min(...ws), wHi = Math.max(...ws);
+  const wTxt = wHi - wLo <= 0.1 ? `rund ${fmt((wLo + wHi) / 2 * 100, 0)} %` : `${fmt(wLo * 100, 0)}–${fmt(wHi * 100, 0)} %`;
+  const months = E.rows.map(r => MON[r.mo]);
+  const inM = months.length === 1 ? 'Im gemessenen Monat' : 'In den gemessenen Monaten';
+  const summer = E.rows.some(r => r.mo >= 3 && r.mo <= 8 && r.covLoad > 0.5);
+  const pIn = pvInputs(), q = E.p;
+  const differs = Math.abs(pIn.kwp - q.kwp) > 0.05 || Math.abs(pIn.batt - q.batt) > 0.05 || Math.abs(pIn.spec - q.spec) > 5;
+  const extra = (q.evAnnual > 0 ? `, E-Auto ${kwh(q.evAnnual, 0)}/Jahr` : '') + (q.acAnnual > 0 ? `, Klima ${kwh(q.acAnnual, 0)}/Jahr` : '');
+  nt.innerHTML = (E.full
+    ? '<b>Ein ganzes Jahr gemessen</b> – die mittlere Spalte sind deine echten Werte (auf 365 Tage gerechnet).'
+    : `<b>Aufs Jahr hochgerechnet:</b> ${months.length === 1 ? 'der gemessene Monat' : `die ${months.length} gemessenen Monate`} ` +
+      `(${months.join(', ')}) plus der Planer für den Rest des Jahres. ` +
+      (cmp.length ? `${inM} lag ${cmp.join(', ').replace(/, ([^,]*)$/, ' und $1')} neben dem Planer. ` +
+        `Diese Abweichung wird auf den Rest übertragen – aber nur so stark, wie vom Planer-Jahr schon gemessen ist (${wTxt}), ` +
+        'damit ein paar trübe oder sonnige Monate nicht das ganze Jahr verbiegen. ' : '') +
+      (noCmp.length ? `Für ${noCmp.join(' und ')} war ${inM.toLowerCase()} zu wenig zum Vergleichen – dort zählt der Planer. ` : '') +
+      (summer ? '' : 'Noch kein Sommermonat dabei – der Rest des Jahres kommt deshalb fast nur aus dem Planer. ') +
+      'Mit jedem gemessenen Monat wird es genauer; nach einem Jahr zählen nur noch die Messwerte.') +
+    `<br><span style="color:var(--muted)">„Planer“ = der PV-Planer mit deiner echten Anlage: ${E.src.join(', ')}${extra}.` +
+    (differs ? ` Die Karte „Wirtschaftlichkeit“ darüber rechnet mit deinen Eingaben im Planer (${fmt(pIn.kwp, 1)} kWp, ` +
+      `${pIn.batt > 0 ? `Batterie ${fmt(pIn.batt, 1)} kWh` : 'ohne Batterie'}) und zeigt deshalb andere Zahlen.` : '') +
+    ` Eigenverbrauch = was du nicht kaufen musstest (Verbrauch − Netzbezug). Gerechnet mit Strompreis ${fmt(E.price, 2)} €/kWh und ` +
+    `Einspeisevergütung ${fmt(E.feedin * 100, 1)} ct/kWh${E.invest > 0 ? `, Investition ${money(E.invest)}` : ''} (Setup bzw. PV-Planer).</span>`;
 }
 function renderPvTheory() {
   const card = $('pv-tp-card'); if (!card) return;
