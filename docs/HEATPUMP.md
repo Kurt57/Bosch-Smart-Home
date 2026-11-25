@@ -266,6 +266,31 @@ für Tage, die die Bridge nicht gesehen hat – aus dem HomeCom-Import (Stunden-
 Außentemperatur). Der laufende Tag fehlt, weil er noch nicht fertig ist; Tage vor dem Bauphasen-Ende aus dem
 Setup sind ausgeblendet. Endpunkt: `GET /api/heatpump/tempdays?days=90|365|730`.
 
+### Gebäude-Einordnung: „Real je m²“ und Abgleich mit der Bosch-App
+
+Tab **Wärme → 📊 Effizienz**, Karte mit der **Gebäude-Einordnung** (Skala in kWh/m²·a).
+
+* **Heizwärme gemessen / Heizstrom gemessen (ab v236):** nur aus gemessenen Tagen – kein Gebäudemodell
+  darin. Je Tag der letzten 12 Monate nach dem Bauphasen-Ende (Bridge-Zähler, sonst HomeCom-Import) Wärme
+  bzw. Strom der Wärmepumpe gegen die **Heizgradtage** dieses Tages (G20/15: an Tagen unter 15 °C die
+  Differenz 20 °C − mittlere Außentemperatur): *je Tag = Sockel (Warmwasser, Bereitschaft) + k × Heizgradtage*.
+  Aufs Jahr: k × die Heizgradtage des Gebäudemodells (Standard 3.500 Kd/a) – wetterbereinigt auf dasselbe
+  Klima wie der Modellwert (weißer Marker); Warmwasser zählt bei der Heizwärme je m² nicht mit. Tage, die die
+  Bridge nur zu 80–99 % gesehen hat, werden auf den ganzen Tag hochgerechnet. Sind kaum warme Tage dabei
+  (weniger als 7 Tage mit höchstens 2 Heizgradtagen), kommt der Sockel aus dem Warmwasser des Gebäudemodells.
+  Angezeigt wird ab 30 gemessenen Tagen und 250 Heizgradtagen, vorher sagt die Karte, wie viel noch fehlt.
+  Bis v235 war „gemessen“ eine grobe Hochrechnung (Tagesschnitt × 365 bzw. Jahreswerte, die für nicht
+  gemessene Wintermonate das Gebäudemodell einsetzten) – im Herbst und Winter meist zu hoch.
+* **🔁 Abgleich mit der Bosch-App:** je Kalenderjahr (das laufende bis heute und das Vorjahr) Strom, Wärme,
+  Arbeitszahl und Heizstab-Anteil – dieselben Lebenszähler, die die Bosch-App unter **Energiemonitoring →
+  Effizienz** je Jahr zeigt (`emon/totalConsumption`: Kompressor + Heizstab, erzeugte Wärme). Die Bridge
+  liest den Zählerstand am 1. Januar (zwischen den Abfragen davor und danach gerechnet) und den letzten –
+  genau, auch über Abfrage-Lücken hinweg. Hat die Bridge erst im Lauf des Jahres angefangen, kommen die ganzen
+  Tage davor aus dem HomeCom-Import; sonst steht dabei, wie viel des Jahres erfasst ist. Die Arbeitszahl steht
+  nur da, wenn Strom und Wärme denselben Zeitraum abdecken; den Heizstab gibt es nur aus den Zählerständen
+  (der CSV-Export hat ihn nicht). Die Bosch-App rundet die Arbeitszahl auf eine Stelle. Endpunkt:
+  `GET /api/heatpump/years`.
+
 ## Warmwasser-Speicher & Legionellen
 
 Tab **Wärme → 🚿 Warmwasser**, Karte **🛁 Warmwasser-Speicher** (darunter, umgezogen aus

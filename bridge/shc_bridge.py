@@ -1290,6 +1290,20 @@ class Store:
                 (since_ts,))
             return [dict(r) for r in cur.fetchall()]
 
+    def hp_counter_around(self, ts: int, col: str) -> tuple:
+        """The last reading at/before ts and the first after it that carry the
+        cumulative counter `col` ({ts, v} or None) – reads a counter at a moment."""
+        if col not in ("energy_kwh", "heat_kwh", "eheater_kwh"):
+            raise ValueError(col)
+        with self.lock:
+            a = self.conn.execute(
+                f"SELECT ts,{col} AS v FROM hp_samples WHERE ts<=? AND {col} IS NOT NULL"
+                " ORDER BY ts DESC LIMIT 1", (ts,)).fetchone()
+            b = self.conn.execute(
+                f"SELECT ts,{col} AS v FROM hp_samples WHERE ts>? AND {col} IS NOT NULL"
+                " ORDER BY ts ASC LIMIT 1", (ts,)).fetchone()
+        return (dict(a) if a else None), (dict(b) if b else None)
+
     def hp_samples_between(self, start_ts: int, end_ts: int) -> list[dict]:
         with self.lock:
             cur = self.conn.execute(
@@ -6703,7 +6717,9 @@ def compute_hp_tempdays(store: "Store", days: int = 365, now: int | None = None)
             if d == today or d < first or cov < SIG_DAY_MIN_COVER * 86400 or no < 0.5 * cov or e <= 0:
                 continue
             pts[d] = {"day": d, "t": round(so / no, 1), "e": round(e, 2),
-                      "h": round(h, 2) if nh else None, "src": "live"}
+                      "h": round(h, 2) if nh else None, "src": "live",
+                      # share of the day the bridge saw (energy in longer gaps is not in e/h)
+                      "cov": round(min(1.0, cov / 86400.0), 3)}
     hrs: dict = {}
     for r in store.hp_history("hour"):
         d = str(r.get("date") or "")[:10]
@@ -6720,7 +6736,8 @@ def compute_hp_tempdays(store: "Store", days: int = 365, now: int | None = None)
     for d, (e, h, so, n, nh) in hrs.items():
         if n >= SIG_DAY_MIN_H and e > 0:
             pts[d] = {"day": d, "t": round(so / n, 1), "e": round(e, 2),
-                      "h": round(h, 2) if nh >= 0.9 * n else None, "src": "csv"}
+                      "h": round(h, 2) if nh >= 0.9 * n else None, "src": "csv",
+                      "cov": round(min(1.0, n / 24.0), 3)}
     for r in store.hp_history("day"):
         d = str(r.get("date") or "")[:10]
         o, e, h = r.get("outdoor_c"), r.get("elec_kwh"), r.get("heat_kwh")
@@ -6732,6 +6749,133 @@ def compute_hp_tempdays(store: "Store", days: int = 365, now: int | None = None)
     return {"ok": True, "days": days, "points": out,
             "n_live": sum(1 for p in out if p["src"] == "live"),
             "n_csv": sum(1 for p in out if p["src"] == "csv")}
+
+
+HP_YEAR_MAX_GAP_S = 6 * 3600          # read a counter between two readings at most this far apart
+
+
+def _hp_counter_at(store: "Store", ts: int, col: str):
+    """The cumulative counter `col` at moment ts – a reading right there, or
+    interpolated between the readings around it (≤ 6 h apart); else None."""
+    a, b = store.hp_counter_around(ts, col)
+    if a and a["ts"] == ts:
+        return a["v"]
+    if a and b and b["ts"] - a["ts"] <= HP_YEAR_MAX_GAP_S and b["v"] >= a["v"]:
+        return a["v"] + (b["v"] - a["v"]) * (ts - a["ts"]) / (b["ts"] - a["ts"])
+    return None
+
+
+def _hp_imported_days(store: "Store") -> dict:
+    """Imported HomeCom history per day {day: {e, h}}: day rows, else a day
+    with all (≥ 23) hour rows."""
+    imp: dict = {}
+    for r in store.hp_history("day"):
+        d = str(r.get("date") or "")[:10]
+        if len(d) == 10 and (r.get("elec_kwh") is not None or r.get("heat_kwh") is not None):
+            imp[d] = {"e": r.get("elec_kwh"), "h": r.get("heat_kwh")}
+    hrs: dict = {}
+    for r in store.hp_history("hour"):
+        d = str(r.get("date") or "")[:10]
+        if len(d) < 10 or d in imp:
+            continue
+        x = hrs.setdefault(d, [0.0, 0.0, 0, 0])
+        if r.get("elec_kwh") is not None:
+            x[0] += r["elec_kwh"]
+            x[2] += 1
+        if r.get("heat_kwh") is not None:
+            x[1] += r["heat_kwh"]
+            x[3] += 1
+    for d, (e, h, ne, nh) in hrs.items():
+        if ne >= 23 or nh >= 23:
+            imp[d] = {"e": e if ne >= 23 else None, "h": h if nh >= 23 else None}
+    return imp
+
+
+def _hp_year_counter(store: "Store", t0: int, t1: int, col: str, has_day) -> dict | None:
+    """Growth of the counter `col` within [t0, t1] as far as the bridge read it:
+    {kwh, s, e} with the start/end read at the window edges where readings lie
+    around them. When the bridge started (or stopped) inside the window, the
+    counter part is cut at a local midnight if the imported history has that
+    day – so imported whole days fill the rest without counting twice."""
+    v0, s = _hp_counter_at(store, t0, col), t0
+    if v0 is None:
+        _, b = store.hp_counter_around(t0, col)
+        if not b or b["ts"] >= t1:
+            return None                                       # no reading inside the window
+        nxt = int((datetime.fromtimestamp(b["ts"]).replace(hour=0, minute=0, second=0, microsecond=0)
+                   + timedelta(days=1)).timestamp())
+        vm = _hp_counter_at(store, nxt, col) if (nxt < t1 and has_day(b["ts"])) else None
+        v0, s = (vm, nxt) if vm is not None else (b["v"], b["ts"])
+    v1, e = _hp_counter_at(store, t1, col), t1
+    if v1 is None:
+        a, _ = store.hp_counter_around(t1, col)
+        if not a or a["ts"] <= s:
+            return None
+        mid = _local_midnight(a["ts"])
+        vm = _hp_counter_at(store, mid, col) if (mid > s and has_day(a["ts"]) and a["ts"] < t1 - 3600) else None
+        v1, e = (vm, mid) if vm is not None else (a["v"], a["ts"])
+    if v1 < v0:
+        return None                                           # counter replaced or reset
+    return {"kwh": v1 - v0, "s": int(s), "e": int(e)}
+
+
+def compute_hp_years(store: "Store", now: int | None = None) -> dict:
+    """Per calendar year (this one so far and the last one) what the heat pump
+    used and made – the same lifetime counters the Bosch app sums per year in
+    'Energiemonitoring → Effizienz' (emon/totalConsumption: compressor +
+    e-heater, outputProduced). The bridge's readings give the exact growth,
+    also across polling gaps; whole days before (or after) its readings come
+    from the imported HomeCom history. Today counts up to now, like the app."""
+    now = int(now or time.time())
+    cur_y = datetime.fromtimestamp(now).year
+    imp = _hp_imported_days(store)
+    out = []
+    for y in (cur_y - 1, cur_y):
+        t0 = int(datetime(y, 1, 1).timestamp())
+        t1 = min(now, int(datetime(y + 1, 1, 1).timestamp()))
+        if t1 <= t0:
+            continue
+        row = {"year": y, "running": t1 == now, "to": _local_day(t1 - 1),
+               "days": round((t1 - t0) / 86400.0, 1)}
+        span = t1 - t0
+        for col, key in (("energy_kwh", "elec"), ("heat_kwh", "heat")):
+            ik = "e" if key == "elec" else "h"
+            has_day = lambda ts, ik=ik: (imp.get(_local_day(ts)) or {}).get(ik) is not None
+            part = _hp_year_counter(store, t0, t1, col, has_day)
+            kwh, cov, n_csv = 0.0, 0.0, 0
+            if part:
+                kwh, cov = part["kwh"], part["e"] - part["s"]
+            for d, v in imp.items():
+                if v.get(ik) is None:
+                    continue
+                ds = int(datetime.strptime(d, "%Y-%m-%d").timestamp())
+                de = int((datetime.strptime(d, "%Y-%m-%d") + timedelta(days=1)).timestamp())
+                if ds < t0 or de > t1 or (part and de > part["s"] and ds < part["e"]):
+                    continue                                  # outside the year, or the counter has it
+                kwh += v[ik]
+                cov += de - ds
+                n_csv += 1
+            got = cov > 0
+            row[f"{key}_kwh"] = round(kwh, 1) if got else None
+            row[f"{key}_cov"] = round(min(1.0, cov / span), 3) if got else 0.0
+            row[f"{key}_csv_days"] = n_csv
+            row[f"{key}_from"] = _local_day(part["s"]) if part else None
+        # e-heater share: only the counter knows it (not in the CSV export)
+        ph = _hp_year_counter(store, t0, t1, "eheater_kwh", lambda ts: False)
+        row["eheater_kwh"] = row["heater_share"] = row["heater_from"] = row["heater_cov"] = None
+        if ph:
+            e0, e1 = _hp_counter_at(store, ph["s"], "energy_kwh"), _hp_counter_at(store, ph["e"], "energy_kwh")
+            if e0 is not None and e1 is not None and e1 - e0 > 1.0:
+                row["eheater_kwh"] = round(ph["kwh"], 1)
+                row["heater_share"] = round(ph["kwh"] / (e1 - e0), 3)
+                row["heater_from"] = _local_day(ph["s"])
+                row["heater_cov"] = round((ph["e"] - ph["s"]) / span, 3)
+        ok = (row["elec_kwh"] and row["heat_kwh"] is not None
+              and abs(row["elec_cov"] - row["heat_cov"]) <= 0.005)
+        row["cop"] = round(row["heat_kwh"] / row["elec_kwh"], 2) if ok else None
+        if row["elec_kwh"] is not None or row["heat_kwh"] is not None:
+            out.append(row)
+    return {"ok": True, "years": out}
 
 
 def _energy_signature(store: "Store") -> dict | None:
@@ -13917,6 +14061,10 @@ class Handler(BaseHTTPRequestHandler):
                 # one point per day: outdoor temperature, electricity, heat (chart in Wärme → Effizienz)
                 return self._send_json(self.ctx.calc_get(
                     ("tempdays", days), 600, lambda: compute_hp_tempdays(self.store, days)))
+            if path == "/api/heatpump/years":
+                # calendar years from the heat pump's counters (Wärme → Effizienz: Abgleich mit der Bosch-App)
+                return self._send_json(self.ctx.calc_get(
+                    ("hpyears",), 300, lambda: compute_hp_years(self.store)))
             if path == "/api/series":
                 device = qs.get("device", ["all"])[0]
                 since = int(time.time()) - days * 86400

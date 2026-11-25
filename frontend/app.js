@@ -94,8 +94,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v235';   // short tag shown always-on in the header
-const APP_VERSION = 'v235 · 2026-11-25 · PV → direkt unter „Wirtschaftlichkeit“ (Planer) die neue Karte „💶 Wirtschaftlichkeit · gemessen“: dieselbe Rechnung mit den echten Messwerten von Wechselrichter und Smart Meter – Eigenverbrauch (spart …), Einspeisung, Netzbezug (Rest), Vorteil und Amortisation, jeweils „bisher gemessen“, „aufs Jahr“ hochgerechnet und zum Vergleich der Planer mit kWp, Batterie und Ausrichtung deiner echten Anlage. Hochrechnung: gemessene Monate plus Planer für den Rest des Jahres; die gemessene Abweichung zählt nur so stark, wie vom Jahr schon gemessen ist, damit ein paar trübe Wintermonate nicht das ganze Jahr verbiegen. Nach einem Jahr zählen nur noch die Messwerte. Mit eingetragener Investition zusätzlich ein Balken „seit Messbeginn schon zurückverdient“. ' +
+const APP_BUILD = 'v236';   // short tag shown always-on in the header
+const APP_VERSION = 'v236 · 2026-11-25 · Wärme → Effizienz → Gebäude-Einordnung: „Heizwärme gemessen“ und „Heizstrom gemessen“ kommen jetzt nur noch aus gemessenen Tagen – Wärme und Strom je Tag gegen die Heizgradtage, aufs Jahr mit den Heizgradtagen deines Gebäudemodells gerechnet (wetterbereinigt), ohne Bauphase. Bisher war das eine grobe Hochrechnung, die für nicht gemessene Wintermonate das Gebäudemodell einsetzte. Neu darunter: „🔁 Abgleich mit der Bosch-App“ – je Kalenderjahr Strom, Wärme, Arbeitszahl und Heizstab-Anteil aus denselben Zählern wie „Energiemonitoring → Effizienz“ in der Bosch-App. ' +
+  'v235 · 2026-11-25 · PV → direkt unter „Wirtschaftlichkeit“ (Planer) die neue Karte „💶 Wirtschaftlichkeit · gemessen“: dieselbe Rechnung mit den echten Messwerten von Wechselrichter und Smart Meter – Eigenverbrauch (spart …), Einspeisung, Netzbezug (Rest), Vorteil und Amortisation, jeweils „bisher gemessen“, „aufs Jahr“ hochgerechnet und zum Vergleich der Planer mit kWp, Batterie und Ausrichtung deiner echten Anlage. Hochrechnung: gemessene Monate plus Planer für den Rest des Jahres; die gemessene Abweichung zählt nur so stark, wie vom Jahr schon gemessen ist, damit ein paar trübe Wintermonate nicht das ganze Jahr verbiegen. Nach einem Jahr zählen nur noch die Messwerte. Mit eingetragener Investition zusätzlich ein Balken „seit Messbeginn schon zurückverdient“. ' +
   'v234 · 2026-11-25 · Wärme → Effizienz: neues Diagramm „🌡️ Strom & Wärme nach Außentemperatur“ – ein Punkt je Tag, waagerecht die mittlere Außentemperatur (links warm, rechts kalt), senkrecht der verbrauchte Strom (rot, linke Achse) und die erzeugte Wärme (gelb, rechte Achse), mit Trendlinien über die Heiztage. Darunter: Strom und Wärme je Grad kälter, ein Tag mit 0 °C und die Arbeitszahl. Zeitraum 90 Tage / 1 Jahr / 2 Jahre, Reihen ausblendbar, Tippen zeigt den Tag. Daten: Zählerstände der Bridge (Tage mit ≥ 80 % Messung) und HomeCom-Import; heute und die Bauphase fehlen. Außerdem: Ein Tipp auf ein Diagramm schließt die Wertanzeige nicht mehr sofort wieder (betraf am Handy alle Diagramme). ' +
   'v233 · 2026-11-25 ·Wärme → Effizienz → „Theorie vs. Praxis pro Monat“: neuer, zuschaltbarer Balken „Vorjahr“ (standardmäßig aus) – derselbe Monat ein Jahr früher aus dem HomeCom-Import, graublau neben „Gemessen“. Ist er an, zeigt „Gemessen“ nur dieses Jahr (kein Monat doppelt), dazu die Vorjahres-Summe und ein Vergleich „dieses Jahr gegen Vorjahr“ über dieselben Monate; Vorjahres-Monate aus der Bauphase sind im Tipp-Fenster markiert und zählen beim Vergleich nicht. Ohne Vorjahresdaten ist das Häkchen ausgegraut. ' +
   'v232 · 2026-11-24 · Apple TV, ruhige Farbschemas (Nacht, Graphit, Wald, Kamin): weniger Schimmer – das Leuchten um die Kreise im Energiefluss, um das Geburtstagsbanner und hinter dem Radio-Cover ist nur noch ein Hauch, die Kreise sind innen matt wie die Karten, und an Feiertagen färbt sich der Hintergrund nicht mehr pink (höchstens ein Hauch Gold). „Aurora sanft“ leuchtet halb so stark, „Aurora“ bleibt wie gehabt. „Sonne erzeugt“: kürzerer Text („von ≈ 12 kWh“ bzw. „Prognose ≈ 12 kWh“), damit nichts abgeschnitten wird. ' +
@@ -9268,6 +9269,104 @@ function thmPrevNote(vOn, prev, meas, curY) {
     (bau.length ? ` Darunter Monate der Bauphase (${bau.join(', ')}) – damals lag der Verbrauch z. B. durch ` +
       `Bautrocknung höher; beim Vergleich mit diesem Jahr zählen sie nicht mit.` : '') + '</span>' + cmp;
 }
+/* ---- "Real je m² (gemessen)" + "Abgleich mit der Bosch-App" ---------------------
+ * The last 12 months day by day (/api/heatpump/tempdays) and the calendar years
+ * from the heat pump's own counters (/api/heatpump/years), both cached 5–10 min. */
+let _hpRealBusy = false;
+async function loadHpReal(force) {
+  if (_hpRealBusy || (!force && STATE.hpRealAt && Date.now() - STATE.hpRealAt < 600000)) return;
+  _hpRealBusy = true; STATE.hpRealAt = Date.now();
+  try {
+    const [d, y] = await Promise.all([api('/api/heatpump/tempdays?days=365').catch(() => null),
+      api('/api/heatpump/years').catch(() => null)]);
+    if (d && d.ok) STATE.hpYearPts = d;
+    if (y && y.ok) STATE.hpYears = y;
+  } finally { _hpRealBusy = false; }
+  renderHeatDemand();
+}
+// "gemessen" per m² from MEASURED days only – no building model in it: the heat
+// pump's heat (and electricity) per day against that day's heating degree days
+// (G20/15: 20 °C minus the mean outdoor temperature on days below 15 °C):
+//   per day = base (hot water, standby) + k × degree days
+// over the last 12 months after the construction phase. A year = base × 365 +
+// k × the building model's degree days – weather-corrected to the same climate as
+// the model's white marker. With too few warm days to pin the base, the base is
+// the model's hot water. Too few heating days → { short }.
+const HPREAL_MIN_DAYS = 30, HPREAL_MIN_KD = 250;
+function hpRealYear(b) {
+  const P = STATE.hpYearPts; if (!P) return null;
+  const bauDay = ymdLocal(buildPhaseEnd());
+  let nBau = 0;
+  const days = [];
+  (P.points || []).forEach(p => {
+    if (p.day < bauDay) { nBau++; return; }
+    if (!(p.e > 0) || p.t == null) return;
+    const c = p.cov > 0.5 ? Math.min(1, p.cov) : 1;        // live day: scale to the whole day
+    days.push({ day: p.day, src: p.src, x: p.t < 15 ? 20 - p.t : 0, e: p.e / c, h: p.h != null ? p.h / c : null });
+  });
+  const kd = days.reduce((a, d) => a + d.x, 0);
+  if (days.length < HPREAL_MIN_DAYS || kd < HPREAL_MIN_KD) return { short: true, n: days.length, nBau, kd };
+  const warm = days.filter(d => d.x <= 2).length;
+  const fit = (rows, base0) => {
+    if (rows.length < HPREAL_MIN_DAYS) return null;
+    let f = null;
+    if (warm >= 7) {
+      const l = linFit(rows.map(r => [r.x, r.y]));
+      if (l && l.a > 0 && l.b >= 0) f = { k: l.a, base: l.b, free: true };
+    }
+    if (!f) {
+      let sxx = 0, sxy = 0;
+      rows.forEach(r => { sxx += r.x * r.x; sxy += r.x * (r.y - base0); });
+      if (!(sxx > 0) || !(sxy > 0)) return null;
+      f = { k: sxy / sxx, base: base0, free: false };
+    }
+    const my = rows.reduce((a, r) => a + r.y, 0) / rows.length;
+    let ss = 0, sr = 0;
+    rows.forEach(r => { ss += (r.y - my) ** 2; sr += (r.y - f.base - f.k * r.x) ** 2; });
+    f.r2 = ss > 0 ? 1 - sr / ss : null;
+    return f;
+  };
+  const H = fit(days.filter(d => d.h != null).map(d => ({ x: d.x, y: d.h })), (b.dhw || 0) / 365);
+  const E = fit(days.map(d => ({ x: d.x, y: d.e })), (b.dhw || 0) / (b.cop_dhw || 2.5) / 365);
+  const hgt = b.hgt > 0 ? b.hgt : 3500;
+  return { n: days.length, nBau, kd, warm, hgt, H, E, first: days[0].day, last: days[days.length - 1].day,
+    nLive: days.filter(d => d.src === 'live').length, nCsv: days.filter(d => d.src === 'csv').length,
+    heatYear: H ? H.k * hgt : null, elecHeatYear: E ? E.k * hgt : null,
+    elecYear: E ? E.base * 365 + E.k * hgt : null };
+}
+// Calendar years as in the Bosch app (Energiemonitoring → Effizienz): electricity
+// used, heat made, their ratio and the electric heater's share – from the same
+// counters, so the numbers can be checked against each other.
+function hpBoschHtml() {
+  const Y = STATE.hpYears && STATE.hpYears.years; if (!Y || !Y.length) return '';
+  const sm = t => `<br><small style="color:var(--muted)">${t}</small>`;
+  const notes = [];
+  const rows = Y.slice().reverse().map(y => {
+    const part = y.elec_cov < 0.995;
+    if (part) {
+      notes.push(`<b>${y.year}</b>: ${fmt(y.elec_cov * 100, 0)} % der Tage erfasst` +
+        (y.elec_csv_days ? ` – ${y.elec_csv_days} Tage aus dem HomeCom-Import` : '') +
+        (y.elec_from ? `${y.elec_csv_days ? ', ' : ' – '}Zählerstände ab ${fmtDay(y.elec_from)}` : '') +
+        '. Mit einem HomeCom-CSV-Import (Setup) für die Tage davor wird die Summe vollständig.');
+    } else if (y.elec_csv_days) {
+      notes.push(`<b>${y.year}</b>: ${y.elec_csv_days} Tage aus dem HomeCom-Import, ab ${fmtDay(y.elec_from)} aus den Zählerständen.`);
+    }
+    const hePart = y.heater_share != null && y.heater_cov != null && y.heater_cov < y.elec_cov - 0.01;
+    if (hePart) notes.push(`Heizstab ${y.year} erst ab ${fmtDay(y.heater_from)} (vorher hat die Bridge ihn nicht gelesen).`);
+    const e = y.elec_kwh != null ? `${fmt(y.elec_kwh, y.elec_kwh < 10000 ? 1 : 0)} kWh` : '–';
+    const h = y.heat_kwh != null ? `${fmt(y.heat_kwh, 0)} kWh` : '–';
+    return `<tr><td><b>${y.year}</b>${y.running ? sm('bis heute') : ''}</td><td>${e}${part ? sm(fmt(y.elec_cov * 100, 0) + ' % erfasst') : ''}</td>` +
+      `<td>${h}</td><td><b>${y.cop != null ? fmt(y.cop, 2) : '–'}</b></td>` +
+      `<td>${y.heater_share != null ? fmt(y.heater_share * 100, 0) + ' %' + (hePart ? '*' : '') : '–'}</td></tr>`;
+  });
+  return `<div style="font-weight:700;font-size:13px;margin:16px 0 6px">🔁 Abgleich mit der Bosch-App</div>` +
+    '<table class="pvt"><tr><th>Jahr</th><th>Strom</th><th>Wärme</th><th>Arbeits&shy;zahl</th><th>Heiz&shy;stab</th></tr>' +
+    rows.join('') + '</table>' +
+    `<div class="note" style="margin-top:6px">Dieselben Zähler wie in der Bosch-App unter <b>Energiemonitoring → Effizienz</b>: ` +
+    'verbrauchte Energie (Kompressor + Heizstab), erzeugte Wärme (Heizung + Warmwasser), Arbeitszahl = Wärme ÷ Strom ' +
+    '(die Bosch-App rundet auf eine Stelle) und der Anteil des elektrischen Zuheizers. Hier aus den Zählerständen, die die Bridge ' +
+    'liest – auch über Lücken hinweg genau. ' + notes.join(' ') + '</div>';
+}
 function renderHeatDemand() {
   const card = $('hp-theory-card'); if (!card) return;
   const b = buildData(), r = computeHeat(b), price = STATE.price;
@@ -9470,20 +9569,22 @@ function renderHeatDemand() {
   // ---- Gebäude-Einordnung (kWh/m²·a Heizwärmebedarf) -------------------
   const spec = b.area > 0 ? r.qHeat / b.area : 0;
   const [cls, col] = buildClass(spec);
-  // measured counterpart per m²: real heating thermal / electricity, total house
-  // electricity and PV generation – all per m² of heated area.
+  // measured counterpart per m²: heating heat and heating electricity from MEASURED
+  // days only (hpRealYear – no building model in it), plus the house's electricity
+  // and the PV generation – all per m² of heated area.
   const area = b.area > 0 ? b.area : 0;
-  // measured annual WP electricity + thermal heat – from monthly/CSV if present,
-  // else the counter-based year estimate (works without a CSV import).
-  const measYearElec = measured || (A && A.stats && A.stats.year_estimate_kwh) ||
+  if (!STATE.hpRealAt || Date.now() - STATE.hpRealAt > 600000) loadHpReal();   // days + Bosch years
+  const RY = area > 0 ? hpRealYear(b) : null, ryOk = !!(RY && !RY.short);
+  // the heat pump's year for the electricity total: the measured days when there
+  // are enough, else the earlier year estimate (months/CSV/counter)
+  const measYearElec = (ryOk && RY.elecYear) || measured || (A && A.stats && A.stats.year_estimate_kwh) ||
     (A && A.counter && A.counter.avg_daily_elec_kwh ? A.counter.avg_daily_elec_kwh * 365 : null);
-  const measYearHeat = (A && A.counter && A.counter.avg_daily_heat_kwh ? A.counter.avg_daily_heat_kwh * 365 : null) ||
-    (measYearElec && copMeas ? measYearElec * copMeas : null);
   let realSpec = null, heatElecM2 = null, elecM2 = null, pvM2 = null, pvCover = null, pvYield = null;
+  if (area > 0 && ryOk) {
+    if (RY.heatYear != null) realSpec = RY.heatYear / area;            // space-heating heat per m²
+    if (RY.elecHeatYear != null) heatElecM2 = RY.elecHeatYear / area;  // its electricity per m²
+  }
   if (area > 0 && measYearElec) {
-    const heatFrac = r.eTotal > 0 ? r.eHeat / r.eTotal : 1;          // model heating share of WP elec
-    heatElecM2 = measYearElec * heatFrac / area;
-    if (measYearHeat) realSpec = Math.max(0, measYearHeat - b.dhw) / area;  // heating thermal /m²
     const shYear = Math.max(0, shAvgDaily() * 365);
     elecM2 = (shYear + measYearElec) / area;
     try {
@@ -9498,9 +9599,8 @@ function renderHeatDemand() {
   // real / measured per m²
   const realEl = $('hp-theory-real');
   if (realEl) {
-    if (!area || !measYearElec) {
-      realEl.innerHTML = '<div class="note">Für die <b>gemessenen</b> Werte je m² fehlen noch Daten – trage die ' +
-        '<b>beheizte Fläche</b> ein (oben) und lass die Wärmepumpe mitlaufen (oder importiere eine HomeCom-CSV).</div>';
+    if (!area) {
+      realEl.innerHTML = '<div class="note">Für die <b>gemessenen</b> Werte je m² fehlt noch die <b>beheizte Fläche</b> (oben).</div>' + hpBoschHtml();
     } else {
       const rows = [];
       if (realSpec != null) {
@@ -9513,35 +9613,32 @@ function renderHeatDemand() {
       if (heatElecM2 != null) rows.push(devRow('Heizstrom gemessen', 'Strom nur fürs Heizen', `${fmt(heatElecM2, 0)} kWh/m²·a`, money(heatElecM2 * area * STATE.price) + '/Jahr', Math.min(100, heatElecM2 / 80 * 100), COL.hp));
       if (elecM2 != null) rows.push(devRow('Haushaltsstrom gesamt', 'Smart Home + Wärmepumpe', `${fmt(elecM2, 0)} kWh/m²·a`, '', Math.min(100, elecM2 / 120 * 100), COL.sh));
       if (pvM2 != null) rows.push(devRow('PV-Erzeugung', pvCover != null ? `deckt ~${fmt(pvCover * 100, 0)}% deines m²-Strombedarfs` : 'je m² Wohnfläche', `${fmt(pvM2, 0)} kWh/m²·a`, kwh(pvYield, 0) + '/Jahr', Math.min(100, pvM2 / 120 * 100), COL.pv));
-      // data basis: which months are actually measured + from CSV or the counter
-      const MABB = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'];
-      const fmtYM = ym => { const p = String(ym).split('-'); const mi = parseInt(p[1], 10) - 1; return (MABB[mi] || p[1]) + ' ' + p[0]; };
-      const im = A && A.imported, cnt = A && A.counter;
       let basis;
-      if (measured && im && im.months) {
-        basis = `importierte <b>HomeCom-CSV</b> (${im.months} Monate, ${im.days} Tage` +
-          (im.seasonal_cop ? `, JAZ ${fmt(im.seasonal_cop, 2)}` : '') + ')';
-      } else if (cnt && (cnt.observed_months || cnt.span_days)) {
-        const oms = (cnt.observed_months || []).map(fmtYM);
-        const span = oms.length >= 2 ? `${oms[0]} – ${oms[oms.length - 1]}` : (oms[0] || '');
-        basis = `dem laufenden <b>WP-Zähler</b> über <b>${fmt(cnt.span_days || 0, 0)} gemessene Tage</b>` +
-          (span ? ` (${oms.length >= 2 ? '' : 'Monat '}<b>${span}</b>)` : '');
-      } else if (A && A.stats) {
-        basis = `der <b>Zähler-Jahresschätzung</b> der Wärmepumpe`;
+      if (ryOk) {
+        const H = RY.H, src = RY.nCsv && RY.nLive ? 'Bridge + HomeCom-Import' : (RY.nCsv ? 'HomeCom-Import' : 'Bridge');
+        const share = RY.kd / RY.hgt;
+        basis = `<b>Basis:</b> nur gemessene Tage – <b>${RY.n} Tage</b> (${fmtDay(RY.first)} – ${fmtDay(RY.last)}, ${src})` +
+          (RY.nBau ? `, die Bauphase bis ${fmtDay(ymdLocal(buildPhaseEnd()))} nicht mitgezählt` : '') + '. ' +
+          (H ? `Je Tag macht die Wärmepumpe ≈ <b>${fmt(H.base, 1)} kWh</b> Wärme als Sockel (Warmwasser, Bereitschaft` +
+            `${H.free ? '' : ' – aus dem Gebäudemodell, solange kaum warme Tage gemessen sind'}) plus <b>${fmt(H.k, 2)} kWh je Heizgradtag</b>` +
+            `${H.r2 != null && H.r2 < 0.5 ? ' (die Tage streuen stark)' : ''}; den Strom rechne ich genauso. ` : '') +
+          `Aufs Jahr mit den <b>${fmt(RY.hgt, 0)} Heizgradtagen</b> deines Gebäudemodells gerechnet und durch die beheizte Fläche ` +
+          `(<b>${fmt(area, 0)} m²</b>) geteilt – wetterbereinigt, also dasselbe ` +
+          `Klima wie beim weißen Marker; Warmwasser zählt bei der Heizwärme je m² nicht mit. In den gemessenen Tagen stecken ` +
+          `<b>${fmt(Math.min(100, share * 100), 0)} %</b> der Heizgradtage eines Jahres${share < 0.35 ? ' – noch grob, mit jedem kalten Tag genauer' : ''}. ` +
+          `<span style="color:var(--muted)">Heizgradtag: an Tagen unter 15 °C die Differenz 20 °C − mittlere Außentemperatur (G20/15). ` +
+          `Haushaltsstrom = Smart Home + dieselbe Jahresrechnung der Wärmepumpe, PV-Erzeugung aus deiner PV-Auslegung (PV-Tab).</span>`;
+      } else if (RY && RY.short) {
+        basis = `<b>Heizwärme und Heizstrom je m²</b> zeige ich, sobald genug Heiztage gemessen sind – mindestens ` +
+          `${HPREAL_MIN_DAYS} Tage und ${HPREAL_MIN_KD} Heizgradtage (bisher ${RY.n} Tag${RY.n === 1 ? '' : 'e'}, ${fmt(RY.kd, 0)} Heizgradtage` +
+          `${RY.nBau ? ', Bauphase nicht mitgezählt' : ''}). Gerechnet wird dann nur mit gemessenen Tagen, nicht mit dem Gebäudemodell.`;
       } else {
-        basis = `den gemessenen WP-Daten`;
+        basis = STATE.hpYearPts ? 'Noch keine gemessenen Tage der Wärmepumpe – lass die Bridge mitlaufen oder importiere eine HomeCom-CSV (Setup).'
+          : 'Lade die gemessenen Tage …';
       }
-      const heatBasis = (cnt && cnt.avg_daily_heat_kwh)
-        ? 'der <b>gemessenen Wärmemenge</b> (WP-Wärmezähler)'
-        : 'dem <b>gemessenen Strom × Jahresarbeitszahl</b>';
       realEl.innerHTML = `<div style="font-weight:700;font-size:13px;margin-bottom:6px">🔎 Real je m² (gemessen)` +
         (realSpec != null ? ` <span style="font-weight:400;color:#3ba9ff;font-size:12px">· blauer Marker oben</span>` : '') + `</div>` +
-        rows.join('') +
-        `<div class="note" style="margin-top:8px"><b>Basis:</b> ${basis}, aufs Jahr hochgerechnet und durch die ` +
-        `beheizte Fläche (${fmt(area, 0)} m²) geteilt. Die <b>Heizwärme je m²</b> stammt aus ${heatBasis} (Warmwasser herausgerechnet)` +
-        (pvM2 != null ? ', die <b>PV-Erzeugung</b> aus deiner PV-Auslegung (PV-Tab)' : '') + '. ' +
-        `Je <b>weniger Monate</b> bisher gemessen wurden, desto gröber die Hochrechnung. Die Heizwärme hängt zudem vom <b>Wetter</b> ab: ` +
-        `ein milder Zeitraum liegt <b>unter</b> dem Modell-Bedarf (Auslegung), ein kalter <b>darüber</b> – erst über eine volle Heizsaison nähern sich beide Marker an.</div>`;
+        rows.join('') + `<div class="note" style="margin-top:8px">${basis}</div>` + hpBoschHtml();
     }
   }
 
