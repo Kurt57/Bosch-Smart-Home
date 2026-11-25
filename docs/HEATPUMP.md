@@ -250,6 +250,22 @@ Heizlast kam etwa um den Faktor COP zu niedrig heraus (auch im Reiter Abgleich).
 die erzeugte Heizwärme direkt; ältere Importe teilen die Gesamtwärme nach den Stromanteilen auf. Im Abgleich
 bekommen Räume ohne Auskühl-Messung (τ) jetzt ihren Anteil an der gemessenen Gesamtlast nach Fläche.
 
+### Strom & Wärme nach Außentemperatur
+
+Tab **Wärme → 📊 Effizienz**, Karte **🌡️ Strom & Wärme nach Außentemperatur** (direkt unter „Effizienz nach
+Außentemperatur“). Ein Punkt je Tag: waagerecht die mittlere Außentemperatur des Tages (Fühler der Wärmepumpe;
+wie bei der Heizkurve links warm, rechts kalt), senkrecht der **verbrauchte Strom** (rot, linke Achse) und die
+**erzeugte Wärme** (gelb, rechte Achse) – Heizen und Warmwasser zusammen. Gestrichelt die Trendlinien über die
+Heiztage unter 16 °C. Darunter: wie viel Strom und Wärme ein Grad kälter je Tag mehr bedeutet, was ein Tag mit
+0 °C braucht (ist 0 °C noch nicht gemessen, als „geschätzt“ markiert) und die Arbeitszahl über die gezeigten Tage.
+Zeitraum 90 Tage, 1 Jahr oder 2 Jahre; Strom, Wärme und Trendlinien einzeln ausblendbar; Tippen auf einen Punkt
+zeigt den Tag.
+
+Die Tage kommen aus den eigenen Zählerständen der Bridge (nur Tage, die zu mindestens 80 % gemessen sind) und –
+für Tage, die die Bridge nicht gesehen hat – aus dem HomeCom-Import (Stunden- oder Tageswerte mit
+Außentemperatur). Der laufende Tag fehlt, weil er noch nicht fertig ist; Tage vor dem Bauphasen-Ende aus dem
+Setup sind ausgeblendet. Endpunkt: `GET /api/heatpump/tempdays?days=90|365|730`.
+
 ## Warmwasser-Speicher & Legionellen
 
 Tab **Wärme → 🚿 Warmwasser**, Karte **🛁 Warmwasser-Speicher** (darunter, umgezogen aus

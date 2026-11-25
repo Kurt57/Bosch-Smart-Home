@@ -1282,6 +1282,14 @@ class Store:
                 "SELECT * FROM hp_samples WHERE ts>=? ORDER BY ts ASC", (since_ts,))
             return [dict(r) for r in cur.fetchall()]
 
+    def hp_counters_since(self, since_ts: int) -> list[dict]:
+        """Just the counters and the outdoor temperature – light enough for a year."""
+        with self.lock:
+            cur = self.conn.execute(
+                "SELECT ts,energy_kwh,heat_kwh,outdoor_c FROM hp_samples WHERE ts>=? ORDER BY ts ASC",
+                (since_ts,))
+            return [dict(r) for r in cur.fetchall()]
+
     def hp_samples_between(self, start_ts: int, end_ts: int) -> list[dict]:
         with self.lock:
             cur = self.conn.execute(
@@ -6655,6 +6663,75 @@ def _signature_days(store: "Store", now: int | None = None) -> dict:
                 continue
             pts[d] = (so / no, h * 1000.0 * 3600.0 / cov, "live")
     return pts
+
+
+def compute_hp_tempdays(store: "Store", days: int = 365, now: int | None = None) -> dict:
+    """One point per day for the app's chart 'Strom & Wärme nach Außentemperatur':
+    the day's mean outdoor temperature, the electricity the heat pump used and
+    the heat it made (heating and hot water together). The bridge's own counters
+    first (outdoor mean weighted by time, at least 80 % of the day seen), the
+    imported HomeCom hours or days for the days it did not see. Today is left
+    out – an unfinished day would sit far too low."""
+    now = int(now or time.time())
+    days = max(7, min(1100, int(days)))
+    today, first = _local_day(now), _local_day(now - days * 86400)
+    pts: dict = {}
+    rows = [s for s in store.hp_counters_since(now - days * 86400) if s.get("ts")]
+    if len(rows) > 1:
+        gap = _hp_gap_s(rows)
+        acc: dict = {}                       # day -> [elec, heat, seen s, out·s, out s, heat seen]
+        for p, c in zip(rows, rows[1:]):
+            dt = c["ts"] - p["ts"]
+            if dt <= 0 or dt > gap:
+                continue
+            a = acc.setdefault(_local_day(c["ts"]), [0.0, 0.0, 0.0, 0.0, 0.0, 0])
+            a[2] += dt
+            if p.get("energy_kwh") is not None and c.get("energy_kwh") is not None:
+                de = c["energy_kwh"] - p["energy_kwh"]
+                if 0 <= de <= 30.0 * dt / 3600.0:          # a house heat pump never draws 30 kW
+                    a[0] += de
+            if p.get("heat_kwh") is not None and c.get("heat_kwh") is not None:
+                dh = c["heat_kwh"] - p["heat_kwh"]
+                if 0 <= dh <= 80.0 * dt / 3600.0:
+                    a[1] += dh
+                    a[5] += 1
+            outs = [x for x in (p.get("outdoor_c"), c.get("outdoor_c")) if x is not None]
+            if outs:
+                a[3] += sum(outs) / len(outs) * dt
+                a[4] += dt
+        for d, (e, h, cov, so, no, nh) in acc.items():
+            if d == today or d < first or cov < SIG_DAY_MIN_COVER * 86400 or no < 0.5 * cov or e <= 0:
+                continue
+            pts[d] = {"day": d, "t": round(so / no, 1), "e": round(e, 2),
+                      "h": round(h, 2) if nh else None, "src": "live"}
+    hrs: dict = {}
+    for r in store.hp_history("hour"):
+        d = str(r.get("date") or "")[:10]
+        o, e, h = r.get("outdoor_c"), r.get("elec_kwh"), r.get("heat_kwh")
+        if len(d) < 10 or d in pts or d == today or d < first or o is None or e is None:
+            continue
+        x = hrs.setdefault(d, [0.0, 0.0, 0.0, 0, 0])
+        x[0] += e
+        x[2] += o
+        x[3] += 1
+        if h is not None:
+            x[1] += h
+            x[4] += 1
+    for d, (e, h, so, n, nh) in hrs.items():
+        if n >= SIG_DAY_MIN_H and e > 0:
+            pts[d] = {"day": d, "t": round(so / n, 1), "e": round(e, 2),
+                      "h": round(h, 2) if nh >= 0.9 * n else None, "src": "csv"}
+    for r in store.hp_history("day"):
+        d = str(r.get("date") or "")[:10]
+        o, e, h = r.get("outdoor_c"), r.get("elec_kwh"), r.get("heat_kwh")
+        if len(d) < 10 or d in pts or d == today or d < first or o is None or not e or e <= 0:
+            continue
+        pts[d] = {"day": d, "t": round(o, 1), "e": round(e, 2),
+                  "h": round(h, 2) if h is not None else None, "src": "csv"}
+    out = [pts[d] for d in sorted(pts)]
+    return {"ok": True, "days": days, "points": out,
+            "n_live": sum(1 for p in out if p["src"] == "live"),
+            "n_csv": sum(1 for p in out if p["src"] == "csv")}
 
 
 def _energy_signature(store: "Store") -> dict | None:
@@ -13836,6 +13913,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json(self.ctx.core("overview", days, price))
             if path == "/api/heatpump/analytics":
                 return self._send_json(self.ctx.core("hpanalytics", days, price))
+            if path == "/api/heatpump/tempdays":
+                # one point per day: outdoor temperature, electricity, heat (chart in Wärme → Effizienz)
+                return self._send_json(self.ctx.calc_get(
+                    ("tempdays", days), 600, lambda: compute_hp_tempdays(self.store, days)))
             if path == "/api/series":
                 device = qs.get("device", ["all"])[0]
                 since = int(time.time()) - days * 86400

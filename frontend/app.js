@@ -94,8 +94,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v233';   // short tag shown always-on in the header
-const APP_VERSION = 'v233 · 2026-11-25 · Wärme → Effizienz → „Theorie vs. Praxis pro Monat“: neuer, zuschaltbarer Balken „Vorjahr“ (standardmäßig aus) – derselbe Monat ein Jahr früher aus dem HomeCom-Import, graublau neben „Gemessen“. Ist er an, zeigt „Gemessen“ nur dieses Jahr (kein Monat doppelt), dazu die Vorjahres-Summe und ein Vergleich „dieses Jahr gegen Vorjahr“ über dieselben Monate; Vorjahres-Monate aus der Bauphase sind im Tipp-Fenster markiert und zählen beim Vergleich nicht. Ohne Vorjahresdaten ist das Häkchen ausgegraut. ' +
+const APP_BUILD = 'v234';   // short tag shown always-on in the header
+const APP_VERSION = 'v234 · 2026-11-25 · Wärme → Effizienz: neues Diagramm „🌡️ Strom & Wärme nach Außentemperatur“ – ein Punkt je Tag, waagerecht die mittlere Außentemperatur (links warm, rechts kalt), senkrecht der verbrauchte Strom (rot, linke Achse) und die erzeugte Wärme (gelb, rechte Achse), mit Trendlinien über die Heiztage. Darunter: Strom und Wärme je Grad kälter, ein Tag mit 0 °C und die Arbeitszahl. Zeitraum 90 Tage / 1 Jahr / 2 Jahre, Reihen ausblendbar, Tippen zeigt den Tag. Daten: Zählerstände der Bridge (Tage mit ≥ 80 % Messung) und HomeCom-Import; heute und die Bauphase fehlen. Außerdem: Ein Tipp auf ein Diagramm schließt die Wertanzeige nicht mehr sofort wieder (betraf am Handy alle Diagramme). ' +
+  'v233 · 2026-11-25 ·Wärme → Effizienz → „Theorie vs. Praxis pro Monat“: neuer, zuschaltbarer Balken „Vorjahr“ (standardmäßig aus) – derselbe Monat ein Jahr früher aus dem HomeCom-Import, graublau neben „Gemessen“. Ist er an, zeigt „Gemessen“ nur dieses Jahr (kein Monat doppelt), dazu die Vorjahres-Summe und ein Vergleich „dieses Jahr gegen Vorjahr“ über dieselben Monate; Vorjahres-Monate aus der Bauphase sind im Tipp-Fenster markiert und zählen beim Vergleich nicht. Ohne Vorjahresdaten ist das Häkchen ausgegraut. ' +
   'v232 · 2026-11-24 · Apple TV, ruhige Farbschemas (Nacht, Graphit, Wald, Kamin): weniger Schimmer – das Leuchten um die Kreise im Energiefluss, um das Geburtstagsbanner und hinter dem Radio-Cover ist nur noch ein Hauch, die Kreise sind innen matt wie die Karten, und an Feiertagen färbt sich der Hintergrund nicht mehr pink (höchstens ein Hauch Gold). „Aurora sanft“ leuchtet halb so stark, „Aurora“ bleibt wie gehabt. „Sonne erzeugt“: kürzerer Text („von ≈ 12 kWh“ bzw. „Prognose ≈ 12 kWh“), damit nichts abgeschnitten wird. ' +
   'v231 · 2026-11-24 · Apple TV: Farbschema in den Einstellungen (⚙︎, nach rechts wischen) – „Aurora“ wie bisher, „Aurora sanft“ mit halb so starkem Licht, dazu ruhig und ohne Schimmer „Nacht“, „Graphit“, „Wald“ und „Kamin“; wirkt sofort und bleibt auf dem Apple TV. Neue Tachos: Akku-Ladestand als Ring im Energiefluss (mit Funke beim Laden), bei „Sonne erzeugt“ ein Balken gegen den heute erwarteten Ertrag, Wettersymbol neben der Außentemperatur. Ganz unten neu: „Sonne & Wetter“ für heute, morgen, übermorgen mit Sonnen-Tacho, erwartetem PV-Ertrag und Tipp, wann Waschmaschine & Co. am besten laufen. Radio: die Bridge liest Titel jetzt auch aus HLS-Streams (z. B. KRAL FM) – aus der Playlist oder den ID3-Angaben im Stream; 🎵 im Setup sagt, ob einer kam. ' +
   'v230 · 2026-11-24 · Apple TV: Die Räume bleiben rechts oben; die Kinder-Routine steht, solange sie läuft, als erste Karte unterhalb der ersten Seite (Kinder nebeneinander), oben bei den Hinweisen steht „Abendroutine: 3 von 12 erledigt – zum Abhaken nach unten wischen“. „Läuft gerade“ mit Cover jetzt auch an Feiertagen – dann etwas kleiner unter den Senderknöpfen. Den Songtitel liest jetzt die Bridge selbst aus dem Stream (auch ältere Shoutcast-Sender und Playlists, türkische Buchstaben richtig) und sucht das Cover; die TV-App fragt sie alle 20 Sekunden und sofort, wenn der Titel wechselt. Neu im Setup bei „Meine Sender“: 🎵 zeigt, was gerade läuft und ob ein Cover gefunden wurde – oder dass der Sender keine Titel schickt. Termine rechts oben erscheinen nur noch, wenn sie ganz hineinpassen (kein abgeschnittener Kasten mehr). ' +
@@ -515,6 +516,13 @@ const INFO = {
     'mehr). Smart Home aus dem kumulativen Zähler, Wärmepumpe aus dem Zählerwachstum seit Messbeginn.',
   cop: () => 'COP / Arbeitszahl = erzeugte <b>Wärme ÷ eingesetzter Strom</b>. 3,0 heißt: aus 1 kWh Strom ' +
     'werden 3 kWh Wärme. Höher = effizienter.',
+  hpsig: () => 'Jeder <b>Punkt ist ein Tag</b>: waagerecht die mittlere <b>Außentemperatur</b> des Tages (Fühler der ' +
+    'Wärmepumpe; wie bei der Heizkurve links warm, rechts kalt), senkrecht was die Wärmepumpe an dem Tag ' +
+    '<b>an Strom verbraucht</b> (rot, linke Achse) und <b>an Wärme erzeugt</b> hat (gelb, rechte Achse) – Heizen und ' +
+    'Warmwasser zusammen. Die <b>Trendlinien</b> gehen durch die Heiztage (unter 16 °C): je steiler, desto mehr ' +
+    'braucht das Haus je Grad kälter. Der Abstand zwischen Wärme und Strom ist die Arbeitszahl. ' +
+    'Quellen: die eigenen Zählerstände der Bridge (Tage mit mindestens 80 % Messung), sonst der HomeCom-Import; ' +
+    'heute fehlt (noch nicht fertig), Tage der Bauphase sind ausgeblendet. <b>Tippe auf einen Punkt</b> für den Tag.',
   coptemp: () => 'COP je 5-°C-Außentemperatur-Bereich (kumulierte Wärme ÷ Strom). Zeigt, wie die Effizienz ' +
     'mit dem Wetter schwankt – wärmere Luft ist meist effizienter.',
   'hp-cal': () => 'Jede Zelle ist ein Tag, eingefärbt nach Stromverbrauch (heller/röter = mehr). Zeigt die ' +
@@ -816,6 +824,7 @@ const INFO = {
     'aus deinen Angaben. „Gemessen" ist deine echte Historie – so vergleichst du <b>Theorie und Praxis</b>.',
 };
 let _toastT = null;
+let _toastShownAt = 0;          // when the toast last appeared or changed (see the click handler)
 function showInfo(key) {
   const t = $('toast'); if (!t) return;
   const fn = INFO[key]; if (!fn) return;
@@ -4979,6 +4988,171 @@ function paintHeatingDiag(r) {
     'Spalten <b>Fenster</b> (Tür-/Fensterkontakte) und <b>Luft</b> (Twinguard) werden automatisch aus Bosch gelesen – ' +
     'jeder Kontakt/Sensor bringt seinen Raum selbst mit, eine manuelle Zuordnung ist nicht nötig. ' +
     '€-Werte sind grobe Schätzungen (Sparanteil × WP-Jahresverbrauch × Strompreis).';
+}
+
+/* ---- Strom & Wärme nach Außentemperatur (Wärme → Effizienz) ----------------
+ * One point per day (GET /api/heatpump/tempdays): x the day's mean outdoor
+ * temperature, warm left → cold right like the Heizkurve; electricity on the
+ * left axis, heat on the right one, with least-squares trend lines through the
+ * heating days. */
+const HPSIG_E = '#ef6c4d', HPSIG_H = '#f6b93b', HPSIG_HEAT_BELOW = 16;   // = --hp / --heat, as in the Monatsbilanz
+let _hpSigHit = null;
+function hpSigDays() {
+  let d = 90; try { d = parseInt(localStorage.getItem('bhe_hpsig_d') || '90', 10); } catch (e) {}
+  return [90, 365, 730].includes(d) ? d : 90;
+}
+function hpSigOn(id, def) {
+  try { const v = localStorage.getItem('bhe_' + id.replace('-', '_')); if (v !== null) return v === '1'; } catch (e) {}
+  return def;
+}
+async function loadHpSig(force) {
+  const days = hpSigDays();
+  if (!force && STATE.hpSig && STATE.hpSig.days === days && Date.now() - (STATE.hpSigAt || 0) < 600000) return;
+  STATE.hpSigAt = Date.now();
+  try {
+    const r = await api('/api/heatpump/tempdays?days=' + days);
+    if (r && r.ok) STATE.hpSig = r;
+  } catch (e) { if (!STATE.hpSig) STATE.hpSig = { ok: false, days, points: [] }; }
+  renderHpSig();
+}
+// least squares y = a·x + b over the points (null when there is no spread)
+function linFit(pts) {
+  const n = pts.length; if (n < 2) return null;
+  let sx = 0, sy = 0, sxx = 0, sxy = 0;
+  pts.forEach(([x, y]) => { sx += x; sy += y; sxx += x * x; sxy += x * y; });
+  const den = n * sxx - sx * sx; if (Math.abs(den) < 1e-9) return null;
+  const a = (n * sxy - sx * sy) / den;
+  return { a, b: (sy - a * sx) / n };
+}
+// axis maximum with 5 even divisions on a 1/2/2.5/5 step
+function sigAxisMax(v) {
+  const raw = Math.max(1, v) / 5, p = 10 ** Math.floor(Math.log10(raw));
+  const step = [1, 2, 2.5, 5, 10].map(x => x * p).find(x => x >= raw) || 10 * p;
+  return step * 5;
+}
+function renderHpSig() {
+  const box = $('hpsig-chart'); if (!box) return;
+  const R = STATE.hpSig;
+  const kp = $('hpsig-kpis'), nt = $('hpsig-note');
+  if (!R) { box.innerHTML = '<div class="note">Lade …</div>'; return; }
+  if (R.ok === false) {
+    box.innerHTML = '<div class="note">Nur möglich, wenn die App von der Bridge geöffnet ist.</div>';
+    if (kp) kp.innerHTML = ''; if (nt) nt.innerHTML = ''; return;
+  }
+  const bau = buildPhaseEnd(), bauKey = ymdLocal(bau);
+  const all = R.points || [];
+  const pts = all.filter(p => p.day >= bauKey && p.t != null && p.e > 0);
+  const hidden = all.length - pts.length;
+  const showE = hpSigOn('hpsig-e', true), showH = hpSigOn('hpsig-h', true), showFit = hpSigOn('hpsig-fit', true);
+  if (pts.length < 3) {
+    box.innerHTML = '<div class="note">Noch zu wenige ganze Tage mit Außentemperatur – die Bridge braucht ein paar Tage ' +
+      'Messung, ältere Tage kommen mit einem HomeCom-Import dazu.</div>';
+    if (kp) kp.innerHTML = '';
+    if (nt) nt.innerHTML = hidden ? `${hidden} Tage aus der Bauphase sind ausgeblendet.` : '';
+    return;
+  }
+  const h = 260, padL = 34, padR = 40, top = 22, base = h - 30;
+  const plotW = CW - padL - padR, plotH = base - top;
+  const ts = pts.map(p => p.t);
+  let XL = Math.ceil(Math.max(...ts) / 5) * 5, XR = Math.floor(Math.min(...ts) / 5) * 5;
+  if (XL - XR < 10) XR = XL - 10;
+  const X = t => padL + (XL - t) / (XL - XR) * plotW;
+  const withH = pts.filter(p => p.h != null);
+  const eMax = sigAxisMax(Math.max(...pts.map(p => p.e)) * 1.04);
+  const hMax = sigAxisMax(Math.max(1, ...withH.map(p => p.h)) * 1.04);
+  const YE = v => base - v / eMax * plotH, YH = v => base - v / hMax * plotH;
+  let g = '';
+  for (let i = 0; i <= 5; i++) {
+    const py = base - i / 5 * plotH;
+    g += `<line class="gl" x1="${padL}" x2="${CW - padR}" y1="${py.toFixed(1)}" y2="${py.toFixed(1)}"/>`;
+    if (showE) g += `<text class="axis" x="${padL - 4}" y="${(py + 3).toFixed(1)}" text-anchor="end" fill="${HPSIG_E}">${fmt(eMax * i / 5, eMax < 10 ? 1 : 0)}</text>`;
+    if (showH) g += `<text class="axis" x="${CW - padR + 4}" y="${(py + 3).toFixed(1)}" fill="${HPSIG_H}">${fmt(hMax * i / 5, hMax < 10 ? 1 : 0)}</text>`;
+  }
+  for (let v = XL; v >= XR; v -= 5) {
+    const px = X(v), anchor = v === XL ? 'start' : v === XR ? 'end' : 'middle';
+    g += `<text class="axis" x="${px.toFixed(1)}" y="${h - 12}" text-anchor="${anchor}">${v}°</text>`;
+  }
+  g += `<text class="axis" x="${((padL + CW - padR) / 2).toFixed(1)}" y="${h - 1}" text-anchor="middle">außen °C · ← wärmer · kälter →</text>`;
+  if (showE) g += `<text class="axis" x="${padL - 4}" y="10" text-anchor="end" fill="${HPSIG_E}">kWh Strom</text>`;
+  if (showH) g += `<text class="axis" x="${CW - padR + 4}" y="10" fill="${HPSIG_H}">kWh Wärme</text>`;
+  // trend lines through the heating days
+  const heatDays = pts.filter(p => p.t < HPSIG_HEAT_BELOW);
+  const fE = heatDays.length >= 5 ? linFit(heatDays.map(p => [p.t, p.e])) : null;
+  const fH = heatDays.filter(p => p.h != null).length >= 5 ? linFit(heatDays.filter(p => p.h != null).map(p => [p.t, p.h])) : null;
+  const okE = fE && fE.a < 0, okH = fH && fH.a < 0;
+  const x1 = Math.min(XL, HPSIG_HEAT_BELOW), x2 = XR;
+  const line = (f, Y, col, max) => {
+    const ya = Math.max(0, Math.min(max, f.a * x1 + f.b)), yb = Math.max(0, Math.min(max, f.a * x2 + f.b));
+    return `<line x1="${X(x1).toFixed(1)}" y1="${Y(ya).toFixed(1)}" x2="${X(x2).toFixed(1)}" y2="${Y(yb).toFixed(1)}" ` +
+      `stroke="${col}" stroke-width="2.2" stroke-dasharray="7 5" opacity="0.9"/>`;
+  };
+  let dots = '';
+  if (showH) withH.forEach(p => { dots += `<circle cx="${X(p.t).toFixed(1)}" cy="${YH(p.h).toFixed(1)}" r="3.3" fill="${HPSIG_H}" fill-opacity="0.62"/>`; });
+  if (showE) pts.forEach(p => { dots += `<circle cx="${X(p.t).toFixed(1)}" cy="${YE(p.e).toFixed(1)}" r="3.3" fill="${HPSIG_E}" fill-opacity="0.68"/>`; });
+  let fits = '';
+  if (showFit && showH && okH) fits += line(fH, YH, HPSIG_H, hMax);
+  if (showFit && showE && okE) fits += line(fE, YE, HPSIG_E, eMax);
+  const html = (showE || showH)
+    ? `<div class="sighit" style="touch-action:none">${svg(h, g + dots + fits)}</div>`
+    : '<div class="note">Strom und Wärme ausgeblendet – oben wieder anhaken.</div>';
+  if (box.dataset.sig !== html.length + ':' + pts.length + ':' + showE + showH + showFit + ':' + (pts[pts.length - 1] || {}).day) {
+    box.innerHTML = html;            // only when it changed – a tap must keep its element
+    box.dataset.sig = html.length + ':' + pts.length + ':' + showE + showH + showFit + ':' + (pts[pts.length - 1] || {}).day;
+  }
+  _hpSigHit = { pts, h, X, YE, YH, showE, showH };
+  // key figures from the trend lines and the days themselves
+  const sE = pts.reduce((a, p) => a + (p.h != null ? p.e : 0), 0), sH = withH.reduce((a, p) => a + p.h, 0);
+  const at = (f, t) => Math.max(0, f.a * t + f.b);
+  const inRange = t => t <= Math.max(...ts) + 0.5 && t >= Math.min(...ts) - 0.5;
+  const card = (v, l, c) => `<div class="kpi sm"><div class="v" style="color:${c || 'inherit'}">${v}</div><div class="l">${l}</div></div>`;
+  let k = '';
+  if (okE || okH) k += card(`${okE ? '+' + fmt(-fE.a, 1) : '–'} / ${okH ? '+' + fmt(-fH.a, 1) : '–'}`, 'kWh Strom / Wärme mehr je Tag und Grad kälter');
+  if (okE && okH) {
+    const est0 = !inRange(0) ? ' (geschätzt)' : '';
+    k += card(`${fmt(at(fE, 0), 0)} / ${fmt(at(fH, 0), 0)}`, `kWh Strom / Wärme an einem Tag mit 0 °C${est0}`);
+  }
+  if (sE > 0 && sH > 0) k += card(fmt(sH / sE, 2), `Arbeitszahl über ${withH.length} Tage (Wärme ÷ Strom)`, '#4be0b0');
+  if (kp) kp.innerHTML = k ? `<div class="grid3">${k}</div>` : '';
+  if (nt) {
+    const span = `${fmtDay(pts[0].day)} – ${fmtDay(pts[pts.length - 1].day)}`;
+    const nLive = pts.filter(p => p.src === 'live').length, nCsv = pts.length - nLive;
+    nt.innerHTML = `${pts.length} Tage (${span}): ${nLive} von der Bridge gemessen` +
+      (nCsv ? `, ${nCsv} aus dem HomeCom-Import` : '') + '; heute fehlt noch (unfertiger Tag)' +
+      (hidden ? `, ${hidden} Tage der Bauphase ausgeblendet` : '') + '. ' +
+      (okE || okH ? `Trendlinien über die ${heatDays.length} Heiztage unter ${HPSIG_HEAT_BELOW} °C.` :
+        'Für Trendlinien braucht es mindestens 5 Heiztage unter 16 °C.') +
+      ' <span style="color:var(--muted)">Tippe auf einen Punkt für den Tag.</span>';
+  }
+}
+function fmtDay(day) {
+  const d = new Date(day + 'T12:00:00');
+  return d.toLocaleDateString('de-DE', { day: 'numeric', month: 'numeric', year: '2-digit' });
+}
+// tap/hover: the day nearest to the finger (either series)
+function hpSigPointer(e) {
+  const H = _hpSigHit; if (!H) return;
+  const wrap = e.target.closest && e.target.closest('.sighit'); if (!wrap) return;
+  const svgEl = wrap.querySelector('svg'); if (!svgEl) return;
+  const rect = svgEl.getBoundingClientRect();
+  const cx = e.touches && e.touches[0] ? e.touches[0].clientX : e.clientX;
+  const cy = e.touches && e.touches[0] ? e.touches[0].clientY : e.clientY;
+  const vx = (cx - rect.left) / (rect.width || 1) * CW, vy = (cy - rect.top) / (rect.height || 1) * H.h;
+  let best = null, bd = Infinity;
+  H.pts.forEach(p => {
+    const cands = [];
+    if (H.showE) cands.push(H.YE(p.e));
+    if (H.showH && p.h != null) cands.push(H.YH(p.h));
+    cands.forEach(y => { const d = (H.X(p.t) - vx) ** 2 + (y - vy) ** 2; if (d < bd) { bd = d; best = p; } });
+  });
+  if (!best) return;
+  const t = $('toast'); if (!t) return;
+  const wd = new Date(best.day + 'T12:00:00').toLocaleDateString('de-DE', { weekday: 'short', day: 'numeric', month: 'numeric', year: 'numeric' });
+  t.innerHTML = `<b>${esc(wd)}</b> · außen <b>${fmt(best.t, 1)} °C</b><div class="note" style="margin-top:2px">` +
+    `<span style="color:${HPSIG_E}">●</span> Strom <b>${kwh(best.e, 1)}</b>` +
+    (best.h != null ? ` · <span style="color:${HPSIG_H}">●</span> Wärme <b>${kwh(best.h, 1)}</b> · Arbeitszahl <b>${fmt(best.h / best.e, 2)}</b>` : '') +
+    ` · <span style="color:var(--muted)">${best.src === 'csv' ? 'HomeCom-Import' : 'gemessen'}</span></div>`;
+  t.hidden = false; clearTimeout(_toastT); _toastT = setTimeout(() => { t.hidden = true; }, 5000);
+  e.stopPropagation();
 }
 
 /* ---- Heizkurve: flow temp vs. outdoor temp, drawn as a classic Heizkennlinie:
@@ -9426,6 +9600,7 @@ function hpFlowLine(F, l) {
 }
 
 function renderHeatpump() {
+  renderHpSig(); loadHpSig();        // Strom & Wärme nach Außentemperatur (own endpoint, cached 10 min)
   const A = STATE.hpA; if (!A) return;
   const l = A.live || {};
   const connected = A.connected;
@@ -13059,8 +13234,17 @@ function init() {
     if (hpt) { e.stopPropagation(); hpdToggle(hpt.dataset.hpt); return; }
     const hpr = e.target.closest('.hpd-rt');
     if (hpr) { e.stopPropagation(); hpdRoomToggle(hpr.dataset.hpr); return; }
+    // a tap on a chart shows its values in the toast (pointerdown) – the click
+    // that follows must not close it again at once (also when the chart was just
+    // redrawn and the click lands next to it)
+    if (e.target.closest('svg[role="img"]') || Date.now() - _toastShownAt < 600) return;
     const t = $('toast'); if (t && !t.hidden) t.hidden = true;
   });
+  try {
+    const tt = $('toast');
+    if (tt) new MutationObserver(() => { if (!tt.hidden) _toastShownAt = Date.now(); })
+      .observe(tt, { attributes: true, attributeFilter: ['hidden'], childList: true, subtree: true, characterData: true });
+  } catch (e) {}
   $('hist-range').addEventListener('click', e => {
     const b = e.target.closest('button'); if (!b) return;
     STATE.histSel = b.dataset.d;
@@ -13155,6 +13339,27 @@ function init() {
   const hsp = $('hpd-span');
   if (hsp) hsp.addEventListener('click', e => { const b = e.target.closest('button'); if (b) hpdSetSpan(b.dataset.hsp); });
   ['hpc-a', 'hpc-b'].forEach(id => { const el = $(id); if (el) el.addEventListener('change', () => renderHpCompare()); });
+  // Strom & Wärme nach Außentemperatur: range, series toggles (kept), tap readout
+  const sgd = $('hpsig-span');
+  if (sgd) {
+    sgd.querySelectorAll('button').forEach(x => x.classList.toggle('on', parseInt(x.dataset.sigd, 10) === hpSigDays()));
+    sgd.addEventListener('click', e => {
+      const b = e.target.closest('button'); if (!b) return;
+      try { localStorage.setItem('bhe_hpsig_d', b.dataset.sigd); } catch (err) {}
+      sgd.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+      loadHpSig(true);
+    });
+  }
+  ['hpsig-e', 'hpsig-h', 'hpsig-fit'].forEach(id => {
+    const el = $(id); if (!el) return;
+    el.checked = hpSigOn(id, true);
+    el.addEventListener('change', () => {
+      try { localStorage.setItem('bhe_' + id.replace('-', '_'), el.checked ? '1' : '0'); } catch (err) {}
+      renderHpSig();
+    });
+  });
+  const sgc = $('hpsig-chart');
+  if (sgc) { sgc.addEventListener('pointermove', hpSigPointer); sgc.addEventListener('pointerdown', hpSigPointer); }
   const htd = $('hpt-days');
   if (htd) htd.addEventListener('click', e => {
     const b = e.target.closest('button'); if (!b) return;

@@ -1267,6 +1267,22 @@
       <div id="hp-coptemp"></div>
       <div class="note" id="hp-coptemp-note" style="margin-top:10px"></div>
     </div>
+    <div class="card" id="hpsig-card">
+      <h2><span class="info" data-info="hpsig" role="button" aria-label="Info">i</span>🌡️ Strom &amp; Wärme nach Außentemperatur</h2>
+      <div class="seg" id="hpsig-span" style="margin:0 0 10px">
+        <button data-sigd="90" class="on">90 Tage</button>
+        <button data-sigd="365">1 Jahr</button>
+        <button data-sigd="730">2 Jahre</button>
+      </div>
+      <div style="display:flex; flex-wrap:wrap; gap:8px 16px; margin-bottom:8px; font-size:13px">
+        <label style="display:flex; align-items:center; gap:6px; cursor:pointer"><input type="checkbox" id="hpsig-e" checked style="width:auto"> <span style="color:var(--hp)">●</span> Strom</label>
+        <label style="display:flex; align-items:center; gap:6px; cursor:pointer"><input type="checkbox" id="hpsig-h" checked style="width:auto"> <span style="color:var(--heat)">●</span> Wärme</label>
+        <label style="display:flex; align-items:center; gap:6px; cursor:pointer"><input type="checkbox" id="hpsig-fit" checked style="width:auto"> Trendlinien</label>
+      </div>
+      <div id="hpsig-chart"><div class="note">Lade …</div></div>
+      <div id="hpsig-kpis" style="margin-top:10px"></div>
+      <div class="note" id="hpsig-note" style="margin-top:8px"></div>
+    </div>
     <div class="card" id="hp-cophour-card" hidden>
       <h2><span class="info" data-info="cophour" role="button" aria-label="Info">i</span>Effizienz nach Uhrzeit (COP)</h2>
       <div id="hp-cophour"></div>
