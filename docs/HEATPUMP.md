@@ -270,7 +270,16 @@ Setup sind ausgeblendet. Endpunkt: `GET /api/heatpump/tempdays?days=90|365|730`.
 
 Tab **Wärme → 📊 Effizienz**, Karte mit der **Gebäude-Einordnung** (Skala in kWh/m²·a).
 
-* **Heizwärme gemessen / Heizstrom gemessen (ab v236):** nur aus gemessenen Tagen – kein Gebäudemodell
+* **Heizwärme gemessen / Heizstrom gemessen (ab v238):** zuerst aus den **Monatswerten von HomeCom** – nur Heizen,
+  ohne Warmwasser (siehe „Direkt aus HomeCom“ unten). Genommen werden die Monate der letzten 12, die nach dem
+  Bauphasen-Ende beginnen (der laufende Monat anteilig), hochgerechnet mit den üblichen Gradtagzahl-Anteilen je
+  Monat (Promille eines Heizjahres: Jan 170, Feb 150, Mär 130, Apr 80, Mai 40, Jun–Aug je 13,3, Sep 30, Okt 80,
+  Nov 120, Dez 160 – die Tabelle der Heizkostenabrechnung bei Ablesung mitten im Jahr): Heizwärme der Monate ÷
+  ihr Anteil = ein durchschnittliches Heizjahr, geteilt durch die beheizte Fläche. Heizstrom genauso;
+  Warmwasser-Strom läuft das ganze Jahr (je Tag × 365) und zählt nur beim Haushaltsstrom. Erst ab einem Viertel
+  eines Heizjahres (250 ‰); fehlen Dezember bis Februar, steht das dabei. Mit HomeCom-Werten ist der
+  Zählerstands-Gegencheck darunter eingeklappt.
+* **Ersatz ohne HomeCom-Monatswerte (ab v236, ab v238 strenger):** nur aus gemessenen Tagen – kein Gebäudemodell
   darin. Je Tag der letzten 12 Monate nach dem Bauphasen-Ende (Bridge-Zähler, sonst HomeCom-Import) Wärme
   bzw. Strom der Wärmepumpe gegen die **Heizgradtage** dieses Tages (G20/15: an Tagen unter 15 °C die
   Differenz 20 °C − mittlere Außentemperatur): *je Tag = Sockel (Warmwasser, Bereitschaft) + k × Heizgradtage*.
@@ -278,7 +287,8 @@ Tab **Wärme → 📊 Effizienz**, Karte mit der **Gebäude-Einordnung** (Skala 
   Klima wie der Modellwert (weißer Marker); Warmwasser zählt bei der Heizwärme je m² nicht mit. Tage, die die
   Bridge nur zu 80–99 % gesehen hat, werden auf den ganzen Tag hochgerechnet. Sind kaum warme Tage dabei
   (weniger als 7 Tage mit höchstens 2 Heizgradtagen), kommt der Sockel aus dem Warmwasser des Gebäudemodells.
-  Angezeigt wird ab 30 gemessenen Tagen und 250 Heizgradtagen, vorher sagt die Karte, wie viel noch fehlt.
+  Angezeigt wird ab 30 gemessenen Tagen und 30 % der Heizgradtage eines Jahres (ab v238; vorher 250 Heizgradtage –
+  mit nur 12 % eines Jahres kam an einem echten Haus 38 % zu viel heraus); vorher sagt die Karte, wie viel noch fehlt.
   Bis v235 war „gemessen“ eine grobe Hochrechnung (Tagesschnitt × 365 bzw. Jahreswerte, die für nicht
   gemessene Wintermonate das Gebäudemodell einsetzten) – im Herbst und Winter meist zu hoch.
 * **🔁 Abgleich mit der Bosch-App:** je Kalenderjahr (das laufende bis heute und das Vorjahr) Strom, Wärme,

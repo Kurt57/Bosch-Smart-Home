@@ -6963,13 +6963,27 @@ def _hc_years_demo() -> dict:
     d = lambda c, e, h: dict(zip(keys, (c, e, h)))
     cur = {"ch": d(3790.0, 120.0, 12020.0), "dhw": d(840.0, 232.0, 2390.0)}
     prev = {"ch": d(1650.0, 310.0, 4900.0), "dhw": d(420.0, 150.0, 1000.0)}
+    # months: heating along the usual degree-day shares, hot water evenly; this
+    # year up to the running month (pro rata), last year from commissioning in October
+    now = datetime.now()
+    cm, dim = now.month - 1, (datetime(now.year + (now.month == 12), now.month % 12 + 1, 1) - timedelta(days=1)).day
+    run = min(1.0, (now.day - 1 + now.hour / 24.0) / dim)
+    gtz = (170, 150, 130, 80, 40, 13.3, 13.3, 13.3, 30, 80, 120, 160)
+
+    def spread(total, first, last, even):
+        w = [0.0 if not (first <= i <= last) else (1.0 if even else gtz[i]) * (run if (i == last and last == cm) else 1.0)
+             for i in range(12)]
+        sw = sum(w) or 1.0
+        return [round(total * x / sw, 2) if first <= i <= last else None for i, x in enumerate(w)]
+    mon = lambda D, first, last: {dom: {k: spread(D[dom][k], first, last, dom == "dhw") for k in keys} for dom in D}
     for x in (cur, prev):
         x["total"] = {k: round(x["ch"][k] + x["dhw"][k], 1) for k in keys}
     life = {dom: {k: round(cur[dom][k] + prev[dom][k], 1) for k in keys} for dom in ("total", "ch", "dhw")}
-    ent = lambda yr, dm, fin: {"ok": True, "year": yr, "final": fin, "method": "demo", "domains": dm,
-                               "warn": [], "plausible": True, "fetched": int(time.time())}
+    ent = lambda yr, dm, fin, mo: {"ok": True, "year": yr, "final": fin, "method": "demo", "domains": dm, "months": mo,
+                                   "rate": "P1M", "warn": [], "plausible": True, "fetched": int(time.time())}
     return {"ok": True, "demo": True, "connected": True, "method": "demo", "checked": int(time.time()),
-            "lifetime": life, "years": {str(y - 1): ent(y - 1, prev, True), str(y): ent(y, cur, False)}}
+            "lifetime": life, "years": {str(y - 1): ent(y - 1, prev, True, mon(prev, 9, 11)),
+                                        str(y): ent(y, cur, False, mon(cur, 0, cm))}}
 
 
 def _energy_signature(store: "Store") -> dict | None:

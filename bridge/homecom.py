@@ -969,7 +969,7 @@ class HomeComClient:
         base = f"{API_BASE}{gateway_id}{EMON_REC}"
         tried: list = []
         out = {"ok": False, "year": year, "method": None, "domains": {}, "months": {},
-               "tried": tried, "sample": None}
+               "rate": None, "tried": tried, "sample": None}
 
         def get(rel, what, accept=True):
             st, body, head = self._get(base + rel, accept)
@@ -985,6 +985,7 @@ class HomeComClient:
             r = self.rec_slots(body) if st == 200 else None
             if not r or not any(v is not None for v in r[1]):
                 return None, st
+            out["rate"] = r[0]
             res[("total", "compressor")] = r[1]
             for dom in EMON_DOMAINS:
                 for key in EMON_KEYS:
