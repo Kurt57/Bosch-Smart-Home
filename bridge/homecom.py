@@ -921,6 +921,25 @@ class HomeComClient:
                 slots.append(float(y))
         return payload.get("sampleRate"), slots
 
+    @staticmethod
+    def rec_avg(payload, lo: float = -40.0, hi: float = 95.0):
+        """A recording of a measured quantity (a temperature) → the mean per
+        slot: Bosch sums a slot's samples in y and counts them in c. Slots
+        without samples, or with a mean outside [lo, hi], → None."""
+        if not isinstance(payload, dict) or not isinstance(payload.get("recording"), list):
+            return None
+        out = []
+        for b in payload["recording"]:
+            y = b.get("y") if isinstance(b, dict) else None
+            c = b.get("c") if isinstance(b, dict) else None
+            v = None
+            if isinstance(y, (int, float)) and isinstance(c, (int, float)) and c > 0 \
+                    and not isinstance(y, bool):
+                v = float(y) / float(c)
+                v = round(v, 2) if lo <= v <= hi else None
+            out.append(v)
+        return out
+
     @classmethod
     def emon3_slots(cls, payload) -> dict:
         """EMON3 query answer → {(domain, key): [kWh per slot]}. Bosch has not
@@ -1036,6 +1055,18 @@ class HomeComClient:
                 break
         if not res:
             return out
+        # monthly means of the outdoor and the supply temperature (same recording
+        # family; a device without them just leaves them out)
+        temps = {}
+        if method in ("interval-noaccept", "interval"):
+            for name, rel, lo, hi in (("outdoor", "/resource/recordings/system/sensors/temperatures/outdoor_t1", -40.0, 45.0),
+                                      ("supply", "/resource/recordings/heatSources/actualSupplyTemperature", 5.0, 90.0)):
+                st, body, _ = self._get(f"{API_BASE}{gateway_id}{rel}?interval={year}", method == "interval")
+                tried.append([f"{rel.split('/recordings/', 1)[1]}?interval={year}", st])
+                r = self.rec_avg(body, lo, hi) if st == 200 else None
+                if r and any(v is not None for v in r):
+                    temps[name] = r
+        out["temps"] = temps
         for (dom, key), slots in res.items():
             vals = [v for v in slots if v is not None]
             if not vals:

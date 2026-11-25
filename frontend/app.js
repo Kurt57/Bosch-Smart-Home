@@ -94,8 +94,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v238';   // short tag shown always-on in the header
-const APP_VERSION = 'v238 · 2026-11-25 · Wärme → Effizienz → Gebäude-Einordnung: „Heizwärme gemessen“ und „Heizstrom gemessen“ kommen jetzt aus den echten Monatswerten von HomeCom – nur Heizen, ohne Warmwasser –, für die Monate nach der Bauphase, mit den üblichen Gradtagzahl-Anteilen je Monat aufs Jahr hochgerechnet (wie bei der Heizkostenabrechnung). Die Hochrechnung aus Tageswerten lag mit nur 12 % der Heizgradtage eines Jahres deutlich zu hoch; sie springt nur noch ohne HomeCom ein und erst ab 30 %. Außerdem: Heizstab-Anteil mit einer Nachkommastelle und wie bei Bosch abgeschnitten (7,9 % ↔ 7 %), der Zählerstands-Gegencheck ist eingeklappt, sobald HomeCom liefert. ' +
+const APP_BUILD = 'v239';   // short tag shown always-on in the header
+const APP_VERSION = 'v239 · 2026-11-25 · Wärme → Effizienz: (1) Monatsbilanz neu – Januar bis Dezember, Jahr wählbar, jede Reihe ein- und ausblendbar: Strom und Wärme gesamt und getrennt nach Heizen/Warmwasser, Heizstab, Solarstrom für die WP, dazu in kleinen Diagrammen Arbeitszahl, Außen- und Vorlauftemperatur (Monatsmittel aus HomeCom), Heizgradtage und Stromkosten; Tippen zeigt alle Werte des Monats, Tabelle mit Jahreszeile. (2) Neue Karte „📄 Verbrauchsausweis – nachgerechnet“: Strom für Heizung + Warmwasser der letzten 12 Monate ÷ Gebäudenutzfläche (Wohnfläche × 1,2 bzw. × 1,35 mit beheiztem Keller) → Effizienzklasse A+ bis H, Primärenergie, dasselbe mit der erzeugten Wärme als Vergleich zur Gasheizung; Klimafaktor (DWD) eintragbar, Bauphase-Monate geschätzt; Rechenweg und Monatstabelle zeigen jede Zahl. ' +
+  'v238 · 2026-11-25 · Wärme → Effizienz → Gebäude-Einordnung: „Heizwärme gemessen“ und „Heizstrom gemessen“ kommen jetzt aus den echten Monatswerten von HomeCom – nur Heizen, ohne Warmwasser –, für die Monate nach der Bauphase, mit den üblichen Gradtagzahl-Anteilen je Monat aufs Jahr hochgerechnet (wie bei der Heizkostenabrechnung). Die Hochrechnung aus Tageswerten lag mit nur 12 % der Heizgradtage eines Jahres deutlich zu hoch; sie springt nur noch ohne HomeCom ein und erst ab 30 %. Außerdem: Heizstab-Anteil mit einer Nachkommastelle und wie bei Bosch abgeschnitten (7,9 % ↔ 7 %), der Zählerstands-Gegencheck ist eingeklappt, sobald HomeCom liefert. ' +
   'v237 · 2026-11-25 · Wärme → Effizienz → „🔁 Abgleich mit der Bosch-App“: die Bridge fragt HomeCom jetzt direkt nach den Jahreswerten – Strom und Wärme fürs laufende Jahr und das Vorjahr, aufgeteilt in Heizen, Warmwasser und Gesamt, mit Arbeitszahl, Heizstab und Heizwärme je m² (bis heute). Dieselben Werte wie „Energiemonitoring → Effizienz“ in der Bosch-App. Bosch dokumentiert diese Abfrage nicht: die Bridge probiert die bekannten Wege durch, merkt sich den, der klappt, prüft die Werte gegen die Zähler seit Inbetriebnahme und zeigt sonst, was Bosch geantwortet hat (mit „Erneut abfragen“). Die Zählerstände der Bridge bleiben zum Gegencheck darunter. ' +
   'v236 · 2026-11-25 · Wärme → Effizienz → Gebäude-Einordnung: „Heizwärme gemessen“ und „Heizstrom gemessen“ kommen jetzt nur noch aus gemessenen Tagen – Wärme und Strom je Tag gegen die Heizgradtage, aufs Jahr mit den Heizgradtagen deines Gebäudemodells gerechnet (wetterbereinigt), ohne Bauphase. Bisher war das eine grobe Hochrechnung, die für nicht gemessene Wintermonate das Gebäudemodell einsetzte. Neu darunter: „🔁 Abgleich mit der Bosch-App“ – je Kalenderjahr Strom, Wärme, Arbeitszahl und Heizstab-Anteil aus denselben Zählern wie „Energiemonitoring → Effizienz“ in der Bosch-App. ' +
   'v235 · 2026-11-25 · PV → direkt unter „Wirtschaftlichkeit“ (Planer) die neue Karte „💶 Wirtschaftlichkeit · gemessen“: dieselbe Rechnung mit den echten Messwerten von Wechselrichter und Smart Meter – Eigenverbrauch (spart …), Einspeisung, Netzbezug (Rest), Vorteil und Amortisation, jeweils „bisher gemessen“, „aufs Jahr“ hochgerechnet und zum Vergleich der Planer mit kWp, Batterie und Ausrichtung deiner echten Anlage. Hochrechnung: gemessene Monate plus Planer für den Rest des Jahres; die gemessene Abweichung zählt nur so stark, wie vom Jahr schon gemessen ist, damit ein paar trübe Wintermonate nicht das ganze Jahr verbiegen. Nach einem Jahr zählen nur noch die Messwerte. Mit eingetragener Investition zusätzlich ein Balken „seit Messbeginn schon zurückverdient“. ' +
@@ -550,6 +551,17 @@ const INFO = {
     'Daraus ergeben sich Eigenverbrauch, Autarkie und Einspeisung.',
   'pv-quote': () => '<b>Autarkie</b> = Anteil deines Verbrauchs, der durch PV (inkl. Batterie) gedeckt wird. ' +
     '<b>Eigenverbrauchsquote</b> = Anteil des erzeugten PV-Stroms, den du selbst nutzt statt einzuspeisen.',
+  'hpva': () => 'Nachgerechnet wie ein <b>Energieverbrauchsausweis</b> für Wohngebäude: der Strom der Wärmepumpe für Heizung und ' +
+    'Warmwasser über 12 Monate, geteilt durch die Gebäudenutzfläche A<sub>N</sub> (Wohnfläche × 1,2, mit beheiztem Keller × 1,35), ' +
+    'ergibt den Endenergie-Kennwert und die Effizienzklasse A+ bis H. Dasselbe mit der erzeugten Wärme zeigt, was eine Gasheizung für ' +
+    'dasselbe Haus gebraucht hätte. Jede Zahl steht im Rechenweg und in der Monatstabelle; geschätzte Monate sind markiert.',
+  'hpmonth': () => 'Die Monate <b>Januar bis Dezember</b> des gewählten Jahres. Mit den Knöpfen blendest du Reihen ein und aus: ' +
+    '<b>Strom</b> und <b>Wärme</b> der Wärmepumpe (gesamt und getrennt nach <b>Heizen</b> und <b>Warmwasser</b>), der <b>Heizstab</b>, ' +
+    'der <b>Solarstrom</b> für die Wärmepumpe (mit Wechselrichter), die <b>Arbeitszahl</b> je Monat, <b>Außen-</b> und ' +
+    '<b>Vorlauftemperatur</b> (Monatsmittel), <b>Heizgradtage</b> und <b>Stromkosten</b>. Werte mit eigener Einheit stehen in ' +
+    'kleinen Diagrammen unter den Balken, Tippen zeigt alle Werte des Monats, die Tabelle alle Zahlen samt Jahreswert ' +
+    '(Arbeitszahl des Jahres = Jahreswärme ÷ Jahresstrom). Quelle sind die Monatswerte aus HomeCom, für Monate ohne sie die ' +
+    'Zählerstände der Bridge.',
   'pv-econ-live': () => 'Dieselbe Rechnung wie die Karte „Wirtschaftlichkeit“ darüber – aber mit dem, was deine Anlage ' +
     '<b>wirklich gemessen</b> hat (Wechselrichter + Smart Meter). <b>Eigenverbrauch</b> = Strom, den du nicht kaufen musstest ' +
     '(Verbrauch − Netzbezug: Sonne direkt oder über die Batterie) mal Strompreis, <b>Einspeisung</b> mal Vergütung, ' +
@@ -9285,6 +9297,8 @@ async function loadHpReal(force) {
     if (y && y.ok) STATE.hpYears = y;
   } finally { _hpRealBusy = false; }
   renderHeatDemand();
+  renderHpMonthly();
+  renderVa();
   // the bridge is still asking HomeCom in the background → look again shortly (a few times)
   const busy = !!(STATE.hpYears && STATE.hpYears.homecom && STATE.hpYears.homecom.busy);
   STATE.hpHcPolls = busy ? (STATE.hpHcPolls || 0) + 1 : 0;
@@ -9353,18 +9367,7 @@ function hpHomecomHeatYear() {
   const H = STATE.hpYears && STATE.hpYears.homecom; if (!H || !H.years) return null;
   const now = new Date(), cy = now.getFullYear(), cm = now.getMonth();
   const be = buildPhaseEnd(), bauStart = new Date(be.getFullYear(), be.getMonth(), be.getDate());
-  const val = (y, dom, key, m) => {
-    const e = H.years[y]; if (!e || !e.ok || e.plausible === false) return null;
-    const a = e.months && e.months[dom] && e.months[dom][key];
-    if (!Array.isArray(a)) return null;
-    if (a.length === 12) return a[m];
-    if (a.length >= 365) {                                   // one slot per day → the month's sum
-      const d0 = Math.round((new Date(y, m, 1) - new Date(y, 0, 1)) / 864e5), n = new Date(y, m + 1, 0).getDate();
-      const part = a.slice(d0, d0 + n).filter(v => v != null);
-      return part.length ? part.reduce((t, v) => t + v, 0) : null;
-    }
-    return null;
-  };
+  const val = hcVal;
   let heat = 0, eh = 0, ed = 0, prom = 0, days = 0, nBau = 0;
   const used = [];
   for (let i = 11; i >= 0; i--) {
@@ -9488,7 +9491,398 @@ document.addEventListener('click', e => {
   api('/api/heatpump/years?refresh=1').then(r => { if (r && r.ok) STATE.hpYears = r; }).catch(() => {});
   setTimeout(() => loadHpReal(true), 20000);
 });
+/* ---- Monatsbilanz (Wärme → Effizienz): January … December of one year -----------
+ * Every monthly figure we have, each one switchable: HomeCom's monthly energy per
+ * purpose (heating / hot water, electricity / heat, electric heater), the outdoor
+ * and supply temperature means, the bridge's own months where HomeCom has none,
+ * the heat pump's solar share (Fronius), degree days and cost. */
+function hcEntry(y) {
+  const H = STATE.hpYears && STATE.hpYears.homecom, e = H && H.years && H.years[y];
+  return e && e.ok && e.plausible !== false ? e : null;
+}
+// one month out of HomeCom's slots: 12 monthly slots, or daily slots (sum / mean)
+function hcSlot(a, y, m, mean) {
+  if (!Array.isArray(a)) return null;
+  if (a.length === 12) return a[m];
+  if (a.length >= 365) {
+    const d0 = Math.round((new Date(y, m, 1) - new Date(y, 0, 1)) / 864e5), n = new Date(y, m + 1, 0).getDate();
+    const part = a.slice(d0, d0 + n).filter(v => v != null);
+    if (!part.length) return null;
+    const t = part.reduce((s, v) => s + v, 0);
+    return mean ? t / part.length : t;
+  }
+  return null;
+}
+function hcVal(y, dom, key, m) {
+  const e = hcEntry(y);
+  return e && e.months && e.months[dom] ? hcSlot(e.months[dom][key], y, m, false) : null;
+}
+function hcTemp(y, name, m) {
+  const e = hcEntry(y);
+  return e && e.temps ? hcSlot(e.temps[name], y, m, true) : null;
+}
+const HPM_SERIES = [
+  { k: 'e', l: 'Strom', col: COL.hp, bar: true },
+  { k: 'q', l: 'Wärme', col: COL.heat, bar: true },
+  { k: 'eH', l: 'Strom Heizen', col: '#ff8a65', bar: true },
+  { k: 'eW', l: 'Strom Warmwasser', col: '#ce93d8', bar: true },
+  { k: 'qH', l: 'Wärme Heizen', col: '#ffe082', bar: true },
+  { k: 'qW', l: 'Wärme Warmwasser', col: '#81d4fa', bar: true },
+  { k: 'eh', l: 'Heizstab', col: '#e53935', bar: true },
+  { k: 'pv', l: 'Solarstrom für die WP', col: '#c0ca33', bar: true },
+  { k: 'jaz', l: 'Arbeitszahl', col: '#4be0b0', grp: 'jaz', dec: 2 },
+  { k: 'jazH', l: 'Arbeitszahl Heizen', col: '#26a69a', grp: 'jaz', dec: 2 },
+  { k: 'jazW', l: 'Arbeitszahl Warmwasser', col: '#b39ddb', grp: 'jaz', dec: 2 },
+  { k: 'tOut', l: 'Außentemperatur', col: '#3ba9ff', grp: 'temp', unit: '°C', dec: 1 },
+  { k: 'tSup', l: 'Vorlauftemperatur', col: '#ff7043', grp: 'temp', unit: '°C', dec: 1 },
+  { k: 'hdd', l: 'Heizgradtage', col: '#90a4ae', grp: 'hdd', unit: 'Kd', dec: 0 },
+  { k: 'cost', l: 'Stromkosten', col: '#f6b93b', grp: 'cost', unit: '€', dec: 0 },
+];
+const HPM_GRP = { jaz: 'Arbeitszahl', temp: 'Temperatur', hdd: 'Heizgradtage', cost: 'Stromkosten' };
+const HPM_LS = { year: 'bhe_hpmon_year', on: 'bhe_hpmon_on', tbl: 'bhe_hpmon_tbl' };
+function hpmGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+function hpmSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+function hpMonthRows(year) {
+  const now = new Date(), cy = now.getFullYear(), cm = now.getMonth();
+  const bm = {}; ((STATE.hpA && STATE.hpA.monthly) || []).forEach(x => { bm[x.month] = x; });
+  const dayT = {};
+  [STATE.hpSig, STATE.hpYearPts].forEach(P => ((P && P.points) || []).forEach(p => { if (p.t != null) dayT[p.day] = p.t; }));
+  const pvm = {}; ((STATE.pvYear && STATE.pvYear.monthly) || []).forEach(x => { pvm[x.month] = x; });
+  const sum = (...v) => (v.some(x => x != null) ? v.reduce((a, x) => a + (x || 0), 0) : null);
+  const jz = (q, e) => (q != null && e != null && e > 0.5 ? q / e : null);
+  const rows = [];
+  for (let m = 0; m < 12; m++) {
+    const key = `${year}-${String(m + 1).padStart(2, '0')}`, dim = new Date(year, m + 1, 0).getDate();
+    const r = { m, key, dim, future: year > cy || (year === cy && m > cm), running: year === cy && m === cm, src: null };
+    rows.push(r);
+    if (r.future) continue;
+    const eH = sum(hcVal(year, 'ch', 'compressor', m), hcVal(year, 'ch', 'eheater', m));
+    const eW = sum(hcVal(year, 'dhw', 'compressor', m), hcVal(year, 'dhw', 'eheater', m));
+    const eT = sum(hcVal(year, 'total', 'compressor', m), hcVal(year, 'total', 'eheater', m));
+    if (eT != null || eH != null || eW != null) {
+      r.src = 'HomeCom';
+      r.eH = eH; r.eW = eW; r.e = eT != null ? eT : sum(eH, eW);
+      r.qH = hcVal(year, 'ch', 'outputProduced', m); r.qW = hcVal(year, 'dhw', 'outputProduced', m);
+      const qT = hcVal(year, 'total', 'outputProduced', m);
+      r.q = qT != null ? qT : sum(r.qH, r.qW);
+      r.eh = hcVal(year, 'total', 'eheater', m);
+      if (r.eh == null) r.eh = sum(hcVal(year, 'ch', 'eheater', m), hcVal(year, 'dhw', 'eheater', m));
+    } else if (bm[key]) {
+      r.src = 'Bridge'; r.e = bm[key].elec_kwh; r.q = bm[key].heat_kwh;
+    }
+    r.jaz = jz(r.q, r.e); r.jazH = jz(r.qH, r.eH); r.jazW = jz(r.qW, r.eW);
+    // temperatures: HomeCom's monthly mean, else the bridge's daily means
+    const ts = [];
+    for (let d = 1; d <= dim; d++) { const t = dayT[`${key}-${String(d).padStart(2, '0')}`]; if (t != null) ts.push(t); }
+    r.tOut = hcTemp(year, 'outdoor', m);
+    if (r.tOut == null && ts.length >= 10) r.tOut = ts.reduce((a, t) => a + t, 0) / ts.length;
+    r.tSup = hcTemp(year, 'supply', m);
+    // degree days G20/15: from the daily means if the month is (almost) covered, else ≈ from the monthly mean
+    const days = r.running ? Math.max(1, now.getDate() - 1) : dim;
+    if (ts.length && ts.length >= 0.8 * days) r.hdd = ts.reduce((a, t) => a + (t < 15 ? 20 - t : 0), 0) * days / ts.length;
+    else if (r.tOut != null && r.tOut <= 12) { r.hdd = days * (20 - r.tOut); r.hddApprox = true; }
+    const pv = pvm[key]; r.pv = pv && pv.hp_sun_kwh != null ? pv.hp_sun_kwh : null;
+    r.cost = r.e != null ? r.e * STATE.price : null;
+  }
+  return rows;
+}
+function hpmFmt(s, v, r) {
+  if (s.unit === '€') return money(v);
+  if (s.bar) return kwh(v, v < 100 ? 1 : 0);
+  if (s.k === 'hdd') return `${r && r.hddApprox ? '≈ ' : ''}${fmt(v, 0)} Kd`;
+  return fmt(v, s.dec != null ? s.dec : 1) + (s.unit ? ' ' + s.unit : '');
+}
+function hpmTip(r, year, avail) {
+  const name = new Date(year, r.m, 1).toLocaleDateString('de-DE', { month: 'long' });
+  const head = `<b>${name} ${year}</b>${r.running ? ' · bis heute' : ''}${r.future ? ' · noch nicht' : ''}`;
+  if (r.future) return head;
+  const parts = avail.filter(s => r[s.k] != null).map(s => `<span style="color:${s.col}">●</span> ${esc(s.l)} <b>${hpmFmt(s, r[s.k], r)}</b>`);
+  return head + `<div class="note" style="margin-top:2px">${parts.join(' · ') || 'keine Werte'}` +
+    `${r.src ? ` <span style="color:var(--muted)">(${r.src})</span>` : ''}</div>`;
+}
+// grouped bars (kWh), January … December; the running month a little paler
+function hpmBars(rows, ss, tips) {
+  const h = 190, pad = 26, top = 12, base = h - 22, n = 12, gw = (CW - pad * 2) / n;
+  const sc = niceScale(Math.max(0.0001, ...rows.map(r => Math.max(0, ...ss.map(s => r[s.k] || 0))))), max = sc.max;
+  const iw = Math.max(1.5, (gw * 0.76) / ss.length);
+  let g = '';
+  rows.forEach((r, i) => {
+    const gx = pad + i * gw + gw * 0.12;
+    ss.forEach((s, k) => {
+      const v = Math.max(0, r[s.k] || 0); if (!v) return;
+      const bh = v / max * (base - top);
+      g += `<rect x="${(gx + k * iw).toFixed(1)}" y="${(base - bh).toFixed(1)}" width="${(iw * 0.92).toFixed(1)}" height="${bh.toFixed(1)}" rx="1.5" fill="${s.col}"${r.running ? ' opacity="0.55"' : ''}/>`;
+    });
+    g += `<text class="axis" x="${(pad + i * gw + gw / 2).toFixed(1)}" y="${h - 8}" text-anchor="middle"${r.future ? ' opacity="0.45"' : ''}>${MON[i].slice(0, 3)}</text>`;
+  });
+  return svg(h, gridLines(h, top, base, pad, max, { step: sc.step, unit: 'kWh' }) + g, { kind: 'bar', pad, n, h, tips });
+}
+// a small line chart for figures with their own unit (°C, Arbeitszahl, Kd, €), months aligned with the bars
+function hpmLines(rows, ss, tips) {
+  const h = 116, pad = 26, top = 10, base = h - 20, n = 12, gw = (CW - pad * 2) / n;
+  const vals = [];
+  rows.forEach(r => ss.forEach(s => { if (r[s.k] != null) vals.push(r[s.k]); }));
+  if (!vals.length) return '<div class="note">Für dieses Jahr keine Werte.</div>';
+  let lo = Math.min(...vals), hi = Math.max(...vals);
+  if (ss[0].grp === 'hdd' || ss[0].grp === 'cost') lo = Math.min(lo, 0);           // sums start at 0, means fit their range
+  if (hi - lo < 1e-6) { hi += 1; lo -= 1; }
+  const step = niceScale((hi - lo) / 3 * 3).step || 1;
+  lo = Math.floor(lo / step) * step; hi = Math.ceil(hi / step) * step;
+  const Y = v => base - (base - top) * (v - lo) / (hi - lo), X = i => pad + i * gw + gw / 2;
+  const unit = ss[0].unit || '';
+  let g = '';
+  for (let v = lo, k = 0; v <= hi + step * 1e-6 && k < 12; v += step, k++) {
+    g += `<line class="gl" x1="${pad}" x2="${CW - 4}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}"/>` +
+      `<text class="axis" x="${pad - 4}" y="${(Y(v) + 3).toFixed(1)}" text-anchor="end">${fmt(v, step < 1 ? 1 : 0)}</text>`;
+  }
+  if (unit) g += `<text class="axis" x="${CW - 4}" y="${top + 2}" text-anchor="end">${esc(unit)}</text>`;
+  ss.forEach(s => {
+    let d = '', prev = false;
+    rows.forEach((r, i) => {
+      const v = r[s.k];
+      if (v == null) { prev = false; return; }
+      d += `${prev ? 'L' : 'M'}${X(i).toFixed(1)} ${Y(v).toFixed(1)} `; prev = true;
+    });
+    if (d) g += `<path d="${d}" fill="none" stroke="${s.col}" stroke-width="2.2" stroke-linejoin="round"/>`;
+    rows.forEach((r, i) => {
+      const v = r[s.k]; if (v == null) return;
+      g += `<circle cx="${X(i).toFixed(1)}" cy="${Y(v).toFixed(1)}" r="2.8" fill="${r.running ? 'var(--card)' : s.col}" stroke="${s.col}" stroke-width="1.5"/>`;
+    });
+  });
+  return svg(h, g, { kind: 'bar', pad, n, h, tips });
+}
+function hpmCell(s, v, r) {
+  if (s.unit === '€') return fmt(v, 0);
+  if (s.bar) return fmt(v, v < 100 ? 1 : 0);
+  if (s.k === 'hdd') return (r && r.hddApprox ? '≈' : '') + fmt(v, 0);
+  return fmt(v, s.dec != null ? s.dec : 1);
+}
+function hpmTable(rows, cols, year) {
+  const head = '<tr><th>Monat</th>' + cols.map(s => `<th>${esc(s.l)}<br><small>${s.bar ? 'kWh' : esc(s.unit || '')}</small></th>`).join('') + '<th>Quelle</th></tr>';
+  const body = rows.map(r => `<tr${r.future ? ' style="opacity:.45"' : ''}><td>${MON[r.m]}${r.running ? '*' : ''}</td>` +
+    cols.map(s => `<td>${r[s.k] != null ? hpmCell(s, r[s.k], r) : '–'}</td>`).join('') + `<td>${r.src || '–'}</td></tr>`).join('');
+  const QE = { jaz: ['q', 'e'], jazH: ['qH', 'eH'], jazW: ['qW', 'eW'] };
+  const tot = s => {
+    if (s.grp === 'jaz') {                          // the year's ratio, not the mean of the months
+      const [qk, ek] = QE[s.k], v = rows.filter(r => r[qk] != null && r[ek] > 0);
+      const Q = v.reduce((a, r) => a + r[qk], 0), E = v.reduce((a, r) => a + r[ek], 0);
+      return E > 0.5 ? Q / E : null;
+    }
+    const v = rows.filter(r => r[s.k] != null); if (!v.length) return null;
+    const t = v.reduce((a, r) => a + r[s.k], 0);
+    return s.grp === 'temp' ? t / v.length : t;    // temperatures: mean of the months, the rest: sum
+  };
+  const foot = `<tr style="font-weight:700"><td>${year}</td>` + cols.map(s => { const v = tot(s); return `<td>${v != null ? hpmCell(s, v, {}) : '–'}</td>`; }).join('') + '<td></td></tr>';
+  return `<table class="pvt">${head}${body}${foot}</table>`;
+}
+function renderHpMonthly() {
+  const box = $('hp-monthly'); if (!box) return;
+  const cy = new Date().getFullYear();
+  const ys = new Set([cy]);
+  const H = STATE.hpYears && STATE.hpYears.homecom;
+  Object.values((H && H.years) || {}).forEach(e => { if (e && e.ok) ys.add(+e.year); });
+  ((STATE.hpA && STATE.hpA.monthly) || []).forEach(x => ys.add(+String(x.month).slice(0, 4)));
+  const years = [...ys].filter(y => y > 2000).sort();
+  let year = +(hpmGet(HPM_LS.year) || cy); if (!years.includes(year)) year = cy;
+  const yb = $('hp-month-years');
+  yb.hidden = years.length < 2;
+  yb.innerHTML = years.map(y => `<button data-hpmy="${y}" class="${y === year ? 'on' : ''}">${y}</button>`).join('');
+  if (STATE.fr && STATE.fr.connected && !STATE.pvYear && !_pvYearBusy) loadPvYear();   // the heat pump's solar share
+  const rows = hpMonthRows(year);
+  const avail = HPM_SERIES.filter(s => s.k === 'e' || s.k === 'q' || rows.some(r => r[s.k] != null));
+  let on = null; try { on = JSON.parse(hpmGet(HPM_LS.on) || 'null'); } catch (e) { on = null; }
+  if (!Array.isArray(on)) on = ['e', 'q'];
+  const act = avail.filter(s => on.includes(s.k));
+  $('hp-month-chips').innerHTML = avail.map(s => `<button data-hpmk="${s.k}" class="${on.includes(s.k) ? 'on' : ''}">` +
+    `<span class="sw" style="background:${s.col}"></span>${esc(s.l)}</button>`).join('');
+  const tips = rows.map(r => hpmTip(r, year, avail));
+  const bars = act.filter(s => s.bar), groups = [...new Set(act.filter(s => !s.bar).map(s => s.grp))];
+  box.innerHTML = bars.length ? hpmBars(rows, bars, tips) : (groups.length ? '' : '<div class="note">Oben mindestens eine Reihe einschalten.</div>');
+  $('hp-month-lines').innerHTML = groups.map(g => `<div style="font-size:12px;color:var(--muted);margin:10px 0 2px">${HPM_GRP[g]}</div>` +
+    hpmLines(rows, act.filter(s => s.grp === g), tips)).join('');
+  const tb = $('hp-month-tbl');
+  if (tb) tb.checked = hpmGet(HPM_LS.tbl) === '1';
+  $('hp-month-table').innerHTML = tb && tb.checked ? hpmTable(rows, act.length ? act : avail.slice(0, 2), year) : '';
+  const src = [];
+  if (rows.some(r => r.src === 'HomeCom')) src.push('<b>HomeCom</b> (Monatswerte der Wärmepumpe, Heizen und Warmwasser getrennt)');
+  if (rows.some(r => r.src === 'Bridge')) src.push('die <b>Zählerstände der Bridge</b> für Monate ohne HomeCom-Werte (nur gesamt)');
+  $('hp-month-note').innerHTML = (src.length ? `Quelle: ${src.join(', ')}. ` : 'Für dieses Jahr noch keine Monatswerte. ') +
+    (rows.some(r => r.running && r.src) ? '* laufender Monat bis heute (heller). ' : '') +
+    'Tippen auf einen Monat zeigt alle Werte. <span style="color:var(--muted)">Außen- und Vorlauftemperatur: Monatsmittel aus ' +
+    'HomeCom, sonst aus den Tagesmitteln der Bridge. Heizgradtage (G20/15) aus den Tagesmitteln, „≈“ = aus dem Monatsmittel ' +
+    `geschätzt. Solarstrom für die WP laut Wechselrichter. Stromkosten = Strom × ${fmt(STATE.price, 2)} €/kWh.</span>`;
+}
+document.addEventListener('click', e => {
+  const t = e.target && e.target.closest ? e.target : null; if (!t) return;
+  const c = t.closest('[data-hpmk]');
+  if (c) {
+    let on = null; try { on = JSON.parse(hpmGet(HPM_LS.on) || 'null'); } catch (err) { on = null; }
+    if (!Array.isArray(on)) on = ['e', 'q'];
+    const k = c.dataset.hpmk;
+    on = on.includes(k) ? on.filter(x => x !== k) : on.concat(k);
+    hpmSet(HPM_LS.on, JSON.stringify(on)); renderHpMonthly(); return;
+  }
+  const y = t.closest('[data-hpmy]');
+  if (y) { hpmSet(HPM_LS.year, y.dataset.hpmy); renderHpMonthly(); }
+});
+document.addEventListener('change', e => {
+  if (e.target && e.target.id === 'hp-month-tbl') { hpmSet(HPM_LS.tbl, e.target.checked ? '1' : '0'); renderHpMonthly(); }
+});
+/* ---- 📄 Verbrauchsausweis – nachgerechnet --------------------------------------
+ * The consumption certificate's rule (§ 82 GEG/GModG, Wohngebäude): the final
+ * energy for heating and hot water per m² of Gebäudenutzfläche A_N and year –
+ * A_N = Wohnfläche × 1,2 (one- or two-family house with heated basement × 1,35),
+ * the heating part × the DWD climate factor, the class by final energy (Anlage
+ * 10), primary energy with 1,8 for grid electricity (Anlage 4). For the heat pump
+ * the final energy is its electricity; the same with the heat it made shows what
+ * a gas heating would have needed. Months: the last 12 complete ones from HomeCom
+ * (heating and hot water separate); construction-phase months can be estimated. */
+const VA_CLASSES = [[30, 'A+'], [50, 'A'], [75, 'B'], [100, 'C'], [130, 'D'], [160, 'E'], [200, 'F'], [250, 'G'], [Infinity, 'H']];
+const VA_COLORS = ['#00a651', '#4cb848', '#bfd730', '#fff200', '#fdb913', '#f7941d', '#f15a29', '#ed1c24', '#be1e2d'];
+const VA_LS = { area: 'bhe_va_area', kf: 'bhe_va_kf', keller: 'bhe_va_keller', bau: 'bhe_va_bau' };
+const VA_FP_STROM = 1.8, VA_FP_GAS = 1.1, VA_ETA_GAS = 0.9;
+function vaClass(v) { return VA_CLASSES.find(([lim]) => v <= lim)[1]; }
+function vaCompute(useEst) {
+  const H = STATE.hpYears && STATE.hpYears.homecom; if (!H || !H.years) return null;
+  const now = new Date(), cy = now.getFullYear(), cm = now.getMonth();
+  const be = buildPhaseEnd(), bauStart = new Date(be.getFullYear(), be.getMonth(), be.getDate());
+  const sum = (...v) => (v.some(x => x != null) ? v.reduce((a, x) => a + (x || 0), 0) : null);
+  const month = (y, m) => ({ eH: sum(hcVal(y, 'ch', 'compressor', m), hcVal(y, 'ch', 'eheater', m)),
+    eW: sum(hcVal(y, 'dhw', 'compressor', m), hcVal(y, 'dhw', 'eheater', m)),
+    qH: hcVal(y, 'ch', 'outputProduced', m), qW: hcVal(y, 'dhw', 'outputProduced', m) });
+  // basis of the estimates: the months after the construction phase (last 12 + the running one pro rata)
+  const B = { eH: 0, qH: 0, eW: 0, qW: 0, prom: 0, days: 0, n: 0 };
+  for (let i = 12; i >= 0; i--) {
+    const d = new Date(cy, cm - i, 1), y = d.getFullYear(), m = d.getMonth();
+    if (d < bauStart) continue;
+    const v = month(y, m); if (v.qH == null || v.eH == null) continue;
+    const dim = new Date(y, m + 1, 0).getDate();
+    const frac = i === 0 ? Math.min(1, (now.getDate() - 1 + now.getHours() / 24) / dim) : 1;
+    if (frac < 0.25) continue;
+    B.eH += v.eH; B.qH += v.qH; B.eW += v.eW || 0; B.qW += v.qW || 0;
+    B.prom += GTZ_PROMILLE[m] * frac; B.days += dim * frac; B.n++;
+  }
+  const canEst = B.prom >= 250 && B.days > 0;
+  const rows = [];
+  for (let i = 12; i >= 1; i--) {                     // the last 12 complete months
+    const d = new Date(cy, cm - i, 1), y = d.getFullYear(), m = d.getMonth(), dim = new Date(y, m + 1, 0).getDate();
+    const v = month(y, m), bau = d < bauStart, has = v.eH != null && v.qH != null;
+    let r;
+    if (has && !(bau && useEst)) r = Object.assign({}, v, { src: bau ? 'gemessen, Bauphase' : 'gemessen' });
+    else if (useEst && canEst) {
+      r = { eH: B.eH / B.prom * GTZ_PROMILLE[m], qH: B.qH / B.prom * GTZ_PROMILLE[m],
+        eW: B.eW / B.days * dim, qW: B.qW / B.days * dim, est: true, meas: has ? v : null,
+        src: bau ? 'geschätzt, Bauphase' : 'geschätzt, keine Daten' };
+    } else r = { eH: null, eW: null, qH: null, qW: null, src: 'fehlt' };
+    rows.push(Object.assign(r, { y, m, bau }));
+  }
+  const tot = k => rows.reduce((a, r) => a + (r[k] || 0), 0);
+  return { rows, B, canEst, E_H: tot('eH'), E_W: tot('eW'), Q_H: tot('qH'), Q_W: tot('qW'),
+    nMeas: rows.filter(r => !r.est && r.src !== 'fehlt').length, nEst: rows.filter(r => r.est).length,
+    nMiss: rows.filter(r => r.src === 'fehlt').length };
+}
+// the certificate's scale: classes A+ … H over 0 … >250 kWh/(m²·a), markers above (heat pump) and below (gas)
+function vaScale(wp, gas) {
+  const h = 92, x0 = 8, x1 = CW - 8, top = 30, barH = 22, max = 275;
+  const X = v => x0 + (x1 - x0) * Math.min(max, Math.max(0, v)) / max;
+  let g = '', lo = 0;
+  VA_CLASSES.forEach(([lim, c], i) => {
+    const hi = Math.min(lim, max), a = X(lo), b2 = X(hi);
+    g += `<rect x="${a.toFixed(1)}" y="${top}" width="${(b2 - a).toFixed(1)}" height="${barH}" fill="${VA_COLORS[i]}"/>` +
+      `<text x="${((a + b2) / 2).toFixed(1)}" y="${top + 15}" text-anchor="middle" font-size="11" font-weight="700" fill="#10141f">${c}</text>`;
+    lo = lim;
+  });
+  [0, 50, 100, 150, 200, 250].forEach(v => { g += `<text class="axis" x="${X(v).toFixed(1)}" y="${top + barH + 13}" text-anchor="middle">${v}</text>`; });
+  const mark = (v, lbl, col, above) => {
+    const x = X(v), y = above ? top - 2 : top + barH + 2;
+    return `<path d="M${x.toFixed(1)} ${y} l-6 ${above ? -9 : 9} l12 0 z" fill="${col}"/>` +
+      `<text x="${Math.min(x1 - 2, Math.max(x0 + 2, x)).toFixed(1)}" y="${above ? top - 14 : top + barH + 27}" text-anchor="${x < 70 ? 'start' : x > CW - 70 ? 'end' : 'middle'}" font-size="11" font-weight="700" fill="${col}">${lbl}</text>`;
+  };
+  if (gas != null) g += mark(gas, `Gasheizung ≈ ${fmt(gas, 0)}`, '#f6b93b', false);
+  if (wp != null) g += mark(wp, `Wärmepumpe ${fmt(wp, 0)}`, '#4be0b0', true);
+  return svg(h, g);
+}
+function renderVa() {
+  const card = $('hp-va-card'); if (!card) return;
+  const b = buildData();
+  const areaIn = $('va-area'), kfIn = $('va-kf'), kel = $('va-keller'), bauCb = $('va-bau');
+  if (!areaIn.dataset.init) {                     // restore once; the handlers keep them afterwards
+    areaIn.value = hpmGet(VA_LS.area) || (b.area > 0 ? b.area : '');
+    kfIn.value = hpmGet(VA_LS.kf) || '';
+    kel.checked = hpmGet(VA_LS.keller) === '1';
+    bauCb.checked = (hpmGet(VA_LS.bau) || '1') === '1';
+    areaIn.dataset.init = '1';
+  }
+  const num = el => parseFloat(String(el.value || '').replace(',', '.'));
+  const area = num(areaIn) > 0 ? num(areaIn) : 0;
+  const kfSet = num(kfIn) > 0, kf = kfSet ? num(kfIn) : 1;
+  const fA = kel.checked ? 1.35 : 1.2, AN = area * fA;
+  const V = vaCompute(bauCb.checked);
+  const out = (kpi, calc, months, note) => { $('va-scale').innerHTML = kpi ? $('va-scale').innerHTML : '';
+    $('va-kpi').innerHTML = kpi; $('va-calc').innerHTML = calc; $('va-months').innerHTML = months; $('va-note').innerHTML = note; };
+  if (!V || !V.rows.some(r => r.src !== 'fehlt')) {
+    $('va-scale').innerHTML = '';
+    return out('<div class="note">Dafür braucht es die Monatswerte aus HomeCom (Heizen und Warmwasser getrennt) – siehe ' +
+      '„🔁 Abgleich mit der Bosch-App“ in der Gebäude-Einordnung.</div>', '', '', '');
+  }
+  if (!(AN > 0)) { $('va-scale').innerHTML = ''; return out('<div class="note">Bitte die <b>Wohnfläche</b> eintragen.</div>', '', '', ''); }
+  const E = V.E_H * kf + V.E_W, Q = V.Q_H * kf + V.Q_W;
+  const eEnd = E / AN, ePrim = eEnd * VA_FP_STROM, qA = Q / AN, gEnd = qA / VA_ETA_GAS, gPrim = gEnd * VA_FP_GAS;
+  const r0 = V.rows[0], r1 = V.rows[V.rows.length - 1];
+  const span = `${MON[r0.m]} ${r0.y} – ${MON[r1.m]} ${r1.y}`;
+  $('va-scale').innerHTML = vaScale(eEnd, gEnd);
+  const kp = (v, l, c) => `<div class="kpi sm"><div class="v"${c ? ` style="color:${c}"` : ''}>${v}</div><div class="l">${l}</div></div>`;
+  const kpi = '<div class="grid2">' +
+    kp(`${fmt(eEnd, 0)} <small>kWh/(m²·a)</small>`, `Endenergie Strom · <b>Klasse ${vaClass(eEnd)}</b>`, '#4be0b0') +
+    kp(`${fmt(gEnd, 0)} <small>kWh/(m²·a)</small>`, `Gasheizung, gleiche Wärme · <b>Klasse ${vaClass(gEnd)}</b>`, '#f6b93b') +
+    kp(`${fmt(ePrim, 0)}`, 'Primärenergie Wärmepumpe') + kp(`${fmt(gPrim, 0)}`, 'Primärenergie Gasheizung') + '</div>';
+  const k0 = v => kwh(v, 0);
+  const calc = [
+    ['Zeitraum', `${span} (12 Monate${V.nEst ? `: ${V.nMeas} gemessen, ${V.nEst} geschätzt` : ', alle gemessen'}${V.nMiss ? `, ${V.nMiss} fehlen` : ''})`],
+    ['Strom Heizen', k0(V.E_H)], ['Strom Warmwasser', k0(V.E_W)],
+    ['Klimafaktor (nur Heizen)', kfSet ? `${fmt(kf, 2)} (eingetragen)` : '1,00 – nicht klimabereinigt'],
+    ['Endenergie (Strom)', `${k0(V.E_H)}${kfSet ? ` × ${fmt(kf, 2)}` : ''} + ${k0(V.E_W)} = <b>${k0(E)}</b>`],
+    ['Gebäudenutzfläche A<sub>N</sub>', `${fmt(area, 0)} m² × ${fmt(fA, 2)} = <b>${fmt(AN, 0)} m²</b>`],
+    ['Kennwert Endenergie', `${k0(E)} ÷ ${fmt(AN, 0)} m² = <b>${fmt(eEnd, 0)} kWh/(m²·a)</b> → Klasse <b>${vaClass(eEnd)}</b>`],
+    ['Primärenergie', `${fmt(eEnd, 0)} × ${fmt(VA_FP_STROM, 1)} (Strom) = <b>${fmt(ePrim, 0)} kWh/(m²·a)</b>`],
+    ['Wärme (erzeugt)', `${k0(V.Q_H)}${kfSet ? ` × ${fmt(kf, 2)}` : ''} + ${k0(V.Q_W)} = ${k0(Q)} ÷ ${fmt(AN, 0)} m² = <b>${fmt(qA, 0)} kWh/(m²·a)</b>`],
+    ['Gasheizung, gleiche Wärme', `${fmt(qA, 0)} ÷ ${fmt(VA_ETA_GAS, 2)} (Jahresnutzungsgrad) = <b>${fmt(gEnd, 0)} kWh/(m²·a)</b> → Klasse <b>${vaClass(gEnd)}</b>, ` +
+      `Primärenergie × ${fmt(VA_FP_GAS, 1)} = ${fmt(gPrim, 0)}`],
+    ['Arbeitszahl im Zeitraum', V.E_H + V.E_W > 0 ? fmt((V.Q_H + V.Q_W) / (V.E_H + V.E_W), 2) : '–'],
+  ].map(([k, v]) => statusRow(k, v)).join('');
+  const c = v => (v == null ? '–' : fmt(v, v < 100 ? 1 : 0));
+  const months = '<table class="pvt"><tr><th>Monat</th><th>Strom<br><small>Heizen</small></th><th>Strom<br><small>Warmw.</small></th>' +
+    '<th>Wärme<br><small>Heizen</small></th><th>Wärme<br><small>Warmw.</small></th></tr>' +
+    V.rows.map(r => `<tr${r.est ? ' style="font-style:italic;color:var(--muted)"' : ''}><td>${MON[r.m]} ${String(r.y).slice(2)}` +
+      `${r.bau ? ' <small>B</small>' : ''}${r.src === 'fehlt' ? ' <small>fehlt</small>' : ''}</td>` +
+      `<td>${r.est ? '≈' : ''}${c(r.eH)}</td><td>${r.est ? '≈' : ''}${c(r.eW)}</td><td>${r.est ? '≈' : ''}${c(r.qH)}</td><td>${r.est ? '≈' : ''}${c(r.qW)}</td></tr>`).join('') +
+    `<tr style="font-weight:700"><td>Summe</td><td>${c(V.E_H)}</td><td>${c(V.E_W)}</td><td>${c(V.Q_H)}</td><td>${c(V.Q_W)}</td></tr></table>` +
+    '<div class="note" style="margin-top:4px">kWh je Monat aus HomeCom · <i>≈ kursiv</i> = geschätzt · B = Monat der Bauphase</div>';
+  const estTxt = V.nEst ? `Geschätzt (kursiv, ≈): Heizen mit den üblichen Gradtagzahl-Anteilen des Monats aus den ${V.B.n} Monaten nach der Bauphase ` +
+    `(${fmt(V.B.prom / 10, 0)} % eines Heizjahres), Warmwasser mit deren Tagesdurchschnitt. ` : '';
+  const note = '<b>So rechnet der Verbrauchsausweis</b> (§ 82 GEG, seit 2026 GModG, für Wohngebäude): Endenergie für Heizung und Warmwasser ' +
+    'je m² Gebäudenutzfläche A<sub>N</sub> und Jahr. Ohne bekannte A<sub>N</sub> gilt Wohnfläche × 1,2, beim Ein-/Zweifamilienhaus mit beheiztem ' +
+    'Keller × 1,35. Der Heizanteil wird mit dem Klimafaktor des Deutschen Wetterdienstes bereinigt (für deine Postleitzahl und den Zeitraum, ' +
+    'kostenlos auf dwd.de unter „Klimafaktoren“ – oben eintragen). Bei der Wärmepumpe ist die Endenergie ihr Strom; Warmwasser ist hier gemessen, ' +
+    'die Pauschale von 20 kWh/(m²·a) gilt nur, wenn es unbekannt ist. Effizienzklasse nach Endenergie (A+ bis H, GEG Anlage 10), Primärenergie ' +
+    'mit Faktor 1,8 für Netzstrom und 1,1 für Erdgas (Anlage 4). ' + estTxt +
+    '<span style="color:var(--muted)">Unterschiede zum echten Ausweis: Der braucht 36 Monate (drei Abrechnungsjahre, die letzte Abrechnung höchstens ' +
+    '18 Monate alt) – hier sind es die letzten 12 vollen Monate. Die Werte stammen aus der Wärmepumpe selbst (HomeCom), nicht aus Abrechnungen. ' +
+    'Der Gasvergleich ist eine Schätzung: dieselbe Wärme mit einem Gas-Brennwertkessel bei 90 % Jahresnutzungsgrad.</span>';
+  out(kpi, calc, months, note);
+}
+document.addEventListener('input', e => {
+  const id = e.target && e.target.id;
+  if (id === 'va-area') { hpmSet(VA_LS.area, e.target.value); renderVa(); }
+  else if (id === 'va-kf') { hpmSet(VA_LS.kf, e.target.value); renderVa(); }
+});
+document.addEventListener('change', e => {
+  const id = e.target && e.target.id;
+  if (id === 'va-keller') { hpmSet(VA_LS.keller, e.target.checked ? '1' : '0'); renderVa(); }
+  else if (id === 'va-bau') { hpmSet(VA_LS.bau, e.target.checked ? '1' : '0'); renderVa(); }
+});
 function renderHeatDemand() {
+  try { renderVa(); } catch (e) { /* the certificate card must never break the rest */ }
   const card = $('hp-theory-card'); if (!card) return;
   const b = buildData(), r = computeHeat(b), price = STATE.price;
   const measured = hpYearFromMonthly() || (STATE.hpA && STATE.hpA.imported && STATE.hpA.imported.year_elec_kwh) || null;
@@ -10002,10 +10396,7 @@ function renderHeatpump() {
   } else { cophCard.hidden = true; }
 
   const m = A.monthly || [];
-  $('hp-monthly').innerHTML = m.length ? groupedBar(
-    m.map(x => ({ label: MON[parseInt(x.month.slice(5), 10) - 1], values: { e: x.elec_kwh, h: x.heat_kwh } })),
-    [{ key: 'e', color: COL.hp }, { key: 'h', color: COL.heat }], { h: 180, unit: 'kWh' })
-    : '<div class="note">Noch keine vollen Monate.</div>';
+  renderHpMonthly();
 
   // COP per month (efficiency over the year)
   const mc = m.filter(x => x.cop != null && x.cop > 0);
@@ -15006,6 +15397,7 @@ async function loadPvYear() {
   finally { _pvYearBusy = false; }
   renderPvTheory();
   renderPvEconLive();
+  renderHpMonthly();
 }
 // the planner with the data of the REAL installation (where known)
 function pvTheoryParams() {

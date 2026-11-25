@@ -322,6 +322,51 @@ Tab **Wärme → 📊 Effizienz**, Karte mit der **Gebäude-Einordnung** (Skala 
   geantwortet haben, und bietet „Erneut abfragen“ an (`GET /api/heatpump/years?refresh=1`, höchstens einmal pro
   Minute). Die Rohantworten aller bekannten Pfade zeigt `GET /api/homecom/probe`.
 
+### Monatsbilanz (ab v239)
+
+Tab **Wärme → 📊 Effizienz**, Karte **Monatsbilanz**: die Monate **Januar bis Dezember** des gewählten Jahres
+(Jahresknöpfe oben, sobald es für mehr als ein Jahr Werte gibt). Mit den Knöpfen darunter blendest du Reihen ein
+und aus (wird gemerkt; Standard wie bisher Strom + Wärme):
+
+* als **Balken (kWh):** Strom, Wärme, Strom und Wärme fürs **Heizen** und fürs **Warmwasser**, Heizstab,
+  Solarstrom für die Wärmepumpe (mit Wechselrichter);
+* in **kleinen Diagrammen mit eigener Achse:** Arbeitszahl (gesamt, Heizen, Warmwasser), **Außen-** und
+  **Vorlauftemperatur** (Monatsmittel), Heizgradtage (G20/15) und Stromkosten (Strom × Strompreis).
+
+Tippen auf einen Monat zeigt alle Werte dieses Monats, „Tabelle mit allen Werten“ alle Zahlen samt Jahreszeile
+(Arbeitszahl des Jahres = Jahreswärme ÷ Jahresstrom, Temperaturen als Mittel der Monate). Der laufende Monat
+ist heller (bis heute). Quellen: die Monatswerte aus HomeCom (Heizen und Warmwasser getrennt), für Monate ohne
+sie die Zählerstände der Bridge (nur gesamt). Außen- und Vorlauftemperatur sind Monatsmittel aus den
+HomeCom-Aufzeichnungen (`/resource/recordings/system/sensors/temperatures/outdoor_t1` und
+`/resource/recordings/heatSources/actualSupplyTemperature`, je `?interval=JJJJ`, Mittel = y ÷ c; unplausible
+Werte fallen weg), sonst die Tagesmittel der Bridge; Heizgradtage aus den Tagesmitteln, „≈“ = aus dem
+Monatsmittel geschätzt.
+
+### Verbrauchsausweis – nachgerechnet (ab v239)
+
+Karte **📄 Verbrauchsausweis – nachgerechnet** direkt unter der Gebäude-Einordnung – so, wie ein
+Energieverbrauchsausweis für Wohngebäude rechnet (§ 82 GEG, seit 29.07.2026 Gebäudemodernisierungsgesetz;
+für Energieausweise von Wohngebäuden gilt bis zur späteren Umstellung das bisherige Recht, die Skala A+ bis H
+bleibt):
+
+* **Endenergie** = Strom der Wärmepumpe für Heizung + Warmwasser über die **letzten 12 vollen Monate**
+  (HomeCom, Heizen und Warmwasser getrennt); der Heizanteil wird mit dem **Klimafaktor des DWD** multipliziert
+  (für Postleitzahl und Zeitraum kostenlos auf dwd.de unter „Klimafaktoren“; leer = nicht bereinigt).
+* **Gebäudenutzfläche A<sub>N</sub>** = Wohnfläche × 1,2, beim Ein-/Zweifamilienhaus mit beheiztem Keller × 1,35
+  (Wohnfläche vorbelegt aus dem Gebäudemodell, änderbar).
+* **Kennwert** = Endenergie ÷ A<sub>N</sub> → **Effizienzklasse** nach GEG Anlage 10: A+ ≤ 30, A ≤ 50, B ≤ 75,
+  C ≤ 100, D ≤ 130, E ≤ 160, F ≤ 200, G ≤ 250, H > 250 kWh/(m²·a); **Primärenergie** × 1,8 (Netzstrom, Anlage 4).
+* Dasselbe mit der **erzeugten Wärme**: Wärme ÷ A<sub>N</sub>. Eine **Gas-Brennwertheizung** bräuchte für dieselbe
+  Wärme etwa ÷ 0,9 (Jahresnutzungsgrad 90 %), Primärenergie × 1,1 – beide stehen auf der Skala.
+* Warmwasser ist gemessen; die Pauschale von 20 kWh/(m²·a) gilt nur bei unbekanntem dezentralem Warmwasser.
+* **Bauphase:** Monate vor dem Bauphasen-Ende aus dem Setup werden auf Wunsch geschätzt (Schalter, Standard an):
+  Heizen mit den üblichen Gradtagzahl-Anteilen des Monats aus den Monaten nach der Bauphase, Warmwasser mit deren
+  Tagesdurchschnitt; sonst zählen die echten Werte.
+* **Transparent:** Rechenweg Schritt für Schritt (jede Zahl mit Formel) und eine Monatstabelle; geschätzte Werte
+  kursiv mit „≈“, Bauphase-Monate mit „B“.
+* **Unterschiede zum echten Ausweis:** Der braucht 36 Monate (drei Abrechnungsjahre, die letzte Abrechnung höchstens
+  18 Monate alt) und Abrechnungen statt der Messwerte der Wärmepumpe; der Gasvergleich ist eine Schätzung.
+
 ## Warmwasser-Speicher & Legionellen
 
 Tab **Wärme → 🚿 Warmwasser**, Karte **🛁 Warmwasser-Speicher** (darunter, umgezogen aus

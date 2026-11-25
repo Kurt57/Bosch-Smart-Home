@@ -136,6 +136,15 @@
   .seg button{flex:1; border:none; background:transparent; color:var(--muted);
     padding:8px 6px; border-radius:9px; font-size:13px; font-weight:600}
   .seg button.on{background:var(--accent); color:#04121f}
+  .seg[hidden]{display:none !important}
+  .mchips{display:flex; flex-wrap:wrap; gap:6px; margin:2px 0 10px}
+  .mchips button{display:flex; align-items:center; gap:6px; width:auto; margin:0; padding:5px 10px; border-radius:999px;
+    border:1px solid var(--line); background:transparent; color:var(--muted); font-size:12.5px; font-weight:600}
+  .mchips button .sw{width:10px; height:10px; border-radius:3px; flex:none; opacity:.3}
+  .mchips button.on{color:var(--ink); border-color:var(--accent)}
+  .mchips button.on .sw{opacity:1}
+  .mtable{overflow-x:auto; -webkit-overflow-scrolling:touch; margin-top:8px}
+  .mtable table.pvt td, .mtable table.pvt th{white-space:nowrap}
 
   .statusrow{display:flex; align-items:baseline; gap:10px; font-size:14px; margin:5px 0}
   .statusrow .k{color:var(--muted); flex:1; min-width:44%}
@@ -1288,13 +1297,15 @@
       <div id="hp-cophour"></div>
       <div class="note" id="hp-cophour-note" style="margin-top:10px"></div>
     </div>
-    <div class="card">
-      <h2>Monatsbilanz</h2>
+    <div class="card" id="hp-month-card">
+      <h2><span class="info" data-info="hpmonth" role="button" aria-label="Info">i</span>Monatsbilanz</h2>
+      <div class="seg" id="hp-month-years" style="display:flex; margin-bottom:8px" hidden></div>
+      <div class="mchips" id="hp-month-chips"></div>
       <div id="hp-monthly"></div>
-      <div class="legend">
-        <div class="it"><span class="sw" style="background:var(--hp)"></span>Strom</div>
-        <div class="it"><span class="sw" style="background:var(--heat)"></span>Wärme</div>
-      </div>
+      <div id="hp-month-lines"></div>
+      <label style="display:flex; align-items:center; gap:6px; cursor:pointer; margin-top:10px; font-size:13px"><input type="checkbox" id="hp-month-tbl" style="width:auto"> Tabelle mit allen Werten</label>
+      <div class="mtable" id="hp-month-table"></div>
+      <div class="note" id="hp-month-note" style="margin-top:8px"></div>
     </div>
     <div class="card" id="hp-copmonth-card" hidden>
       <h2><span class="info" data-info="cop" role="button" aria-label="Info">i</span>COP pro Monat</h2>
@@ -1330,6 +1341,20 @@
       <div id="hp-theory-class"></div>
       <div class="note" id="hp-theory-class-note" style="margin-top:8px"></div>
       <div id="hp-theory-real" style="margin-top:12px"></div>
+    </div>
+    <div class="card" id="hp-va-card">
+      <h2><span class="info" data-info="hpva" role="button" aria-label="Info">i</span>📄 Verbrauchsausweis – nachgerechnet</h2>
+      <div class="grid2">
+        <div><label>Wohnfläche (m²)</label><input id="va-area" type="number" min="10" step="1" inputmode="decimal"></div>
+        <div><label>Klimafaktor (DWD, optional)</label><input id="va-kf" type="number" min="0.5" max="2" step="0.01" inputmode="decimal" placeholder="1,00"></div>
+      </div>
+      <label style="display:flex; align-items:center; gap:6px; cursor:pointer; margin-top:8px; font-size:13px"><input type="checkbox" id="va-keller" style="width:auto"> Ein-/Zweifamilienhaus mit beheiztem Keller (× 1,35 statt × 1,2)</label>
+      <label style="display:flex; align-items:center; gap:6px; cursor:pointer; margin-top:4px; font-size:13px"><input type="checkbox" id="va-bau" style="width:auto" checked> Monate der Bauphase schätzen (sonst echte Werte)</label>
+      <div id="va-scale" style="margin-top:12px"></div>
+      <div id="va-kpi" style="margin-top:6px"></div>
+      <div id="va-calc" style="margin-top:10px"></div>
+      <div class="mtable" id="va-months"></div>
+      <div class="note" id="va-note" style="margin-top:10px"></div>
     </div>
     <div class="card" id="hp-theory-reno-card">
       <h2><span class="info" data-info="theory-reno" role="button" aria-label="Info">i</span>🔧 Sanierung & Temperatur – was bringt's?</h2>

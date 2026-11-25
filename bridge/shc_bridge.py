@@ -6935,7 +6935,7 @@ def hc_years_refresh(ctx, store: "Store", cfg: dict) -> dict:
         fails = []
         for y in (now.year - 1, now.year):
             ent = years.get(str(y))
-            if ent and ent.get("final"):
+            if ent and ent.get("final") and "temps" in ent:    # (before v239 a final year had no temperatures)
                 continue
             r = client.energy_year(gid, y, cache.get("method"))
             if r.get("ok"):
@@ -6979,11 +6979,15 @@ def _hc_years_demo() -> dict:
     for x in (cur, prev):
         x["total"] = {k: round(x["ch"][k] + x["dhw"][k], 1) for k in keys}
     life = {dom: {k: round(cur[dom][k] + prev[dom][k], 1) for k in keys} for dom in ("total", "ch", "dhw")}
-    ent = lambda yr, dm, fin, mo: {"ok": True, "year": yr, "final": fin, "method": "demo", "domains": dm, "months": mo,
-                                   "rate": "P1M", "warn": [], "plausible": True, "fetched": int(time.time())}
+    t_out = (2.1, 3.0, 6.2, 9.8, 13.9, 17.0, 19.1, 18.7, 15.0, 10.6, 6.1, 3.2)    # a mild German year
+    t_sup = (36.5, 35.8, 33.9, 31.2, 29.5, 41.0, 42.5, 41.8, 30.4, 32.6, 35.1, 36.2)
+    temps = lambda first, last: {"outdoor": [t_out[i] if first <= i <= last else None for i in range(12)],
+                                 "supply": [t_sup[i] if first <= i <= last else None for i in range(12)]}
+    ent = lambda yr, dm, fin, mo, tp: {"ok": True, "year": yr, "final": fin, "method": "demo", "domains": dm, "months": mo,
+                                       "temps": tp, "rate": "P1M", "warn": [], "plausible": True, "fetched": int(time.time())}
     return {"ok": True, "demo": True, "connected": True, "method": "demo", "checked": int(time.time()),
-            "lifetime": life, "years": {str(y - 1): ent(y - 1, prev, True, mon(prev, 9, 11)),
-                                        str(y): ent(y, cur, False, mon(cur, 0, cm))}}
+            "lifetime": life, "years": {str(y - 1): ent(y - 1, prev, True, mon(prev, 9, 11), temps(9, 11)),
+                                        str(y): ent(y, cur, False, mon(cur, 0, cm), temps(0, cm))}}
 
 
 def _energy_signature(store: "Store") -> dict | None:
