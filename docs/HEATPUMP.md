@@ -290,6 +290,27 @@ Tab **Wärme → 📊 Effizienz**, Karte mit der **Gebäude-Einordnung** (Skala 
   nur da, wenn Strom und Wärme denselben Zeitraum abdecken; den Heizstab gibt es nur aus den Zählerständen
   (der CSV-Export hat ihn nicht). Die Bosch-App rundet die Arbeitszahl auf eine Stelle. Endpunkt:
   `GET /api/heatpump/years`.
+* **Direkt aus HomeCom (ab v237):** Darüber fragt die Bridge HomeCom selbst nach den Jahreswerten – fürs
+  laufende Jahr (bis heute) und das Vorjahr, aufgeteilt in **Heizen**, **Warmwasser** (und Kühlen, falls genutzt)
+  und **Gesamt**: Strom (Kompressor + Heizstab), erzeugte Wärme, Arbeitszahl, Heizstab-Anteil und beim Heizen die
+  Wärme je m² (bis heute, nicht wetterbereinigt). Das sind dieselben Werte wie unter „Energiemonitoring →
+  Effizienz“ in der Bosch-App. **Bosch dokumentiert diese Abfrage nicht**; die Wege stammen aus
+  Community-Projekten (homecom_alt, bosch-homecom-hass, buderus) und können sich ändern. Die Bridge probiert:
+  1. die Aufzeichnung je Zweck und Größe mit Jahreszeitraum
+     (`/resource/recordings/heatSources/emon/{total|ch|dhw}/{compressor|eheater|outputProduced}?interval=JJJJ`),
+     ohne und nach einem HTTP 406 mit `Accept`-Kopf;
+  2. die EMON3-Abfrage der neueren Bosch-App
+     (`/resource/recordings/heatSources/emon/{total|ch|dhw}?query=all&sampleRate=P1M&startDate=…&endDate=…`)
+     mit drei Datumsschreibweisen.
+
+  Der Weg, der klappt, wird gemerkt und beim nächsten Mal zuerst genommen. Gefragt wird im Hintergrund alle 6
+  Stunden (nach einem Fehlschlag alle 2 Stunden); ein Jahr, das mehr als zwei Tage vorbei war, wird nicht mehr neu
+  gefragt. Zur Kontrolle liest die Bridge die Zähler je Zweck seit Inbetriebnahme
+  (`/resource/heatSources/emon/{total|ch|dhw|cooling}Consumption`): Ist ein Jahreswert größer als der Zähler seit
+  Inbetriebnahme (falsche Einheit o. ä.), wird er nicht angezeigt; passen Heizen + Warmwasser nicht zur Summe,
+  steht ein Hinweis dabei. Liefert HomeCom nichts, zeigt die Karte, welche Wege mit welchem HTTP-Status
+  geantwortet haben, und bietet „Erneut abfragen“ an (`GET /api/heatpump/years?refresh=1`, höchstens einmal pro
+  Minute). Die Rohantworten aller bekannten Pfade zeigt `GET /api/homecom/probe`.
 
 ## Warmwasser-Speicher & Legionellen
 

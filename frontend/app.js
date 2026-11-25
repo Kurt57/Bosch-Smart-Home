@@ -94,8 +94,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v236';   // short tag shown always-on in the header
-const APP_VERSION = 'v236 · 2026-11-25 · Wärme → Effizienz → Gebäude-Einordnung: „Heizwärme gemessen“ und „Heizstrom gemessen“ kommen jetzt nur noch aus gemessenen Tagen – Wärme und Strom je Tag gegen die Heizgradtage, aufs Jahr mit den Heizgradtagen deines Gebäudemodells gerechnet (wetterbereinigt), ohne Bauphase. Bisher war das eine grobe Hochrechnung, die für nicht gemessene Wintermonate das Gebäudemodell einsetzte. Neu darunter: „🔁 Abgleich mit der Bosch-App“ – je Kalenderjahr Strom, Wärme, Arbeitszahl und Heizstab-Anteil aus denselben Zählern wie „Energiemonitoring → Effizienz“ in der Bosch-App. ' +
+const APP_BUILD = 'v237';   // short tag shown always-on in the header
+const APP_VERSION = 'v237 · 2026-11-25 · Wärme → Effizienz → „🔁 Abgleich mit der Bosch-App“: die Bridge fragt HomeCom jetzt direkt nach den Jahreswerten – Strom und Wärme fürs laufende Jahr und das Vorjahr, aufgeteilt in Heizen, Warmwasser und Gesamt, mit Arbeitszahl, Heizstab und Heizwärme je m² (bis heute). Dieselben Werte wie „Energiemonitoring → Effizienz“ in der Bosch-App. Bosch dokumentiert diese Abfrage nicht: die Bridge probiert die bekannten Wege durch, merkt sich den, der klappt, prüft die Werte gegen die Zähler seit Inbetriebnahme und zeigt sonst, was Bosch geantwortet hat (mit „Erneut abfragen“). Die Zählerstände der Bridge bleiben zum Gegencheck darunter. ' +
+  'v236 · 2026-11-25 · Wärme → Effizienz → Gebäude-Einordnung: „Heizwärme gemessen“ und „Heizstrom gemessen“ kommen jetzt nur noch aus gemessenen Tagen – Wärme und Strom je Tag gegen die Heizgradtage, aufs Jahr mit den Heizgradtagen deines Gebäudemodells gerechnet (wetterbereinigt), ohne Bauphase. Bisher war das eine grobe Hochrechnung, die für nicht gemessene Wintermonate das Gebäudemodell einsetzte. Neu darunter: „🔁 Abgleich mit der Bosch-App“ – je Kalenderjahr Strom, Wärme, Arbeitszahl und Heizstab-Anteil aus denselben Zählern wie „Energiemonitoring → Effizienz“ in der Bosch-App. ' +
   'v235 · 2026-11-25 · PV → direkt unter „Wirtschaftlichkeit“ (Planer) die neue Karte „💶 Wirtschaftlichkeit · gemessen“: dieselbe Rechnung mit den echten Messwerten von Wechselrichter und Smart Meter – Eigenverbrauch (spart …), Einspeisung, Netzbezug (Rest), Vorteil und Amortisation, jeweils „bisher gemessen“, „aufs Jahr“ hochgerechnet und zum Vergleich der Planer mit kWp, Batterie und Ausrichtung deiner echten Anlage. Hochrechnung: gemessene Monate plus Planer für den Rest des Jahres; die gemessene Abweichung zählt nur so stark, wie vom Jahr schon gemessen ist, damit ein paar trübe Wintermonate nicht das ganze Jahr verbiegen. Nach einem Jahr zählen nur noch die Messwerte. Mit eingetragener Investition zusätzlich ein Balken „seit Messbeginn schon zurückverdient“. ' +
   'v234 · 2026-11-25 · Wärme → Effizienz: neues Diagramm „🌡️ Strom & Wärme nach Außentemperatur“ – ein Punkt je Tag, waagerecht die mittlere Außentemperatur (links warm, rechts kalt), senkrecht der verbrauchte Strom (rot, linke Achse) und die erzeugte Wärme (gelb, rechte Achse), mit Trendlinien über die Heiztage. Darunter: Strom und Wärme je Grad kälter, ein Tag mit 0 °C und die Arbeitszahl. Zeitraum 90 Tage / 1 Jahr / 2 Jahre, Reihen ausblendbar, Tippen zeigt den Tag. Daten: Zählerstände der Bridge (Tage mit ≥ 80 % Messung) und HomeCom-Import; heute und die Bauphase fehlen. Außerdem: Ein Tipp auf ein Diagramm schließt die Wertanzeige nicht mehr sofort wieder (betraf am Handy alle Diagramme). ' +
   'v233 · 2026-11-25 ·Wärme → Effizienz → „Theorie vs. Praxis pro Monat“: neuer, zuschaltbarer Balken „Vorjahr“ (standardmäßig aus) – derselbe Monat ein Jahr früher aus dem HomeCom-Import, graublau neben „Gemessen“. Ist er an, zeigt „Gemessen“ nur dieses Jahr (kein Monat doppelt), dazu die Vorjahres-Summe und ein Vergleich „dieses Jahr gegen Vorjahr“ über dieselben Monate; Vorjahres-Monate aus der Bauphase sind im Tipp-Fenster markiert und zählen beim Vergleich nicht. Ohne Vorjahresdaten ist das Häkchen ausgegraut. ' +
@@ -9283,6 +9284,10 @@ async function loadHpReal(force) {
     if (y && y.ok) STATE.hpYears = y;
   } finally { _hpRealBusy = false; }
   renderHeatDemand();
+  // the bridge is still asking HomeCom in the background → look again shortly (a few times)
+  const busy = !!(STATE.hpYears && STATE.hpYears.homecom && STATE.hpYears.homecom.busy);
+  STATE.hpHcPolls = busy ? (STATE.hpHcPolls || 0) + 1 : 0;
+  if (busy && STATE.hpHcPolls <= 4) setTimeout(() => loadHpReal(true), 15000);
 }
 // "gemessen" per m² from MEASURED days only – no building model in it: the heat
 // pump's heat (and electricity) per day against that day's heating degree days
@@ -9337,7 +9342,7 @@ function hpRealYear(b) {
 // Calendar years as in the Bosch app (Energiemonitoring → Effizienz): electricity
 // used, heat made, their ratio and the electric heater's share – from the same
 // counters, so the numbers can be checked against each other.
-function hpBoschHtml() {
+function hpCounterYearsHtml() {
   const Y = STATE.hpYears && STATE.hpYears.years; if (!Y || !Y.length) return '';
   const sm = t => `<br><small style="color:var(--muted)">${t}</small>`;
   const notes = [];
@@ -9359,14 +9364,78 @@ function hpBoschHtml() {
       `<td>${h}</td><td><b>${y.cop != null ? fmt(y.cop, 2) : '–'}</b></td>` +
       `<td>${y.heater_share != null ? fmt(y.heater_share * 100, 0) + ' %' + (hePart ? '*' : '') : '–'}</td></tr>`;
   });
-  return `<div style="font-weight:700;font-size:13px;margin:16px 0 6px">🔁 Abgleich mit der Bosch-App</div>` +
-    '<table class="pvt"><tr><th>Jahr</th><th>Strom</th><th>Wärme</th><th>Arbeits&shy;zahl</th><th>Heiz&shy;stab</th></tr>' +
+  return '<table class="pvt"><tr><th>Jahr</th><th>Strom</th><th>Wärme</th><th>Arbeits&shy;zahl</th><th>Heiz&shy;stab</th></tr>' +
     rows.join('') + '</table>' +
     `<div class="note" style="margin-top:6px">Dieselben Zähler wie in der Bosch-App unter <b>Energiemonitoring → Effizienz</b>: ` +
     'verbrauchte Energie (Kompressor + Heizstab), erzeugte Wärme (Heizung + Warmwasser), Arbeitszahl = Wärme ÷ Strom ' +
     '(die Bosch-App rundet auf eine Stelle) und der Anteil des elektrischen Zuheizers. Hier aus den Zählerständen, die die Bridge ' +
     'liest – auch über Lücken hinweg genau. ' + notes.join(' ') + '</div>';
 }
+// HomeCom's own year values per purpose (heating / hot water) – asked for by the
+// bridge in the background (/api/heatpump/years → homecom). Bosch does not
+// document that query, so a failure shows what Bosch answered.
+function hpHomecomHtml() {
+  const H = STATE.hpYears && STATE.hpYears.homecom;
+  if (!H || H.connected === false) return '';
+  const sm = t => `<br><small style="color:var(--muted)">${t}</small>`;
+  const ys = Object.values(H.years || {}).filter(y => y && y.ok).sort((a, z) => z.year - a.year);
+  if (!ys.length) {
+    if (H.busy || !H.checked) return '<div class="note" style="margin-bottom:8px">Frage HomeCom nach den Jahreswerten für Heizen und Warmwasser …</div>';
+    const t = ((H.last_fail && H.last_fail.tried) || []).map(([w, st]) => `${esc(w)} → <b>${esc(String(st))}</b>`).join(' · ');
+    return `<div class="note" style="margin-bottom:8px">HomeCom hat keine Jahreswerte geliefert${H.error ? ` (${esc(H.error)})` : ''}.` +
+      (t ? ` Versucht: ${t}.` : '') + ' Unten stehen die Werte aus den Zählerständen der Bridge. ' +
+      '<a href="#" id="hc-years-retry">Erneut abfragen</a>' +
+      (H.last_fail && H.last_fail.sample ? '<details style="margin-top:6px"><summary>Antwort von Bosch (Anfang)</summary>' +
+        `<code style="display:block;white-space:pre-wrap;word-break:break-all;font-size:11px;margin-top:4px">${esc(H.last_fail.sample)}</code></details>` : '') +
+      '</div>';
+  }
+  const area = buildData().area || 0;
+  const NM = { ch: 'Heizen', dhw: 'Warmwasser', cooling: 'Kühlen', total: 'Gesamt' };
+  // as the Bosch app writes them: electricity with one decimal, heat without
+  const kE = v => `${fmt(v, v < 10000 ? 1 : 0)} kWh`, kH = v => `${fmt(v, 0)} kWh`;
+  const shares = [];
+  const blocks = ys.map(y => {
+    if (y.plausible === false) {
+      return `<div class="note">⚠️ <b>${y.year}</b>: die HomeCom-Werte passen nicht zu den Zählern seit Inbetriebnahme ` +
+        `(${esc((y.warn || []).join('; '))}) – deshalb nicht angezeigt.</div>`;
+    }
+    const D = y.domains || {};
+    const doms = ['ch', 'dhw', 'cooling', 'total'].filter(d => D[d] && (d !== 'cooling' || (D[d].compressor || 0) + (D[d].outputProduced || 0) > 0.5));
+    const rows = doms.map(d => {
+      const v = D[d], e = (v.compressor || 0) + (v.eheater || 0), h = v.outputProduced, tot = d === 'total';
+      const jaz = e > 0.5 && h != null ? h / e : null, B = x => (tot ? `<b>${x}</b>` : x);
+      if (tot && e > 0.5 && v.eheater != null) shares.push(`${y.year}: <b>${fmt(v.eheater / e * 100, 0)}&nbsp;%</b>`);
+      return `<tr><td>${B(NM[d])}</td><td>${B(kE(e))}${v.eheater > 0.05 ? sm('Heizstab ' + fmt(v.eheater, 0) + ' kWh') : ''}</td>` +
+        `<td>${h != null ? B(kH(h)) : '–'}${d === 'ch' && area > 0 && h != null ? sm(fmt(h / area, 0) + ' kWh/m²') : ''}</td>` +
+        `<td>${jaz != null ? `<b>${fmt(jaz, 2)}</b>` : '–'}</td></tr>`;
+    });
+    return `<div style="font-size:12.5px;font-weight:700;margin:10px 0 4px">${y.year}${y.final ? '' : ' bis heute'}</div>` +
+      `<table class="pvt"><tr><th></th><th>Strom</th><th>Wärme</th><th>Arbeits&shy;zahl</th></tr>${rows.join('')}</table>` +
+      ((y.warn || []).length ? `<div class="note">⚠️ ${esc(y.warn.join('; '))}</div>` : '');
+  });
+  const when = H.checked ? new Date(H.checked * 1000).toLocaleString('de-DE', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+  return `<div style="font-size:12px;color:var(--muted)">Direkt aus HomeCom (Bosch-Cloud)${H.demo ? ' · Demo-Werte' : ''}</div>` +
+    blocks.join('') +
+    '<div class="note" style="margin-top:6px">Dieselben Werte wie in der Bosch-App unter <b>Energiemonitoring → Effizienz</b>, hier aufgeteilt in ' +
+    '<b>Heizen</b> und <b>Warmwasser</b>. Strom = Kompressor + Heizstab, Arbeitszahl = Wärme ÷ Strom' +
+    (area > 0 ? `, kWh/m² = Heizwärme ÷ beheizte Fläche (${fmt(area, 0)} m², bis heute, nicht wetterbereinigt)` : '') + '. ' +
+    (shares.length ? `Anteil des Heizstabs am Strom (bei Bosch „Anteil am Verbrauch durch den elektrischen Zuheizer“): ${shares.join(', ')}. ` : '') +
+    (when ? `Abgefragt ${when}${H.method && H.method !== 'demo' ? ` (Weg: ${esc(H.method)})` : ''}. ` : '') +
+    'Bosch dokumentiert diese Abfrage nicht – sie kann sich ändern.</div>';
+}
+function hpBoschHtml() {
+  const hcPart = hpHomecomHtml(), ctrPart = hpCounterYearsHtml();
+  if (!hcPart && !ctrPart) return '';
+  return '<div style="font-weight:700;font-size:13px;margin:16px 0 6px">🔁 Abgleich mit der Bosch-App</div>' + hcPart +
+    (ctrPart ? (hcPart ? '<div style="font-size:12px;color:var(--muted);margin:12px 0 4px">Zum Gegencheck: aus den Zählerständen der Bridge</div>' : '') + ctrPart : '');
+}
+document.addEventListener('click', e => {
+  const a = e.target && e.target.closest && e.target.closest('#hc-years-retry'); if (!a) return;
+  e.preventDefault();
+  a.textContent = 'frage HomeCom …';
+  api('/api/heatpump/years?refresh=1').then(r => { if (r && r.ok) STATE.hpYears = r; }).catch(() => {});
+  setTimeout(() => loadHpReal(true), 20000);
+});
 function renderHeatDemand() {
   const card = $('hp-theory-card'); if (!card) return;
   const b = buildData(), r = computeHeat(b), price = STATE.price;

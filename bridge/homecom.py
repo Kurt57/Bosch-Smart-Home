@@ -27,10 +27,12 @@ import base64
 import hashlib
 import http.client
 import json
+import re
 import socket
 import ssl
 import threading
 import time
+from datetime import datetime, timezone
 from urllib.parse import urlencode
 
 OAUTH_HOST = "singlekey-id.com"
@@ -84,7 +86,28 @@ PROBE_PATHS = [
     "/resource/energy/history",
     "/resource/energy/historyHourly",
     "/resource/energy/historyEntries",
+    "/resource/heatSources/emon/chConsumption",
+    "/resource/heatSources/emon/dhwConsumption",
+    "/resource/recordings/heatSources",
+    "/resource/recordings/heatSources/emon",
 ]
+
+# Energy per purpose (heating / hot water) – not documented by Bosch; the paths
+# are the ones the community found (homecom_alt, bosch-homecom-hass, buderus):
+#  * lifetime counters since commissioning, same "values" shape as
+#    totalConsumption: compressor = heat-pump electricity, eheater = electric
+#    heater, outputProduced = heat made
+EMON_LIFETIME = {"total": "/resource/heatSources/emon/totalConsumption",
+                 "ch": "/resource/heatSources/emon/chConsumption",
+                 "dhw": "/resource/heatSources/emon/dhwConsumption",
+                 "cooling": "/resource/heatSources/emon/coolingConsumption"}
+#  * recordings per purpose and quantity: classic …/{domain}/{key}?interval=
+#    YYYY-MM-DD (hours) / YYYY-MM (days) / YYYY (months – by analogy, not
+#    confirmed); the newer app's EMON3 query on …/{domain}?query=all&sampleRate=
+#    P1M&startDate=…&endDate=… (date spelling not published)
+EMON_REC = "/resource/recordings/heatSources/emon"
+EMON_DOMAINS = ("total", "ch", "dhw")
+EMON_KEYS = ("compressor", "eheater", "outputProduced")
 
 
 def _challenge() -> str:
@@ -525,7 +548,9 @@ class HomeComClient:
 
     def probe(self, gateway_id: str) -> dict:
         out = {}
-        for p in PROBE_PATHS:
+        y = datetime.now().year
+        q = urlencode({"query": "all", "sampleRate": "P1M", "startDate": f"{y}-01-01", "endDate": f"{y}-12-31"})
+        for p in PROBE_PATHS + [f"{EMON_REC}/total/compressor?interval={y}", f"{EMON_REC}/total?{q}"]:
             try:
                 st, body = self.raw(gateway_id, p)
                 out[p] = {"status": st, "body": body[:700]}
@@ -821,3 +846,201 @@ class HomeComClient:
             return r.status, data.decode("utf-8", "replace")
         finally:
             conn.close()
+
+    # -- energy per year and purpose (Bosch recordings) -------------------- #
+    def _get(self, path: str, accept: bool = True):
+        """GET → (status, JSON or None, start of the text). Unlike _api_get it
+        does not raise on 4xx/5xx: the year lookup tries several undocumented
+        forms and keeps every answer for the diagnosis. Network errors and a
+        rejected token raise as usual."""
+        token = self._valid_token()
+        conn = http.client.HTTPSConnection(API_HOST, 443, timeout=self.timeout, context=self._ctx)
+        try:
+            hdr = {"Authorization": f"Bearer {token}"}
+            if accept:
+                hdr["Accept"] = "application/json"
+            try:
+                conn.request("GET", path, headers=hdr)
+                resp = conn.getresponse()
+                data = resp.read()
+            except (OSError, http.client.HTTPException) as exc:
+                raise _net_error(API_HOST, exc) from exc
+            if resp.status == 401:
+                raise HomeComAuthError("Datenabruf HomeCom: Bosch lehnt das Token ab (HTTP 401)")
+            body = None
+            if resp.status == 200 and data:
+                try:
+                    body = json.loads(data)
+                except ValueError:
+                    body = None
+            return resp.status, body, data[:600].decode("utf-8", "replace")
+        finally:
+            conn.close()
+
+    @staticmethod
+    def emon_values(payload) -> dict:
+        """{compressor, eheater, outputProduced, …} of an emon counter answer."""
+        vals = {}
+        if isinstance(payload, dict):
+            items = payload.get("values")
+            if isinstance(items, dict):
+                items = [items]
+            for item in items or []:
+                if isinstance(item, dict):
+                    for k, v in item.items():
+                        if isinstance(v, (int, float)) and not isinstance(v, bool):
+                            vals[k] = float(v)
+        return vals
+
+    def read_emon_lifetime(self, gateway_id: str) -> dict:
+        """Energy per purpose since commissioning: {domain: {compressor, eheater,
+        outputProduced}} for every domain the device answers."""
+        out = {}
+        for dom, p in EMON_LIFETIME.items():
+            st, body, _ = self._get(f"{API_BASE}{gateway_id}{p}")
+            v = self.emon_values(body) if st == 200 else {}
+            if v:
+                out[dom] = v
+        return out
+
+    @staticmethod
+    def rec_slots(payload):
+        """A classic recording {sampleRate, recording: [{y, c}, …]} →
+        (sampleRate, [kWh or None per slot]); None if it is not one. A slot
+        with c == 0 is not filled yet (Bosch sends y=1, c=0 there) → None."""
+        if not isinstance(payload, dict) or not isinstance(payload.get("recording"), list):
+            return None
+        slots = []
+        for b in payload["recording"]:
+            y = b.get("y") if isinstance(b, dict) else None
+            c = b.get("c") if isinstance(b, dict) else None
+            if not isinstance(y, (int, float)) or isinstance(y, bool) \
+                    or (isinstance(c, (int, float)) and c <= 0):
+                slots.append(None)
+            else:
+                slots.append(float(y))
+        return payload.get("sampleRate"), slots
+
+    @classmethod
+    def emon3_slots(cls, payload) -> dict:
+        """EMON3 query answer → {(domain, key): [kWh per slot]}. Bosch has not
+        published the format, so this walks the JSON for a recording next to a
+        value path …/emon/{domain}/{key} (in id, path, name or recordedResource)."""
+        found = {}
+
+        def ident(o):
+            for k in ("id", "path", "uri", "resource", "valuePath", "name", "type"):
+                v = o.get(k)
+                if isinstance(v, str) and ("/" in v or v in EMON_KEYS):
+                    return v
+            rr = o.get("recordedResource")
+            if isinstance(rr, dict) and isinstance(rr.get("id"), str):
+                return rr["id"]
+            return None
+
+        def visit(o, parent=None):
+            if isinstance(o, dict):
+                i = ident(o)
+                if i in EMON_KEYS and parent:          # {"id": "compressor"} under …/emon/ch
+                    i = parent.rstrip("/") + "/" + i
+                i = i or parent
+                r = cls.rec_slots(o)
+                if r and i:
+                    m = re.search(r"emon/(\w+)/(compressor|eheater|outputProduced)\b", i)
+                    if m:
+                        found[(m.group(1), m.group(2))] = r[1]
+                for v in o.values():
+                    visit(v, i)
+            elif isinstance(o, list):
+                for v in o:
+                    visit(v, parent)
+        visit(payload)
+        return found
+
+    def energy_year(self, gateway_id: str, year: int, prefer: str | None = None) -> dict:
+        """What the heat pump used and made in one calendar year, per purpose –
+        the numbers behind 'Energiemonitoring → Effizienz' in the Bosch app.
+        Neither way is documented, so it tries (1) the classic recording per
+        purpose and quantity with a year interval, without and – after a 406 –
+        with an Accept header, (2) the EMON3 query of the newer app with three
+        date spellings. The way that worked (`prefer`) goes first next time.
+        → {ok, year, method, domains: {domain: {key: kWh}}, months: {domain:
+           {key: [kWh per month]}}, tried: [[what, HTTP status], …], sample}"""
+        base = f"{API_BASE}{gateway_id}{EMON_REC}"
+        tried: list = []
+        out = {"ok": False, "year": year, "method": None, "domains": {}, "months": {},
+               "tried": tried, "sample": None}
+
+        def get(rel, what, accept=True):
+            st, body, head = self._get(base + rel, accept)
+            tried.append([what, st])
+            if st == 200 and out["sample"] is None:
+                out["sample"] = head
+            return st, body
+
+        def classic(accept):
+            tag = "" if accept else " (ohne Accept)"
+            res = {}
+            st, body = get(f"/total/compressor?interval={year}", f"total/compressor?interval={year}{tag}", accept)
+            r = self.rec_slots(body) if st == 200 else None
+            if not r or not any(v is not None for v in r[1]):
+                return None, st
+            res[("total", "compressor")] = r[1]
+            for dom in EMON_DOMAINS:
+                for key in EMON_KEYS:
+                    if (dom, key) in res:
+                        continue
+                    st2, b2 = get(f"/{dom}/{key}?interval={year}", f"{dom}/{key}?interval={year}{tag}", accept)
+                    r2 = self.rec_slots(b2) if st2 == 200 else None
+                    if r2:
+                        res[(dom, key)] = r2[1]
+            return res, st
+
+        s_loc = datetime(year, 1, 1).astimezone()
+        e_loc = datetime(year, 12, 31, 23, 59, 59).astimezone()
+        fmts = {"iso-offset": (s_loc.isoformat(), e_loc.isoformat()),
+                "iso-utc": (s_loc.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                            e_loc.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")),
+                "date": (f"{year}-01-01", f"{year}-12-31")}
+
+        def emon3(fmt):
+            sd, ed = fmts[fmt]
+            res = {}
+            for dom in EMON_DOMAINS:
+                q = urlencode({"query": "all", "sampleRate": "P1M", "startDate": sd, "endDate": ed})
+                st, body = get(f"/{dom}?{q}", f"{dom}?query=all&sampleRate=P1M ({fmt})")
+                got = self.emon3_slots(body) if st == 200 else {}
+                if dom == "total" and not any(any(v is not None for v in sl) for sl in got.values()):
+                    return None
+                res.update(got)
+            return res
+
+        order = ["interval-noaccept", "emon3:iso-offset", "emon3:iso-utc", "emon3:date"]
+        if prefer == "interval":
+            order[0] = "interval"                     # this device needed the Accept header
+        elif prefer in order:
+            order.remove(prefer)
+            order.insert(0, prefer)
+        res, method = None, None
+        for m in order:
+            if m in ("interval-noaccept", "interval"):
+                res, st = classic(accept=(m == "interval"))
+                if res is None and m == "interval-noaccept" and st == 406:
+                    res, _ = classic(accept=True)
+                    m = "interval"
+            else:
+                res = emon3(m.split(":", 1)[1])
+            if res:
+                method = m
+                break
+        if not res:
+            return out
+        for (dom, key), slots in res.items():
+            vals = [v for v in slots if v is not None]
+            if not vals:
+                continue
+            out["domains"].setdefault(dom, {})[key] = round(sum(vals), 2)
+            out["months"].setdefault(dom, {})[key] = [None if v is None else round(v, 2) for v in slots]
+        out["ok"] = bool(out["domains"].get("total") or out["domains"].get("ch"))
+        out["method"] = method
+        return out

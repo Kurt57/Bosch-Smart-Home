@@ -6878,6 +6878,100 @@ def compute_hp_years(store: "Store", now: int | None = None) -> dict:
     return {"ok": True, "years": out}
 
 
+# HomeCom's own year values per purpose (heating / hot water) – what the Bosch
+# app shows under 'Energiemonitoring → Effizienz', asked for in the background.
+HC_YEARS_KEY = "homecom_years_v1"
+HC_YEARS_TTL = 6 * 3600              # this year's values: ask again every 6 h
+HC_YEARS_RETRY = 2 * 3600            # when nothing came back
+
+
+def _hc_years_load(store: "Store") -> dict:
+    try:
+        raw = store.kv_get(HC_YEARS_KEY)
+        d = json.loads(raw) if raw else {}
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def _hc_year_check(r: dict, life: dict | None) -> None:
+    """Flag a year that cannot be right: more than the counter since
+    commissioning (wrong unit, slots counted twice) – or heating + hot water
+    not adding up to the total."""
+    warn, bad = [], False
+    D = r.get("domains") or {}
+    for dom, vals in D.items():
+        L = (life or {}).get(dom) or {}
+        for k, v in vals.items():
+            if L.get(k) is not None and v > L[k] * 1.02 + 1.0:
+                warn.append(f"{dom}/{k}: Jahr {v:.0f} kWh > seit Inbetriebnahme {L[k]:.0f} kWh")
+                bad = True
+    t, ch, dhw = D.get("total") or {}, D.get("ch") or {}, D.get("dhw") or {}
+    for k in ("compressor", "outputProduced"):
+        if t.get(k) and ch.get(k) is not None and dhw.get(k) is not None:
+            parts = ch[k] + dhw[k] + ((D.get("cooling") or {}).get(k) or 0.0)
+            if abs(parts - t[k]) > 0.1 * t[k] + 2.0:
+                warn.append(f"{k}: Heizen + Warmwasser {parts:.0f} kWh ≠ gesamt {t[k]:.0f} kWh")
+    r["warn"], r["plausible"] = warn, not bad
+
+
+def hc_years_refresh(ctx, store: "Store", cfg: dict) -> dict:
+    """Ask HomeCom for last year's and this year's energy per purpose – a few
+    HTTPS calls, in the background. A year fetched more than two days after it
+    ended is final and not asked for again."""
+    cache = _hc_years_load(store)
+    cache["checked"] = int(time.time())
+    client, gid = ctx.homecom_client(), cfg.get("homecom_gateway")
+    if not client or not gid or homecom is None:
+        cache.update(ok=False, error="nicht mit HomeCom verbunden")
+        store.kv_set(HC_YEARS_KEY, json.dumps(cache))
+        return cache
+    now = datetime.now()
+    years = cache.setdefault("years", {})
+    try:
+        life = client.read_emon_lifetime(gid)
+        if life:
+            cache["lifetime"], cache["lifetime_ts"] = life, int(time.time())
+        fails = []
+        for y in (now.year - 1, now.year):
+            ent = years.get(str(y))
+            if ent and ent.get("final"):
+                continue
+            r = client.energy_year(gid, y, cache.get("method"))
+            if r.get("ok"):
+                r["final"] = now >= datetime(y + 1, 1, 3)
+                r["fetched"] = int(time.time())
+                _hc_year_check(r, cache.get("lifetime"))
+                r.pop("sample", None)
+                years[str(y)] = r
+                cache["method"] = r["method"]
+            else:
+                fails.append({"year": y, "tried": r.get("tried"), "sample": r.get("sample")})
+        cache["ok"] = any(v.get("ok") for v in years.values())
+        cache["last_fail"] = None if cache["ok"] else (fails[-1] if fails else None)
+        cache["error"] = None if cache["ok"] else "HomeCom liefert keine Jahreswerte"
+    except Exception as exc:                   # network / login: keep what we had
+        cache["error"] = str(exc)
+    store.kv_set(HC_YEARS_KEY, json.dumps(cache))
+    return cache
+
+
+def _hc_years_demo() -> dict:
+    """Demo: invented, self-consistent HomeCom year values (heating + hot water = total)."""
+    y = datetime.now().year
+    keys = ("compressor", "eheater", "outputProduced")
+    d = lambda c, e, h: dict(zip(keys, (c, e, h)))
+    cur = {"ch": d(3790.0, 120.0, 12020.0), "dhw": d(840.0, 232.0, 2390.0)}
+    prev = {"ch": d(1650.0, 310.0, 4900.0), "dhw": d(420.0, 150.0, 1000.0)}
+    for x in (cur, prev):
+        x["total"] = {k: round(x["ch"][k] + x["dhw"][k], 1) for k in keys}
+    life = {dom: {k: round(cur[dom][k] + prev[dom][k], 1) for k in keys} for dom in ("total", "ch", "dhw")}
+    ent = lambda yr, dm, fin: {"ok": True, "year": yr, "final": fin, "method": "demo", "domains": dm,
+                               "warn": [], "plausible": True, "fetched": int(time.time())}
+    return {"ok": True, "demo": True, "connected": True, "method": "demo", "checked": int(time.time()),
+            "lifetime": life, "years": {str(y - 1): ent(y - 1, prev, True), str(y): ent(y, cur, False)}}
+
+
 def _energy_signature(store: "Store") -> dict | None:
     """Building heat-demand line: mean space-heating HEAT power (W) against the
     outdoor temperature, least squares. First choice the classic daily energy
@@ -13137,6 +13231,23 @@ class Handler(BaseHTTPRequestHandler):
             feed = PV_FEEDIN_DEFAULT_CT / 100.0
         return (price if price is not None else 0.35), max(0.0, feed)
 
+    def _hc_years(self, force: bool = False) -> dict:
+        """HomeCom's own year values per purpose – from the cache, refreshed in
+        the background when stale (or on request, at most once a minute)."""
+        if self.ctx.mode == "demo":
+            return _hc_years_demo()
+        if not (homecom and self.cfg.get("homecom_refresh_token") and self.cfg.get("homecom_gateway")):
+            return {"ok": False, "connected": False}
+        cache = _hc_years_load(self.store)
+        age = time.time() - (cache.get("checked") or 0)
+        stale = age > (HC_YEARS_TTL if cache.get("ok") else HC_YEARS_RETRY)
+        if stale or (force and age > 60):
+            _bg_refresh(self.ctx, "hcyears", lambda: hc_years_refresh(self.ctx, self.store, self.cfg))
+        with self.ctx._bg_lock:
+            cache["busy"] = "hcyears" in self.ctx._bg_running
+        cache["connected"] = True
+        return cache
+
     def _fronius_payload(self) -> dict:
         st = dict(self.ctx.fr_state)
         connected = self.ctx.fronius_connected()
@@ -14063,8 +14174,9 @@ class Handler(BaseHTTPRequestHandler):
                     ("tempdays", days), 600, lambda: compute_hp_tempdays(self.store, days)))
             if path == "/api/heatpump/years":
                 # calendar years from the heat pump's counters (Wärme → Effizienz: Abgleich mit der Bosch-App)
-                return self._send_json(self.ctx.calc_get(
-                    ("hpyears",), 300, lambda: compute_hp_years(self.store)))
+                out = dict(self.ctx.calc_get(("hpyears",), 300, lambda: compute_hp_years(self.store)))
+                out["homecom"] = self._hc_years(qs.get("refresh", ["0"])[0] == "1")
+                return self._send_json(out)
             if path == "/api/series":
                 device = qs.get("device", ["all"])[0]
                 since = int(time.time()) - days * 86400
