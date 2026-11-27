@@ -32,7 +32,10 @@ Adresse öffnen (z. B. `http://<bridge>:8090/#dash`) und zum Homescreen hinzufü
 **Einstellungen:** Setup → **🖥️ Wohn-Dashboard** – ab wie vielen **Sekunden** der Fenster-Hinweis
 blinkt (Standard 600 s; zum Testen z. B. 1 s) und wie viele **Abende vorher** der Tonnen-Hinweis
 erscheint (Standard 1). Gilt für alle Geräte; ein laufendes Dashboard übernimmt die Werte innerhalb
-einer Minute. Ist ein Fenster offen, schaut das Dashboard alle 20 Sekunden nach.
+einer Minute. Ist ein Fenster offen, schaut das Dashboard alle 20 Sekunden nach. Dort auch fürs Apple TV:
+ab welcher Leistung ein Gerät mit Messung (Standard 100 W) und der „Rest im Haus“ (Standard 150 W) als
+**weitere Verbraucher** unter dem Energiefluss erscheinen – mit Vorschau, was gerade gemessen wird
+([APPLETV.md](APPLETV.md)).
 
 Auf Handy-Breite rutschen Außentemperatur und „aktualisiert“ in eine zweite Zeile, damit die
 Knöpfe oben (Zuhause/Abwesend, Hell/Dunkel, ✕) im Bild bleiben.

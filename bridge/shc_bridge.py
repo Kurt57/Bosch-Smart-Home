@@ -12302,12 +12302,28 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 # the heat pump is there but without a current power: the rest would hide it
                 hp_unknown = bool(hp.get("connected")) and (out.get("live") or {}).get("hp_w") is None
+                dev_w, rest_w = tv_cons_limits(st)
                 out["consumers"] = tv_consumers(self._tv_devices_now(), out.get("live"), self._tv_aeg_now(), now,
-                                                hp_unknown=hp_unknown)
+                                                hp_unknown=hp_unknown, min_w=dev_w, rest_min_w=rest_w)
             except Exception:
                 out["consumers"] = []
             return out
         return self.ctx.calc_get(("tv",), 20, build)
+
+    def _tv_consumers_preview(self) -> dict:
+        """For Setup → Wohn-Dashboard: everything measured right now (devices and
+        the rest from 1 W, not pooled) and the thresholds in force – the app marks
+        what the TV would show and updates the marks as you change a threshold."""
+        tv = self._tv_payload()                      # cached 20 s: house load, heat pump
+        live = tv.get("live") or {}
+        hp = self._hp_live()
+        hp_unknown = bool(hp.get("connected")) and live.get("hp_w") is None
+        items = tv_consumers(self._tv_devices_now(), live, self._tv_aeg_now(), time.time(),
+                             hp_unknown=hp_unknown, min_w=1.0, rest_min_w=1.0, max_n=None)
+        dev_w, rest_w = tv_cons_limits(self._settings_load())
+        return {"ok": True, "items": items[:12], "dev_w": dev_w, "rest_w": rest_w,
+                "has_meter": live.get("load_w") is not None, "hp_unknown": hp_unknown,
+                "max": TV_CONS_MAX, "shown": tv.get("consumers") or []}
 
     def _tv_devices_now(self) -> list:
         """The Smart Home's measured devices with their latest reading."""
@@ -13693,6 +13709,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json({"ok": False, "error": "zu viele Einstellungen"}, 400)
         if changed:
             self.store.kv_set(self.SETTINGS_KEY, json.dumps(cur))
+            if any(isinstance(k, str) and k.startswith("bhe_tvcons_") for k in updates):
+                self.ctx.calc_clear("tv")      # the TV asks again within 15 s – show the new threshold then
         return self._send_json({"ok": True, "changed": changed, "settings": cur})
 
     def _post_automeasure(self, kind, body):
@@ -13748,6 +13766,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json(self._health())
             if path == "/api/tv":
                 return self._send_json(self._tv_payload())
+            if path == "/api/tv/consumers":
+                return self._send_json(self._tv_consumers_preview())
             if path == "/api/music/meta":
                 # a YouTube Music playlist link → canonical app link + title/cover
                 # (public oEmbed; private lists: the user names them). Cached in ytmusic.
@@ -15567,14 +15587,37 @@ def _dev_icon(name: str) -> str:
     return "🔌"
 
 
-def tv_consumers(devices: list, live: dict | None, aeg: list | None, now: float, hp_unknown: bool = False) -> list:
+def tv_cons_limits(st: dict | None) -> tuple:
+    """The thresholds from Setup → Wohn-Dashboard: bhe_tvcons_dev_w (measured
+    devices) and bhe_tvcons_rest_w (rest of the house) – watts, or "off" for
+    never. Defaults 100 W and 150 W; anything unreadable counts as not set."""
+    st = st or {}
+
+    def one(key, default):
+        v = str(st.get(key) if st.get(key) is not None else "").strip().lower()
+        if not v:
+            return default
+        if v == "off":
+            return None
+        try:
+            f = float(v)
+        except ValueError:
+            return default
+        return max(1.0, min(50000.0, f)) if f == f else default
+    return one("bhe_tvcons_dev_w", TV_CONS_MIN_W), one("bhe_tvcons_rest_w", TV_CONS_REST_MIN_W)
+
+
+def tv_consumers(devices: list, live: dict | None, aeg: list | None, now: float, hp_unknown: bool = False,
+                 min_w: float | None = TV_CONS_MIN_W, rest_min_w: float | None = TV_CONS_REST_MIN_W,
+                 max_n: int | None = TV_CONS_MAX) -> list:
     """The other big consumers right now, next to the heat pump on the TV: the
-    Smart Home's measured devices drawing at least 100 W and – with the smart
-    meter – the rest of the house nothing measures individually (house load −
-    heat pump − all measured devices), named after a running AEG appliance
-    (they report no power, so theirs is part of that rest). No rest while the
-    heat pump has no current power (hp_unknown) – it would be hidden in there.
-    At most four, the smallest pooled.
+    Smart Home's measured devices drawing at least min_w (100 W) and – with the
+    smart meter – the rest of the house nothing measures individually (house
+    load − heat pump − all measured devices) from rest_min_w (150 W), named
+    after a running AEG appliance (they report no power, so theirs is part of
+    that rest). A threshold of None: never. No rest while the heat pump has no
+    current power (hp_unknown) – it would be hidden in there. At most max_n,
+    the smallest pooled (None: all, for the Setup preview).
     devices: [{id, name, room, w, ts}]; aeg: [{name, state, time_to_end_min}]."""
     live = live or {}
     out, dev_sum = [], 0.0
@@ -15582,15 +15625,15 @@ def tv_consumers(devices: list, live: dict | None, aeg: list | None, now: float,
         w = d.get("w")
         if w is None or not d.get("ts") or now - d["ts"] > TV_CONS_STALE_S or w <= 0:
             continue
-        dev_sum += w
-        if w >= TV_CONS_MIN_W:
+        dev_sum += w                    # every device counts against the rest, shown or not
+        if min_w is not None and w >= min_w:
             name = d.get("name") or "Gerät"
             out.append({"id": f"d-{d.get('id')}", "name": name, "icon": _dev_icon(name), "w": round(w),
                         "value": _kw(w), "sub": d.get("room") or "", "kind": "dev"})
     load = live.get("load_w")
-    if load is not None and not hp_unknown:
+    if load is not None and not hp_unknown and rest_min_w is not None:
         rest = float(load) - float(live.get("hp_w") or 0) - dev_sum
-        if rest >= TV_CONS_REST_MIN_W:
+        if rest >= rest_min_w:
             run = [a for a in (aeg or []) if "RUN" in str(a.get("state") or "").upper()]
             name, sub = "Rest im Haus", "ungemessen"
             if run:
@@ -15603,10 +15646,10 @@ def tv_consumers(devices: list, live: dict | None, aeg: list | None, now: float,
             out.append({"id": "rest", "name": name, "icon": "🏠", "w": round(rest), "value": _kw(rest),
                         "sub": sub, "kind": "rest"})
     out.sort(key=lambda c: -c["w"])
-    if len(out) > TV_CONS_MAX:
-        more = out[TV_CONS_MAX - 1:]
+    if max_n is not None and len(out) > max_n:
+        more = out[max_n - 1:]
         w = sum(c["w"] for c in more)
-        out = out[:TV_CONS_MAX - 1] + [{"id": "more", "name": f"{len(more)} weitere", "icon": "⋯", "w": w,
+        out = out[:max_n - 1] + [{"id": "more", "name": f"{len(more)} weitere", "icon": "⋯", "w": w,
                                         "value": _kw(w), "sub": ", ".join(c["name"] for c in more)[:60], "kind": "more"}]
     return out
 

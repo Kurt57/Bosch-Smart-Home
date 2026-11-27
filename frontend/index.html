@@ -2168,6 +2168,28 @@
       <div class="note" style="margin-top:6px; line-height:1.6">Standard: <b>600 s</b> (10 min) und <b>1 Abend</b>. Zum Testen
         z. B. <b>1 Sekunde</b> – der Hinweis blinkt dann, sobald die Bridge das offene Fenster bemerkt hat (je nach Abfrage
         bis etwa eine Minute). <a href="#" id="dash-reset" onclick="return false">Auf Standard zurücksetzen</a></div>
+      <div id="tvcons-setup">
+        <h3>📺 Apple TV: weitere Verbraucher</h3>
+        <div class="note" style="line-height:1.6; margin-bottom:8px">
+          Unter dem Energiefluss zeigt das Apple TV, was außer der Wärmepumpe gerade viel Strom zieht: Geräte mit
+          eigener Messung (Zwischenstecker) und – mit dem Smart Meter – den <b>Rest im Haus</b>, also alles, was nichts
+          einzeln misst (Herd, Wasserkocher …). Ab welcher Leistung ein Eintrag erscheint:
+        </div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap">
+          <div style="flex:1; min-width:160px"><label for="tvcons-dev">Gerät mit Messung ab</label>
+            <select id="tvcons-dev">
+              <option value="50">50 W</option><option value="100">100 W (Standard)</option><option value="200">200 W</option>
+              <option value="300">300 W</option><option value="500">500 W</option><option value="1000">1 kW</option>
+              <option value="2000">2 kW</option><option value="off">nie</option>
+            </select></div>
+          <div style="flex:1; min-width:160px"><label for="tvcons-rest">„Rest im Haus“ ab</label>
+            <select id="tvcons-rest">
+              <option value="150">150 W (Standard)</option><option value="300">300 W</option><option value="500">500 W</option>
+              <option value="1000">1 kW</option><option value="2000">2 kW</option><option value="off">nie</option>
+            </select></div>
+        </div>
+        <div class="note" id="tvcons-note" style="margin-top:8px; line-height:1.6"></div>
+      </div>
       <div id="party-setup">
         <h3>🎉 Feier-Modus</h3>
         <div class="note" style="line-height:1.6; margin-bottom:8px">

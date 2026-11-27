@@ -38,10 +38,10 @@ Radio-Cover ist dort nur noch ein Hauch, und an Feiertagen färbt sich der Hinte
 **Weitere Verbraucher 🔌:** Unter dem Energiefluss steht eine Zeile mit dem, was außer der Wärmepumpe gerade
 spürbar Strom zieht – höchstens vier Einträge, der größte zuerst:
 
-- jedes **Smart-Home-Gerät mit Strommessung** (Zwischenstecker), das gerade **ab 100 W** braucht, mit Raum
-  (Messwert höchstens 15 Minuten alt);
+- jedes **Smart-Home-Gerät mit Strommessung** (Zwischenstecker), das gerade **ab 100 W** braucht (einstellbar,
+  siehe unten), mit Raum (Messwert höchstens 15 Minuten alt);
 - mit dem Smart Meter der **Rest im Haus**: Hausverbrauch − Wärmepumpe − alle gemessenen Geräte, also alles, was
-  nichts einzeln misst (Herd, Wasserkocher, Backofen …), ab 150 W. Läuft gerade ein AEG-Gerät (Waschmaschine,
+  nichts einzeln misst (Herd, Wasserkocher, Backofen …), ab 150 W (einstellbar). Läuft gerade ein AEG-Gerät (Waschmaschine,
   Trockner, Geschirrspüler), heißt der Eintrag „Rest · Waschmaschine läuft“ mit „noch 42 min“ – AEG meldet keine
   Leistung, ihr Strom steckt in diesem Rest. Hat die Wärmepumpe gerade keine aktuelle Leistung, fehlt der Rest,
   weil er sie sonst mit enthielte;
@@ -51,6 +51,12 @@ Der Ring um das Symbol zeigt den Anteil am Hausverbrauch gerade jetzt; ab 1 kW i
 Damit die Seite weiter ohne Blättern passt, wird das Energiefluss-Bild etwas flacher, wenn es eng wird (höchstens
 44 Punkte). Ist nichts davon über der Schwelle, bleibt die Zeile weg und das Bild hat seine alte Größe. Die Bridge
 liefert die Einträge fertig in `GET /api/tv` → `consumers`.
+
+**Schwellen einstellen:** In der App unter **Setup → Wohn-Dashboard → „📺 Apple TV: weitere Verbraucher“** –
+„Gerät mit Messung ab“ (50 W bis 2 kW, Standard 100 W) und „Rest im Haus ab“ (150 W bis 2 kW, Standard 150 W), jeweils
+auch **nie**. Darunter steht, was gerade gemessen wird und was davon auf dem Fernseher erscheint (✅). Die Werte liegen
+in der Bridge (`bhe_tvcons_dev_w`, `bhe_tvcons_rest_w`, wie die übrigen Einstellungen); das Apple TV übernimmt eine
+Änderung mit seiner nächsten Abfrage (≈ 15 s). Die Vorschau kommt aus `GET /api/tv/consumers`.
 
 **Tachos:** Der Akku hat im Energiefluss einen Ring für seinen Ladestand (grün ab halb voll, orange darunter, rot
 unter einem Fünftel); lädt er, läuft ein heller Funke den Ring entlang. Bei „Sonne erzeugt“ zeigt ein Balken, wie

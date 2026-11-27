@@ -94,8 +94,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v239';   // short tag shown always-on in the header
-const APP_VERSION = 'v239 · 2026-11-25 · Wärme → Effizienz: (1) Monatsbilanz neu – Januar bis Dezember, Jahr wählbar, jede Reihe ein- und ausblendbar: Strom und Wärme gesamt und getrennt nach Heizen/Warmwasser, Heizstab, Solarstrom für die WP, dazu in kleinen Diagrammen Arbeitszahl, Außen- und Vorlauftemperatur (Monatsmittel aus HomeCom), Heizgradtage und Stromkosten; Tippen zeigt alle Werte des Monats, Tabelle mit Jahreszeile. (2) Neue Karte „📄 Verbrauchsausweis – nachgerechnet“: Strom für Heizung + Warmwasser der letzten 12 Monate ÷ Gebäudenutzfläche (Wohnfläche × 1,2 bzw. × 1,35 mit beheiztem Keller) → Effizienzklasse A+ bis H, Primärenergie, dasselbe mit der erzeugten Wärme als Vergleich zur Gasheizung; Klimafaktor (DWD) eintragbar, Bauphase-Monate geschätzt; Rechenweg und Monatstabelle zeigen jede Zahl. ' +
+const APP_BUILD = 'v240';   // short tag shown always-on in the header
+const APP_VERSION = 'v240 · 2026-11-27 · Setup → Wohn-Dashboard: neu „📺 Apple TV: weitere Verbraucher“ – einstellbar, ab welcher Leistung ein Gerät mit eigener Messung (50 W bis 2 kW, Standard 100 W) und der „Rest im Haus“ (150 W bis 2 kW, Standard 150 W) unter dem Energiefluss des Apple TV erscheinen, jeweils auch „nie“. Darunter, was gerade gemessen wird und was davon auf dem Fernseher steht (✅). Die Apple-TV-App selbst zeigt seit dem letzten Stand die weiteren großen Verbraucher mit Ring für den Anteil am Hausverbrauch. ' +
+  'v239 · 2026-11-25 · Wärme → Effizienz: (1) Monatsbilanz neu – Januar bis Dezember, Jahr wählbar, jede Reihe ein- und ausblendbar: Strom und Wärme gesamt und getrennt nach Heizen/Warmwasser, Heizstab, Solarstrom für die WP, dazu in kleinen Diagrammen Arbeitszahl, Außen- und Vorlauftemperatur (Monatsmittel aus HomeCom), Heizgradtage und Stromkosten; Tippen zeigt alle Werte des Monats, Tabelle mit Jahreszeile. (2) Neue Karte „📄 Verbrauchsausweis – nachgerechnet“: Strom für Heizung + Warmwasser der letzten 12 Monate ÷ Gebäudenutzfläche (Wohnfläche × 1,2 bzw. × 1,35 mit beheiztem Keller) → Effizienzklasse A+ bis H, Primärenergie, dasselbe mit der erzeugten Wärme als Vergleich zur Gasheizung; Klimafaktor (DWD) eintragbar, Bauphase-Monate geschätzt; Rechenweg und Monatstabelle zeigen jede Zahl. ' +
   'v238 · 2026-11-25 · Wärme → Effizienz → Gebäude-Einordnung: „Heizwärme gemessen“ und „Heizstrom gemessen“ kommen jetzt aus den echten Monatswerten von HomeCom – nur Heizen, ohne Warmwasser –, für die Monate nach der Bauphase, mit den üblichen Gradtagzahl-Anteilen je Monat aufs Jahr hochgerechnet (wie bei der Heizkostenabrechnung). Die Hochrechnung aus Tageswerten lag mit nur 12 % der Heizgradtage eines Jahres deutlich zu hoch; sie springt nur noch ohne HomeCom ein und erst ab 30 %. Außerdem: Heizstab-Anteil mit einer Nachkommastelle und wie bei Bosch abgeschnitten (7,9 % ↔ 7 %), der Zählerstands-Gegencheck ist eingeklappt, sobald HomeCom liefert. ' +
   'v237 · 2026-11-25 · Wärme → Effizienz → „🔁 Abgleich mit der Bosch-App“: die Bridge fragt HomeCom jetzt direkt nach den Jahreswerten – Strom und Wärme fürs laufende Jahr und das Vorjahr, aufgeteilt in Heizen, Warmwasser und Gesamt, mit Arbeitszahl, Heizstab und Heizwärme je m² (bis heute). Dieselben Werte wie „Energiemonitoring → Effizienz“ in der Bosch-App. Bosch dokumentiert diese Abfrage nicht: die Bridge probiert die bekannten Wege durch, merkt sich den, der klappt, prüft die Werte gegen die Zähler seit Inbetriebnahme und zeigt sonst, was Bosch geantwortet hat (mit „Erneut abfragen“). Die Zählerstände der Bridge bleiben zum Gegencheck darunter. ' +
   'v236 · 2026-11-25 · Wärme → Effizienz → Gebäude-Einordnung: „Heizwärme gemessen“ und „Heizstrom gemessen“ kommen jetzt nur noch aus gemessenen Tagen – Wärme und Strom je Tag gegen die Heizgradtage, aufs Jahr mit den Heizgradtagen deines Gebäudemodells gerechnet (wetterbereinigt), ohne Bauphase. Bisher war das eine grobe Hochrechnung, die für nicht gemessene Wintermonate das Gebäudemodell einsetzte. Neu darunter: „🔁 Abgleich mit der Bosch-App“ – je Kalenderjahr Strom, Wärme, Arbeitszahl und Heizstab-Anteil aus denselben Zählern wie „Energiemonitoring → Effizienz“ in der Bosch-App. ' +
@@ -16904,6 +16905,7 @@ async function calClear() {
 }
 function renderDashSetup() {
   try { renderPartySetup().catch(e => console.error(e)); } catch (e) { console.error(e); }
+  try { renderTvConsSetup().catch(e => console.error(e)); } catch (e) { console.error(e); }
   const w = $('dash-win-s'), b = $('dash-bin-days'); if (!w || !b) return;
   if (document.activeElement !== w) w.value = String(kioskSetting('win_s'));
   if (document.activeElement !== b) b.value = String(kioskSetting('bin_days'));
@@ -16970,8 +16972,69 @@ function initPartySetup() {
     if (!confetti('burst')) { const n = $('party-note'); if (n) n.textContent = 'Konfetti ist aus, weil „Bewegung reduzieren“ in den Bedienungshilfen eingeschaltet ist.'; }
   });
 }
+// Setup → Wohn-Dashboard → „Apple TV: weitere Verbraucher“: from which power a
+// measured device / the rest of the house shows below the TV's energy flow. The
+// bridge reads the two settings for /api/tv; "off" = never.
+const TVCONS_DEF = { dev: '100', rest: '150' };
+function tvconsGet(k) {
+  let v = null; try { v = localStorage.getItem('bhe_tvcons_' + k + '_w'); } catch (e) {}
+  v = (v == null ? '' : String(v)).trim().toLowerCase();
+  if (v === 'off') return 'off';
+  const n = parseFloat(v);
+  return isFinite(n) && n >= 1 ? String(Math.round(Math.min(50000, n))) : TVCONS_DEF[k];
+}
+const tvconsLbl = v => v === 'off' ? 'nie' : +v >= 1000 ? `${(+v / 1000).toLocaleString('de-DE')} kW` : `${v} W`;
+// shows the stored value even when it is none of the presets (set on another device or by hand)
+function tvconsSelect(sel, v) {
+  if (![...sel.options].some(o => o.value === v)) {
+    const o = document.createElement('option'); o.value = v; o.textContent = tvconsLbl(v); sel.appendChild(o);
+  }
+  sel.value = v;
+}
+let _tvconsPrev = null;            // { ts, data } – what is measured right now, asked at most every 15 s
+async function tvconsPreview(force) {
+  if (!force && _tvconsPrev && Date.now() - _tvconsPrev.ts < 15000) return _tvconsPrev.data;
+  let d = null; try { d = await api('/api/tv/consumers'); } catch (e) { /* not opened from the bridge */ }
+  _tvconsPrev = { ts: Date.now(), data: d };
+  return d;
+}
+async function renderTvConsSetup() {
+  const sd = $('tvcons-dev'), sr = $('tvcons-rest'), note = $('tvcons-note'); if (!sd || !sr || !note) return;
+  if (document.activeElement !== sd) tvconsSelect(sd, tvconsGet('dev'));
+  if (document.activeElement !== sr) tvconsSelect(sr, tvconsGet('rest'));
+  const paint = d => {
+    const dev = tvconsGet('dev'), rest = tvconsGet('rest'), max = (d && d.max) || 4;
+    const on = it => { const t = it.kind === 'rest' ? rest : dev; return t !== 'off' && (it.w || 0) >= +t; };
+    let h = `Geräte ab <b>${tvconsLbl(dev)}</b>, Rest im Haus ab <b>${tvconsLbl(rest)}</b> · ab 1 kW orange · ` +
+      `höchstens ${max} Einträge. Das Apple TV übernimmt eine Änderung mit der nächsten Aktualisierung (≈ 15 s).`;
+    if (!d || d.ok === false) { note.innerHTML = h; return; }
+    const items = d.items || [], nOn = items.filter(on).length;
+    const list = items.slice(0, 6).map(it => `<div style="display:flex;gap:6px;${on(it) ? '' : 'opacity:.55'}">` +
+      `<span style="flex:none;width:1.4em;text-align:center">${on(it) ? '✅' : '–'}</span><span>${esc(it.icon || '')} ` +
+      `${esc(it.name || '')} <b>${esc(it.value || '')}</b></span></div>`).join('');
+    h += `<div style="margin-top:6px"><b>Gerade gemessen</b> (✅ = steht auf dem Apple TV):</div>` +
+      (list || '<div>Kein Gerät mit Strommessung zieht gerade Strom.</div>');
+    if (!d.has_meter) h += '<br>Ohne Smart Meter gibt es keinen „Rest im Haus“.';
+    else if (d.hp_unknown) h += '<br>Die Wärmepumpe liefert gerade keine Leistung – so lange fehlt der Rest, er würde sie sonst enthalten.';
+    if (nOn > max) h += `<br>Auf dem Fernseher die ${max - 1} größten, die übrigen als „${nOn - max + 1} weitere“.`;
+    note.innerHTML = h;
+  };
+  paint(_tvconsPrev && _tvconsPrev.data);
+  paint(await tvconsPreview(false));
+}
+function initTvConsSetup() {
+  const sd = $('tvcons-dev'), sr = $('tvcons-rest');
+  const save = (k, sel) => {
+    try { localStorage.setItem('bhe_tvcons_' + k + '_w', sel.value); } catch (e) {}
+    _flushSettingsNow();                       // the TV asks the bridge – send it right away
+    renderTvConsSetup().catch(e => console.error(e));
+  };
+  if (sd) sd.addEventListener('change', () => save('dev', sd));
+  if (sr) sr.addEventListener('change', () => save('rest', sr));
+}
 function initDashSetup() {
   initPartySetup();
+  initTvConsSetup();
   const w = $('dash-win-s'), b = $('dash-bin-days');
   const save = (k, v) => { try { localStorage.setItem('bhe_kiosk_' + k, String(v)); } catch (e) {} renderDashSetup();
     if (kioskOpen()) { try { paintKiosk(); } catch (e) {} } };
