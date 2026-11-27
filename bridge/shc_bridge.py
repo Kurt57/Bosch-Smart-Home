@@ -12299,8 +12299,37 @@ class Handler(BaseHTTPRequestHandler):
                 out["news"], out["ticker"] = _tv_news(news, now), _tv_ticker(news, fb, now)
             except Exception:
                 out["news"], out["ticker"] = [], []
+            try:
+                # the heat pump is there but without a current power: the rest would hide it
+                hp_unknown = bool(hp.get("connected")) and (out.get("live") or {}).get("hp_w") is None
+                out["consumers"] = tv_consumers(self._tv_devices_now(), out.get("live"), self._tv_aeg_now(), now,
+                                                hp_unknown=hp_unknown)
+            except Exception:
+                out["consumers"] = []
             return out
         return self.ctx.calc_get(("tv",), 20, build)
+
+    def _tv_devices_now(self) -> list:
+        """The Smart Home's measured devices with their latest reading."""
+        out = []
+        for d in self.store.devices():
+            last = self.store.latest(d["id"])
+            if last:
+                out.append({"id": d["id"], "name": d.get("custom_name") or d.get("name"), "room": d.get("room") or "",
+                            "w": last.get("power_w"), "ts": last.get("ts")})
+        return out
+
+    def _tv_aeg_now(self) -> list:
+        """AEG/Electrolux appliances with their running state (they report no power) –
+        only from a poll of the last 15 minutes, an old "läuft" must not stick."""
+        ael = self.ctx.ael_state or {}
+        fresh = time.time() - (ael.get("last_poll") or 0) <= TV_CONS_STALE_S
+        live = {a.get("id"): a for a in (ael.get("appliances") or []) if isinstance(a, dict)} if fresh else {}
+        out = []
+        for a in self.store.aeg_appliances():
+            st = live.get(a["id"]) or {}
+            out.append({"name": a.get("name"), "state": st.get("state"), "time_to_end_min": st.get("time_to_end_min")})
+        return out
 
     def _health(self) -> dict:
         """Bridge status for the app (mode, connections, capabilities)."""
@@ -15515,6 +15544,71 @@ def _tv_pct(x) -> str:
 def _kw(w) -> str:
     w = float(w or 0)
     return f"{_tv_num(w / 1000.0, 1)} kW" if abs(w) >= 1000 else f"{_tv_num(w)} W"
+
+
+TV_CONS_MIN_W = 100.0          # a measured device counts as a big consumer from this power on
+TV_CONS_REST_MIN_W = 150.0     # … the not individually measured rest of the house from this
+TV_CONS_MAX = 4                # chips on the TV; the smallest beyond are pooled
+TV_CONS_STALE_S = 15 * 60      # a device reading older than this is not "now"
+_DEV_ICONS = ((r"licht|lampe|leuchte|\bled\b|spot|strahler", "💡"), (r"fernseh|\btv\b|beamer|sound|musik|receiver", "📺"),
+              (r"trockn", "🌀"), (r"wasch", "🧺"), (r"spül|spuel|geschirr|quooker", "🍽️"), (r"kühl|kuehl|gefrier", "🧊"),
+              (r"router|wlan|netzwerk|server|\bnas\b|switch|fritz", "📶"), (r"roll|jalousie|markise", "🪟"),
+              (r"\bpc\b|computer|monitor|büro|buero|laptop|drucker", "💻"), (r"herd|ofen|koch|mikrowelle", "🍳"),
+              (r"kaffee|espresso", "☕"), (r"wallbox|auto|laden", "🚗"), (r"pumpe|heiz", "♨️"))
+
+
+def _dev_icon(name: str) -> str:
+    """Icon for a measured device from its name (the SHC knows no device kinds) –
+    the same rules as the app's kioskDevIcon."""
+    n = (name or "").lower()
+    for pat, icon in _DEV_ICONS:
+        if re.search(pat, n):
+            return icon
+    return "🔌"
+
+
+def tv_consumers(devices: list, live: dict | None, aeg: list | None, now: float, hp_unknown: bool = False) -> list:
+    """The other big consumers right now, next to the heat pump on the TV: the
+    Smart Home's measured devices drawing at least 100 W and – with the smart
+    meter – the rest of the house nothing measures individually (house load −
+    heat pump − all measured devices), named after a running AEG appliance
+    (they report no power, so theirs is part of that rest). No rest while the
+    heat pump has no current power (hp_unknown) – it would be hidden in there.
+    At most four, the smallest pooled.
+    devices: [{id, name, room, w, ts}]; aeg: [{name, state, time_to_end_min}]."""
+    live = live or {}
+    out, dev_sum = [], 0.0
+    for d in devices or []:
+        w = d.get("w")
+        if w is None or not d.get("ts") or now - d["ts"] > TV_CONS_STALE_S or w <= 0:
+            continue
+        dev_sum += w
+        if w >= TV_CONS_MIN_W:
+            name = d.get("name") or "Gerät"
+            out.append({"id": f"d-{d.get('id')}", "name": name, "icon": _dev_icon(name), "w": round(w),
+                        "value": _kw(w), "sub": d.get("room") or "", "kind": "dev"})
+    load = live.get("load_w")
+    if load is not None and not hp_unknown:
+        rest = float(load) - float(live.get("hp_w") or 0) - dev_sum
+        if rest >= TV_CONS_REST_MIN_W:
+            run = [a for a in (aeg or []) if "RUN" in str(a.get("state") or "").upper()]
+            name, sub = "Rest im Haus", "ungemessen"
+            if run:
+                names = [a.get("name") or "Gerät" for a in run]
+                name = f"Rest · {names[0]} läuft" if len(names) == 1 else f"Rest · {' + '.join(names[:2])} laufen"
+                left = next((a.get("time_to_end_min") for a in run
+                             if isinstance(a.get("time_to_end_min"), (int, float)) and a["time_to_end_min"] > 0), None)
+                if left is not None:
+                    sub = f"noch {int(left)} min"
+            out.append({"id": "rest", "name": name, "icon": "🏠", "w": round(rest), "value": _kw(rest),
+                        "sub": sub, "kind": "rest"})
+    out.sort(key=lambda c: -c["w"])
+    if len(out) > TV_CONS_MAX:
+        more = out[TV_CONS_MAX - 1:]
+        w = sum(c["w"] for c in more)
+        out = out[:TV_CONS_MAX - 1] + [{"id": "more", "name": f"{len(more)} weitere", "icon": "⋯", "w": w,
+                                        "value": _kw(w), "sub": ", ".join(c["name"] for c in more)[:60], "kind": "more"}]
+    return out
 
 
 def _ago(secs: float) -> str:

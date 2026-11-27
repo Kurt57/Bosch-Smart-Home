@@ -13,7 +13,7 @@ gibt es zwei Wege:
 Die App zeigt Uhr, Außentemperatur, Zuhause/Abwesend, **Hinweise** (Fenster offen, lüften, Raum zu kalt,
 Termin in der nächsten Stunde, Mülltonnen, Batterie lädt aus dem Netz, PV/Wärmepumpe ohne Werte),
 **Energie jetzt** als bewegtes Bild – das Haus in der Mitte, Sonne, Batterie, Netz und Wärmepumpe drumherum,
-Punkte laufen in Flussrichtung, schneller bei mehr Leistung –, **Heute** (erzeugt, verbraucht, autark und
+Punkte laufen in Flussrichtung, schneller bei mehr Leistung, darunter die **weiteren großen Verbraucher** –, **Heute** (erzeugt, verbraucht, autark und
 Eigenverbrauch mit Ring, Netzbezug, Einspeisung, gespart – mit „+ ≈ … € im Akku“, solange heute Geladenes noch
 nicht verbraucht ist), die **Räume** mit Thermometer-Balken (weißer Strich =
 deine Wunschtemperatur) und die nächsten **Termine**. Glaskarten über einem langsam wandernden Farblicht, das
@@ -34,6 +34,23 @@ matte Karten, ein ruhiger Verlauf mit einem schwachen Licht in den oberen Ecken,
 Sonne das Haus versorgt; das Leuchten um die Kreise im Energiefluss, um das Geburtstagsbanner und hinter dem
 Radio-Cover ist dort nur noch ein Hauch, und an Feiertagen färbt sich der Hintergrund nicht pink. Die Statusfarben
 (grün = gut, orange = Achtung) bleiben überall gleich.
+
+**Weitere Verbraucher 🔌:** Unter dem Energiefluss steht eine Zeile mit dem, was außer der Wärmepumpe gerade
+spürbar Strom zieht – höchstens vier Einträge, der größte zuerst:
+
+- jedes **Smart-Home-Gerät mit Strommessung** (Zwischenstecker), das gerade **ab 100 W** braucht, mit Raum
+  (Messwert höchstens 15 Minuten alt);
+- mit dem Smart Meter der **Rest im Haus**: Hausverbrauch − Wärmepumpe − alle gemessenen Geräte, also alles, was
+  nichts einzeln misst (Herd, Wasserkocher, Backofen …), ab 150 W. Läuft gerade ein AEG-Gerät (Waschmaschine,
+  Trockner, Geschirrspüler), heißt der Eintrag „Rest · Waschmaschine läuft“ mit „noch 42 min“ – AEG meldet keine
+  Leistung, ihr Strom steckt in diesem Rest. Hat die Wärmepumpe gerade keine aktuelle Leistung, fehlt der Rest,
+  weil er sie sonst mit enthielte;
+- sind es mehr als vier, werden die kleinsten zu „N weitere“ zusammengefasst.
+
+Der Ring um das Symbol zeigt den Anteil am Hausverbrauch gerade jetzt; ab 1 kW ist ein Eintrag orange und leuchtet.
+Damit die Seite weiter ohne Blättern passt, wird das Energiefluss-Bild etwas flacher, wenn es eng wird (höchstens
+44 Punkte). Ist nichts davon über der Schwelle, bleibt die Zeile weg und das Bild hat seine alte Größe. Die Bridge
+liefert die Einträge fertig in `GET /api/tv` → `consumers`.
 
 **Tachos:** Der Akku hat im Energiefluss einen Ring für seinen Ladestand (grün ab halb voll, orange darunter, rot
 unter einem Fünftel); lädt er, läuft ein heller Funke den Ring entlang. Bei „Sonne erzeugt“ zeigt ein Balken, wie

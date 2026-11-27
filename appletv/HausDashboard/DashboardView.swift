@@ -394,10 +394,22 @@ struct DashboardView: View {
                     VStack(alignment: .leading, spacing: 22) {
                         AlertsView(alerts: (payload.alerts ?? []) + routineHint(payload), more: payload.more ?? 0)
                         if let live = payload.live, !(payload.flow ?? []).isEmpty {
-                            EnergyFlowCard(live: live, tiles: payload.flow ?? [], note: payload.note)
+                            EnergyFlowCard(live: live, tiles: payload.flow ?? [], note: payload.note,
+                                           consumers: payload.consumers ?? [])
                         } else {
                             TileSection(title: "Energie jetzt", tiles: payload.flow ?? [], big: true,
                                         note: payload.note)
+                            if let consumers = payload.consumers, !consumers.isEmpty {
+                                // without the flow picture there is room enough below the tiles
+                                VStack(alignment: .leading, spacing: 10) {
+                                    SectionTitle(text: "Weitere Verbraucher")
+                                    ConsumerStrip(consumers: consumers, houseW: payload.live?.load_w)
+                                }
+                                .padding(.horizontal, 22)
+                                .padding(.vertical, 14)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .glassCard()
+                            }
                         }
                         TileSection(title: "Heute", tiles: payload.today ?? [], big: false, note: nil)
                     }
@@ -963,22 +975,112 @@ struct EnergyFlowCard: View {
     let live: TVLive
     let tiles: [TVTile]
     let note: String?
+    /// the other big consumers right now – a row below the picture
+    var consumers: [TVConsumer] = []
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let strip = !consumers.isEmpty
+        VStack(alignment: .leading, spacing: strip ? 6 : 8) {
             SectionTitle(text: "Energie jetzt")
             if let n = note, !n.isEmpty {
                 Text("⚠︎ " + n)
                     .font(.system(size: 20))
                     .foregroundStyle(.orange)
             }
+            // With the row below, the picture gives up to 44 points (and the card
+            // 14 of its padding) when the column is tight, so the page still fits:
+            // the row costs about as much as that. 246 is as low as it goes – below
+            // that the house's caption would reach out of the picture.
             EnergyFlowView(live: live, tiles: tiles)
-                .frame(height: 290)
+                .frame(minHeight: strip ? 246 : 290, maxHeight: 290)
+            if strip {
+                ConsumerStrip(consumers: consumers, houseW: live.load_w)
+                    .padding(.top, 2)
+            }
         }
         .padding(.horizontal, 22)
-        .padding(.vertical, 18)
+        .padding(.vertical, strip ? 12 : 18)
         .frame(maxWidth: .infinity, alignment: .leading)
         .glassCard()
+    }
+}
+
+/// The other big consumers right now, next to the heat pump: the Smart Home's
+/// measured devices from 100 W, the rest of the house nothing measures on its
+/// own (house − heat pump − devices, with the smart meter) and, beyond four,
+/// the smallest pooled – texts from the bridge. The ring around an icon is the
+/// share of what the house draws right now.
+struct ConsumerStrip: View {
+    let consumers: [TVConsumer]
+    let houseW: Double?
+
+    private func share(_ c: TVConsumer) -> Double? {
+        guard let house = houseW, house > 50, let w = c.w, w > 0 else { return nil }
+        return min(1, w / house)
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 14) {
+            ForEach(Array(consumers.prefix(4))) { c in
+                ConsumerChip(consumer: c, share: share(c))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+}
+
+private struct ConsumerChip: View {
+    let consumer: TVConsumer
+    let share: Double?
+    @Environment(\.tvTheme) private var theme
+
+    /// from 1 kW a consumer is a big one right now: orange, with a halo
+    private var big: Bool { (consumer.w ?? 0) >= 1000 }
+
+    private var color: Color {
+        if big { return Palette.warn }
+        switch consumer.kind ?? "" {
+        case "rest", "more": return Color(white: 0.80)
+        default: return Palette.house
+        }
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            ZStack {
+                Circle().fill(color.opacity(big ? 0.22 : 0.12))
+                if let s = share {
+                    Ring(fraction: s, color: color)
+                } else {
+                    Circle().strokeBorder(color.opacity(0.45), lineWidth: 3)
+                }
+                Text(consumer.icon).font(.system(size: 21))
+            }
+            .frame(width: 46, height: 46)
+            .shadow(color: color.opacity(big ? 0.5 * theme.halo : 0), radius: big ? 12 : 0)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(consumer.name)
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(consumer.value)
+                        .font(.system(size: 26, weight: .bold, design: .rounded))
+                        .foregroundStyle(big ? Palette.warn : .primary)
+                        .lineLimit(1)
+                        .fixedSize()
+                        .contentTransition(.numericText())
+                    if let sub = consumer.sub, !sub.isEmpty {
+                        Text(sub)
+                            .font(.system(size: 15))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
+                    }
+                }
+            }
+        }
     }
 }
 

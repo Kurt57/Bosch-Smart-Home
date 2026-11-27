@@ -120,7 +120,22 @@ struct TVPayload: Decodable {
     let news: [TVNews]?
     let ticker: [TVTickerItem]?
     let weather: TVWeather?
+    let consumers: [TVConsumer]?
     let note: String?
+}
+
+/// One of the other big consumers right now, next to the heat pump: a measured
+/// Smart Home device from 100 W, the rest of the house nothing measures on its
+/// own (house − heat pump − devices, with the smart meter; named after a running
+/// AEG appliance), or the smallest ones pooled.
+struct TVConsumer: Decodable, Identifiable {
+    let id: String
+    let name: String
+    let icon: String
+    let w: Double?
+    let value: String           // "2,1 kW"
+    let sub: String?            // the room, "ungemessen", "noch 42 min", the pooled names
+    let kind: String?           // dev, rest, more
 }
 
 /// "Sonne & Wetter": today and the next two days, and a tip when to run the
