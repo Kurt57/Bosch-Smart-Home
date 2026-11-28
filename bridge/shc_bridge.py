@@ -28,6 +28,11 @@ Local SHC API summary (confirmed against the official docs / boschshcpy):
                  GET /devices
                  GET /devices/{id}/services/{serviceId}
 * PowerMeter state fields: powerConsumption (W), energyConsumption (Wh).
+* Events:        POST https://<IP>:8444/remote/json-rpc (JSON-RPC 2.0, as a list)
+                 RE/subscribe ["com/bosch/sh/remote/*", null] → poll id,
+                 RE/longPoll [poll id, 30] → the changes (DeviceServiceData),
+                 RE/unsubscribe [poll id]; an unknown poll id (code -32001,
+                 about daily) means: subscribe again.
 """
 
 from __future__ import annotations
@@ -42,6 +47,7 @@ import ipaddress
 import json
 import math
 import os
+import random
 import re
 import signal
 import socket
@@ -52,6 +58,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections import deque
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, urlparse
@@ -371,6 +378,15 @@ def _parse_start_date(raw) -> int | None:
 # --------------------------------------------------------------------------- #
 # SHC client (mutual TLS, standard library only)
 # --------------------------------------------------------------------------- #
+class ShcRpcError(RuntimeError):
+    """An error answer of the controller's JSON-RPC (event) interface."""
+
+    def __init__(self, code, message: str):
+        super().__init__(f"{code}: {message}")
+        self.code = code
+        self.message = message
+
+
 class SHCClient:
     """Minimal mutual-TLS client for the local Bosch SHC REST API."""
 
@@ -390,9 +406,10 @@ class SHCClient:
         return ctx
 
     def _request(self, method: str, port: int, path: str,
-                 body: bytes | None = None, extra_headers: dict | None = None) -> tuple[int, bytes]:
+                 body: bytes | None = None, extra_headers: dict | None = None,
+                 timeout: float | None = None) -> tuple[int, bytes]:
         conn = http.client.HTTPSConnection(
-            self.ip, port, timeout=self.timeout, context=self._context()
+            self.ip, port, timeout=timeout or self.timeout, context=self._context()
         )
         headers = {"api-version": API_VERSION, "Accept": "application/json"}
         if body is not None:
@@ -412,6 +429,24 @@ class SHCClient:
         if status != 200:
             raise RuntimeError(f"GET {path} -> HTTP {status}: {data[:200]!r}")
         return json.loads(data) if data else None
+
+    def rpc(self, method: str, params: list, timeout: float | None = None):
+        """One JSON-RPC call on the controller's event interface (/remote/json-rpc,
+        a list with one call, as boschshcpy/Home Assistant send it): its "result", or
+        ShcRpcError with Bosch's code (-32001: the poll id is unknown)."""
+        body = json.dumps([{"jsonrpc": "2.0", "method": method, "params": params}]).encode("utf-8")
+        status, data = self._request("POST", 8444, "/remote/json-rpc", body=body, timeout=timeout)
+        if status != 200:
+            raise RuntimeError(f"{method} -> HTTP {status}: {data[:200]!r}")
+        res = json.loads(data) if data else None
+        if isinstance(res, list):
+            res = res[0] if res else None
+        if not isinstance(res, dict):
+            raise RuntimeError(f"{method}: unerwartete Antwort {str(res)[:120]}")
+        if res.get("error"):
+            err = res["error"] if isinstance(res["error"], dict) else {"message": str(res["error"])}
+            raise ShcRpcError(err.get("code"), str(err.get("message") or ""))
+        return res.get("result")
 
     def put(self, path: str, obj: dict) -> int:
         """PUT a service state. Returns the HTTP status (200/204 = ok)."""
@@ -9037,12 +9072,167 @@ def compute_overview(store: Store, days: int, price: float,
 # --------------------------------------------------------------------------- #
 # Poller
 # --------------------------------------------------------------------------- #
+class PlugLive:
+    """What the measuring devices (plugs, light/shutter controls) report right
+    now, in memory: the controller's event stream brings each new value the
+    moment the controller has it, the regular poll fills in at the start and
+    whenever the stream is down. Per device: the last value, when it came, when
+    it last changed, the gaps between reports (how often the device reports)
+    and the last 15 minutes as a curve. Nothing of this goes to the database –
+    the 30-s samples stay the history."""
+    KEEP_S = 15 * 60
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._dev: dict = {}
+        self.conn = {"mode": "poll", "since": None, "events": 0, "last_event": None,
+                     "error": None, "error_ts": None, "subscribes": 0}
+
+    def update(self, dev_id: str, w: float, wh: float | None, ts: float, src: str) -> None:
+        """src: "event" (the stream), "demo" (simulated reports) or "poll"."""
+        w = float(w)
+        with self._lock:
+            d = self._dev.get(dev_id)
+            if d is None:
+                d = self._dev[dev_id] = {"w": None, "wh": None, "ts": None, "t_event": None,
+                                         "t_change": None, "src": src, "hist": deque(), "gaps": deque(maxlen=30)}
+            changed = d["w"] is None or abs(w - d["w"]) >= 0.05
+            if src != "poll":
+                if d["t_event"] is not None and ts - d["t_event"] > 0.3:
+                    d["gaps"].append(ts - d["t_event"])
+                d["t_event"] = ts
+                self.conn["events"] += 1
+                self.conn["last_event"] = ts
+            if changed:
+                d["t_change"] = ts
+            if wh is not None:
+                d["wh"] = float(wh)
+            if src == "poll" and not changed and d["t_event"] is not None:
+                return                        # the poll only confirms the last report: keep its time
+            d["w"], d["ts"], d["src"] = w, ts, src
+            h = d["hist"]
+            if changed or not h or ts - h[-1][0] >= 60:
+                h.append((ts, w))
+            while h and ts - h[0][0] > self.KEEP_S:
+                h.popleft()
+
+    def seed(self, rows: list) -> int:
+        """Start with the stored 30-s samples of the last 15 minutes, so the curve
+        has no gap after a restart (as if polled). rows: samples_since() order."""
+        n = 0
+        for r in rows:
+            if r.get("power_w") is not None:
+                self.update(r["device_id"], r["power_w"], r.get("energy_wh"), float(r["ts"]), "poll")
+                n += 1
+        return n
+
+    def conn_set(self, subscribed: bool = False, **kw) -> None:
+        with self._lock:
+            if subscribed:
+                self.conn["subscribes"] += 1
+            if kw.get("error"):
+                kw.setdefault("error_ts", time.time())
+            self.conn.update(kw)
+
+    def snapshot(self, now: float, window_s: int = 600, max_points: int = 150) -> dict:
+        """Per device the value, its times, how often it reports (median gap of
+        the last reports, from 3 on) and the curve of the last window_s seconds
+        (starting with the value valid at its left edge)."""
+        with self._lock:
+            devs = {}
+            for dev_id, d in self._dev.items():
+                gaps = sorted(list(d["gaps"])[-15:])
+                every = round(gaps[len(gaps) // 2], 1) if len(gaps) >= 3 else None
+                t0 = now - window_s
+                before = [p for p in d["hist"] if p[0] < t0]
+                pts = ([(t0, before[-1][1])] if before else []) + [p for p in d["hist"] if p[0] >= t0]
+                if len(pts) > max_points:
+                    k = math.ceil(len(pts) / max_points)
+                    pts = pts[::k] + ([pts[-1]] if (len(pts) - 1) % k else [])
+                devs[dev_id] = {"w": d["w"], "wh": d["wh"], "ts": d["ts"], "t_event": d["t_event"],
+                                "t_change": d["t_change"], "src": d["src"], "every_s": every,
+                                "hist": [[round(t, 1), round(w, 1)] for t, w in pts]}
+            return {"devices": devs, "conn": dict(self.conn)}
+
+
+class ShcEventListener(threading.Thread):
+    """The controller's event stream (long polling – how Home Assistant's
+    boschshcpy follows the controller): subscribe once, then ask for news
+    with a request the controller holds open up to 30 s; every new PowerMeter
+    value arrives the moment the controller has it. An unknown poll id (the
+    controller drops subscriptions about daily) → subscribe again; other
+    errors → wait, longer each time, while the 30-s poll keeps everything
+    going."""
+    WAIT_S = 30
+
+    def __init__(self, client: "SHCClient", live: PlugLive):
+        super().__init__(daemon=True)
+        self.client = client
+        self.live = live
+        self.poll_id = None
+        self.fails = 0
+        self._stop = threading.Event()
+
+    def run(self):
+        while not self._stop.is_set():
+            try:
+                self.step()
+            except ShcRpcError as exc:        # subscription gone or refused → subscribe again
+                self.poll_id = None
+                self.fails += 1
+                self.live.conn_set(mode="poll" if self.fails > 1 else "event",
+                                   error=f"Controller meldet {exc}")
+                self._stop.wait(1.0 if self.fails == 1 else min(120.0, 5.0 * 2 ** (self.fails - 2)))
+            except Exception as exc:          # network, TLS, HTTP status
+                self.poll_id = None
+                self.fails += 1
+                self.live.conn_set(mode="poll", error=str(exc)[:200])
+                self._stop.wait(min(120.0, 5.0 * 2 ** (self.fails - 1)))
+        if self.poll_id:
+            try:
+                self.client.rpc("RE/unsubscribe", [self.poll_id], timeout=5)
+            except Exception:
+                pass
+
+    def step(self) -> int:
+        """Subscribe if needed, then one long poll; returns the PowerMeter values taken over."""
+        if not self.poll_id:
+            self.poll_id = self.client.rpc("RE/subscribe", ["com/bosch/sh/remote/*", None])
+            self.live.conn_set(subscribed=True, mode="event", since=time.time(), error=None)
+        events = self.client.rpc("RE/longPoll", [self.poll_id, self.WAIT_S], timeout=self.WAIT_S + 15)
+        self.fails = 0
+        if self.live.conn.get("mode") != "event" or self.live.conn.get("error"):
+            self.live.conn_set(mode="event", error=None)
+        return self.handle(events)
+
+    def handle(self, events) -> int:
+        n, now = 0, time.time()
+        for ev in events if isinstance(events, list) else []:
+            if not isinstance(ev, dict) or ev.get("@type") != "DeviceServiceData" or ev.get("id") != "PowerMeter":
+                continue
+            st = ev.get("state") if isinstance(ev.get("state"), dict) else {}
+            if not ev.get("deviceId") or st.get("powerConsumption") is None:
+                continue
+            try:
+                w = float(st.get("powerConsumption") or 0.0)
+                wh = float(st["energyConsumption"]) if st.get("energyConsumption") is not None else None
+            except (TypeError, ValueError):
+                continue
+            self.live.update(ev["deviceId"], w, wh, now, "event")
+            n += 1
+        return n
+
+    def stop(self):
+        self._stop.set()
+
+
 class Poller(threading.Thread):
-    def __init__(self, client: SHCClient, store: Store, cfg: dict):
+    def __init__(self, client: SHCClient, store: Store, cfg: dict, live: PlugLive | None = None):
         super().__init__(daemon=True)
         self.client = client
         self.store = store
         self.cfg = cfg
+        self.live = live              # the live view (Übersicht → Steckdosen live)
         self._stop = threading.Event()
         self.last_error: str | None = None
         self.last_poll: int | None = None
@@ -9072,6 +9262,8 @@ class Poller(threading.Thread):
                 self.store.upsert_device(dev, ts, reading.get("energy_start") if reading else None)
                 if reading:
                     self.store.add_sample(dev["id"], ts, reading["power_w"], reading["energy_wh"])
+                    if self.live is not None:
+                        self.live.update(dev["id"], reading["power_w"], reading["energy_wh"], time.time(), "poll")
             except Exception as exc:  # one bad device must not stop the others
                 print(f"[poll] device {dev.get('id')}: {exc}", file=sys.stderr)
         # log the average indoor temperature from the thermostats (every ~10 min)
@@ -9582,6 +9774,45 @@ def seed_demo(store: Store, days: int = 90):
 
     # utility-meter readings: added by seed_demo_pv, consistent with the demo
     # smart meter (since the PV system the meter counts grid import only)
+
+
+class DemoPlugSim(threading.Thread):
+    """Demo: the measuring devices report like real ones, each at its own pace
+    (the TV about every 8 s, the router about every 30 s, lights and shutters
+    when their power changes, at least every 5 minutes) – into the live view,
+    so "Steckdosen live" can be tried without a controller."""
+    PACE = {"demo-tv": 8.0, "demo-router": 30.0}
+
+    def __init__(self, live: PlugLive):
+        super().__init__(daemon=True)
+        self.live = live
+        self._stop = threading.Event()
+
+    def run(self):
+        self.live.conn_set(mode="demo", since=time.time(), error=None)
+        due: dict = {}
+        last: dict = {}
+        while not self._stop.is_set():
+            now = time.time()
+            dt = datetime.fromtimestamp(now)
+            for dev in DEMO_DEVICES:
+                i = dev["id"]
+                p = _demo_power(i, dt, away=False)
+                pace = self.PACE.get(i)
+                if pace:
+                    if now >= due.get(i, 0):
+                        if p > 20:
+                            p += random.uniform(-1.5, 1.5)      # a running TV wobbles a little
+                        self.live.update(i, round(p, 1), None, now, "demo")
+                        due[i] = now + pace * random.uniform(0.85, 1.15)
+                elif i not in last or abs(p - last[i]) >= max(1.0, 0.1 * last[i]) or now >= due.get(i, 0):
+                    self.live.update(i, round(p, 1), None, now, "demo")
+                    last[i] = p
+                    due[i] = now + 300
+            self._stop.wait(2.0)
+
+    def stop(self):
+        self._stop.set()
 
 
 class DemoPoller(threading.Thread):
@@ -11690,6 +11921,8 @@ class Runtime:
         self.cfg = cfg
         self.poller = None
         self.mode = "idle"
+        self.plug_live = PlugLive()     # Übersicht → Steckdosen live (in memory)
+        self.events = None              # ShcEventListener (live) / DemoPlugSim (demo)
         self.hp = None          # HeatPumpPoller
         self.hp_state = {}      # latest heat-pump snapshot
         self.ael = None         # ElectroluxPoller
@@ -12042,8 +12275,17 @@ class Runtime:
         if self.poller:
             self.poller.stop()
             self.poller = None
+        if self.events:
+            self.events.stop()
+            self.events = None
         self.stop_heatpump()
         self.stop_electrolux()
+
+    def _seed_plug_live(self):
+        try:
+            self.plug_live.seed(self.store.samples_since(int(time.time()) - PlugLive.KEEP_S))
+        except Exception as exc:            # only the curve's start – never stop the bridge for it
+            print(f"[plugs] seed: {exc}", file=sys.stderr)
 
     def start_demo(self, days: int = 90):
         self.stop()
@@ -12054,6 +12296,10 @@ class Runtime:
         self.poller = DemoPoller(self.store, int(self.cfg.get("poll_interval", 30)),
                                  hp_state=self.hp_state)
         self.poller.start()
+        self.plug_live = PlugLive()
+        self._seed_plug_live()
+        self.events = DemoPlugSim(self.plug_live)
+        self.events.start()
         self.start_fronius()
 
     def start_live(self):
@@ -12061,8 +12307,14 @@ class Runtime:
         self.cfg["_demo"] = False
         self.mode = "live"
         client = SHCClient(self.cfg.get("shc_ip", ""), self.cfg["cert"], self.cfg["key"])
-        self.poller = Poller(client, self.store, self.cfg)
+        self.plug_live = PlugLive()
+        self._seed_plug_live()
+        self.poller = Poller(client, self.store, self.cfg, live=self.plug_live)
         self.poller.start()
+        if self.cfg.get("shc_events", True) is not False:      # "shc_events": false → only the poll
+            self.events = ShcEventListener(SHCClient(self.cfg.get("shc_ip", ""), self.cfg["cert"], self.cfg["key"]),
+                                           self.plug_live)
+            self.events.start()
         self.start_fronius()
 
     # -- PV system (Fronius) --------------------------------------------- #
@@ -12324,6 +12576,38 @@ class Handler(BaseHTTPRequestHandler):
         return {"ok": True, "items": items[:12], "dev_w": dev_w, "rest_w": rest_w,
                 "has_meter": live.get("load_w") is not None, "hp_unknown": hp_unknown,
                 "max": TV_CONS_MAX, "shown": tv.get("consumers") or []}
+
+    def _plugs_live(self) -> dict:
+        """Übersicht → 🔌 Steckdosen live: every measuring device with its value
+        right now, how old it is, how often it reports, the last 10 minutes and
+        today's kWh – and how the bridge hears the controller (event stream or
+        only the poll). In memory, cheap: the app asks every 2 s."""
+        now = time.time()
+        snap = self.ctx.plug_live.snapshot(now)
+        known = {d["id"]: d for d in self.store.devices()}
+
+        def day():                            # today's kWh as in "Heute" (same day statistics)
+            d0 = _local_day(int(now))
+            per = _window_stats(self.store, d0, int(now))
+            return {dv: round(st[d0]["wh"] / 1000.0, 3) for dv, st in per.items() if d0 in st}
+        today = self.ctx.calc_get(("plugs_today", _local_day(int(now))), 60, day)
+        out = []
+        for dev_id, v in snap["devices"].items():
+            d = known.get(dev_id)
+            if d is None:
+                continue                      # left out in Setup (device filter) or not known yet
+            kwh = today.get(dev_id)
+            out.append({"id": dev_id, "name": d.get("custom_name") or d.get("name") or dev_id,
+                        "room": d.get("room") or "", "model": d.get("model") or "",
+                        "w": v["w"], "ts": v["ts"], "t_event": v["t_event"], "t_change": v["t_change"],
+                        "src": v["src"], "every_s": v["every_s"], "hist": v["hist"], "kwh_today": kwh})
+        out.sort(key=lambda x: -(x["w"] or 0))
+        c = snap["conn"]
+        mode = "demo" if self.ctx.mode == "demo" else (c.get("mode") or "poll") if self.ctx.mode == "live" else "off"
+        return {"ok": True, "now": round(now, 1), "mode": mode, "since": c.get("since"), "events": c.get("events"),
+                "last_event": c.get("last_event"), "error": c.get("error"), "error_ts": c.get("error_ts"),
+                "subscribes": c.get("subscribes"), "poll_s": int(self.cfg.get("poll_interval", 30)),
+                "last_poll": getattr(self.ctx.poller, "last_poll", None), "devices": out}
 
     def _tv_devices_now(self) -> list:
         """The Smart Home's measured devices with their latest reading."""
@@ -13768,6 +14052,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json(self._tv_payload())
             if path == "/api/tv/consumers":
                 return self._send_json(self._tv_consumers_preview())
+            if path == "/api/plugs/live":
+                return self._send_json(self._plugs_live())
             if path == "/api/music/meta":
                 # a YouTube Music playlist link → canonical app link + title/cover
                 # (public oEmbed; private lists: the user names them). Cached in ytmusic.

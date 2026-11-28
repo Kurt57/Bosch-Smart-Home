@@ -94,8 +94,9 @@ const SERIES_LABEL = {
 };
 const HP_MODE = { dhw: 'Warmwasser', ch: 'Heizung', cooling: 'Kühlen',
   frost: 'Frostschutz', off: 'Bereitschaft', '': 'Bereitschaft' };
-const APP_BUILD = 'v240';   // short tag shown always-on in the header
-const APP_VERSION = 'v240 · 2026-11-27 · Setup → Wohn-Dashboard: neu „📺 Apple TV: weitere Verbraucher“ – einstellbar, ab welcher Leistung ein Gerät mit eigener Messung (50 W bis 2 kW, Standard 100 W) und der „Rest im Haus“ (150 W bis 2 kW, Standard 150 W) unter dem Energiefluss des Apple TV erscheinen, jeweils auch „nie“. Darunter, was gerade gemessen wird und was davon auf dem Fernseher steht (✅). Die Apple-TV-App selbst zeigt seit dem letzten Stand die weiteren großen Verbraucher mit Ring für den Anteil am Hausverbrauch. ' +
+const APP_BUILD = 'v241';   // short tag shown always-on in the header
+const APP_VERSION = 'v241 · 2026-11-28 · Übersicht: neue Karte „🔌 Steckdosen live“ – was jedes Gerät mit Strommessung gerade zieht, so schnell es der Controller weiß: Die Bridge hält jetzt eine Live-Verbindung zum Smart Home Controller (seine Ereignis-Schnittstelle, wie Home Assistant sie nutzt) statt nur alle 30 s nachzufragen, die Karte aktualisiert sich alle 2 s. Je Gerät: große Watt-Zahl (blitzt bei neuem Wert auf), wie alt der Wert ist (zählt sekündlich mit), wie oft das Gerät gemessen neue Werte schickt, die letzten 10 Minuten als Kurve und der Verbrauch heute in kWh und €. Oben rechts „live“ oder „alle 30 s“, wenn die Live-Verbindung gerade nicht steht. ' +
+  'v240 · 2026-11-27 · Setup → Wohn-Dashboard: neu „📺 Apple TV: weitere Verbraucher“ – einstellbar, ab welcher Leistung ein Gerät mit eigener Messung (50 W bis 2 kW, Standard 100 W) und der „Rest im Haus“ (150 W bis 2 kW, Standard 150 W) unter dem Energiefluss des Apple TV erscheinen, jeweils auch „nie“. Darunter, was gerade gemessen wird und was davon auf dem Fernseher steht (✅). Die Apple-TV-App selbst zeigt seit dem letzten Stand die weiteren großen Verbraucher mit Ring für den Anteil am Hausverbrauch. ' +
   'v239 · 2026-11-25 · Wärme → Effizienz: (1) Monatsbilanz neu – Januar bis Dezember, Jahr wählbar, jede Reihe ein- und ausblendbar: Strom und Wärme gesamt und getrennt nach Heizen/Warmwasser, Heizstab, Solarstrom für die WP, dazu in kleinen Diagrammen Arbeitszahl, Außen- und Vorlauftemperatur (Monatsmittel aus HomeCom), Heizgradtage und Stromkosten; Tippen zeigt alle Werte des Monats, Tabelle mit Jahreszeile. (2) Neue Karte „📄 Verbrauchsausweis – nachgerechnet“: Strom für Heizung + Warmwasser der letzten 12 Monate ÷ Gebäudenutzfläche (Wohnfläche × 1,2 bzw. × 1,35 mit beheiztem Keller) → Effizienzklasse A+ bis H, Primärenergie, dasselbe mit der erzeugten Wärme als Vergleich zur Gasheizung; Klimafaktor (DWD) eintragbar, Bauphase-Monate geschätzt; Rechenweg und Monatstabelle zeigen jede Zahl. ' +
   'v238 · 2026-11-25 · Wärme → Effizienz → Gebäude-Einordnung: „Heizwärme gemessen“ und „Heizstrom gemessen“ kommen jetzt aus den echten Monatswerten von HomeCom – nur Heizen, ohne Warmwasser –, für die Monate nach der Bauphase, mit den üblichen Gradtagzahl-Anteilen je Monat aufs Jahr hochgerechnet (wie bei der Heizkostenabrechnung). Die Hochrechnung aus Tageswerten lag mit nur 12 % der Heizgradtage eines Jahres deutlich zu hoch; sie springt nur noch ohne HomeCom ein und erst ab 30 %. Außerdem: Heizstab-Anteil mit einer Nachkommastelle und wie bei Bosch abgeschnitten (7,9 % ↔ 7 %), der Zählerstands-Gegencheck ist eingeklappt, sobald HomeCom liefert. ' +
   'v237 · 2026-11-25 · Wärme → Effizienz → „🔁 Abgleich mit der Bosch-App“: die Bridge fragt HomeCom jetzt direkt nach den Jahreswerten – Strom und Wärme fürs laufende Jahr und das Vorjahr, aufgeteilt in Heizen, Warmwasser und Gesamt, mit Arbeitszahl, Heizstab und Heizwärme je m² (bis heute). Dieselben Werte wie „Energiemonitoring → Effizienz“ in der Bosch-App. Bosch dokumentiert diese Abfrage nicht: die Bridge probiert die bekannten Wege durch, merkt sich den, der klappt, prüft die Werte gegen die Zähler seit Inbetriebnahme und zeigt sonst, was Bosch geantwortet hat (mit „Erneut abfragen“). Die Zählerstände der Bridge bleiben zum Gegencheck darunter. ' +
@@ -563,6 +564,15 @@ const INFO = {
     'kleinen Diagrammen unter den Balken, Tippen zeigt alle Werte des Monats, die Tabelle alle Zahlen samt Jahreswert ' +
     '(Arbeitszahl des Jahres = Jahreswärme ÷ Jahresstrom). Quelle sind die Monatswerte aus HomeCom, für Monate ohne sie die ' +
     'Zählerstände der Bridge.',
+  plugs: () => 'Was deine Geräte mit Strommessung (Bosch-Zwischenstecker, Licht-/Rollladensteuerung) <b>gerade</b> ziehen. ' +
+    '<b>So kommt ein Wert hierher:</b> Das Gerät misst und schickt neue Werte an den Smart Home Controller – <b>wie oft, ' +
+    'entscheidet das Gerät selbst</b>. Die Bridge hält eine <b>Live-Verbindung</b> zum Controller (dieselbe Art, mit der ' +
+    'auch Home Assistant ihm folgt) und hat jeden neuen Wert im selben Moment; diese Karte holt ihn alle 2 Sekunden, ' +
+    'solange die Übersicht offen ist.<br><b>neuer Wert vor … s</b> = wie alt der angezeigte Wert ist (zählt mit). ' +
+    '<b>kommt etwa alle …</b> = gemessener Abstand zwischen den letzten Meldungen dieses Geräts (ab drei Meldungen). ' +
+    '<b>unverändert seit …</b> = seitdem kam nichts Neues – der Wert gilt trotzdem, jede Änderung käme sofort an. ' +
+    'Die kleine Kurve zeigt die letzten 10 Minuten, <b>heute</b> den Verbrauch seit Mitternacht (wie unter „Heute“). ' +
+    'Steht die Live-Verbindung nicht, kommen die Werte aus der regelmäßigen Abfrage (Standard alle 30 s) – das steht dann oben rechts.',
   'pv-econ-live': () => 'Dieselbe Rechnung wie die Karte „Wirtschaftlichkeit“ darüber – aber mit dem, was deine Anlage ' +
     '<b>wirklich gemessen</b> hat (Wechselrichter + Smart Meter). <b>Eigenverbrauch</b> = Strom, den du nicht kaufen musstest ' +
     '(Verbrauch − Netzbezug: Sonne direkt oder über die Batterie) mal Strompreis, <b>Einspeisung</b> mal Vergütung, ' +
@@ -13837,6 +13847,7 @@ function switchView(v) {
   document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
   window.scrollTo({ top: 0, behavior: 'instant' in window ? 'instant' : 'auto' });
   flushView(v);                         // draw what arrived while this tab was hidden
+  if (v === 'overview') plugsStart(); else plugsStop();      // Steckdosen live: only while you look
   if (v === 'settings' && typeof renderPerf === 'function') renderPerf();
   if (v === 'settings' && typeof renderNetCard === 'function') renderNetCard();
   // lazily load ONLY the active Wärme sub-tab when the tab is opened
@@ -14852,6 +14863,9 @@ function init() {
   initCalSetup();
   if (!_bootDriven) loadAll();
   setInterval(refreshLive, 30000);
+  plugsStart();
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') plugsStart(); else plugsStop(); });
+  window.addEventListener('hashchange', () => setTimeout(plugsStart, 400));   // a wall dashboard closed → back to live
   // Service worker: register, then actively check for a newer version and take
   // it over automatically. Without the controllerchange auto-reload the browser
   // keeps running the old app.js until the user manually clears the cache –
@@ -14885,6 +14899,115 @@ function init() {
   };
   openFromHash();
   window.addEventListener('hashchange', openFromHash);
+}
+
+// ---- Übersicht → 🔌 Steckdosen live -------------------------------------------
+// The measuring devices' power as it comes: the bridge follows the controller's
+// event stream (/api/plugs/live), this card asks every 2 s while the overview is
+// open and the page visible. A changed value flashes, its age counts every
+// second, rows keep their order unless a device clearly overtakes another.
+let _plugs = null, _plugsAt = 0, _plugsT = null, _plugsTickT = null, _plugsBusy = false;
+let _plugsPrev = {}, _plugsOrder = [];
+const PLUGS_MS = 2000, PLUGS_IDLE_W = 2;
+// not behind the wall dashboards (#dash, #dash2): there the overview stays "on" underneath for days
+function plugsWanted() { return !STATE.demo && activeView() === 'overview' && document.visibilityState === 'visible' && !kioskOpen() && !houseOpen(); }
+function plugsStart() {
+  if (!plugsWanted()) { plugsStop(); return; }
+  if (!_plugsT) { _plugsT = setInterval(plugsLoad, PLUGS_MS); _plugsTickT = setInterval(plugsTick, 1000); }
+  plugsLoad();
+}
+function plugsStop() { clearInterval(_plugsT); clearInterval(_plugsTickT); _plugsT = _plugsTickT = null; }
+async function plugsLoad() {
+  if (_plugsBusy) return;
+  if (!plugsWanted()) { plugsStop(); return; }
+  _plugsBusy = true;
+  try { const d = await api('/api/plugs/live'); if (d && d.ok) { _plugs = d; _plugsAt = Date.now(); renderPlugs(); } }
+  catch (e) { /* bridge not reachable: keep the last values, their age keeps counting */ }
+  finally { _plugsBusy = false; }
+}
+const plugsNow = () => (_plugs ? _plugs.now + (Date.now() - _plugsAt) / 1000 : Date.now() / 1000);
+function plugW(w) { w = Math.max(0, w || 0); return w >= 1000 ? fmt(w / 1000, w >= 10000 ? 1 : 2) + ' kW' : fmt(w, w < 10 ? 1 : 0) + ' W'; }
+function plugAgo(s) {
+  s = Math.max(0, s);
+  return s < 1.5 ? 'gerade eben' : s < 60 ? `vor ${Math.round(s)}\u00a0s` : s < 3600 ? `vor ${Math.floor(s / 60)}\u00a0min`
+    : `vor ${Math.floor(s / 3600)}\u00a0h ${String(Math.floor(s % 3600 / 60)).padStart(2, '0')}\u00a0min`;
+}
+function plugEvery(s) { return s < 60 ? `${fmt(s, s < 10 ? 1 : 0)}\u00a0s` : `${fmt(s / 60, s < 600 ? 1 : 0)}\u00a0min`; }
+function plugAgeText(x, now) {
+  const ev = x.src === 'event' || x.src === 'demo';
+  return (ev ? 'neuer Wert ' : 'Stand ') + plugAgo(now - x.ts) + (ev ? '' : ' (Abfrage)');
+}
+// the last 10 minutes as a step line (a value holds until the next report)
+function plugSpark(x, now) {
+  const W = 300, H = 34, t0 = now - 600, pts = (x.hist || []).filter(p => p[0] <= now + 1);
+  if (!pts.length) return '';
+  const top = Math.max(1, ...pts.map(p => p[1]), x.w || 0) * 1.12;
+  const X = t => Math.max(0, Math.min(W, (t - t0) / 600 * W)), Y = w => H - 1 - Math.max(0, w) / top * (H - 3);
+  let d = `M${X(pts[0][0]).toFixed(1)} ${Y(pts[0][1]).toFixed(1)}`;
+  for (let i = 1; i < pts.length; i++) d += ` H${X(pts[i][0]).toFixed(1)} V${Y(pts[i][1]).toFixed(1)}`;
+  d += ` H${W}`;
+  const col = (x.w || 0) >= 1000 ? 'var(--warn)' : 'var(--accent2)';
+  return `<svg class="plug-spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">` +
+    `<path d="${d} V${H} H${X(pts[0][0]).toFixed(1)} Z" fill="${col}" opacity=".14"/>` +
+    `<path d="${d}" fill="none" stroke="${col}" stroke-width="1.7" vector-effect="non-scaling-stroke"/></svg>`;
+}
+// biggest first, but rows stay put unless one clearly overtakes the one above
+function plugsOrder(list) {
+  const by = Object.fromEntries(list.map(x => [x.id, x]));
+  const same = _plugsOrder.length === list.length && _plugsOrder.every(i => by[i]);
+  const swap = same && _plugsOrder.some((id, k) => k > 0 && (by[id].w || 0) > (by[_plugsOrder[k - 1]].w || 0) * 1.2 + 5);
+  if (!same || swap) _plugsOrder = list.slice().sort((a, b) => (b.w || 0) - (a.w || 0)).map(x => x.id);
+  return _plugsOrder.map(i => by[i]);
+}
+function renderPlugs() {
+  const card = $('ov-plugs-card'), body = $('ov-plugs-body'); if (!card || !body) return;
+  const d = _plugs;
+  if (!d || STATE.demo || (!d.devices.length && d.mode === 'off')) { card.hidden = true; return; }
+  card.hidden = false;
+  const now = plugsNow(), live = d.mode === 'event' || d.mode === 'demo';
+  const act = d.devices.filter(x => (x.w || 0) >= PLUGS_IDLE_W), idle = d.devices.filter(x => (x.w || 0) < PLUGS_IDLE_W);
+  const row = (x, small) => {
+    const w = x.w || 0, prev = _plugsPrev[x.id], flash = prev != null && Math.abs(prev - w) >= 0.05;
+    _plugsPrev[x.id] = w;
+    const still = now - (x.t_change || x.ts), max10 = Math.max(0, ...(x.hist || []).map(p => p[1]));
+    const meta = [`<span class="plug-age" data-id="${esc(x.id)}">${plugAgeText(x, now)}</span>`,
+      x.every_s ? `kommt etwa alle ${plugEvery(x.every_s)}` : '',
+      still >= 120 ? `unverändert seit ${fmtMin(Math.floor(still / 60))}` : '',
+      !small && max10 > w * 1.3 + 5 ? `max. ${plugW(max10).replace(' ', '&nbsp;')} in 10&nbsp;min` : '',
+      x.kwh_today != null ? `heute ${fmt(x.kwh_today, x.kwh_today < 10 ? 2 : 1)}&nbsp;kWh · ${money(x.kwh_today * STATE.price).replace(' ', '&nbsp;')}` : '']
+      .filter(Boolean).join(' · ');
+    return `<div class="plug${small ? ' small' : ''}"><div class="plug-top"><span class="plug-ic">${kioskDevIcon(x.name)}</span>` +
+      `<div class="plug-nm"><b>${esc(x.name)}</b>${x.room ? `<small>${esc(x.room)}</small>` : ''}</div>` +
+      `<div class="plug-val${w >= 1000 ? ' big' : ''}${flash ? ' flash' : ''}">${plugW(w)}</div></div>` +
+      (small ? '' : plugSpark(x, now)) + `<div class="plug-meta">${meta}</div></div>`;
+  };
+  const open = !!(body.querySelector('details') || {}).open;          // keep it open across the 2-s updates
+  body.innerHTML = (act.length ? plugsOrder(act).map(x => row(x, false)).join('')
+    : `<div class="note" style="padding:4px 0">Gerade zieht kein Gerät mit Messung ${PLUGS_IDLE_W} W oder mehr.</div>`) +
+    (idle.length ? `<details style="margin-top:6px"${open ? ' open' : ''}><summary style="cursor:pointer;color:var(--muted);font-size:12px">` +
+      `${idle.length} ${idle.length === 1 ? 'Gerät' : 'Geräte'} unter ${PLUGS_IDLE_W} W (aus oder Standby)</summary>` +
+      idle.map(x => row(x, true)).join('') + '</details>' : '');
+  const total = d.devices.reduce((t, x) => t + (x.w || 0), 0);
+  const sum = $('ov-plugs-sum');
+  if (sum) sum.innerHTML = `Zusammen jetzt <b>${plugW(total)}</b> · ${d.devices.length} ${d.devices.length === 1 ? 'Gerät' : 'Geräte'} mit Strommessung`;
+  const head = $('ov-plugs-head');
+  if (head) head.innerHTML = live
+    ? `<span class="live-pill" title="${d.events || 0} Meldungen seit dem Start der Bridge"><i></i>live${d.mode === 'demo' ? ' · Demo' : ''}</span>`
+    : `<span class="live-pill poll"><i></i>alle ${d.poll_s} s</span>`;
+  const since = d.since ? new Date(d.since * 1000).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) : '';
+  const note = $('ov-plugs-note');
+  if (note) note.innerHTML = live
+    ? `<b>Live-Verbindung</b> zum Smart Home Controller${since ? ' seit ' + since + ' Uhr' : ''}` +
+      (d.mode === 'demo' ? ' (Demo: simulierte Meldungen)' : '') + ': jeder neue Wert ist im selben Moment hier, die Karte holt ihn ' +
+      'alle 2 s. Wie oft ein Gerät neue Werte schickt, entscheidet das Gerät selbst – „kommt etwa alle …“ ist gemessen. Kommt länger ' +
+      'nichts Neues, hat sich der Wert nicht geändert: jede Änderung käme sofort an.'
+    : `<b>Live-Verbindung gerade nicht aktiv</b>${d.error ? ` (${esc(d.error)})` : ''} – die Werte kommen aus der Abfrage alle ` +
+      `${d.poll_s} s, eine Änderung siehst du also spätestens nach ${d.poll_s} s. Die Bridge versucht die Live-Verbindung weiter.`;
+}
+function plugsTick() {
+  if (!_plugs) return;
+  const now = plugsNow(), by = Object.fromEntries(_plugs.devices.map(x => [x.id, x]));
+  document.querySelectorAll('#ov-plugs-body .plug-age').forEach(el => { const x = by[el.dataset.id]; if (x) el.textContent = plugAgeText(x, now); });
 }
 
 async function refreshLive() {

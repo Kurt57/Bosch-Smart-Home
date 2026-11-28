@@ -12,7 +12,7 @@ deinem Heimnetz; die Wärmepumpe kommt über Bosch HomeCom Easy dazu.
 
 | Ansicht | Inhalt |
 |---|---|
-| **Übersicht** | **Heute bisher** (kWh + Kosten), aktuelle Gesamtleistung inkl. Wärmepumpen-Anteil, **Energiefluss jetzt** (Sonne · Haus · Batterie · Netz · Wärmepumpe, mit Fronius-Wechselrichter), Monats-Hochrechnung, **Monatsbudget** (Stand + Hochrechnung, warnt vor Überschreitung), **Wofür-heute-Donut** (Wärmepumpe + Geräte), letzte 14 Tage **gestapelt** (Smart Home vs. Wärmepumpe), **Sparpotenzial** (die größten Hebel mit €/Jahr, sortiert nach Wirkung), Wärmepumpen-Kurzstatus |
+| **Übersicht** | **Heute bisher** (kWh + Kosten), aktuelle Gesamtleistung inkl. Wärmepumpen-Anteil, **Energiefluss jetzt** (Sonne · Haus · Batterie · Netz · Wärmepumpe, mit Fronius-Wechselrichter), **🔌 Steckdosen live** (jedes Gerät mit Strommessung, so schnell es der Controller weiß – siehe unten), Monats-Hochrechnung, **Monatsbudget** (Stand + Hochrechnung, warnt vor Überschreitung), **Wofür-heute-Donut** (Wärmepumpe + Geräte), letzte 14 Tage **gestapelt** (Smart Home vs. Wärmepumpe), **Sparpotenzial** (die größten Hebel mit €/Jahr, sortiert nach Wirkung), Wärmepumpen-Kurzstatus |
 | **Heute** | Verbrauch **nach Stunde** (Smart Home + Wärmepumpe gestapelt), Aufteilung heute als Donut mit Kosten, Smart-Home-Geräte heute |
 | **Verlauf** | kWh **pro Tag** (14/30/90 Tage) bzw. **pro Monat** (1 Jahr, fehlende Monate geschätzt), gestapelt nach Quelle; mit PV-Anlage der **ganze Hausverbrauch laut Smart Meter** (Wärmepumpe, Smart Home und grau „nicht einzeln gemessen“, siehe [docs/FRONIUS.md](docs/FRONIUS.md)), sonst **echter Gesamtverbrauch** aus dem **Tibber**-Zähler (wenn verbunden); **Anteil je Quelle**; **Abwesenheit** (wie oft ihr nicht zuhause wart) + Kalender; **Jahres-Hochrechnung** & Einordnung |
 | **Wärmepumpe** | Live-Karte (elektr./therm. Leistung, **COP jetzt**, Zähler-Splits Kompressor/Heizstab, Temperaturen, **Volumenstrom** – gelesen, wenn die Anlage ihn meldet, sonst aus Wärmemenge ÷ Spreizung abgeleitet, Starts/Stunden), **Strom & Wärme pro Tag**, **COP-Verlauf**, **COP pro Monat**, **Monatsbilanz**, **Wärmekarte** Wochentag × Stunde, **Theorie vs. Praxis** (erwarteter Stromverbrauch aus deinen Gebäudedaten – U·A + Heizgradtage – gegen den gemessenen Verbrauch, mit den größten Sanierungs-Hebeln), **Strombedarf-Prognose** (erwarteter WP-Strom der nächsten Tage aus der Wettervorhersage), **Warmwasser-Anteil & -Kosten** pro Jahr mit Optimierungs-Tipp, Ø **Laufzeit je Start** mit Kurztakt-Warnung |
@@ -48,6 +48,33 @@ denen die Bridge Leistung, COP und Historie ableitet.
 * **bridge/** – eine kleine Python-Bridge (nur Standardbibliothek). Sie meldet
   sich per Client-Zertifikat am Controller an, fragt regelmäßig die Leistungs-
   werte ab, speichert sie in SQLite und liefert eine JSON-API **plus** die Web-App.
+  Zusätzlich hält sie eine **Live-Verbindung** zum Controller (dessen Ereignis-
+  Schnittstelle, „Long Polling“, so wie auch Home Assistant dem Controller folgt):
+  jeder neue Leistungswert eines Zwischensteckers ist im selben Moment in der
+  Bridge – für die Karte **🔌 Steckdosen live**.
+
+### Steckdosen live – wie aktuell sind die Watt?
+
+Ein Bosch-Zwischenstecker misst laufend und schickt neue Werte an den Smart Home
+Controller; **wie oft, entscheidet der Stecker selbst** (einen festen Takt habe ich in
+Boschs Unterlagen nicht gefunden – die Karte misst ihn deshalb je Gerät). Bisher fragte die Bridge den Controller alle 30 s – so alt konnte
+ein Wert also sein, ohne dass man es sah. Jetzt:
+
+* **Controller → Bridge sofort:** Die Bridge meldet sich beim Controller für
+  Ereignisse an (`/remote/json-rpc`, `RE/subscribe` + `RE/longPoll`) und bekommt
+  jede neue Meldung im selben Moment. Die 30-s-Abfrage läuft weiter (Verlauf in
+  SQLite, Sicherheitsnetz). Fällt die Live-Verbindung aus, versucht die Bridge es
+  weiter (5 s, 10 s, 20 s … bis 2 min) und die Karte zeigt ehrlich „alle 30 s“.
+  Der Controller beendet Anmeldungen etwa täglich – die Bridge meldet sich dann
+  von selbst neu an. Abschalten (nur Abfrage): `"shc_events": false` in `config.json`.
+* **Bridge → App alle 2 s**, solange die Übersicht offen ist (sonst gar nicht).
+* **Je Gerät** steht, wie alt der Wert ist („neuer Wert vor 4 s“, zählt mit), wie
+  oft das Gerät **gemessen** neue Werte schickt („kommt etwa alle 9 s“), ob es seit
+  einer Weile **unverändert** ist, die **letzten 10 Minuten** als Kurve, der
+  Verbrauch **heute** in kWh und €; ein neuer Wert blitzt kurz auf.
+
+Schneller als der Stecker selbst meldet, geht es nicht – aber du siehst jetzt jeden
+Wert sofort und weißt immer, wie alt er ist. API: `GET /api/plugs/live`.
 * **frontend/** – die Single-File-PWA mit eigenen SVG-Diagrammen (keine externen
   Bibliotheken). Funktioniert auch **ohne Bridge im Demo-Modus**, damit du sofort
   siehst, wie alles aussieht.
