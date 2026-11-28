@@ -5,18 +5,35 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Strom">
+<meta name="apple-mobile-web-app-title" content="Energie">
 <meta name="theme-color" content="#0b1220">
 <meta name="mobile-web-app-capable" content="yes">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon.svg">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
-<title>Bosch Home Strom</title>
+<title>Bosch Energie</title>
+<script>
+/* Ask the bridge for the first screen's data NOW – before the (large) app
+   script below has been downloaded and parsed. app.js picks the answer up from
+   window.__boot (see bootApp). Skipped in demo mode. */
+(function () {
+  try {
+    if (localStorage.getItem('bhe_demo') === '1') return;
+    var base = localStorage.getItem('bhe_base') || '';
+    window.__bootT0 = performance.now();
+    window.__boot = fetch(base + '/api/boot?days=90', { cache: 'no-store' })
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function (j) { window.__bootT1 = performance.now(); return j; });
+    window.__boot.catch(function () {});   /* failure is handled in bootApp */
+  } catch (e) {}
+})();
+</script>
 <style>
   :root{
     --bg:#0b1220; --bg2:#111a2e; --card:#16213c; --card2:#1c2a49;
     --ink:#eaf0ff; --muted:#93a2c4; --line:#26355c;
     --accent:#3ba9ff; --accent2:#4be0b0; --warn:#ffb64d; --away:#ff6b8a;
+    --sh:#4da3ff; --hp:#ef6c4d; --heat:#f6b93b;
     --grad1:#3ba9ff; --grad2:#7c5cff;
     --safe-t:env(safe-area-inset-top); --safe-b:env(safe-area-inset-bottom);
   }
@@ -24,13 +41,12 @@
   html,body{margin:0; background:var(--bg); color:var(--ink);
     font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,sans-serif;
     -webkit-font-smoothing:antialiased}
-  body{padding-bottom:calc(72px + var(--safe-b))}
+  body{padding-bottom:calc(74px + var(--safe-b))}
   a{color:var(--accent)}
   .wrap{max-width:640px; margin:0 auto; padding:0 14px}
   header{position:sticky; top:0; z-index:20;
     padding:calc(12px + var(--safe-t)) 14px 12px;
-    background:linear-gradient(180deg,var(--bg) 70%,rgba(11,18,32,0));
-    backdrop-filter:blur(8px)}
+    background:var(--bg); border-bottom:1px solid var(--line)}
   header .row{display:flex; align-items:center; justify-content:space-between; gap:10px}
   h1{font-size:19px; margin:0; font-weight:700; letter-spacing:-.02em}
   .sub{color:var(--muted); font-size:12px; margin-top:2px}
@@ -44,19 +60,24 @@
     padding:16px; margin:12px 0; box-shadow:0 6px 24px rgba(0,0,0,.25)}
   .card h2{font-size:13px; margin:0 0 12px; color:var(--muted); font-weight:600;
     text-transform:uppercase; letter-spacing:.06em}
+  .card h2 .r{float:right; text-transform:none; letter-spacing:0; font-weight:600}
   .grid2{display:grid; grid-template-columns:1fr 1fr; gap:12px}
+  .grid3{display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px}
   .kpi{background:var(--card); border:1px solid var(--line); border-radius:16px; padding:14px}
-  .kpi .v{font-size:24px; font-weight:750; letter-spacing:-.03em; line-height:1}
+  .kpi .v{font-size:23px; font-weight:750; letter-spacing:-.03em; line-height:1.05}
   .kpi .l{color:var(--muted); font-size:12px; margin-top:6px}
-  .kpi .u{font-size:13px; color:var(--muted); font-weight:600}
+  .kpi.sm .v{font-size:18px}
 
   .hero{background:radial-gradient(120% 120% at 20% 0%,#1b2b52 0%,var(--card) 60%);
     text-align:center; padding:22px 16px}
-  .hero .now{font-size:56px; font-weight:800; letter-spacing:-.04em; line-height:1;
+  .hero .now{font-size:52px; font-weight:800; letter-spacing:-.04em; line-height:1;
     background:linear-gradient(90deg,var(--grad1),var(--grad2));
     -webkit-background-clip:text; background-clip:text; color:transparent}
-  .hero .now span{font-size:22px; -webkit-text-fill-color:var(--muted); color:var(--muted)}
+  .hero .now span{font-size:20px; -webkit-text-fill-color:var(--muted); color:var(--muted)}
   .hero .cap{color:var(--muted); font-size:13px; margin-top:8px}
+  .hero .split{display:flex; justify-content:center; gap:18px; margin-top:12px; flex-wrap:wrap}
+  .hero .split div{font-size:13px; color:var(--muted)}
+  .hero .split b{display:block; font-size:17px; color:var(--ink); font-weight:700; margin-top:2px}
   .dot{display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--accent2);
     margin-right:6px; animation:pulse 2s infinite}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
@@ -73,15 +94,61 @@
   .bar>i{display:block; height:100%; border-radius:6px;
     background:linear-gradient(90deg,var(--grad1),var(--grad2))}
 
-  svg{display:block; width:100%; height:auto; overflow:visible}
+  svg{display:block; width:100%; height:auto; overflow:visible; -webkit-user-select:none; user-select:none; -webkit-touch-callout:none}
+  /* tapping a chart or a badge should read the value, not pop up iOS text selection */
+  .ratebadge,.gloss,#toast{-webkit-user-select:none; user-select:none; -webkit-touch-callout:none}
   .axis{fill:var(--muted); font-size:10px}
   .gl{stroke:var(--line); stroke-width:1}
+  .cd-cursor{stroke:var(--accent,#ffb64d); stroke-width:1.3; opacity:.8; pointer-events:none; vector-effect:non-scaling-stroke}
+  svg[data-cd]{cursor:crosshair}
+  .donut-v{fill:var(--ink); font-size:26px; font-weight:800}
+  .donut-l{fill:var(--muted); font-size:11px}
+
+  .legend{display:flex; flex-wrap:wrap; gap:8px 16px; margin-top:12px}
+  .legend .it{display:flex; align-items:center; gap:7px; font-size:13px}
+  .legend .it[hidden]{display:none}
+  .mc-tab{width:100%; border-collapse:collapse; font-size:12.5px; margin-top:6px}
+  .mc-tab th{font-weight:600; color:var(--muted); text-align:right; padding:3px 4px; font-size:11.5px}
+  .mc-tab td{padding:4px; text-align:right; border-top:1px solid var(--line, rgba(255,255,255,.06)); white-space:nowrap}
+  .mc-tab th:first-child, .mc-tab td:first-child{text-align:left; white-space:normal}
+  .legend .sw{width:11px; height:11px; border-radius:3px; flex:none}
+  .legend small{color:var(--muted); margin-left:4px}
 
   .seg{display:flex; gap:6px; background:var(--card2); padding:4px; border-radius:12px;
     margin:0 0 12px}
+  /* keep the time-range control visible & clickable below the sticky header */
+  #hist-range{position:sticky; top:var(--hdr-h,64px); z-index:21;
+    box-shadow:0 6px 16px rgba(11,18,32,.6); overflow-x:auto; scrollbar-width:none}
+  #hist-range::-webkit-scrollbar{display:none}
+  #hist-range button{flex:1 0 auto; white-space:nowrap}
+  #hist-day{display:flex; gap:8px; align-items:center; margin:-4px 0 12px}
+  #hist-day[hidden]{display:none}
+  #hist-day #hist-day-label{flex:1; text-align:center; font-weight:700; font-size:14px}
+  #hist-day button{flex:0 0 auto; width:auto; padding:8px 16px; margin:0; font-size:15px}
+  #hist-day button:disabled{opacity:.35}
+  .pvdn{display:flex; gap:8px; align-items:center; margin:0 0 10px}
+  .pvdn[hidden]{display:none}
+  .pvdn .pvdn-l{flex:1; text-align:center; font-weight:700; font-size:14px}
+  .pvdn button{flex:0 0 auto; width:auto; padding:8px 16px; margin:0; font-size:15px}
+  .pvdn button:disabled{opacity:.35}
+  #hist-custom{display:flex; gap:8px; margin:-4px 0 12px}
+  #hist-custom[hidden]{display:none}
   .seg button{flex:1; border:none; background:transparent; color:var(--muted);
     padding:8px 6px; border-radius:9px; font-size:13px; font-weight:600}
   .seg button.on{background:var(--accent); color:#04121f}
+  .seg[hidden]{display:none !important}
+  .mchips{display:flex; flex-wrap:wrap; gap:6px; margin:2px 0 10px}
+  .mchips button{display:flex; align-items:center; gap:6px; width:auto; margin:0; padding:5px 10px; border-radius:999px;
+    border:1px solid var(--line); background:transparent; color:var(--muted); font-size:12.5px; font-weight:600}
+  .mchips button .sw{width:10px; height:10px; border-radius:3px; flex:none; opacity:.3}
+  .mchips button.on{color:var(--ink); border-color:var(--accent)}
+  .mchips button.on .sw{opacity:1}
+  .mtable{overflow-x:auto; -webkit-overflow-scrolling:touch; margin-top:8px}
+  .mtable table.pvt td, .mtable table.pvt th{white-space:nowrap}
+
+  .statusrow{display:flex; align-items:baseline; gap:10px; font-size:14px; margin:5px 0}
+  .statusrow .k{color:var(--muted); flex:1; min-width:44%}
+  .statusrow .v{font-weight:650; text-align:right}
 
   input,select{width:100%; padding:12px; border-radius:12px; border:1px solid var(--line);
     background:var(--bg2); color:var(--ink); font-size:16px; margin-top:6px}
@@ -90,22 +157,509 @@
     border:none; font-weight:700; font-size:15px; margin-top:12px;
     background:linear-gradient(90deg,var(--grad1),var(--grad2)); color:#04121f}
   .btn.sec{background:var(--card2); color:var(--ink); border:1px solid var(--line)}
+  /* display:block above would otherwise override the hidden attribute – hidden
+     buttons (e.g. "Stop" while nothing runs) used to stay visible */
+  .btn[hidden]{display:none}
   .note{color:var(--muted); font-size:12px; line-height:1.5}
   .badge{display:inline-block; font-size:11px; padding:2px 8px; border-radius:20px;
     background:var(--card2); color:var(--muted); border:1px solid var(--line)}
   .away-b{color:var(--away); border-color:#6b1f33}
 
   nav{position:fixed; left:0; right:0; bottom:0; z-index:30;
-    padding:6px 8px calc(6px + var(--safe-b)); background:rgba(14,22,40,.92);
+    padding:6px 4px calc(6px + var(--safe-b)); background:rgba(14,22,40,.92);
     backdrop-filter:blur(12px); border-top:1px solid var(--line);
     display:flex; justify-content:space-around; max-width:640px; margin:0 auto}
-  nav button{background:none; border:none; color:var(--muted); font-size:10px;
-    display:flex; flex-direction:column; align-items:center; gap:3px; padding:6px 4px; flex:1}
+  nav button{background:none; border:none; color:var(--muted); font-size:9.5px;
+    display:flex; flex-direction:column; align-items:center; gap:3px; padding:6px 1px; flex:1;
+    min-width:0}
+  nav button span{max-width:100%; overflow:hidden; text-overflow:ellipsis}
   nav button.on{color:var(--accent)}
-  nav button svg{width:22px; height:22px}
+  nav button svg{width:21px; height:21px}
   .view{display:none} .view.on{display:block; animation:fade .25s}
   @keyframes fade{from{opacity:0; transform:translateY(6px)}to{opacity:1}}
-  .tip{fill:var(--ink); font-size:11px; font-weight:700}
+  /* Übersicht → Steckdosen live: one row per measuring device */
+  .plug{padding:9px 0; border-bottom:1px solid var(--line)}
+  .plug:last-child{border-bottom:0}
+  .plug-top{display:flex; align-items:center; gap:10px}
+  .plug-ic{width:34px; height:34px; flex:none; border-radius:50%; display:flex; align-items:center; justify-content:center;
+    background:var(--card2); font-size:17px}
+  .plug-nm{flex:1; min-width:0}
+  .plug-nm b{display:block; font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  .plug-nm small{display:block; color:var(--muted); font-size:11.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  .plug-val{font-size:21px; font-weight:800; font-variant-numeric:tabular-nums; white-space:nowrap; padding:1px 7px; border-radius:9px}
+  .plug-val.big{color:var(--warn)}
+  .plug-val.flash{animation:plugFlash 1.1s ease-out}
+  @keyframes plugFlash{0%{background:rgba(75,224,176,.38); transform:scale(1.07)} 100%{background:transparent; transform:none}}
+  .plug-spark{display:block; width:100%; height:34px; margin:6px 0 2px}
+  .plug-meta{font-size:11.5px; color:var(--muted); line-height:1.45}
+  .plug.small .plug-top{gap:8px} .plug.small .plug-val{font-size:15px; font-weight:700}
+  .plug.small .plug-ic{width:26px; height:26px; font-size:13px}
+  .live-pill{display:inline-flex; align-items:center; gap:6px; font-size:12px; font-weight:700; color:var(--accent2)}
+  .live-pill i{width:8px; height:8px; border-radius:50%; background:var(--accent2); animation:livePing 1.6s infinite}
+  .live-pill.poll{color:var(--muted)} .live-pill.poll i{background:var(--muted); animation:none}
+  @keyframes livePing{0%{box-shadow:0 0 0 0 rgba(75,224,176,.55)} 70%{box-shadow:0 0 0 7px rgba(75,224,176,0)} 100%{box-shadow:0 0 0 0 rgba(75,224,176,0)}}
+  @media (prefers-reduced-motion:reduce){.plug-val.flash, .live-pill i{animation:none}}
+  /* PV energy flow: dashes run along the lines in the direction of the flow */
+  @keyframes flowdash{to{stroke-dashoffset:-24}}
+  .flowln{fill:none; stroke-linecap:round; stroke-dasharray:3 9; animation:flowdash linear infinite}
+  .flowln.idle{stroke-dasharray:none; animation:none; opacity:.18}
+  @media (prefers-reduced-motion: reduce){ .flowln{animation:none; stroke-dasharray:none} }
+  .pvk{display:grid; grid-template-columns:repeat(auto-fit,minmax(96px,1fr)); gap:8px}
+  .pvk > div{background:var(--card2); border:1px solid var(--line); border-radius:10px; padding:8px 10px; text-align:center}
+  .pvk b{display:block; font-size:17px} .pvk small{color:var(--muted); font-size:11px}
+  table.pvt{width:100%; border-collapse:collapse; font-size:12.5px}
+  table.pvt td, table.pvt th{padding:5px 4px; text-align:right; border-bottom:1px solid var(--line)}
+  table.pvt th{color:var(--muted); font-weight:600} table.pvt td:first-child, table.pvt th:first-child{text-align:left}
+  /* addresses in the home network: hidden until "anzeigen" (see ipTag) */
+  .ipm .ipdots{letter-spacing:.5px; color:var(--muted)}
+  .ipm a, a.iptog-in{color:var(--accent); font-size:.86em; font-weight:500; text-decoration:none; white-space:nowrap}
+  a.iptog-in{margin-left:6px}
+  input.ipsec.hid:not(:focus):not(:placeholder-shown){-webkit-text-security:disc; text-security:disc}
+  /* weather for the PV views */
+  .wxrow{display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px}
+  .wxc{background:var(--card2); border:1px solid var(--line); border-radius:12px; padding:8px 10px; min-width:0}
+  .wxc .wxh{font-size:11px; color:var(--muted); font-weight:700; text-transform:uppercase; letter-spacing:.04em}
+  .wxc .wxi{font-size:24px; line-height:1.15; margin:3px 0 1px}
+  .wxc b{display:block; font-size:13.5px; line-height:1.3}
+  .wxc small{display:block; color:var(--muted); font-size:11.5px; line-height:1.4}
+  .wxc .wxe{color:var(--ink); font-weight:650}
+  /* verdict lists (string comparison, plausibility check) */
+  .vlist{display:flex; flex-direction:column; gap:9px}
+  .vrow{display:flex; gap:10px; align-items:flex-start; font-size:13px; line-height:1.45}
+  .vrow .vi{flex:0 0 22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center;
+    font-size:12px; font-weight:800; margin-top:1px}
+  .vrow.v-ok .vi{background:rgba(75,224,176,.16); color:#4be0b0}
+  .vrow.v-info .vi{background:rgba(77,163,255,.16); color:#4da3ff}
+  .vrow.v-warn .vi{background:rgba(255,182,77,.18); color:#ffb64d}
+  .vrow .vt{flex:1; min-width:0} .vrow .vt small{display:block; color:var(--muted); font-size:12px; margin-top:1px}
+  .strbar{display:grid; grid-template-columns:auto 1fr auto; gap:4px 10px; align-items:center; font-size:13px}
+  .strbar .bar{height:10px; border-radius:6px; background:var(--card2); overflow:hidden}
+  .strbar .bar i{display:block; height:100%; border-radius:6px}
+  .strbar .num{text-align:right; font-weight:650; white-space:nowrap}
+  .strbar .sub{grid-column:2 / 4; margin:-2px 0 4px; color:var(--muted); font-size:11.5px}
+  .strform{display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px}
+  .strform fieldset{border:1px solid var(--line); border-radius:12px; padding:8px 10px; margin:0; min-width:0}
+  .strform legend{font-size:12px; font-weight:700; padding:0 4px}
+  .strform label{display:block; font-size:11.5px; color:var(--muted); margin-top:6px}
+  .strform input, .strform select{padding:7px 8px; border-radius:9px; font-size:14px; margin-top:2px}
+  /* sub-tab bar inside a view (e.g. Wärme split into clusters) */
+  .subnav{display:flex; gap:6px; overflow-x:auto; padding:2px 0 12px; -webkit-overflow-scrolling:touch; scrollbar-width:none}
+  .subnav::-webkit-scrollbar{display:none}
+  .subnav button{flex:0 0 auto; padding:7px 13px; border-radius:999px; border:1px solid var(--line); background:var(--card2); color:var(--muted); font-size:13px; font-weight:600; white-space:nowrap; cursor:pointer}
+  .subnav button.on{background:var(--accent); border-color:var(--accent); color:#06142e}
+  /* keep the Wärme sub-tabs visible & clickable below the sticky header –
+     otherwise scrolling slides them under the header, which swallows the clicks */
+  #heat-subnav{position:sticky; top:var(--hdr-h,64px); z-index:21; background:var(--bg);
+    padding-top:8px; box-shadow:0 8px 14px -6px rgba(11,18,32,.55)}
+  #v-heatpump.hsa-heizung > .card:not([data-hs="heizung"]),
+  #v-heatpump.hsa-warmwasser > .card:not([data-hs="warmwasser"]),
+  #v-heatpump.hsa-abgleich > .card:not([data-hs="abgleich"]),
+  #v-heatpump.hsa-effizienz > .card:not([data-hs="effizienz"]),
+  #v-heatpump.hsa-einstellung > .card:not([data-hs="einstellung"]){display:none !important}
+  .info{display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px;
+    border-radius:50%; border:1px solid var(--line); background:var(--card2); color:var(--muted);
+    font-size:10px; font-style:italic; font-weight:700; cursor:pointer; vertical-align:middle;
+    margin-left:6px; line-height:1; flex:none}
+  h2 .info{float:right; margin-top:-1px}
+  #toast{position:fixed; left:50%; bottom:calc(84px + var(--safe-b)); transform:translateX(-50%);
+    max-width:560px; width:calc(100% - 28px); z-index:60; background:#0f1830; color:var(--ink);
+    border:1px solid var(--line); border-radius:14px; padding:13px 15px; font-size:13px; line-height:1.5;
+    box-shadow:0 10px 40px rgba(0,0,0,.5)}
+  #toast b{color:var(--ink)} #toast small{color:var(--muted)}
+  /* Raumtemperatur-Balken (Ziel-Erreichung) */
+  .rt-chart{display:flex; gap:10px; align-items:flex-end; overflow-x:auto; padding:6px 2px 2px; -webkit-overflow-scrolling:touch}
+  .rt-col{flex:1 0 54px; min-width:54px; display:flex; flex-direction:column; align-items:center}
+  .rt-val{font-size:13px; font-weight:700; margin-bottom:5px; letter-spacing:-.3px}
+  .rt-barwrap{position:relative; width:30px; height:160px; background:var(--card2); border-radius:9px; border:1px solid var(--line)}
+  .rt-bar{position:absolute; left:0; right:0; bottom:0; border-radius:0 0 8px 8px; transition:height .5s ease, background .3s}
+  .rt-bar.full{border-radius:8px}
+  .rt-target{position:absolute; left:-4px; right:-4px; border-top:2px dashed var(--ink); opacity:.8}
+  .rt-target::after{content:"Ziel"; position:absolute; right:-2px; top:-13px; font-size:8px; color:var(--muted)}
+  .rt-name{font-size:11px; color:var(--ink); font-weight:600; margin-top:7px; text-align:center; max-width:60px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .rt-gap{font-size:10px; margin-top:2px; text-align:center; line-height:1.3}
+  .rt-ted{display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:8px 12px}
+  .rt-ted label{display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:13px; color:var(--muted)}
+  .rt-ted input{width:62px; padding:5px 7px; border-radius:8px; border:1px solid var(--line); background:var(--card2); color:var(--ink); font-size:13px; text-align:right}
+  /* ===== Kiosk / Wohn-Dashboard — Apple-like, mit Hell/Dunkel ============== */
+  /* Dark tokens (default). Light tokens under [data-ktheme="light"]. */
+  #kiosk{
+    --k-bg:#000000; --k-card:rgba(28,28,30,.92); --k-card2:rgba(58,58,60,.55);
+    --k-ink:#ffffff; --k-sub:rgba(235,235,245,.6); --k-faint:rgba(235,235,245,.3);
+    --k-sep:rgba(84,84,88,.5); --k-blur:saturate(180%) blur(20px);
+    --k-shadow:none; --k-topbg:rgba(0,0,0,.55);
+    --kb-green:#30d158; --kb-green-bg:rgba(48,209,88,.16); --kb-green-bd:rgba(48,209,88,.38);
+    --kb-amber:#ff9f0a; --kb-amber-bg:rgba(255,159,10,.16); --kb-amber-bd:rgba(255,159,10,.38);
+    --kb-red:#ff453b;   --kb-red-bg:rgba(255,69,58,.16);    --kb-red-bd:rgba(255,69,58,.4);
+    --kb-blue:#0a84ff;  --kb-blue-bg:rgba(10,132,255,.16);  --kb-blue-bd:rgba(10,132,255,.38);
+    --kb-teal:#64d2ff; --kb-sun:#ffd426; --kb-grid:#8e8e93;
+  }
+  #kiosk[data-ktheme="light"]{
+    --k-bg:#f2f2f7; --k-card:rgba(255,255,255,.96); --k-card2:rgba(118,118,128,.12);
+    --k-ink:#1c1c1e; --k-sub:rgba(60,60,67,.6); --k-faint:rgba(60,60,67,.3);
+    --k-sep:rgba(60,60,67,.14); --k-blur:saturate(180%) blur(20px);
+    --k-shadow:0 1px 2px rgba(0,0,0,.06), 0 8px 24px rgba(0,0,0,.05); --k-topbg:rgba(242,242,247,.7);
+    --kb-green:#248a3d; --kb-green-bg:rgba(52,199,89,.14); --kb-green-bd:rgba(52,199,89,.32);
+    --kb-amber:#c77700; --kb-amber-bg:rgba(255,149,0,.14); --kb-amber-bd:rgba(255,149,0,.32);
+    --kb-red:#d70015;   --kb-red-bg:rgba(255,59,48,.11);   --kb-red-bd:rgba(255,59,48,.28);
+    --kb-blue:#0071e3;  --kb-blue-bg:rgba(0,122,255,.11);  --kb-blue-bd:rgba(0,122,255,.28);
+    --kb-teal:#0a93c7; --kb-sun:#ff9500; --kb-grid:#8e8e93;
+  }
+  #kiosk{position:fixed; inset:0; z-index:200; background:var(--k-bg); color:var(--k-ink);
+    overflow-y:auto; padding:0 20px calc(22px + var(--safe-b)); -webkit-overflow-scrolling:touch;
+    font-feature-settings:"tnum" 1; letter-spacing:-.01em}
+  #kiosk-top{display:flex; align-items:center; gap:10px; justify-content:space-between;
+    position:sticky; top:0; z-index:2; padding:calc(16px + var(--safe-t)) 0 12px;
+    background:var(--k-topbg); backdrop-filter:var(--k-blur); -webkit-backdrop-filter:var(--k-blur)}
+  #kiosk-top > div:first-child{margin-right:auto}
+  #kiosk-clock{font-size:52px; font-weight:800; line-height:1; letter-spacing:-2px}
+  #kiosk-date{font-size:15px; text-transform:capitalize}
+  #kiosk .k-sub{font-size:14px; color:var(--k-sub); margin-top:3px}
+  #kiosk-top button{flex:0 0 auto; border:none; cursor:pointer; background:var(--k-card2);
+    color:var(--k-ink); box-shadow:var(--k-shadow); -webkit-backdrop-filter:var(--k-blur); backdrop-filter:var(--k-blur)}
+  #kiosk-exit,#kiosk-theme{width:40px; height:40px; border-radius:50%; font-size:17px}
+  #kiosk-away{height:40px; padding:0 16px; border-radius:20px; font-size:14px; font-weight:600; white-space:nowrap}
+  #kiosk-away.away{background:var(--kb-amber-bg); color:var(--kb-amber); box-shadow:none}
+  #kiosk-warn:not(:empty){margin:14px 0 0; border-radius:16px; padding:14px 18px; font-size:15px; font-weight:600;
+    background:var(--kb-red-bg); border:1px solid var(--kb-red-bd); color:var(--kb-red)}
+  #kiosk-banner{margin:16px 0; border-radius:22px; padding:20px 22px; font-size:21px; font-weight:700;
+    line-height:1.3; box-shadow:var(--k-shadow)}
+  #kiosk-banner:empty{display:none}
+  #kiosk-banner .b-sub{font-size:14px; font-weight:500; color:var(--k-ink); opacity:.78; margin-top:6px; letter-spacing:0}
+  #kiosk-banner.green{color:var(--kb-green); background:var(--kb-green-bg); border:1px solid var(--kb-green-bd)}
+  #kiosk-banner.amber{color:var(--kb-amber); background:var(--kb-amber-bg); border:1px solid var(--kb-amber-bd)}
+  #kiosk-banner.red{color:var(--kb-red); background:var(--kb-red-bg); border:1px solid var(--kb-red-bd)}
+  #kiosk-banner.blue{color:var(--kb-blue); background:var(--kb-blue-bg); border:1px solid var(--kb-blue-bd)}
+  /* Feier-Modus: party light, greeting banner, confetti canvas, toast */
+  #kiosk.party{background:radial-gradient(1100px 560px at 6% -8%, rgba(255,55,95,.22), transparent 62%),
+    radial-gradient(1000px 560px at 94% -6%, rgba(191,90,242,.22), transparent 62%),
+    radial-gradient(900px 520px at 50% 110%, rgba(255,214,10,.10), transparent 62%), var(--k-bg)}
+  #kiosk[data-ktheme="light"].party{background:radial-gradient(1100px 560px at 6% -8%, rgba(255,55,95,.13), transparent 62%),
+    radial-gradient(1000px 560px at 94% -6%, rgba(191,90,242,.13), transparent 62%), var(--k-bg)}
+  .party-banner{display:flex; align-items:center; gap:16px; cursor:pointer; -webkit-tap-highlight-color:transparent;
+    -webkit-user-select:none; user-select:none; border-radius:24px; padding:16px 22px;
+    background:linear-gradient(115deg, rgba(255,55,95,.24), rgba(191,90,242,.22) 50%, rgba(255,159,10,.20));
+    border:1px solid rgba(255,255,255,.16)}
+  .party-banner[hidden]{display:none}
+  .party-banner:active{transform:scale(.985)}
+  #kiosk-party{margin:16px 0 0}
+  .pt-emo{font-size:44px; line-height:1; flex:none; animation:pt-bob 2.6s ease-in-out infinite; transform-origin:50% 90%}
+  .pt-emo2{animation-delay:-1.3s}
+  .pt-txt{flex:1; min-width:0; display:flex; flex-direction:column; gap:4px}
+  .pt-txt b{font-size:30px; font-weight:800; letter-spacing:-.02em; line-height:1.15; overflow-wrap:anywhere;
+    background:linear-gradient(90deg,#ff6b8b,#ffd60a 30%,#ff9f0a 50%,#d68cff 75%,#ff6b8b); background-size:200% 100%;
+    -webkit-background-clip:text; background-clip:text; color:transparent; animation:pt-shine 7s linear infinite}
+  .pt-txt b .pt-e{color:#fff; -webkit-text-fill-color:#fff}
+  .pt-txt small{font-size:15px; font-weight:500; opacity:.8}
+  #kiosk[data-ktheme="light"] .party-banner{background:linear-gradient(115deg,#ffe1e8,#f1e4ff 50%,#fff0d6); border-color:rgba(0,0,0,.05)}
+  #kiosk[data-ktheme="light"] .pt-txt b,#h2-party .pt-txt b{background-image:linear-gradient(90deg,#e0245e,#c25e00 30%,#d9480f 50%,#8e44ad 75%,#e0245e)}
+  #h2-party{max-width:1120px; margin:10px auto 0; padding:12px 16px; border-radius:18px; color:#1c1c1e;
+    background:linear-gradient(115deg,#ffe1e8,#f1e4ff 50%,#fff0d6); border:1px solid rgba(0,0,0,.05); box-shadow:0 1px 3px rgba(0,0,0,.06)}
+  #h2-party .pt-emo{font-size:32px} #h2-party .pt-txt b{font-size:21px} #h2-party .pt-txt small{font-size:13px}
+  @keyframes pt-bob{0%,100%{transform:rotate(-8deg) translateY(0)} 50%{transform:rotate(8deg) translateY(-4px)}}
+  @keyframes pt-shine{to{background-position:200% 0}}
+  #confetti{position:fixed; inset:0; width:100%; height:100%; pointer-events:none; z-index:1000; display:none}
+  #party-toast{position:fixed; left:50%; top:calc(12px + var(--safe-t)); transform:translateX(-50%); z-index:1001;
+    display:flex; align-items:center; gap:10px; max-width:calc(100vw - 32px); box-sizing:border-box; padding:12px 18px;
+    border-radius:999px; background:rgba(28,28,30,.92); color:#fff; font-size:16px; box-shadow:0 10px 30px rgba(0,0,0,.35);
+    -webkit-backdrop-filter:blur(16px); backdrop-filter:blur(16px); animation:pt-in .5s cubic-bezier(.2,.9,.3,1.2) both;
+    transition:opacity .5s, transform .5s}
+  #party-toast[hidden]{display:none}
+  #party-toast b{white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0}
+  #party-toast.out{opacity:0; transform:translate(-50%,-20px)}
+  @keyframes pt-in{from{opacity:0; transform:translate(-50%,-24px) scale(.9)}}
+  /* Kinder-Routine (wall dashboard; the Setup preview falls back to the app colours) */
+  #kiosk-routine:not(:empty){margin:16px 0}
+  .krt-card{border-radius:22px; padding:18px 20px; background:var(--k-card, var(--card)); box-shadow:var(--k-shadow, none);
+    border:1px solid var(--k-sep, var(--line))}
+  .krt-card + .krt-card{margin-top:14px}
+  .krt-head{display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; font-size:22px; font-weight:800; margin-bottom:12px}
+  .krt-head small{font-size:14px; font-weight:500; color:var(--k-sub, var(--muted)); margin-left:auto}
+  .krt-kids{display:grid; grid-template-columns:repeat(auto-fit, minmax(250px, 1fr)); gap:14px}
+  .krt-kid{border-radius:18px; padding:14px; background:var(--k-card2, var(--card2)); transition:box-shadow .3s}
+  .krt-kid.ok{box-shadow:0 0 0 2px var(--kb-green, var(--good, #30d158)) inset}
+  .krt-kh{display:flex; align-items:center; gap:10px; margin-bottom:8px}
+  .krt-kh .em{font-size:34px; line-height:1}
+  .krt-kh b{font-size:21px; display:block}
+  .krt-kh small{display:block; font-size:13px; color:var(--k-sub, var(--muted)); margin-top:2px}
+  .krt-bar{height:8px; border-radius:4px; background:var(--k-sep, var(--line)); overflow:hidden; margin:0 0 8px}
+  .krt-bar i{display:block; height:100%; background:var(--kb-green, var(--good, #30d158)); transition:width .4s}
+  .krt-it{display:flex; align-items:center; gap:12px; width:100%; min-height:56px; padding:8px 12px; margin:6px 0 0;
+    border-radius:14px; border:none; background:var(--k-card, var(--card)); color:var(--k-ink, var(--ink));
+    font:600 19px/1.25 -apple-system,system-ui,sans-serif; text-align:left; cursor:pointer;
+    -webkit-tap-highlight-color:transparent; transition:transform .12s, opacity .25s}
+  .krt-it:active{transform:scale(.97)}
+  .krt-it .bx{flex:none; width:30px; height:30px; border-radius:50%; border:2.5px solid var(--k-faint, var(--muted));
+    display:grid; place-items:center; font-size:17px; font-weight:800; color:#fff; box-sizing:border-box}
+  .krt-it .ie{font-size:24px; flex:none}
+  .krt-it.done{opacity:.55}
+  .krt-it.done .tx{text-decoration:line-through}
+  .krt-it.done .bx{background:var(--kb-green, var(--good, #30d158)); border-color:transparent}
+  .krt-it.busy{opacity:.7}
+  /* Nachrichten im Wohn-Dashboard */
+  #kiosk-news:not(:empty){margin:16px 0; border-radius:22px; padding:18px 20px; background:var(--k-card);
+    box-shadow:var(--k-shadow)}
+  #kiosk-news .kn-row{display:flex; gap:12px; align-items:baseline; padding:9px 0; border-top:1px solid var(--k-sep)}
+  #kiosk-news .kn-row:first-of-type{border-top:none}
+  #kiosk-news .kn-src{flex:none; min-width:92px; font-size:12px; font-weight:700; letter-spacing:.06em;
+    text-transform:uppercase; color:var(--kb-blue)}
+  #kiosk-news .kn-t{flex:1; font-size:17px; line-height:1.3}
+  #kiosk-news .kn-ago{flex:none; font-size:13px; color:var(--k-sub)}
+  .nws-chip{border:1px solid var(--line); background:var(--card2); color:var(--ink); border-radius:999px;
+    padding:6px 12px; font-size:13px; cursor:pointer}
+  .nws-chip.on{opacity:.45}
+  /* Radio (Setup) */
+  .rdo-row{display:flex; align-items:center; gap:8px; padding:8px 0; border-bottom:1px solid var(--line)}
+  .rdo-row:last-child{border-bottom:none}
+  .rdo-n{flex:1; min-width:0}
+  .rdo-logo{width:34px; height:34px; flex:none; border-radius:8px; object-fit:contain; background:#fff}
+  .rdo-n b{display:block; font-size:15px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .rdo-n small{display:block; font-size:12px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .rdo-row .btn{width:auto; margin-top:0; padding:8px 12px; flex:none}
+  .rdo-now{display:flex; align-items:center; gap:12px; margin-top:10px; padding:10px 12px; border-radius:14px; border:1px solid var(--line)}
+  .rdo-cover{width:64px; height:64px; flex:none; border-radius:10px; object-fit:cover}
+  .rdo-cover.rdo-cover-logo{object-fit:contain; background:#fff; padding:6px; box-sizing:border-box}
+  .rdo-now-t{display:flex; flex-direction:column; gap:2px; min-width:0; font-size:15px}
+  .rdo-now-t small{color:var(--muted); font-size:12px}
+  .rdo-now-t span{color:var(--muted)}
+  .rdo-now-t b, .rdo-now-t span{overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .rdo-now-t .rdo-now-h{text-transform:uppercase; letter-spacing:.06em; font-weight:700; font-size:11px}
+  #party-setup{margin-top:14px; padding-top:12px; border-top:1px solid var(--line)}
+  #party-setup h3{margin:0 0 6px; font-size:15px}
+  @media (prefers-reduced-motion: reduce){ .pt-emo,.pt-txt b,#party-toast{animation:none} }
+  #kiosk-rooms{display:grid; grid-template-columns:repeat(auto-fill,minmax(158px,1fr)); gap:14px}
+  .kroom{background:var(--k-card); border:.5px solid var(--k-sep); border-radius:22px; padding:16px 17px;
+    box-shadow:var(--k-shadow); -webkit-backdrop-filter:var(--k-blur); backdrop-filter:var(--k-blur)}
+  .kroom .kr-name{font-size:14px; font-weight:600; color:var(--k-sub); display:flex; justify-content:space-between; gap:6px}
+  .kroom .kr-temp{font-size:38px; font-weight:800; line-height:1.05; margin:3px 0; letter-spacing:-1.5px}
+  .kroom .kr-set{font-size:13px; color:var(--k-sub)}
+  .kroom .kr-tags{margin-top:9px; display:flex; flex-wrap:wrap; gap:6px; font-size:12px; letter-spacing:0}
+  .kroom .kr-tags span{background:var(--k-card2); border-radius:11px; padding:3px 9px; font-weight:500; max-width:100%}
+  #kiosk-vent{margin-top:16px}
+  /* Dashboard 2 (#dash2): das Haus mit den Live-Werten, hell wie ein Foto */
+  #house2{position:fixed; inset:0; z-index:200; overflow-y:auto; -webkit-overflow-scrolling:touch;
+    background:linear-gradient(180deg,#f6f7f8 0%,#edeff1 55%,#e7e9ec 100%); color:#1c1c1e;
+    padding:calc(10px + var(--safe-t)) 16px calc(16px + var(--safe-b)); font-feature-settings:"tnum" 1;
+    font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",Arial,sans-serif; letter-spacing:-.01em}
+  #h2-top{display:flex; align-items:center; gap:8px; max-width:1120px; margin:0 auto; position:relative; padding-top:4px}
+  .h2-site{margin-right:auto; display:flex; flex-direction:column; gap:2px; min-width:0}
+  .h2-site b{font-size:21px; font-weight:700; letter-spacing:-.02em}
+  #h2-status{font-size:13px; color:#23946a; display:flex; align-items:center; gap:6px}
+  #h2-status::before{content:""; width:8px; height:8px; border-radius:50%; background:#34c47c; flex:none}
+  #h2-status.bad{color:#b86e00} #h2-status.bad::before{background:#ff9f0a}
+  #h2-top button{width:40px; height:40px; flex:none; border-radius:50%; border:none; cursor:pointer; display:grid; place-items:center;
+    background:rgba(255,255,255,.8); color:#1c1c1e; box-shadow:0 1px 3px rgba(0,0,0,.07)}
+  #h2-top #h2-backup.on{background:#fff1da; color:#b86e00}
+  #h2-pop{position:absolute; right:0; top:48px; z-index:3; min-width:220px; padding:6px; border-radius:14px;
+    background:#fff; box-shadow:0 12px 34px rgba(0,0,0,.16)}
+  #h2-pop a{display:block; padding:11px 12px; border-radius:10px; color:#1c1c1e; text-decoration:none; font-size:15px}
+  #h2-pop a:active,#h2-pop a:hover{background:#f1f2f4}
+  #h2-msg{max-width:1120px; margin:10px auto 0; padding:11px 14px; border-radius:14px; background:#fff;
+    font-size:14px; line-height:1.45; box-shadow:0 1px 3px rgba(0,0,0,.06)}
+  #h2-main{max-width:1120px; margin:0 auto}
+  #h2-house svg{display:block; width:100%; max-width:540px; height:auto; margin:6px auto 0}
+  .h2-lbl rect{fill:#fff; filter:drop-shadow(0 1px 2.5px rgba(0,0,0,.09))}
+  .h2-lbl.tap{cursor:pointer}
+  .h2-v{font-size:17px; font-weight:700; fill:#1c1c1e} .h2-u{font-size:12px; font-weight:600}
+  .h2-n{font-size:12.5px; fill:#6e6e73} .h2-x{font-size:12.5px; font-weight:600}
+  .h2-wire{fill:none; stroke:#bcc5cf; stroke-width:1.6; stroke-linejoin:round}
+  .h2-flow{fill:none; stroke:#3d7fd0; stroke-width:2; stroke-dasharray:4 7; stroke-linecap:round; stroke-linejoin:round;
+    animation:h2f 1s linear infinite}
+  .h2-flow.rev{animation-direction:reverse}
+  @keyframes h2f{to{stroke-dashoffset:-11}}
+  @media (prefers-reduced-motion:reduce){.h2-flow{animation:none}}
+  .h2-head{display:flex; align-items:center; justify-content:space-between; margin:8px 2px 10px}
+  .h2-head h3{margin:0; font-size:19px; font-weight:700}
+  .h2-head a{display:grid; place-items:center; width:38px; height:38px; border-radius:12px; color:#1c1c1e}
+  .h2-card{background:#fff; border-radius:20px; padding:14px 16px 16px;
+    box-shadow:0 1px 3px rgba(0,0,0,.05), 0 8px 24px rgba(0,0,0,.04)}
+  .h2-tabs{display:flex; gap:8px; margin-bottom:8px}
+  .h2-tabs button{width:50px; height:36px; border-radius:10px; border:none; cursor:pointer; display:grid; place-items:center;
+    background:#f1f2f4; color:#8e8e93}
+  .h2-tabs button.on{background:#e2f5f0; color:#1f9e85}
+  .h2-row{display:flex; align-items:center; justify-content:space-between; gap:10px}
+  .h2-title{font-size:18px; font-weight:700}
+  .h2-sub{font-size:13.5px; color:#6e6e73; margin-top:5px; line-height:1.4}
+  .h2-gauge{width:116px; height:116px; flex:none}
+  .h2-gv{font-size:21px; font-weight:700; fill:#1c1c1e} .h2-gu{font-size:12px; font-weight:600}
+  .h2-gc{font-size:9.5px; fill:#8e8e93}
+  .h2-stats{display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:4px}
+  .h2-stats > div{background:#f5f6f8; border-radius:12px; padding:10px 12px}
+  .h2-stats small{display:block; font-size:12.5px; color:#6e6e73; margin-bottom:3px}
+  .h2-stats b{font-size:21px; font-weight:700} .h2-stats span{font-size:12.5px; color:#6e6e73}
+  .h2-foot{font-size:12px; color:#8e8e93; margin:10px 4px 0}
+  .dash-dots{display:flex; justify-content:center; align-items:center; gap:8px; margin:18px 0 2px}
+  .dash-dots > *{display:block; width:8px; height:8px; border-radius:4px; background:#c3c7cd}
+  .dash-dots a{position:relative} .dash-dots a::after{content:""; position:absolute; inset:-12px}
+  .dash-dots .on{width:20px; background:#1c1c1e}
+  #kiosk .dash-dots > *{background:var(--k-faint)} #kiosk .dash-dots .on{background:var(--k-ink)}
+  @media (min-width:900px){
+    #h2-main{display:grid; grid-template-columns:minmax(0,1.5fr) minmax(320px,1fr); column-gap:32px; align-items:center}
+    #h2-house svg{max-width:760px}
+    #h2-side{max-width:480px}
+    .h2-site b{font-size:25px} #h2-status{font-size:14px}
+  }
+  @media (min-width:600px) and (max-width:899px){ #h2-house svg{max-width:680px} #h2-side{max-width:560px; margin:0 auto} }
+  /* Wohn-Dashboard auf Handy-Breite: Außentemperatur/Stand in eine zweite Zeile, damit ✕ im Bild bleibt */
+  @media (max-width:560px){
+    #kiosk-top{flex-wrap:wrap; row-gap:4px}
+    #kiosk-top > div:first-child{flex:1 1 0; min-width:0}
+    #kiosk-clock{font-size:42px; letter-spacing:-1.5px}
+    #kiosk-top > div:nth-child(2){order:9; flex:1 0 100%; text-align:left !important; display:flex; flex-wrap:wrap; column-gap:10px}
+    #kiosk-top > div:nth-child(2) .k-sub{margin-top:0}
+    #kiosk-away{padding:0 12px; font-size:13px}
+  }
+  .copt-gap{font-size:12.5px; padding:6px 0; border-bottom:1px solid var(--line)}
+  .copx-item{padding:10px 0; border-bottom:1px solid var(--line)}
+  .chk-h{font-size:14px; margin:16px 0 8px; font-weight:700}
+  .chk-facts{margin:8px 0 0; padding-left:18px; font-size:13px; line-height:1.55}
+  .chk-facts li{margin:3px 0}
+  .chk-cause{margin-top:5px; padding:6px 8px; border-radius:8px; background:color-mix(in srgb, #ffb64d 10%, transparent)}
+  .chk-cause div{margin:1px 0}
+  .chk-row{display:flex; justify-content:space-between; gap:8px; align-items:flex-start}
+  .chk-btns{display:flex; gap:4px; flex:0 0 auto}
+  .chk-btns button{font:inherit; font-size:11.5px; padding:4px 8px; border-radius:999px; border:1px solid var(--line); background:transparent; color:var(--muted); cursor:pointer; white-space:nowrap}
+  .chk-btns button.on{border-color:#4be0b0; color:#4be0b0; background:#4be0b01a}
+  .chk-btns button.bad.on{border-color:#ffb64d; color:#ffb64d; background:#ffb64d1a}
+  .chk-m.chk-ok > .chk-row b{opacity:.75}
+  .chk-d{margin-top:4px}
+  .chk-norm{width:100%; border-collapse:collapse; margin:8px 0; font-size:12.5px; line-height:1.35}
+  .chk-norm th{font-weight:600; color:var(--muted); text-align:left; padding:3px 4px; font-size:11.5px}
+  .chk-norm td{padding:4px; border-top:1px solid var(--line); vertical-align:top}
+  .chk-norm td:first-child{color:var(--muted); width:38%}
+  .chk-norm-in{display:flex; gap:12px; flex-wrap:wrap; margin-top:8px; font-size:12.5px}
+  .chk-norm-in input{width:64px; padding:4px 6px; margin:0 2px; border-radius:8px; border:1px solid var(--line); background:var(--card2); color:var(--ink); font:inherit}
+  .chk-d > summary, .chk-okd > summary{cursor:pointer; font-size:12.5px; color:var(--muted)}
+  .chk-okd{padding:10px 0; border-bottom:1px solid var(--line)}
+  .chk-okd > summary{font-size:13px; line-height:1.5}
+  .chk-okd[open] > summary{margin-bottom:2px}
+  @media (max-width:420px){ .chk-row{flex-direction:column; gap:6px} }
+  .copt-bar{height:6px; border-radius:3px; background:var(--card2); margin-top:4px; overflow:hidden}
+  .copt-bar span{display:block; height:100%; border-radius:3px}
+  .copt-pt{display:flex; align-items:center; gap:4px; font-size:12.5px; margin:4px 0; flex-wrap:wrap}
+  .copt-pt input{width:56px; padding:6px; margin:0}
+  /* Warmwasser-Speicher */
+  .dwt-row{font-size:12.5px; line-height:1.5; padding:7px 0; border-bottom:1px solid var(--line)}
+  .dwt-chip{display:inline-block; font-size:11px; line-height:1.4; padding:2px 8px; margin:2px 4px 0 0; border-radius:999px;
+    border:1px solid var(--line); background:var(--card2); color:var(--fg)}
+  .dwt-box{border-radius:12px; padding:11px 12px; font-size:13px; line-height:1.55; border:1px solid var(--line)}
+  .dwt-box.ok{border-color:#4be0b0; background:#4be0b014}
+  .dwt-box.warn{border-color:#ffb64d; background:#ffb64d14}
+  .dwt-box.tip{border-color:var(--accent); background:color-mix(in srgb, var(--accent) 8%, transparent)}
+  .dwt-tbl{width:100%; border-collapse:collapse; font-size:12px}
+  .dwt-tbl th{text-align:left; font-weight:600; color:var(--muted); padding:5px 5px; border-bottom:1px solid var(--line); vertical-align:bottom}
+  .dwt-tbl td{padding:6px 5px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.4}
+  .dwt-tbl tr.now td{background:var(--card2)}
+  /* Energiefluss-Animation */
+  #kiosk-flow:not(:empty){margin:16px 0; background:var(--k-card); border:.5px solid var(--k-sep);
+    border-radius:22px; padding:14px 10px 6px; box-shadow:var(--k-shadow);
+    -webkit-backdrop-filter:var(--k-blur); backdrop-filter:var(--k-blur)}
+  #kiosk-flow svg{width:100%; height:auto; display:block; max-width:640px; margin:0 auto}
+  .kf-node-bg{fill:var(--k-card2)}
+  .kf-line{stroke:var(--k-sep); stroke-width:2.5; fill:none; stroke-linecap:round}
+  .kf-icon{font-size:22px}
+  .kf-val{fill:var(--k-ink); font-weight:700; font-size:12px; letter-spacing:-.3px}
+  .kf-lbl{fill:var(--k-sub); font-weight:600; font-size:8.5px; letter-spacing:.3px; text-transform:uppercase}
+  .kf-sub{fill:var(--k-sub); font-size:8px}
+  @media (prefers-reduced-motion:reduce){#kiosk-flow .kf-dot{display:none}
+    #kiosk-flow line[style*="drop-shadow"] animate{display:none}}
+  /* Heute: kumulierte Werte (Autarkie-Ring + Kacheln) */
+  #kiosk-today:not(:empty){margin:16px 0; background:var(--k-card); border:.5px solid var(--k-sep);
+    border-radius:22px; padding:16px 18px; box-shadow:var(--k-shadow)}
+  .kt-head{display:flex; justify-content:space-between; align-items:baseline; gap:10px; margin-bottom:10px}
+  .kt-cmp{font-size:13px; color:var(--k-sub); white-space:nowrap}
+  .kt-body{display:flex; flex-wrap:wrap; gap:16px 20px; align-items:center}
+  .kt-ring{flex:0 0 136px; width:136px; height:136px; margin:0 auto; display:block}
+  .kt-pct{fill:var(--k-ink); font-size:25px; font-weight:800; letter-spacing:-1px}
+  .kt-rl{fill:var(--k-sub); font-size:10px; font-weight:700; letter-spacing:.08em; text-transform:uppercase}
+  .kt-grid{flex:1 1 300px; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px}
+  @media (min-width:700px){.kt-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+  /* wide screens (wall iPad landscape): energy flow and "Heute" side by side */
+  @media (min-width:1000px){
+    #kiosk-energy.two{display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); column-gap:16px; align-items:start}
+    #kiosk-energy.two .kt-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  .kt-t{display:flex; gap:10px; align-items:center; background:var(--k-card2); border-radius:16px; padding:10px 12px; min-width:0}
+  .kt-ic{font-size:22px; flex:0 0 auto; line-height:1}
+  .kt-t > div{min-width:0}
+  .kt-t b{display:block; font-size:20px; font-weight:750; letter-spacing:-.4px; line-height:1.15; white-space:nowrap}
+  .kt-t small{display:block; font-size:12px; color:var(--k-sub); line-height:1.3; margin-top:2px}
+  .kt-foot{margin-top:12px; font-size:13px; color:var(--k-sub); line-height:1.55}
+  .kt-foot b{color:var(--k-ink)}
+  /* Top-Verbraucher jetzt */
+  #kiosk-loads:not(:empty){margin:16px 0; background:var(--k-card); border:.5px solid var(--k-sep);
+    border-radius:22px; padding:16px 18px; box-shadow:var(--k-shadow);
+    -webkit-backdrop-filter:var(--k-blur); backdrop-filter:var(--k-blur)}
+  .kl-title{font-size:12px; font-weight:600; color:var(--k-sub); text-transform:uppercase; letter-spacing:.06em; margin-bottom:12px}
+  .kl-row{display:flex; align-items:center; gap:11px; padding:5px 0}
+  .kl-ic{font-size:20px; flex:0 0 auto; width:24px; text-align:center}
+  .kl-main{flex:1 1 auto; min-width:0}
+  .kl-nm{font-size:14px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  .kl-rm{color:var(--k-sub); font-weight:400; font-size:12px}
+  .kl-bar{height:6px; border-radius:3px; background:var(--k-card2); margin-top:5px; overflow:hidden}
+  .kl-bar span{display:block; height:100%; border-radius:3px; transition:width .5s ease}
+  .kl-w{flex:0 0 auto; font-size:15px; font-weight:700; letter-spacing:-.3px; min-width:62px; text-align:right}
+  /* awareness tiles: what needs attention now */
+  #kiosk-alerts{display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:12px; margin:14px 0 0}
+  #kiosk-alerts:empty{display:none}
+  .ka{display:flex; gap:13px; align-items:center; border-radius:20px; padding:15px 17px; background:var(--k-card);
+    border:1px solid var(--k-sep); box-shadow:var(--k-shadow)}
+  .ka-ic{font-size:32px; line-height:1; flex:0 0 auto}
+  .ka-tx{min-width:0}
+  .ka-t{font-size:18px; font-weight:700; letter-spacing:-.2px; line-height:1.2}
+  .ka-d{font-size:13.5px; color:var(--k-ink); opacity:.75; margin-top:4px; line-height:1.35}
+  .ka-urgent{background:var(--kb-red-bg); border-color:var(--kb-red-bd)} .ka-urgent .ka-t{color:var(--kb-red)}
+  .ka-warn{background:var(--kb-amber-bg); border-color:var(--kb-amber-bd)} .ka-warn .ka-t{color:var(--kb-amber)}
+  .ka-info{background:var(--kb-blue-bg); border-color:var(--kb-blue-bd)} .ka-info .ka-t{color:var(--kb-blue)}
+  .ka-good{background:var(--kb-green-bg); border-color:var(--kb-green-bd)} .ka-good .ka-t{color:var(--kb-green)}
+  .ka-blink{animation:kaPulse 1.5s ease-in-out infinite}
+  .ka-urgent.ka-blink{animation-name:kaPulseRed}
+  .ka-blink .ka-ic{animation:kaIcon 1.5s ease-in-out infinite}
+  @keyframes kaPulse{0%,100%{box-shadow:0 0 0 0 rgba(255,159,10,0)} 50%{box-shadow:0 0 0 7px rgba(255,159,10,.38); background:rgba(255,159,10,.30)}}
+  @keyframes kaPulseRed{0%,100%{box-shadow:0 0 0 0 rgba(255,69,58,0)} 50%{box-shadow:0 0 0 8px rgba(255,69,58,.42); background:rgba(255,69,58,.36)}}
+  @keyframes kaIcon{50%{transform:scale(1.18)}}
+  @media (prefers-reduced-motion:reduce){.ka-blink,.ka-blink .ka-ic{animation:none} .ka-blink{outline:3px solid currentColor}}
+  .ka-ok{font-size:15px; font-weight:600; color:var(--kb-green); padding:4px 2px}
+  /* calendar + school timetable side by side when there is room */
+  @media (min-width:760px){
+    #kiosk-cs.two{display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); column-gap:16px; align-items:start}}
+  /* calendar */
+  #kiosk-cal:not(:empty),#kiosk-school:not(:empty){margin:16px 0; background:var(--k-card); border:.5px solid var(--k-sep);
+    border-radius:22px; padding:16px 18px; box-shadow:var(--k-shadow)}
+  .kc-day{font-size:12px; font-weight:700; color:var(--k-sub); text-transform:uppercase; letter-spacing:.06em; margin:12px 0 4px}
+  .kc-day:first-of-type{margin-top:4px}
+  .kc-row{display:flex; align-items:center; gap:10px; padding:6px 0; font-size:16px}
+  .kc-row.on{font-weight:700}
+  .kc-dot{width:9px; height:9px; border-radius:50%; flex:0 0 auto}
+  .kc-time{flex:0 0 auto; min-width:104px; color:var(--k-sub); font-size:14px; font-variant-numeric:tabular-nums}
+  .kc-title{flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .kc-loc{color:var(--k-sub); font-weight:400; font-size:13px}
+  .kc-b{flex:0 0 auto; font-size:12px; font-weight:700; border-radius:999px; padding:3px 10px}
+  .kc-now{background:var(--kb-green-bg); color:var(--kb-green)}
+  /* music (YouTube Music playlists → app / Shortcut) */
+  #kiosk-music:not(:empty){margin:16px 0; background:var(--k-card); border:.5px solid var(--k-sep);
+    border-radius:22px; padding:16px 18px; box-shadow:var(--k-shadow)}
+  .km-head{display:flex; align-items:center; gap:10px; flex-wrap:wrap}
+  .km-rooms{display:flex; gap:6px; flex-wrap:wrap; margin-left:auto}
+  .km-rooms button{border:none; cursor:pointer; border-radius:999px; padding:6px 12px; font:inherit; font-size:13px; font-weight:600;
+    background:var(--k-card2); color:var(--k-sub)}
+  .km-rooms button.on{background:var(--kb-green-bg); color:var(--kb-green)}
+  .km-grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(118px, 1fr)); gap:12px; margin-top:10px}
+  .km-pl{display:flex; flex-direction:column; gap:6px; text-decoration:none; color:var(--k-ink); min-width:0}
+  .km-cov{display:block; aspect-ratio:1/1; border-radius:14px; overflow:hidden; background:linear-gradient(135deg,#ff2d55,#7b2ff7)}
+  .km-cov img{width:100%; height:100%; object-fit:cover; display:block}
+  .km-ph{display:flex; align-items:center; justify-content:center; width:100%; height:100%; font-size:38px}
+  .km-t{font-size:14px; font-weight:600; line-height:1.25; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical}
+  .km-pl:active .km-cov{transform:scale(.97)}
+  /* Setup list */
+  .mu-row{display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid var(--line)}
+  .mu-cov{flex:0 0 44px; width:44px; height:44px; border-radius:10px; overflow:hidden; display:flex; align-items:center; justify-content:center;
+    background:linear-gradient(135deg,#ff2d55,#7b2ff7); font-size:20px}
+  .mu-cov img{width:100%; height:100%; object-fit:cover}
+  .mu-t{flex:1 1 auto; min-width:0; display:flex; flex-direction:column}
+  .mu-t b{font-size:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .mu-t small{font-size:11px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .mu-act{flex:0 0 auto; display:flex; gap:4px}
+  .mu-act button{border:1px solid var(--line); background:transparent; color:var(--ink); border-radius:8px; width:34px; height:32px; cursor:pointer; font:inherit}
+  .kc-soon{background:var(--kb-amber-bg); color:var(--kb-amber)}
 </style>
 </head>
 <body>
@@ -119,142 +673,1420 @@
     <linearGradient id="gArea" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#3ba9ff"/><stop offset="1" stop-color="#3ba9ff" stop-opacity="0"/>
     </linearGradient>
+    <linearGradient id="gHeat" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ef6c4d"/><stop offset="1" stop-color="#ef6c4d" stop-opacity="0"/>
+    </linearGradient>
   </defs>
 </svg>
 <header>
   <div class="wrap row">
     <div>
-      <h1 id="title">Strom · Bosch Smart Home</h1>
-      <div class="sub" id="subtitle">Licht-/Rollladensteuerung II</div>
+      <h1 id="title">Energie · Bosch Smart Home</h1>
+      <div class="sub" id="subtitle">Smart Home + Wärmepumpe</div>
+      <div class="sub" id="app-ver" style="font-size:11px;opacity:.6;margin-top:2px">App lädt…</div>
+      <div class="sub" id="data-stand" hidden style="font-size:11px;color:var(--warn);margin-top:2px"></div>
     </div>
     <div class="pill" id="mode">…</div>
   </div>
 </header>
 
 <main class="wrap">
-  <!-- LIVE ---------------------------------------------------------------->
-  <section class="view on" id="v-live">
+  <div id="update-banner" hidden style="background:#ffb64d14;border:1px solid #ffb64d66;border-radius:14px;padding:12px 14px;margin-bottom:12px">
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:space-between">
+      <div style="font-size:14px"><b style="color:#ffb64d">⬇️ Neue Version verfügbar</b><span id="update-banner-info" style="color:var(--muted)"></span></div>
+      <button class="btn" id="update-banner-btn" style="width:auto;padding:8px 16px">Aktualisieren &amp; neu starten</button>
+    </div>
+    <div class="note" id="update-banner-note" style="margin-top:8px"></div>
+  </div>
+  <!-- ÜBERSICHT ----------------------------------------------------------->
+  <section class="view on" id="v-overview">
     <div class="card hero">
-      <div class="cap"><span class="dot"></span>Aktueller Verbrauch (alle Geräte)</div>
-      <div class="now" id="live-total">–<span> W</span></div>
-      <div class="cap" id="live-sub">–</div>
+      <div class="cap"><span class="dot"></span>Heute bisher verbraucht</div>
+      <div class="now" id="ov-today">–<span> kWh</span></div>
+      <div class="cap" id="ov-today-cost">–</div>
+      <div class="split">
+        <div>Gerade jetzt<b id="ov-now">– W</b></div>
+        <div>davon Wärmepumpe<b id="ov-now-hp">– W</b></div>
+      </div>
     </div>
     <div class="grid2">
-      <div class="kpi"><div class="v" id="k-today">–</div><div class="l">Heute geschätzt</div></div>
-      <div class="kpi"><div class="v" id="k-cost-today">–</div><div class="l">Kosten heute</div></div>
-      <div class="kpi"><div class="v" id="k-total">–</div><div class="l">Gesamt gemessen</div></div>
-      <div class="kpi"><div class="v" id="k-baseline">–</div><div class="l">Standby (Grundlast)</div></div>
+      <div class="kpi"><div class="v" id="ov-month">–</div><div class="l">Hochrechnung / Monat <span class="info" data-info="ov-month" role="button" aria-label="Info" style="margin-left:3px">i</span></div></div>
+      <div class="kpi"><div class="v" id="ov-month-cost">–</div><div class="l">Kosten / Monat</div></div>
+    </div>
+    <div class="card" id="ov-flow-card" hidden>
+      <h2><span class="info" data-info="pv-flow" role="button" aria-label="Info">i</span>⚡ Energiefluss jetzt <span class="r" id="ov-flow-head"></span></h2>
+      <div id="ov-flow"></div>
+      <div id="ov-flow-kpi" style="margin-top:10px"></div>
+      <div class="note" id="ov-flow-note" style="margin-top:8px"></div>
+    </div>
+    <div class="card" id="ov-plugs-card" hidden>
+      <h2><span class="info" data-info="plugs" role="button" aria-label="Info">i</span>🔌 Steckdosen live <span class="r" id="ov-plugs-head"></span></h2>
+      <div class="note" id="ov-plugs-sum" style="margin:-2px 0 6px"></div>
+      <div id="ov-plugs-body"></div>
+      <div class="note" id="ov-plugs-note" style="margin-top:10px; line-height:1.55"></div>
+    </div>
+    <div class="card" id="ov-budget-card">
+      <h2><span class="info" data-info="budget" role="button" aria-label="Info">i</span>🎯 Monatsbudget</h2>
+      <div style="display:flex; gap:8px; align-items:stretch; margin-bottom:4px">
+        <input id="ov-budget" type="number" min="0" step="10" inputmode="numeric" placeholder="Budget €/Monat" style="flex:1">
+        <select id="ov-budget-unit" style="width:auto">
+          <option value="eur">€ / Monat</option>
+          <option value="kwh">kWh / Monat</option>
+        </select>
+      </div>
+      <div id="ov-budget-bar" style="margin-top:8px"></div>
+      <div class="note" id="ov-budget-note" style="margin-top:8px"></div>
     </div>
     <div class="card">
-      <h2>Live-Leistung je Gerät</h2>
-      <div id="live-devices"></div>
+      <h2><span class="info" data-info="wofuer" role="button" aria-label="Info">i</span>Wofür heute? <span class="r" id="ov-break-sum"></span></h2>
+      <div id="ov-donut"></div>
+      <div class="legend" id="ov-legend"></div>
+      <div class="note" id="ov-break-note" hidden style="margin-top:10px"></div>
     </div>
     <div class="card">
-      <h2>Letzte 24 Stunden</h2>
-      <div id="chart-24h"></div>
+      <h2><span class="info" data-info="fill" role="button" aria-label="Info">i</span>Letzte 14 Tage · Strom gesamt</h2>
+      <div id="ov-daily"></div>
+      <div class="legend" id="ov-daily-legend">
+        <div class="it"><span class="sw" style="background:var(--sh)"></span>Smart Home</div>
+        <div class="it"><span class="sw" style="background:var(--hp)"></span>Wärmepumpe</div>
+        <div class="it" id="ov-daily-leg-rest" hidden><span class="sw" style="background:#8b93a7"></span>Nicht einzeln gemessen (Smart Meter)</div>
+      </div>
+      <div class="note" id="ov-daily-note" style="margin-top:8px" hidden></div>
+    </div>
+    <div class="card" id="ov-dark-card" hidden>
+      <h2><span class="info" data-info="dark" role="button" aria-label="Info">i</span>🔍 Noch nicht gemessen <span class="r" id="ov-dark-sum"></span></h2>
+      <div id="ov-dark-live"></div>
+      <div id="ov-dark-bar" style="margin-top:4px"></div>
+      <div id="ov-dark-kpi" class="grid2" style="margin-top:10px"></div>
+      <div id="ov-dark-list" style="margin-top:10px"></div>
+      <div class="note" id="ov-dark-note" style="margin-top:10px"></div>
+    </div>
+    <div class="card" id="ov-hp-card" hidden>
+      <h2>Wärmepumpe <span class="r" id="ov-hp-cop"></span></h2>
+      <div id="ov-hp-body"></div>
+    </div>
+    <div class="card" id="ov-aeg-card" hidden>
+      <h2><span class="info" data-info="aeg" role="button" aria-label="Info">i</span>🧺 Haushaltsgeräte <span class="r" id="ov-aeg-sum"></span></h2>
+      <div id="ov-aeg-body"></div>
+      <div class="note" id="ov-aeg-note" style="margin-top:8px"></div>
+    </div>
+    <div class="card" id="ov-ha-card" hidden>
+      <h2><span class="info" data-info="ha" role="button" aria-label="Info">i</span>🏠 Home Assistant <span class="r" id="ov-ha-sum"></span></h2>
+      <div id="ov-ha-body"></div>
+      <div class="note" id="ov-ha-note" style="margin-top:8px"></div>
+    </div>
+    <div class="card" id="ov-savings-card" hidden>
+      <h2><span class="info" data-info="savings" role="button" aria-label="Info">i</span>💶 Sparpotenzial</h2>
+      <div id="ov-savings-body"></div>
+      <div class="note" id="ov-savings-note" style="margin-top:10px"></div>
+    </div>
+    <div class="card" id="ov-tips-card" hidden>
+      <h2>💡 Tipps & Einordnung</h2>
+      <div id="ov-tips"></div>
+    </div>
+    <div class="card" id="ov-switch-card" hidden>
+      <h2><span class="info" data-info="switch" role="button" aria-label="Info">i</span>🔌 Geräte schalten
+        <span class="r"><button class="btn sec" id="ov-switch-refresh" style="padding:4px 10px; width:auto; font-size:12px">↻</button></span></h2>
+      <div id="ov-switch-body"><div class="note">Lade schaltbare Geräte …</div></div>
+      <div class="note" id="ov-switch-note" style="margin-top:10px"></div>
     </div>
   </section>
 
-  <!-- CONSUMPTION --------------------------------------------------------->
-  <section class="view" id="v-use">
-    <div class="seg" id="use-range">
+  <!-- HEUTE --------------------------------------------------------------->
+  <section class="view" id="v-today">
+    <div class="grid3">
+      <div class="kpi sm"><div class="v" id="t-total">–</div><div class="l">Gesamt heute<small id="t-total-src" style="display:block;font-size:10.5px;color:var(--muted)"></small></div></div>
+      <div class="kpi sm"><div class="v" id="t-sh">–</div><div class="l">Smart Home</div></div>
+      <div class="kpi sm"><div class="v" id="t-hp">–</div><div class="l">Wärmepumpe</div></div>
+    </div>
+    <div class="card">
+      <h2>Heute nach Stunde · kWh</h2>
+      <div id="t-hourly"></div>
+      <div class="legend">
+        <div class="it"><span class="sw" style="background:var(--sh)"></span>Smart Home</div>
+        <div class="it"><span class="sw" style="background:var(--hp)"></span>Wärmepumpe</div>
+        <div class="it" id="t-leg-rest" hidden><span class="sw" style="background:#8b93a7"></span>Nicht einzeln gemessen</div>
+      </div>
+      <div class="note" id="t-hourly-note" style="margin-top:10px"></div>
+    </div>
+    <div class="card">
+      <h2>Aufteilung heute</h2>
+      <div id="t-donut"></div>
+      <div class="legend" id="t-legend"></div>
+    </div>
+    <div class="card">
+      <h2>Smart-Home-Geräte heute</h2>
+      <div id="t-devices"></div>
+    </div>
+  </section>
+
+  <!-- VERLAUF ------------------------------------------------------------->
+  <section class="view" id="v-history">
+    <div class="seg" id="hist-range">
+      <button data-d="day">Tag</button>
+      <button data-d="7">7 T</button>
       <button data-d="14" class="on">14 T</button>
       <button data-d="30">30 T</button>
       <button data-d="90">90 T</button>
-      <button data-d="365">1 J</button>
+      <button data-d="year">Jahr</button>
+      <button data-d="custom">Zeitraum</button>
+    </div>
+    <div id="hist-day" hidden>
+      <button class="btn sec" id="hist-day-prev" aria-label="voriger Tag">◀</button>
+      <div id="hist-day-label">heute</div>
+      <button class="btn sec" id="hist-day-next" aria-label="nächster Tag">▶</button>
+    </div>
+    <div id="hist-custom" hidden>
+      <div style="flex:1"><label>Von</label><input id="hist-from" type="date"></div>
+      <div style="flex:1"><label>Bis</label><input id="hist-to" type="date"></div>
     </div>
     <div class="grid2">
-      <div class="kpi"><div class="v" id="u-avg">–</div><div class="l" id="u-avg-l">Ø pro Tag</div></div>
-      <div class="kpi"><div class="v" id="u-max">–</div><div class="l" id="u-max-l">Höchster Tag</div></div>
+      <div class="kpi"><div class="v" id="h-avg">–</div><div class="l">Ø gesamt / Tag</div></div>
+      <div class="kpi"><div class="v" id="h-max">–</div><div class="l" id="h-max-l">Höchster Tag</div></div>
     </div>
     <div class="card">
-      <h2 id="chart-daily-title">Verbrauch pro Tag <span class="badge away-b">rot = wahrsch. abwesend</span></h2>
-      <div id="chart-daily"></div>
-      <div class="note" id="chart-daily-note" hidden style="margin-top:10px"></div>
+      <h2 id="h-daily-title">Strom pro Tag</h2>
+      <div id="h-daily"></div>
+      <div class="legend" id="h-daily-legend"></div>
+      <div class="note" id="h-daily-note" hidden style="margin-top:10px"></div>
+    </div>
+    <div class="card" id="h-consum-card">
+      <h2><span class="info" data-info="consum-year" role="button" aria-label="Info">i</span>📅 Verbrauch übers Jahr (erwartet)</h2>
+      <div class="note" style="margin-bottom:8px">Erwarteter Tagesverbrauch über 365 Tage, aufgeteilt in <b>Hausstrom</b> und
+        <b>Wärmepumpe</b> – dasselbe Modell wie im PV-Tab. Tippen/fahren für Details.</div>
+      <div id="h-consum-chart"></div>
+      <div class="note" id="h-consum-note" style="margin-top:8px"></div>
+    </div>
+    <div class="card" id="h-tibber-card" hidden>
+      <h2><span class="info" data-info="tibber-cons" role="button" aria-label="Info">i</span>🏠 Gesamtverbrauch (Tibber)</h2>
+      <div id="h-tibber-kpi"></div>
+      <div id="h-tibber-chart" style="margin-top:10px"></div>
+      <div class="note" id="h-tibber-note" style="margin-top:10px"></div>
     </div>
     <div class="card">
-      <h2>Anteil je Gerät (kumuliert)</h2>
-      <div id="dev-share"></div>
+      <h2><span class="info" data-info="share" role="button" aria-label="Info">i</span>Anteil je Quelle (kumuliert)</h2>
+      <div id="h-share"></div>
+      <div class="note" id="h-share-note" style="margin-top:10px"></div>
+    </div>
+    <div class="card">
+      <h2>Abwesenheit <span class="r" id="h-away-sum"></span></h2>
+      <div id="h-presence"></div>
+      <div class="note" style="margin-top:10px">
+        Ein Tag gilt als „abwesend", wenn der <b>aktive</b> Smart-Home-Verbrauch (über der
+        Grundlast) deutlich unter dem Median liegt – Licht/Rollladen wurden kaum bedient.
+      </div>
+      <div id="h-away-list" style="margin-top:10px"></div>
+    </div>
+    <div class="card">
+      <h2><span class="info" data-info="forecast" role="button" aria-label="Info">i</span>Hochrechnung & Einordnung</h2>
+      <div id="h-insights"></div>
+      <div class="note" id="h-insights-note" style="margin-top:10px"></div>
+      <label class="toggle" id="h-baukorr-wrap" style="margin-top:10px;display:flex;gap:8px;align-items:flex-start;cursor:pointer">
+        <input type="checkbox" id="h-baukorr" style="margin-top:2px">
+        <span>🏗️ <b>Bauphase-Dämpfung</b>: deine echten WP-Messwerte werden genutzt, aber die
+        überhöhten Einzugs-Wintermonate (Rohbau/Baulücken) werden <b>teilweise Richtung
+        Gebäudemodell gedämpft</b>. Sommermonate bleiben unverändert.</span>
+      </label>
     </div>
   </section>
 
-  <!-- PROFILE ------------------------------------------------------------->
+  <!-- WÄRMEPUMPE ---------------------------------------------------------->
+  <section class="view" id="v-heatpump">
+    <div class="subnav" id="heat-subnav">
+      <button data-hs="heizung" class="on">🔥 Heizung</button>
+      <button data-hs="warmwasser">🚿 Warmwasser</button>
+      <button data-hs="abgleich">⚖️ Abgleich</button>
+      <button data-hs="effizienz">📊 Effizienz</button>
+      <button data-hs="einstellung">⚙️ Einstellung</button>
+    </div>
+    <div class="card" id="ab-card">
+      <h2><span class="info" data-info="abgleich" role="button" aria-label="Info">i</span>⚖️ Hydraulischer Abgleich <span class="r" id="ab-head"></span></h2>
+      <div id="ab-phase"><div class="note">Lade …</div></div>
+      <div id="ab-next" style="margin-top:10px"></div>
+      <div id="ab-kpis" style="margin-top:10px"></div>
+      <div id="ab-summary" style="margin-top:10px"></div>
+      <div id="ab-op" style="margin-top:12px"></div>
+      <details id="ab-howto" style="margin-top:12px">
+        <summary style="cursor:pointer;font-weight:600;font-size:13px">📖 So läuft der Abgleich ab (Anleitung in 6 Schritten)</summary>
+        <div id="ab-howto-body" style="margin-top:10px"></div>
+      </details>
+      <div style="display:flex;gap:10px;align-items:center;margin-top:12px">
+        <button class="btn sec" id="ab-refresh" style="width:auto;padding:6px 14px;margin:0">🔄 Neu berechnen</button>
+        <span class="note" id="ab-note" style="margin:0"></span>
+      </div>
+    </div>
+    <div class="card" id="abr-card">
+      <h2><span class="info" data-info="ab-rooms" role="button" aria-label="Info">i</span>🏠 Räume &amp; Heizkreise <span class="r" id="abr-head"></span></h2>
+      <div class="note" style="margin-bottom:6px">Eine Zeile je Raum: <b>Versorgung</b> (gemessen), <b>Ziel-Durchfluss je Kreis</b> für den Tacosetter und dein <b>Ist-Wert</b>.
+        Raum antippen für Details (Trägheit, Heizlast, Wunschtemperatur).</div>
+      <div id="abr-body"></div>
+      <div class="note" id="abr-note" style="margin-top:10px"></div>
+    </div>
+    <div class="card" id="hp-card">
+      <h2>🔥 Wärmepumpe · Live</h2>
+      <div id="hp-body"><div class="note">Noch nicht verbunden – im Setup koppeln.</div></div>
+      <button class="btn sec" id="hp-refresh" style="margin-top:10px">🔄 Verbrauch jetzt nachladen</button>
+      <div class="note" id="hp-refresh-note" style="margin-top:8px">War die Wärmepumpe zwischendurch nicht erreichbar?
+        Der Zählerstand zählt trotzdem weiter – hiermit liest die App ihn frisch und holt versäumte kWh nach.</div>
+    </div>
+    <div class="card" id="hpd-card">
+      <h2><span class="info" data-info="hp-day" role="button" aria-label="Info">i</span>🕒 Tagesverlauf Wärmepumpe <span class="r" id="hpd-date"></span></h2>
+      <div class="note" style="margin-bottom:10px">Chronologisch für einen Tag: <b>Zustände</b> (Heizung / Warmwasser / Abtauen / Pause), <b>Strom &amp; Wärme (kW)</b>, <b>Modulation</b>, COP und Temperaturen. Blättere durch die Tage, um die Wirkung von Einstellungen (z.&nbsp;B. hydraulischer Abgleich) zu sehen.</div>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
+        <button class="btn sec" id="hpd-prev" style="flex:0 0 auto;width:auto;min-width:48px;padding:10px 16px;font-size:18px">‹</button>
+        <div id="hpd-daylabel" style="flex:1 1 auto;min-width:0;text-align:center;font-weight:600">–</div>
+        <button class="btn sec" id="hpd-next" style="flex:0 0 auto;width:auto;min-width:48px;padding:10px 16px;font-size:18px">›</button>
+      </div>
+      <div class="seg" id="hpd-span" style="margin:0 0 12px;flex-wrap:wrap">
+        <button data-hsp="auto" class="on">Auto</button>
+        <button data-hsp="1">1h</button>
+        <button data-hsp="2">2h</button>
+        <button data-hsp="4">4h</button>
+        <button data-hsp="8">8h</button>
+        <button data-hsp="16">16h</button>
+        <button data-hsp="day">Tag</button>
+      </div>
+      <div class="grid3" id="hpd-kpis"></div>
+      <div id="hpd-tg" style="display:flex;flex-wrap:wrap;gap:6px;margin:12px 0 6px"></div>
+      <div id="hpd-rooms" style="display:flex;flex-wrap:wrap;gap:6px;margin:0 0 12px"></div>
+      <div id="hpd-chart"></div>
+      <div class="legend" id="hpd-ribbon-legend" style="margin-top:8px"></div>
+      <h2 style="font-size:14px;margin-top:16px">Was ist passiert?</h2>
+      <div id="hpd-events"></div>
+      <div class="note" id="hpd-note" style="margin-top:12px"></div>
+    </div>
+    <div class="card" id="hpc-card">
+      <h2><span class="info" data-info="hp-compare" role="button" aria-label="Info">i</span>⚖️ Tagesvergleich Wärmepumpe</h2>
+      <div class="note" style="margin-bottom:10px">Zwei Tage direkt nebeneinander – ideal für <b>„vorher / nachher"</b> (z.&nbsp;B. ein Tag vor und einer nach dem hydraulischen Abgleich). Grün = Verbesserung von A → B.</div>
+      <div class="grid2">
+        <div><label>Tag A</label><input id="hpc-a" type="date"></div>
+        <div><label>Tag B</label><input id="hpc-b" type="date"></div>
+      </div>
+      <div id="hpc-table" style="margin-top:12px"></div>
+      <div id="hpc-ribbons" style="margin-top:12px"></div>
+      <div class="legend" id="hpc-legend" style="margin-top:8px"></div>
+      <div class="note" id="hpc-note" style="margin-top:10px"></div>
+    </div>
+    <div class="card" id="hpt-card">
+      <h2><span class="info" data-info="hp-trend" role="button" aria-label="Info">i</span>📉 Takt-Trend (Wochen)</h2>
+      <div class="note" style="margin-bottom:10px">Verdichter-<b>Takte pro Tag</b> und wie lang jeder Lauf dauert (<b>Min/Takt</b>) über die Zeit. Nach gutem Abgleich: <b>weniger Takte, längere Läufe</b>.</div>
+      <div class="seg" id="hpt-days" style="margin:0 0 10px">
+        <button data-htd="14">14 T</button>
+        <button data-htd="30" class="on">30 T</button>
+        <button data-htd="60">60 T</button>
+      </div>
+      <div class="grid2" style="margin-bottom:8px">
+        <div><label>⚖️ Abgleich am (optional)</label><input id="hpt-mark" type="date"></div>
+        <div style="display:flex;align-items:flex-end"><button class="btn sec" id="hpt-mark-clear" style="width:auto">Marke löschen</button></div>
+      </div>
+      <div id="hpt-ba"></div>
+      <div id="hpt-chart"></div>
+      <div class="legend" id="hpt-legend" style="margin-top:6px"></div>
+      <div class="note" id="hpt-note" style="margin-top:10px"></div>
+    </div>
+    <div class="card" id="hd-card">
+      <h2><span class="info" data-info="heating-diag" role="button" aria-label="Info">i</span>🔧 Heizungs-Check <span class="r" id="hd-head"></span></h2>
+      <div class="note" style="margin-bottom:10px">Prüft deine <b>Raumthermostate</b> (Soll/Ist/Ventil) zusammen mit
+        <b>Vorlauf/Rücklauf</b> der Wärmepumpe auf typische <b>Einstellungsfehler &amp; Effizienz-Verluste</b>.
+        Betriebswerte sind eine Momentaufnahme, Einstellungen gelten dauerhaft.</div>
+      <div id="hd-kpi"></div>
+      <div id="hd-findings" style="margin-top:12px"></div>
+      <div id="hd-rooms" style="margin-top:12px"></div>
+      <div id="hd-vent"></div>
+      <button class="btn sec" id="hd-refresh" style="margin-top:10px">🔄 Heizungs-Check aktualisieren</button>
+      <button class="btn sec" id="hd-raw-btn" style="margin-top:10px">🔬 Thermostat-Rohdaten</button>
+      <button class="btn sec" id="hd-map-btn" style="margin-top:10px">🚪 Fenster-/Tür-Zuordnung</button>
+      <div id="hd-map" hidden style="margin-top:8px"></div>
+      <pre class="note" id="hd-raw" hidden style="margin-top:8px;white-space:pre-wrap;word-break:break-word;max-height:320px;overflow:auto;background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:10px;font-size:11px"></pre>
+      <div class="note" id="hd-note" style="margin-top:8px"></div>
+    </div>
+    <div class="card" id="hc-card">
+      <h2><span class="info" data-info="heating-curve" role="button" aria-label="Info">i</span>📈 Heizkurve <span class="r" id="hc-head"></span></h2>
+      <div class="seg" id="hc-range" style="margin-bottom:10px">
+        <button data-hcr="today">Heute</button>
+        <button data-hcr="yesterday">Gestern</button>
+        <button data-hcr="7">7 T</button>
+        <button data-hcr="14">14 T</button>
+        <button data-hcr="30" class="on">30 T</button>
+        <button data-hcr="all">Gesamt</button>
+      </div>
+      <div class="note" style="margin-bottom:10px">Deine <b>echte Heizkurve</b>: gemessener <b>Vorlauf</b> über der <b>Außentemperatur</b>
+        (jeder Punkt ein Messwert beim Heizen). Die <b>grüne Linie</b> ist das WP-freundliche Zielband, die
+        <b>rote</b> deine gemessene Kurve. Liegt Rot über Grün, ist die Kurve zu hoch eingestellt.</div>
+      <div id="hc-chart"></div>
+      <div class="legend">
+        <div class="it"><span class="sw" style="background:#4be0b0"></span>Zielband (WP-freundlich)</div>
+        <div class="it"><span class="sw" style="background:#ff6b8a"></span>gemessen</div>
+        <div class="it"><span class="sw" style="background:#3ba9ff"></span>Geräte-Kurve</div>
+        <div class="it"><span class="sw" style="background:linear-gradient(90deg,#53627a,#ffd166)"></span>Messpunkte (älter → neuer)</div>
+        <div class="it"><span class="sw" style="background:#ffd166"></span>jetzt (aktueller Vorlauf)</div>
+      </div>
+      <div class="note" style="margin-top:6px">👆 Tipp: <b>auf die Kurve tippen</b> (oder mit der Maus darüberfahren) zeigt die <b>Vorlauftemperatur</b> jeder Kurve bei der jeweiligen <b>Außentemperatur</b>. Der <b style="color:#ffd166">gelbe Punkt</b> ist dein <b>aktueller</b> Betriebspunkt, der <b style="color:#4be0b0">grüne Ring</b> der Ziel-Vorlauf bei der momentanen Außentemperatur. Die <b>Messpunkte</b> sind nach Alter eingefärbt – <b style="color:#8a93a3">ältere blass/slate</b>, <b style="color:#ffd166">neuere golden</b>; so erkennst du, ob die Kurve zuletzt gewandert ist.</div>
+      <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:10px;font-size:13px">
+        <b style="color:#3ba9ff">🔵 Geräte-Heizkurve eintragen:</b>
+        <label>Vorlauf bei <b>+20&nbsp;°C</b> <input id="hc-p20" type="number" step="0.5" placeholder="z. B. 22" style="width:72px;padding:5px 7px;margin:0"></label>
+        <label>bei <b>−10&nbsp;°C</b> <input id="hc-pm10" type="number" step="0.5" placeholder="z. B. 39" style="width:72px;padding:5px 7px;margin:0"></label>
+        <button class="btn sec" id="hc-dev-read" style="width:auto;padding:5px 12px;margin:0">🔄 Vom Gerät lesen</button>
+      </div>
+      <div class="note" id="hc-dev-note" style="margin-top:4px">Lies die zwei Punkte an deiner Wärmepumpe ab (Menü <b>Heizkurve</b>) – dann zeichne ich sie blau mit ein und vergleiche.</div>
+      <div id="hc-ref" style="margin-top:10px"></div>
+      <div class="note" id="hc-note" style="margin-top:8px"></div>
+    </div>
+    <div class="card" id="hts-card">
+      <h2><span class="info" data-info="heat-timeseries" role="button" aria-label="Info">i</span>📉 Verlauf &amp; Effizienz <span class="r" id="hts-head"></span></h2>
+      <div class="note" style="margin-bottom:10px">Stündlich über die Zeit: <b>Außen-</b> &amp; <b>Vorlauftemperatur</b>, <b>Verbrauch</b>
+        (Heizung/Warmwasser) und die daraus abgeleitete <b>Arbeitszahl (COP)</b>. Darunter leite ich <b>Effizienz &amp; Regel-Logik</b> ab.</div>
+      <div id="hts-kpi"></div>
+      <div id="hts-chart" style="margin-top:10px"></div>
+      <div class="legend">
+        <div class="it"><span class="sw" style="background:#3ba9ff"></span>Außen °C</div>
+        <div class="it"><span class="sw" style="background:#ff6b8a"></span>Vorlauf °C</div>
+        <div class="it"><span class="sw" style="background:#b794f6"></span>Innen °C</div>
+        <div class="it"><span class="sw" style="background:var(--hp)"></span>Heizung kWh</div>
+        <div class="it"><span class="sw" style="background:var(--heat)"></span>Warmwasser kWh</div>
+        <div class="it"><span class="sw" style="background:#4be0b0"></span>COP</div>
+      </div>
+      <div id="hts-logic" style="margin-top:12px"></div>
+      <div class="note" id="hts-note" style="margin-top:8px"></div>
+    </div>
+    <div class="card" id="roomtemp-card">
+      <h2><span class="info" data-info="roomtemp" role="button" aria-label="Info">i</span>🌡️ Raumtemperaturen – Ziel-Erreichung <span class="r" id="rt-head"></span></h2>
+      <div class="note" style="margin-bottom:10px">Alle Räume nebeneinander: <b>Balken</b> = aktuelle Temperatur, <b>gestrichelter Strich</b> = dein Ziel.
+        <b style="color:#4be0b0">Grün</b> = am Ziel, <b style="color:#ffb64d">gelb</b>/<b style="color:#ff6b8a">rot</b> = noch zu kalt.
+        Ziel des hydraulischen Abgleichs: bei offenen Ventilen erreicht <b>jeder</b> Raum sein Ziel – wer hinterherhinkt, braucht <b>mehr Durchfluss</b>.</div>
+      <div id="rt-chart"></div>
+      <div id="rt-targets" style="margin-top:14px"></div>
+      <div class="note" id="rt-note" style="margin-top:10px"></div>
+    </div>
+    <div class="card" id="rts-card">
+      <h2><span class="info" data-info="room-ts" role="button" aria-label="Info">i</span>🌡️ Räume &amp; Heizbetrieb <span class="r" id="rts-head"></span></h2>
+      <div class="note" style="margin-bottom:8px">Pro Raum: <b>Innentemperatur</b> über die Zeit, gestrichelt der <b>Sollwert</b>, unten der <b>WP-Heizbetrieb</b> (grün).
+        So erkennst du, welcher Raum sein Soll <b>nie</b> erreicht, wann Ventile <b>schließen</b> und <b>warum</b> die WP pausiert.</div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+        <select id="rts-room" style="width:auto;padding:5px 10px;margin:0"></select>
+        <select id="rts-range" style="width:auto;padding:5px 10px;margin:0">
+          <option value="0.0104">15 Min</option>
+          <option value="0.0417">1 Std</option>
+          <option value="0.25">6 Std</option>
+          <option value="0.5">12 Std</option>
+          <option value="1">1 Tag</option>
+          <option value="2" selected>2 Tage</option>
+          <option value="7">7 Tage</option>
+        </select>
+      </div>
+      <div id="rts-chart"></div>
+      <div class="legend" id="rts-legend"></div>
+      <div id="rts-logic" style="margin-top:12px"></div>
+      <div class="note" id="rts-note" style="margin-top:8px"></div>
+    </div>
+    <div class="card" id="win-card">
+      <h2><span class="info" data-info="windows" role="button" aria-label="Info">i</span>🪟 Fenster &amp; Lüften <span class="r" id="win-head"></span></h2>
+      <div class="note" id="win-status" style="margin-bottom:8px"></div>
+      <div id="win-chart"></div>
+      <div class="legend">
+        <div class="it"><span class="sw" style="background:#ffb64d"></span>Fenster offen</div>
+        <div class="it"><span class="sw" style="background:#ff6b8a"></span>offen + WP heizt</div>
+        <div class="it"><span class="sw" style="background:#b794f6"></span>Innentemperatur</div>
+      </div>
+      <div id="win-logic" style="margin-top:12px"></div>
+      <div class="note" id="win-note" style="margin-top:8px"></div>
+    </div>
+    <div class="card" id="opt-card">
+      <h2><span class="info" data-info="optimize" role="button" aria-label="Info">i</span>🔁 Schritt-Protokoll <span class="r" id="opt-head"></span></h2>
+      <div class="note" style="margin-bottom:10px">Halte hier fest, was du am Verteiler verstellt hast – ich messe dann über die nächsten 1–2 Tage die <b>Wirkung</b>.
+        Immer nur <b>ein</b> Kreis pro Schritt. Schreibt <b>nichts</b> an die Heizung.</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+        <select id="opt-room" style="width:auto;padding:5px 10px;margin:0"></select>
+        <select id="opt-action" style="width:auto;padding:5px 10px;margin:0">
+          <option value="open">aufgedreht</option>
+          <option value="throttle">angedrosselt</option>
+        </select>
+        <input id="opt-delta" type="text" inputmode="decimal" placeholder="± l/min" style="width:84px;padding:5px 7px;margin:0">
+        <input id="opt-note-inp" type="text" placeholder="Notiz (optional)" style="flex:1;min-width:120px;padding:5px 7px;margin:0">
+        <button class="btn" id="opt-log" style="width:auto;padding:6px 14px;margin:0">＋ Schritt speichern</button>
+      </div>
+      <div id="opt-steps"></div>
+      <div style="display:none;gap:10px;margin-top:8px" id="opt-tools">
+        <button class="btn sec" id="opt-undo" style="width:auto;padding:6px 14px;margin:0">↩︎ Letzten Schritt löschen</button>
+        <button class="btn sec" id="opt-reset" style="width:auto;padding:6px 14px;margin:0">Verlauf zurücksetzen</button>
+      </div>
+      <div class="note" id="opt-msg" style="margin-top:8px"></div>
+    </div>
+    <div class="card" id="abd-card">
+      <details id="abd-det">
+        <summary style="cursor:pointer;font-weight:700;font-size:15px">🔬 Datenlage &amp; Messung <span id="abd-head" style="float:right;font-weight:600;font-size:12px"></span></summary>
+        <div id="abd-body" style="margin-top:12px"></div>
+        <div id="am-box" hidden style="margin-top:16px;border-top:1px solid var(--line);padding-top:14px">
+          <div style="font-weight:700;margin-bottom:8px"><span class="info" data-info="automeasure" role="button" aria-label="Info" style="float:right">i</span>🤖 Auto-Messung (optional – liefert die Trägheit τ) <span id="am-head" style="font-size:12px;font-weight:600;margin-left:6px"></span></div>
+          <div class="note" style="margin-bottom:10px;border-left:3px solid var(--warn);padding-left:10px">
+            <b>Aktive Steuerung:</b> senkt im <b>Nachtfenster</b> die Raum-Solltemperaturen ab, um saubere
+            <b>Auskühlphasen</b> (τ) zu erzwingen, und stellt morgens die <b>exakt vorherigen</b> Werte wieder her.
+            Senkt nur ab (hebt nie an), nie unter die <b>Mindesttemperatur</b>, stoppt automatisch nach genug Nächten.
+            ⚠︎ Schreibt <b>real</b> an deine Bosch-Thermostate.</div>
+          <div id="am-status" style="margin-bottom:10px"></div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-bottom:10px">
+            <label style="margin:0;font-size:13px">Absenkung (K)
+              <input id="am-setback" type="number" step="0.5" min="1" max="5" value="4" style="padding:5px 7px;margin:2px 0 0"></label>
+            <label style="margin:0;font-size:13px">Mindesttemperatur (°C)
+              <input id="am-floor" type="number" step="0.5" min="12" max="20" value="15" style="padding:5px 7px;margin:2px 0 0"></label>
+            <label style="margin:0;font-size:13px">Fenster von (Std)
+              <input id="am-start" type="number" step="1" min="0" max="23" value="23" style="padding:5px 7px;margin:2px 0 0"></label>
+            <label style="margin:0;font-size:13px">bis (Std)
+              <input id="am-end" type="number" step="1" min="0" max="23" value="5" style="padding:5px 7px;margin:2px 0 0"></label>
+            <label style="margin:0;font-size:13px">max. Nächte
+              <input id="am-nights" type="number" step="1" min="1" max="14" value="5" style="padding:5px 7px;margin:2px 0 0"></label>
+          </div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap">
+            <button class="btn" id="am-arm" style="width:auto;padding:7px 16px;margin:0">▶︎ Auto-Messung starten</button>
+            <button class="btn sec" id="am-disarm" style="width:auto;padding:7px 16px;margin:0" hidden>⏹ Stop &amp; zurückstellen</button>
+          </div>
+          <div id="am-log" style="margin-top:12px"></div>
+          <div class="note" id="am-note" style="margin-top:8px"></div>
+        </div>
+      </details>
+    </div>
+    <div class="card" id="layout-card">
+      <details id="lay-det">
+        <summary style="cursor:pointer;font-weight:700;font-size:15px">🧭 Verteiler einrichten <span id="lay-head" style="float:right;font-weight:600;font-size:12px;color:var(--muted)"></span></summary>
+        <div class="note" style="margin:10px 0">Einmalige Stammdaten: je Raum <b>Verteiler</b>, beheizte <b>Fläche</b> und Anzahl der <b>Kreise/Schläuche</b>
+          – plus die drei <b>Annahmen</b> (W/m², Spreizung, Auslegungstemperatur), aus denen die l/min-Werte oben entstehen. Über alle Geräte gespeichert.</div>
+        <div id="lay-body"></div>
+        <div class="note" id="lay-note" style="margin-top:8px"></div>
+      </details>
+    </div>
+    <div class="card" id="dhwt-card">
+      <h2><span class="info" data-info="dhw-tank" role="button" aria-label="Info">i</span>🛁 Warmwasser-Speicher <span class="r" id="dhwt-head"></span></h2>
+      <div class="note" style="margin-bottom:10px">Wie schnell der Speicher <b>leer</b> wird, wie lange das <b>Nachladen</b> dauert und was das für <b>Legionellen</b> heißt – gemessen am Speicherfühler bei jeder Abfrage der Wärmepumpe. Solange sie Warmwasser macht, <b>pausiert die Heizung</b>.</div>
+      <div class="seg" id="dhwt-days" style="margin:0 0 12px">
+        <button data-dwt="7">7 T</button>
+        <button data-dwt="14" class="on">14 T</button>
+        <button data-dwt="30">30 T</button>
+      </div>
+      <div class="grid3" id="dhwt-kpis"></div>
+      <div id="dhwt-today" style="margin-top:14px"></div>
+      <h2 style="font-size:15px;margin-top:16px">Speicher in den letzten 2 Tagen</h2>
+      <div id="dhwt-chart"></div>
+      <div class="legend" id="dhwt-legend" style="margin-top:8px"></div>
+      <h2 style="font-size:15px;margin-top:16px">Aufheizen: Minuten pro Grad</h2>
+      <div id="dhwt-bands"></div>
+      <div class="note" id="dhwt-bands-note" style="margin-top:6px"></div>
+      <h2 style="font-size:15px;margin-top:16px">Entladen</h2>
+      <div class="note" id="dhwt-dis" style="line-height:1.6"></div>
+      <h2 style="font-size:15px;margin-top:16px">🦠 Legionellen</h2>
+      <div id="dhwt-legio"></div>
+      <h2 style="font-size:15px;margin-top:16px">Was wäre wenn …</h2>
+      <div id="dhwt-scen"></div>
+      <div id="dhwt-advice" style="margin-top:12px"></div>
+      <div class="note" id="dhwt-note" style="margin-top:10px"></div>
+    </div>
+    <div class="card" id="dhw-card">
+      <h2><span class="info" data-info="dhw-impact" role="button" aria-label="Info">i</span>🚿 Warmwasser kostet Komfort <span class="r" id="dhw-head"></span></h2>
+      <div class="note" style="margin-bottom:10px">Macht die WP <b>Warmwasser</b>, pausiert die <b>Heizung</b> (Warmwasser-Vorrang) und das Haus kühlt etwas aus. Hier: um wie viel die <b>Innentemperatur</b> sinkt – und wie lange es dauert, bis sie nach dem Heizungs-Neustart wieder den <b>Ausgangswert</b> erreicht.</div>
+      <div class="seg" id="dhw-days" style="margin:0 0 12px">
+        <button data-dwd="7">7 T</button>
+        <button data-dwd="14" class="on">14 T</button>
+        <button data-dwd="30">30 T</button>
+      </div>
+      <div class="grid3" id="dhw-kpis"></div>
+      <div id="dhw-pattern" style="margin-top:14px"></div>
+      <div id="dhw-levers" style="margin-top:14px"></div>
+      <h2 style="font-size:15px;margin-top:16px">Beispiel-Warmwasserphase</h2>
+      <div class="note" id="dhw-rep-note" style="margin-bottom:6px"></div>
+      <div id="dhw-chart"></div>
+      <div class="legend" id="dhw-legend" style="margin-top:8px"></div>
+      <div id="dhw-byout" style="margin-top:14px"></div>
+      <div id="dhw-events" style="margin-top:14px"></div>
+      <div class="note" id="dhw-note" style="margin-top:12px"></div>
+      <div id="dhw-op" style="margin-top:10px"></div>
+    </div>
+    <div class="card" id="roomsync-card">
+      <h2><span class="info" data-info="roomsync" role="button" aria-label="Info">i</span>🌡️ Raumtemperatur ↔ Wärmepumpe <span class="r" id="roomsync-head"></span></h2>
+      <div class="note" id="roomsync-verdict" style="margin-bottom:10px"></div>
+      <div id="roomsync-table"></div>
+      <div class="note" id="roomsync-note" style="margin-top:10px"></div>
+    </div>
+    <div class="card" id="hpctl-card" hidden>
+      <h2><span class="info" data-info="hp-control" role="button" aria-label="Info">i</span>🛠️ Wärmepumpe steuern <span class="r" style="color:var(--warn)">Experte</span></h2>
+      <div class="note" style="margin-bottom:10px;border-left:3px solid var(--warn);padding-left:10px">
+        <b>Direkt an die Wärmepumpe schreiben</b> (HomeCom-API): Betriebsart, Heizkurven-Niveau, Soll-Temperaturen.
+        Es werden nur Werte angeboten, die deine Anlage selbst als <b>änderbar</b> meldet, und nur im von ihr
+        erlaubten Bereich. Jede Änderung musst du <b>bestätigen</b>. ⚠︎ Wirkt <b>real</b> auf die Heizung –
+        in kleinen Schritten, und notiere dir den vorherigen Wert.
+      </div>
+      <button class="btn sec" id="hpctl-load" style="margin-bottom:8px">🔄 Steuerbare Werte laden</button>
+      <div id="hpctl-body"></div>
+      <div class="note" id="hpctl-note" style="margin-top:8px"></div>
+    </div>
+    <div class="grid2">
+      <div class="kpi sm"><div class="v" id="hp-today-e">–</div><div class="l">Strom heute</div></div>
+      <div class="kpi sm"><div class="v" id="hp-today-h">–</div><div class="l">Wärme heute</div></div>
+      <div class="kpi sm"><div class="v" id="hp-scop">–</div><div class="l" id="hp-scop-l">Arbeitszahl (Zeitraum)</div></div>
+      <div class="kpi sm"><div class="v" id="hp-cost">–</div><div class="l">Stromkosten (Zeitraum)</div></div>
+    </div>
+    <div class="card" id="hp-fc-card">
+      <h2><span class="info" data-info="hp-forecast" role="button" aria-label="Info">i</span>🌦️ Strombedarf-Prognose (Wetter)</h2>
+      <div class="note" style="margin-bottom:10px">
+        Erwarteter Wärmepumpen-Strom der nächsten Tage – aus der Außentemperatur-Vorhersage und deinen
+        Gebäudedaten. Braucht deinen Standort (im <b>PV</b>-Tab eintragen).
+      </div>
+      <button class="btn" id="hp-fc-btn" style="margin-bottom:6px">🌦️ Prognose holen</button>
+      <div class="note" id="hp-fc-note" style="margin-bottom:8px"></div>
+      <div id="hp-fc-kpi"></div>
+      <div id="hp-fc-chart" style="margin-top:10px"></div>
+      <div class="legend" id="hp-fc-legend"></div>
+    </div>
+    <div class="card">
+      <h2>Wofür läuft die Wärmepumpe? <span class="r" id="hp-mode-sum"></span></h2>
+      <div id="hp-mode-donut"></div>
+      <div class="legend" id="hp-mode-legend"></div>
+      <div class="note" id="hp-mode-note" style="margin-top:10px"></div>
+    </div>
+    <div class="card">
+      <h2>Strom & Wärme pro Tag</h2>
+      <div id="hp-daily"></div>
+      <div class="legend">
+        <div class="it"><span class="sw" style="background:var(--hp)"></span>Strom (kWh)</div>
+        <div class="it"><span class="sw" style="background:var(--heat)"></span>Wärme (kWh)</div>
+      </div>
+    </div>
+    <div class="card" id="copt-card">
+      <h2><span class="info" data-info="cop-theory" role="button" aria-label="Info">i</span>⚖️ Arbeitszahl: Datenblatt vs. Praxis <span class="r" id="copt-head"></span></h2>
+      <div class="note" id="copt-model" style="margin-bottom:10px;clear:both"></div>
+      <div class="seg" id="copt-days" style="margin:0 0 12px">
+        <button data-cd="14">14 T</button>
+        <button data-cd="30" class="on">30 T</button>
+        <button data-cd="90">90 T</button>
+        <button data-cd="365">1 Jahr</button>
+      </div>
+      <div class="grid3" id="copt-kpis"></div>
+      <div id="copt-modes"></div>
+      <h2 style="font-size:15px;margin-top:16px">Je Außentemperatur (Heizen)</h2>
+      <div id="copt-bins"></div>
+      <div class="legend" id="copt-legend" style="margin-top:8px"></div>
+      <div class="note" id="copt-bins-note" style="margin-top:6px"></div>
+      <h2 style="font-size:15px;margin-top:16px">Wohin geht der Unterschied?</h2>
+      <div id="copt-gap"></div>
+      <div id="copt-daily"></div>
+      <div id="copt-ctx" style="margin-top:12px"></div>
+      <details id="copt-spec" style="margin-top:12px">
+        <summary style="cursor:pointer;font-weight:600;font-size:13.5px">Datenblatt-Werte anpassen</summary>
+        <div id="copt-spec-body" style="margin-top:8px"></div>
+      </details>
+      <div class="note" id="copt-note" style="margin-top:10px"></div>
+    </div>
+    <div class="card" id="copx-card">
+      <h2><span class="info" data-info="cop-levers" role="button" aria-label="Info">i</span>🔧 Verbesserungs-Check <span class="r" id="copx-head"></span></h2>
+      <div class="note" id="copx-intro" style="margin-bottom:8px;clear:both"></div>
+      <div id="copx-list"></div>
+      <div class="note" id="copx-note" style="margin-top:10px"></div>
+    </div>
+    <div class="card" id="chk-card">
+      <h2><span class="info" data-info="hp-check" role="button" aria-label="Info">i</span>🩺 Anlagen-Check <span class="r" id="chk-head"></span></h2>
+      <div class="note" style="margin-bottom:10px;clear:both">Troubleshooting: Was deine Messwerte über Einbau und Einstellung verraten – und was du vor Ort nachsehen kannst.</div>
+      <h3 class="chk-h" id="chk-h1">Ist der Abstand zum Datenblatt normal?</h3>
+      <div id="chk-verdict"></div>
+      <h3 class="chk-h">Reichen die 7 kW? Heizlast gegen Leistung</h3>
+      <div id="chk-load"></div>
+      <h3 class="chk-h">Automatische Prüfungen</h3>
+      <div id="chk-auto"></div>
+      <h3 class="chk-h">Vor Ort nachsehen</h3>
+      <div class="note" style="margin-bottom:4px">Abhaken, was du selbst sehen kannst – den Rest mit dem Installateur oder bei der Wartung.</div>
+      <div id="chk-manual"></div>
+      <div class="note" id="chk-note" style="margin-top:10px"></div>
+    </div>
+    <div class="card">
+      <h2><span class="info" data-info="cop" role="button" aria-label="Info">i</span>Wirkungsgrad (COP) pro Tag</h2>
+      <div id="hp-cop-chart"></div>
+      <div class="note" id="hp-cop-note" style="margin-top:10px"></div>
+    </div>
+    <div class="card">
+      <h2><span class="info" data-info="coptemp" role="button" aria-label="Info">i</span>Effizienz nach Außentemperatur</h2>
+      <div id="hp-coptemp"></div>
+      <div class="note" id="hp-coptemp-note" style="margin-top:10px"></div>
+    </div>
+    <div class="card" id="hpsig-card">
+      <h2><span class="info" data-info="hpsig" role="button" aria-label="Info">i</span>🌡️ Strom &amp; Wärme nach Außentemperatur</h2>
+      <div class="seg" id="hpsig-span" style="margin:0 0 10px">
+        <button data-sigd="90" class="on">90 Tage</button>
+        <button data-sigd="365">1 Jahr</button>
+        <button data-sigd="730">2 Jahre</button>
+      </div>
+      <div style="display:flex; flex-wrap:wrap; gap:8px 16px; margin-bottom:8px; font-size:13px">
+        <label style="display:flex; align-items:center; gap:6px; cursor:pointer"><input type="checkbox" id="hpsig-e" checked style="width:auto"> <span style="color:var(--hp)">●</span> Strom</label>
+        <label style="display:flex; align-items:center; gap:6px; cursor:pointer"><input type="checkbox" id="hpsig-h" checked style="width:auto"> <span style="color:var(--heat)">●</span> Wärme</label>
+        <label style="display:flex; align-items:center; gap:6px; cursor:pointer"><input type="checkbox" id="hpsig-fit" checked style="width:auto"> Trendlinien</label>
+      </div>
+      <div id="hpsig-chart"><div class="note">Lade …</div></div>
+      <div id="hpsig-kpis" style="margin-top:10px"></div>
+      <div class="note" id="hpsig-note" style="margin-top:8px"></div>
+    </div>
+    <div class="card" id="hp-cophour-card" hidden>
+      <h2><span class="info" data-info="cophour" role="button" aria-label="Info">i</span>Effizienz nach Uhrzeit (COP)</h2>
+      <div id="hp-cophour"></div>
+      <div class="note" id="hp-cophour-note" style="margin-top:10px"></div>
+    </div>
+    <div class="card" id="hp-month-card">
+      <h2><span class="info" data-info="hpmonth" role="button" aria-label="Info">i</span>Monatsbilanz</h2>
+      <div class="seg" id="hp-month-years" style="display:flex; margin-bottom:8px" hidden></div>
+      <div class="mchips" id="hp-month-chips"></div>
+      <div id="hp-monthly"></div>
+      <div id="hp-month-lines"></div>
+      <label style="display:flex; align-items:center; gap:6px; cursor:pointer; margin-top:10px; font-size:13px"><input type="checkbox" id="hp-month-tbl" style="width:auto"> Tabelle mit allen Werten</label>
+      <div class="mtable" id="hp-month-table"></div>
+      <div class="note" id="hp-month-note" style="margin-top:8px"></div>
+    </div>
+    <div class="card" id="hp-copmonth-card" hidden>
+      <h2><span class="info" data-info="cop" role="button" aria-label="Info">i</span>COP pro Monat</h2>
+      <div id="hp-copmonth"></div>
+      <div class="note" id="hp-copmonth-note" style="margin-top:10px"></div>
+    </div>
+    <div class="card" id="hp-theory-card">
+      <h2><span class="info" data-info="theory" role="button" aria-label="Info">i</span>🏗️ Theorie vs. Praxis</h2>
+      <div id="hp-theory-result"></div>
+      <div id="hp-theory-breakdown" style="margin-top:12px"></div>
+      <details style="margin-top:12px">
+        <summary style="cursor:pointer; color:var(--accent); font-size:13px">Gebäudedaten anpassen ▾</summary>
+        <div id="hp-theory-inputs" style="margin-top:12px"></div>
+        <button class="btn sec" id="hp-theory-reset">Auf meine Angaben zurücksetzen</button>
+        <div class="note" id="hp-theory-assump" style="margin-top:10px"></div>
+      </details>
+    </div>
+    <div class="card" id="hp-theory-month-card" hidden>
+      <h2><span class="info" data-info="theory-month" role="button" aria-label="Info">i</span>📅 Theorie vs. Praxis pro Monat</h2>
+      <div id="thm-toggles" style="display:flex; flex-wrap:wrap; gap:14px; margin-bottom:10px; font-size:13px">
+        <label style="display:flex; align-items:center; gap:6px; cursor:pointer"><input type="checkbox" id="thm-t" checked style="width:auto"> Theorie</label>
+        <label style="display:flex; align-items:center; gap:6px; cursor:pointer"><input type="checkbox" id="thm-p" checked style="width:auto"> <span id="thm-p-label">Gemessen</span></label>
+        <label style="display:flex; align-items:center; gap:6px; cursor:pointer"><input type="checkbox" id="thm-e" checked style="width:auto"> Erwartet</label>
+        <label style="display:flex; align-items:center; gap:6px; cursor:pointer"><input type="checkbox" id="thm-v" style="width:auto"> <span id="thm-v-label">Vorjahr</span></label>
+      </div>
+      <div id="hp-theory-month"></div>
+      <div class="legend" id="hp-theory-month-legend" style="margin-top:8px"></div>
+      <div id="hp-theory-month-tot" style="margin-top:10px"></div>
+      <div class="note" id="hp-theory-month-note" style="margin-top:8px"></div>
+    </div>
+    <div class="card" id="hp-theory-class-card">
+      <h2><span class="info" data-info="theory-class" role="button" aria-label="Info">i</span>🏅 Gebäude-Einordnung</h2>
+      <div id="hp-theory-class"></div>
+      <div class="note" id="hp-theory-class-note" style="margin-top:8px"></div>
+      <div id="hp-theory-real" style="margin-top:12px"></div>
+    </div>
+    <div class="card" id="hp-va-card">
+      <h2><span class="info" data-info="hpva" role="button" aria-label="Info">i</span>📄 Verbrauchsausweis – nachgerechnet</h2>
+      <div class="grid2">
+        <div><label>Wohnfläche (m²)</label><input id="va-area" type="number" min="10" step="1" inputmode="decimal"></div>
+        <div><label>Klimafaktor (DWD, optional)</label><input id="va-kf" type="number" min="0.5" max="2" step="0.01" inputmode="decimal" placeholder="1,00"></div>
+      </div>
+      <label style="display:flex; align-items:center; gap:6px; cursor:pointer; margin-top:8px; font-size:13px"><input type="checkbox" id="va-keller" style="width:auto"> Ein-/Zweifamilienhaus mit beheiztem Keller (× 1,35 statt × 1,2)</label>
+      <label style="display:flex; align-items:center; gap:6px; cursor:pointer; margin-top:4px; font-size:13px"><input type="checkbox" id="va-bau" style="width:auto" checked> Monate der Bauphase schätzen (sonst echte Werte)</label>
+      <div id="va-scale" style="margin-top:12px"></div>
+      <div id="va-kpi" style="margin-top:6px"></div>
+      <div id="va-calc" style="margin-top:10px"></div>
+      <div class="mtable" id="va-months"></div>
+      <div class="note" id="va-note" style="margin-top:10px"></div>
+    </div>
+    <div class="card" id="hp-theory-reno-card">
+      <h2><span class="info" data-info="theory-reno" role="button" aria-label="Info">i</span>🔧 Sanierung & Temperatur – was bringt's?</h2>
+      <div id="hp-theory-reno"></div>
+      <div class="note" style="margin:10px 0 4px" id="hp-theory-temp-head"></div>
+      <div id="hp-theory-temp"></div>
+      <div class="note" id="hp-theory-reno-note" style="margin-top:8px"></div>
+    </div>
+    <div class="card" id="hp-cal-card" hidden>
+      <h2><span class="info" data-info="hp-cal" role="button" aria-label="Info">i</span>Kalender · Stromverbrauch pro Tag</h2>
+      <div id="hp-cal"></div>
+      <div class="note" id="hp-cal-note" style="margin-top:8px"></div>
+    </div>
+    <div class="card">
+      <h2>Wärmekarte <span class="r"><select id="hp-heat-month" style="width:auto; padding:4px 8px; margin:0; font-size:12px"><option value="">Gesamt</option></select></span></h2>
+      <div id="hp-heat"></div>
+      <div class="note" id="hp-heat-note" style="margin-top:8px">Wochentag × Stunde · Ø elektrische Leistung (W). Leere Zellen sind mit dem Stunden-Durchschnitt gefüllt.</div>
+    </div>
+    <div class="card">
+      <h2><span class="info" data-info="hp-counter" role="button" aria-label="Info">i</span>Prognose Wärmepumpe</h2>
+      <div id="hp-forecast"></div>
+    </div>
+  </section>
+
+  <!-- PROFIL -------------------------------------------------------------->
   <section class="view" id="v-profile">
     <div class="card">
-      <h2>Tagesprofil · Ø Leistung je Stunde</h2>
+      <h2 id="profile-title">Tagesprofil · Ø Leistung je Stunde (Smart Home)</h2>
       <div id="chart-hourly"></div>
+      <div class="legend" id="profile-legend" hidden></div>
       <div class="note" id="profile-note" style="margin-top:10px"></div>
     </div>
-    <div class="card">
-      <h2>Wochenprofil · Ø kWh je Wochentag</h2>
-      <div id="chart-weekday"></div>
+    <div class="card" id="pf-base-card">
+      <h2><span class="info" data-info="baseload" role="button" aria-label="Info">i</span>🔌 Grundlast · was läuft immer?</h2>
+      <div id="pf-base-kpi"></div>
+      <div class="note" id="pf-base-note" style="margin-top:10px"></div>
     </div>
-    <div class="card">
-      <h2>Wärmekarte · Wochentag × Stunde (W)</h2>
-      <div id="chart-heat"></div>
-    </div>
-  </section>
-
-  <!-- AWAY ---------------------------------------------------------------->
-  <section class="view" id="v-away">
-    <div class="card hero">
-      <div class="cap">Vermutlich abwesende Tage (im Analysezeitraum)</div>
-      <div class="now" id="away-count">–<span> Tage</span></div>
-      <div class="cap" id="away-sub">–</div>
-    </div>
-    <div class="card">
-      <h2>Anwesenheit pro Tag</h2>
-      <div id="chart-presence"></div>
-      <div class="note" style="margin-top:10px">
-        Heuristik: Ein Tag gilt als „abwesend", wenn der <b>aktive</b> Verbrauch
-        (über der Grundlast) deutlich unter dem Median liegt – d.&nbsp;h. Licht/Rollladen
-        wurden kaum bedient. Rein aus diesen Sensoren geschätzt, kein Beweis.
+    <div class="card" id="pf-standby-card">
+      <h2><span class="info" data-info="standby" role="button" aria-label="Info">i</span>🕵️ Standby je Gerät <span class="r" id="pf-sb-head"></span></h2>
+      <div class="note" id="pf-sb-basis" style="margin:0 0 10px"></div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px">
+        <div class="seg" id="pf-sb-days" style="flex:1;min-width:210px;margin:0">
+          <button data-sbd="1">24 h</button>
+          <button data-sbd="7">7 T</button>
+          <button data-sbd="30">30 T</button>
+          <button data-sbd="90" class="on">90 T</button>
+          <button data-sbd="3650">Gesamt</button>
+        </div>
+        <div class="seg" id="pf-sb-thr" style="flex:1;min-width:210px;margin:0">
+          <button data-sbt="0.3">ab 0,3 W</button>
+          <button data-sbt="0.8" class="on">0,8 W</button>
+          <button data-sbt="2">2 W</button>
+          <button data-sbt="5">5 W</button>
+        </div>
       </div>
+      <div id="pf-sb-body"></div>
+      <div id="pf-sb-minor" style="margin-top:4px"></div>
+      <div class="note" id="pf-sb-note" style="margin-top:10px"></div>
+    </div>
+    <div class="card" id="pf-devtl-card">
+      <h2><span class="info" data-info="devtl" role="button" aria-label="Info">i</span>📊 Verbrauch je Gerät · Zeitstrahl <span class="r" id="pf-devtl-head"></span></h2>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px">
+        <div class="seg" id="pf-devtl-res" style="flex:1;min-width:200px;margin:0">
+          <button data-dtr="day" class="on">Tag</button>
+          <button data-dtr="hour">Stunde</button>
+          <button data-dtr="raw">Roh (W)</button>
+        </div>
+        <select id="pf-devtl-dev" style="width:auto;flex:1;min-width:190px"></select>
+      </div>
+      <div class="seg" id="pf-devtl-win" style="margin:0 0 12px"></div>
+      <div id="pf-devtl-chart"></div>
+      <div class="legend" id="pf-devtl-legend" style="margin-top:8px"></div>
+      <div class="note" id="pf-devtl-note" style="margin-top:8px"></div>
+    </div>
+    <div class="card" id="pf-lp-card">
+      <h2><span class="info" data-info="loadpeaks" role="button" aria-label="Info">i</span>⚡ Lastspitzen &amp; Dimensionierung <span class="r" id="pf-lp-head"></span></h2>
+      <div class="seg" id="pf-lp-days" style="margin:0 0 12px">
+        <button data-lpd="1">24 h</button>
+        <button data-lpd="7" class="on">7 T</button>
+        <button data-lpd="30">30 T</button>
+      </div>
+      <div class="grid2" id="pf-lp-kpis"></div>
+      <div class="note" id="pf-lp-basis" style="margin-top:8px"></div>
+      <div id="pf-lp-break-wrap" hidden>
+        <h2 style="margin-top:16px">Aufschlüsselung je Gerät</h2>
+        <div class="note" id="pf-lp-break-note" style="margin-bottom:6px">Dein <b>Zählerverbrauch</b> aufgeteilt: gemessene Geräte real, der <b>ungemessene Rest</b> (Herd, Licht, Kleingeräte …) als eigener Posten.</div>
+        <div id="pf-lp-break"></div>
+      </div>
+      <div id="pf-lp-hours-wrap" hidden>
+        <h2 style="margin-top:16px">Verbrauch je Stunde</h2>
+        <div class="note" id="pf-lp-hours-note" style="margin-bottom:6px">Dein Zähler-Tagesverbrauch auf die Stunden verteilt – nach dem <b>Rhythmus</b> deiner gemessenen Geräte. Der helle Teil ist gemessen, der dunkle der verteilte Rest.</div>
+        <div id="pf-lp-hours"></div>
+      </div>
+      <h2 style="margin-top:16px">Lastdauerlinie</h2>
+      <div class="note" style="margin-bottom:6px">Für wie viel <b>% der Zeit</b> lag die Leistung über einem Wert – so siehst du, welche <b>Ausgangsleistung</b> wie viel abdeckt.</div>
+      <div id="pf-lp-ldc"></div>
+      <div id="pf-lp-levels" style="margin-top:10px"></div>
+      <h2 style="margin-top:16px">Top-10 Lastspitzen</h2>
+      <div id="pf-lp-events"></div>
+      <div class="note" id="pf-lp-note" style="margin-top:10px"></div>
     </div>
     <div class="card">
-      <h2>Abwesenheits-Kalender</h2>
-      <div id="away-list"></div>
+      <h2 id="profile-wd-title">Wochenprofil · Ø kWh je Wochentag</h2>
+      <div id="chart-weekday"></div>
+      <div class="note" id="profile-weekday-note" style="margin-top:8px"></div>
+    </div>
+    <div class="card">
+      <h2 id="profile-heat-title">Wärmekarte · Wochentag × Stunde (W)</h2>
+      <div id="chart-heat"></div>
+      <div class="note" id="profile-heat-note" style="margin-top:8px"></div>
+    </div>
+    <div class="card">
+      <h2>Einblicke & Muster</h2>
+      <div id="profile-insights"></div>
+    </div>
+    <div class="card" id="profile-behavior-card">
+      <h2><span class="info" data-info="behavior" role="button" aria-label="Info">i</span>🔍 Verhalten & Empfehlungen</h2>
+      <div id="profile-behavior"></div>
+    </div>
+    <div class="card">
+      <h2>Nicht gemessener Hausstrom</h2>
+      <div class="note" id="profile-missing" style="line-height:1.6"></div>
     </div>
   </section>
 
-  <!-- FORECAST ------------------------------------------------------------>
-  <section class="view" id="v-forecast">
+  <!-- PV-PLANER ----------------------------------------------------------->
+  <section class="view" id="v-pv">
+    <div class="card" id="pvr-card" hidden>
+      <h2><span class="info" data-info="pv-real" role="button" aria-label="Info">i</span>☀️ Deine PV-Anlage <span class="r" id="pvr-head"></span></h2>
+      <div id="pvr-flow"></div>
+      <div id="pvr-today" style="margin-top:10px"></div>
+      <div id="pvr-wx" style="margin-top:10px"></div>
+      <h2 style="font-size:14px;margin-top:16px">Heute im Tagesverlauf</h2>
+      <div id="pvr-day"></div>
+      <div class="legend" id="pvr-day-legend"></div>
+      <div class="note" id="pvr-note" style="margin-top:8px"></div>
+    </div>
+    <div class="card" id="pvr-hist-card" hidden>
+      <h2><span class="info" data-info="pv-hist" role="button" aria-label="Info">i</span>📊 Erzeugung &amp; Verbrauch <span class="r" id="pvr-hist-head"></span></h2>
+      <div class="seg" id="pvr-range" style="margin-bottom:10px">
+        <button data-d="1">Tag</button>
+        <button data-d="7">7 T</button>
+        <button data-d="30" class="on">30 T</button>
+        <button data-d="90">90 T</button>
+        <button data-d="365">Jahr</button>
+      </div>
+      <div class="pvdn" id="pvr-daynav" hidden></div>
+      <div id="pvr-kpi"></div>
+      <h2 style="font-size:14px;margin-top:14px">Wohin ging der Sonnenstrom?</h2>
+      <div id="pvr-daily"></div>
+      <div class="legend" id="pvr-daily-legend"></div>
+      <div id="pvr-sun-wrap" hidden>
+        <h2 style="font-size:14px;margin-top:14px" id="pvr-sun-h">☀️ Sonnenstunden laut Wetterdienst</h2>
+        <div id="pvr-sun"></div>
+        <div class="legend" id="pvr-sun-legend"></div>
+        <div class="note" id="pvr-sun-note" style="margin-top:6px"></div>
+      </div>
+      <h2 style="font-size:14px;margin-top:14px">Woher kam dein Strom?</h2>
+      <div id="pvr-src"></div>
+      <div class="legend" id="pvr-src-legend"></div>
+      <h2 style="font-size:14px;margin-top:14px" id="pvr-typ-h">Typischer Tag im Zeitraum</h2>
+      <div id="pvr-typ"></div>
+      <div class="legend" id="pvr-typ-legend"></div>
+      <div id="pvr-months" style="margin-top:12px"></div>
+      <div class="note" id="pvr-hist-note" style="margin-top:8px"></div>
+    </div>
+    <div class="card" id="pvr-str-card" hidden>
+      <h2><span class="info" data-info="pv-str" role="button" aria-label="Info">i</span>🧵 String-Vergleich <span class="r" id="pvr-str-head"></span></h2>
+      <div id="pvr-str-live"></div>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:14px">
+        <h2 style="font-size:14px;margin:0;flex:1" id="pvr-str-day-h">Heute im Tagesverlauf</h2>
+        <div class="seg" id="pvr-str-norm" style="padding:3px" hidden>
+          <button data-n="0" class="on" style="padding:4px 10px;white-space:nowrap">kW</button>
+          <button data-n="1" style="padding:4px 10px;white-space:nowrap">je kWp</button>
+        </div>
+      </div>
+      <div class="pvdn" id="pvr-str-daynav" style="margin-top:8px"></div>
+      <div id="pvr-str-day"></div>
+      <div class="legend" id="pvr-str-day-legend"></div>
+      <h2 style="font-size:14px;margin-top:14px" id="pvr-str-daily-h">Tageswerte im Zeitraum</h2>
+      <div id="pvr-str-daily"></div>
+      <div class="legend" id="pvr-str-daily-legend"></div>
+      <div id="pvr-str-table" style="margin-top:10px"></div>
+      <div id="pvr-str-verdict" style="margin-top:12px"></div>
+      <details id="pvr-str-cfg" style="margin-top:12px">
+        <summary style="cursor:pointer;font-weight:600;font-size:13px">✏️ Strings beschreiben (optional – Name, Module, kWp, Ausrichtung)</summary>
+        <div id="pvr-str-form" style="margin-top:10px"></div>
+      </details>
+    </div>
+    <div class="card" id="pvr-chk-card" hidden>
+      <h2><span class="info" data-info="pv-chk" role="button" aria-label="Info">i</span>🔎 Plausibilitätsprüfung <span class="r" id="pvr-chk-head"></span></h2>
+      <div id="pvr-chk"></div>
+    </div>
+    <div class="card" id="pvr-dev-card" hidden>
+      <h2><span class="info" data-info="pv-dev" role="button" aria-label="Info">i</span>🔧 Wechselrichter, Speicher &amp; Zähler <span class="r" id="pvr-dev-head"></span></h2>
+      <div id="pvr-dev"></div>
+    </div>
     <div class="card">
-      <h2>Strompreis</h2>
-      <label>Preis pro kWh (<span id="cur">€</span>)</label>
-      <input id="price" type="number" step="0.01" inputmode="decimal" value="0.35">
-      <div class="note" style="margin-top:8px">Wird lokal gespeichert und für alle Kosten verwendet.</div>
+      <h2><span class="info" data-info="pv-sim" role="button" aria-label="Info">i</span>☀️ PV-Anlage planen</h2>
+      <div class="note" id="pv-plan-real" hidden style="margin-bottom:8px;border-left:3px solid var(--accent);padding-left:10px">
+        Deine <b>echte Anlage</b> steht oben. Der Planer bleibt für Erweiterungen – z. B. mehr Module, ein größerer
+        Speicher oder ein E-Auto – und rechnet mit deinem gemessenen Verbrauch.</div>
+      <div class="note" style="margin-bottom:12px">
+        Schätzung auf Basis deines <b>gemessenen</b> Verbrauchsprofils
+        (Smart Home + Wärmepumpe). Passe die Werte an – alles wird lokal gespeichert.
+      </div>
+      <div class="grid2">
+        <div><label>Anlagengröße (kWp)</label>
+          <input id="pv-kwp" type="number" step="0.5" min="0" inputmode="decimal" value="10"></div>
+        <div><label>Ausrichtung / Ertrag</label>
+          <select id="pv-orient">
+            <option value="1000">Süd, optimal (~1000 kWh/kWp)</option>
+            <option value="950">Süd-Ost / Süd-West (~950)</option>
+            <option value="880">Ost-West (~880)</option>
+            <option value="800">flach / teilverschattet (~800)</option>
+          </select></div>
+      </div>
+      <details style="margin-top:10px">
+        <summary style="cursor:pointer; color:var(--accent); font-size:13px">
+          📍 Echten Ertrag für deinen Standort holen (PVGIS)
+          <span class="info" data-info="pvgis" role="button" aria-label="Info">i</span></summary>
+        <div class="grid2" style="margin-top:8px">
+          <div><label>Breitengrad (lat)</label>
+            <input id="pv-lat" type="number" step="0.0001" inputmode="decimal" placeholder="z. B. 51.05"></div>
+          <div><label>Längengrad (lon)</label>
+            <input id="pv-lon" type="number" step="0.0001" inputmode="decimal" placeholder="z. B. 13.74"></div>
+          <div><label>Dachneigung (°)</label>
+            <input id="pv-tilt" type="number" step="1" min="0" max="90" inputmode="numeric" placeholder="35"></div>
+          <div><label>Azimut (0=Süd, −90=Ost, 90=West)</label>
+            <input id="pv-az" type="number" step="5" min="-180" max="180" inputmode="numeric" placeholder="0"></div>
+        </div>
+        <button class="btn sec" id="pv-locate" style="margin-top:8px">📍 Mein Standort</button>
+        <button class="btn" id="pv-pvgis" style="margin-top:8px">☀️ Ertrag holen (PVGIS)</button>
+        <div class="note" id="pv-pvgis-note" style="margin-top:8px">Kostenlos, ohne Konto (EU-Kommission/JRC). Füllt Ertrag &amp; Monatskurve für deinen Standort. Ist PVGIS nicht erreichbar, rechne ich aus Neigung/Azimut eine Schätzung.</div>
+      </details>
+      <div class="grid2" style="margin-top:10px">
+        <div><label>Batteriespeicher (kWh)</label>
+          <input id="pv-batt" type="number" step="0.5" min="0" inputmode="decimal" value="0"></div>
+        <div><label>Einspeisung (ct/kWh)</label>
+          <input id="pv-feedin" type="number" step="0.1" min="0" inputmode="decimal" value="8.0"></div>
+      </div>
+      <label style="margin-top:10px; display:flex; align-items:center; gap:8px; cursor:pointer">
+        <input type="checkbox" id="pv-cap60" style="width:auto"> 🔌 60 %-Einspeisegrenze (ohne Smart Meter)
+        <span class="info" data-info="cap60" role="button" aria-label="Info">i</span></label>
+      <div class="note" id="pv-cap60-note" style="margin-top:6px"></div>
+      <div class="grid2" style="margin-top:10px">
+        <div><label>E-Auto: km / Jahr <span class="info" data-info="pv-ev" role="button" aria-label="Info">i</span></label>
+          <input id="pv-ev-km" type="number" min="0" step="500" inputmode="numeric" placeholder="0 = keins"></div>
+        <div><label>E-Auto: kWh / 100 km</label>
+          <input id="pv-ev-kwh" type="number" min="0" step="0.5" inputmode="decimal" value="18"></div>
+      </div>
+      <label style="margin-top:10px; display:flex; align-items:center; gap:8px; cursor:pointer">
+        <input type="checkbox" id="pv-v2h" style="width:auto"> 🔋 E-Auto bidirektional nutzen (V2H)
+        <span class="info" data-info="pv-v2h" role="button" aria-label="Info">i</span></label>
+      <div id="pv-v2h-row" style="margin-top:8px" hidden>
+        <div class="grid2">
+          <div><label>nutzbare Auto-Kapazität fürs Haus (kWh)</label>
+            <input id="pv-v2h-kwh" type="number" min="0" step="1" inputmode="decimal" placeholder="z. B. 20"></div>
+          <div><label>Speicherpreis (€/kWh, für Ersparnis)</label>
+            <input id="pv-v2h-price" type="number" min="0" step="50" inputmode="numeric" value="800"></div>
+        </div>
+        <label style="margin-top:10px; display:block">Auto tagsüber</label>
+        <select id="pv-v2h-home">
+          <option value="home">meist zuhause (Homeoffice/Familie)</option>
+          <option value="mixed">teils tagsüber weg</option>
+          <option value="commuter">Pendler – tagsüber weg</option>
+        </select>
+      </div>
+      <label style="margin-top:10px; display:block">Klimaanlage: kWh / Jahr
+        <span class="info" data-info="pv-ac" role="button" aria-label="Info">i</span></label>
+      <div style="display:flex; gap:8px; align-items:stretch">
+        <input id="pv-ac" type="number" min="0" step="50" inputmode="numeric" placeholder="0 = keine" style="flex:1">
+        <button class="btn sec" id="pv-ac-fill" style="margin-top:6px; width:auto; white-space:nowrap; padding:12px 12px">Ø D einsetzen</button>
+      </div>
+      <label style="margin-top:10px; display:block">Investition (optional, für Amortisation)</label>
+      <input id="pv-invest" type="number" inputmode="numeric" placeholder="z. B. 18000">
+      <button class="btn sec" id="pv-suggest">💡 kWp &amp; Speicher aus meinem Verbrauch vorschlagen</button>
+      <div class="note" id="pv-suggest-note" style="margin-top:8px">
+        <span class="info" data-info="pv-suggest" role="button" aria-label="Info" style="margin-left:0">i</span>
+        Vorschlag aus deinem Jahresverbrauch & Profil.
+      </div>
     </div>
     <div class="grid2">
-      <div class="kpi"><div class="v" id="f-year">–</div><div class="l">Jahres-Hochrechnung</div></div>
-      <div class="kpi"><div class="v" id="f-year-cost">–</div><div class="l">Kosten / Jahr</div></div>
-      <div class="kpi"><div class="v" id="f-month">–</div><div class="l">Ø pro Monat</div></div>
-      <div class="kpi"><div class="v" id="f-month-cost">–</div><div class="l">Kosten / Monat</div></div>
+      <div class="kpi"><div class="v" id="pv-yield">–</div><div class="l">PV-Ertrag / Jahr</div></div>
+      <div class="kpi"><div class="v" id="pv-autarky">–</div><div class="l">Autarkie <span class="info" data-info="pv-quote" role="button" aria-label="Info" style="margin-left:3px">i</span></div></div>
+      <div class="kpi"><div class="v" id="pv-self">–</div><div class="l">Eigenverbrauchsquote</div></div>
+      <div class="kpi"><div class="v" id="pv-benefit">–</div><div class="l">Ersparnis / Jahr</div></div>
     </div>
-    <div class="card" id="counter-card" hidden>
-      <h2>Sofort-Schätzung aus dem Zählerstand</h2>
-      <div id="counter-body"></div>
+    <div class="note" id="pv-basis" style="margin-top:4px"></div>
+    <div class="card" id="pv-orient-card">
+      <h2><span class="info" data-info="pv-orient-opt" role="button" aria-label="Info">i</span>🧭 Optimale Ausrichtung &amp; Größe</h2>
+      <div class="note" style="margin-bottom:10px">Aus deinem Verbrauch und den Uhrzeiten: wie viel kWp in welcher Ausrichtung,
+        so dass der <b>Sommer ~100 % autark</b> ist und der <b>Winter</b> bestmöglich gedeckt wird.</div>
+      <div id="pv-orient-body"></div>
+      <div class="note" id="pv-orient-note" style="margin-top:10px"></div>
+    </div>
+    <div class="card" id="pv-surf-card">
+      <h2><span class="info" data-info="pv-surf" role="button" aria-label="Info">i</span>🏠 Meine Flächen belegen</h2>
+      <div class="note" style="margin-bottom:10px">Trag ein, <b>welche Flächen</b> du hast (Dach, Garten, Wand, Terrasse) –
+        ich sage dir, wie du sie am besten belegst und wie viel sie bringen. Das fließt auch in die Ertrags-/Autarkie-Rechnung oben ein.</div>
+      <div id="pv-surf-list"></div>
+      <div class="grid2" style="margin-top:12px">
+        <div><label>Flächentyp</label>
+          <select id="surf-type">
+            <option value="gable">Satteldach</option>
+            <option value="flat">Flachdach</option>
+            <option value="garden">Gartenfläche (Freiland)</option>
+            <option value="wall">Grenz-/Fassadenwand</option>
+            <option value="terrace">Terrassenüberdachung</option>
+            <option value="carport">Carport</option>
+          </select></div>
+        <div><label>Fläche (m²)</label>
+          <input id="surf-area" type="number" min="0" step="1" inputmode="numeric" placeholder="z. B. 40"></div>
+        <div><label>Neigung (°, leer = Typ-Standard)</label>
+          <input id="surf-tilt" type="number" min="0" max="90" step="1" inputmode="numeric" placeholder="Standard"></div>
+        <div><label>Azimut (0=Süd, −90=Ost, 90=West)</label>
+          <input id="surf-az" type="number" min="-180" max="180" step="5" inputmode="numeric" placeholder="0"></div>
+        <div><label>Verschattung (%)</label>
+          <input id="surf-shade" type="number" min="0" max="90" step="5" inputmode="numeric" placeholder="0"></div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+        <button class="btn sec" id="surf-add" style="flex:1">+ Fläche hinzufügen</button>
+        <button class="btn sec" id="surf-cancel" style="flex:1;display:none">Abbrechen</button>
+      </div>
+      <div id="pv-surf-result" style="margin-top:14px"></div>
+      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+        <button class="btn" id="pv-surf-use" style="flex:1" hidden>Empfehlung als Anlage übernehmen</button>
+        <button class="btn sec" id="pv-surf-reset" style="flex:1" hidden>↩︎ Häkchen auf Empfehlung</button>
+      </div>
+      <div class="note" id="pv-surf-note" style="margin-top:8px"></div>
+    </div>
+    <div class="card" id="pv-combo-card" hidden>
+      <h2>🧮 Ausgewählte Flächen · kombiniert</h2>
+      <div class="note" style="margin-bottom:10px">Summe aller oben <b>angehakten</b> Flächen – kumuliertes Jahres-Diagramm (Ertrag vs. Verbrauch) und Gesamt-Kennzahlen.</div>
+      <div id="pv-combo-body"></div>
+      <div id="pv-combo-chart" style="margin-top:8px"></div>
+      <div class="note" id="pv-combo-note" style="margin-top:8px"></div>
+      <button class="btn" id="pv-combo-use" style="margin-top:10px">Diese Auswahl als Anlage übernehmen</button>
+    </div>
+    <div class="card">
+      <h2><span class="info" data-info="pv-forecast" role="button" aria-label="Info">i</span>🌤️ Wetter-Prognose · morgen</h2>
+      <div class="note" style="margin-bottom:10px">
+        Erwarteter PV-Ertrag und – aus deinen Gebäudedaten – der voraussichtliche
+        Wärmepumpen-Strombedarf für die nächsten Tage. Braucht deinen Standort (oben bei PVGIS eintragen).
+      </div>
+      <button class="btn" id="pv-weather" style="margin-bottom:6px">🌤️ Wetter-Prognose holen</button>
+      <div class="note" id="pv-weather-note" style="margin-bottom:10px"></div>
+      <div id="pv-weather-kpi"></div>
+      <div id="pv-weather-chart" style="margin-top:10px"></div>
+      <div class="legend" id="pv-weather-legend"></div>
+      <div class="note" id="pv-weather-best" style="margin-top:10px"></div>
+    </div>
+    <div class="card">
+      <h2><span class="info" data-info="pv-batt" role="button" aria-label="Info">i</span>PV-Nutzung pro Monat</h2>
+      <div id="pv-monthly"></div>
+      <div class="legend" id="pv-monthly-legend"></div>
+      <div class="note" id="pv-monthly-note" style="margin-top:10px"></div>
+    </div>
+    <div class="card" id="pv-tp-card" hidden>
+      <h2><span class="info" data-info="pv-tp" role="button" aria-label="Info">i</span>🔬 Theorie vs. Praxis <span class="r" id="pv-tp-head"></span></h2>
+      <div class="note" id="pv-tp-basis" style="margin-bottom:8px"></div>
+      <div id="pv-tp-chart"></div>
+      <div class="legend" id="pv-tp-legend"></div>
+      <div id="pv-tp-table" style="margin-top:10px"></div>
+      <div class="note" id="pv-tp-note" style="margin-top:8px"></div>
+    </div>
+    <div class="card">
+      <h2><span class="info" data-info="pv-econ" role="button" aria-label="Info">i</span>Wirtschaftlichkeit nach Anlagengröße</h2>
+      <div id="pv-econchart"></div>
+      <div class="note" id="pv-econchart-note" style="margin-top:10px"></div>
+    </div>
+    <div class="card" id="pv-build-card">
+      <h2><span class="info" data-info="pv-build" role="button" aria-label="Info">i</span>🧰 Selbstbau vs. Fachfirma</h2>
+      <div class="note" style="margin-bottom:10px">Trag einfach <b>zwei Preise</b> ein: dein <b>Komplett-Set</b> (Selbstbau) und
+        das <b>Komplett-Angebot</b> der Fachfirma. Die Förderung ziehe ich beim Angebot ab.</div>
+      <div class="grid2">
+        <div><label>🔧 Selbstbau: Komplett-Set (€)</label>
+          <input id="pc-diy-set" type="number" min="0" step="100" inputmode="numeric" placeholder="z. B. 9000"></div>
+        <div><label>🏢 Fachfirma: Komplett-Angebot (€)</label>
+          <input id="pc-pro-offer" type="number" min="0" step="100" inputmode="numeric" placeholder="z. B. 18000"></div>
+        <div><label>Förderung (€, wird abgezogen)</label>
+          <input id="pc-foerder" type="number" min="0" step="100" inputmode="numeric" placeholder="z. B. 3000"></div>
+        <div><label>Eigenleistung (Std., optional)</label>
+          <input id="pc-diy-hours" type="number" min="0" step="5" inputmode="numeric" placeholder="0 = ignorieren"></div>
+      </div>
+      <div id="pc-kpi" style="margin-top:14px"></div>
+      <div id="pc-bar" style="margin-top:12px"></div>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button class="btn sec" id="pc-use-diy" style="flex:1">Selbstbau als Investition</button>
+        <button class="btn sec" id="pc-use-pro" style="flex:1">Fachfirma als Investition</button>
+      </div>
+      <div class="note" id="pc-note" style="margin-top:10px"></div>
+    </div>
+    <div class="card">
+      <h2><span class="info" data-info="pv-gridfree" role="button" aria-label="Info">i</span>🔌 Wann brauchst du kein Netz?</h2>
+      <div id="pv-gridfree-kpi"></div>
+      <div id="pv-gridfree-strip" style="margin-top:10px"></div>
+      <div class="note" id="pv-gridfree-strip-note" style="margin-top:8px"></div>
+      <div class="note" style="margin:14px 0 6px"><b>Und mit einer größeren Anlage?</b> Netzfreie Monate je Anlagengröße (kWp):</div>
+      <div id="pv-gridfree"></div>
+      <div class="note" id="pv-gridfree-note" style="margin-top:8px"></div>
+    </div>
+    <div class="card">
+      <h2>Typischer Tag · Erzeugung & Verbrauch</h2>
+      <div style="display:flex; gap:6px; margin-bottom:8px">
+        <button class="btn sec" id="pv-day-summer" style="flex:1; padding:8px">☀︎ Sommer</button>
+        <button class="btn sec" id="pv-day-winter" style="flex:1; padding:8px">❄︎ Winter</button>
+      </div>
+      <div id="pv-day"></div>
+      <div class="legend">
+        <div class="it"><span class="sw" style="background:var(--heat)"></span>PV-Erzeugung</div>
+        <div class="it"><span class="sw" style="background:var(--sh)"></span>Verbrauch</div>
+        <div class="it"><span class="sw" style="background:var(--accent2)"></span>Eigenverbrauch</div>
+      </div>
+      <div class="note" id="pv-day-note" style="margin-top:8px"></div>
+    </div>
+    <div class="card">
+      <h2>Wirtschaftlichkeit</h2>
+      <div id="pv-econ"></div>
       <div class="note" style="margin-top:10px">
-        Aus dem kumulativen Energiezähler der Module (seit deren Installation) –
-        verfügbar ab der ersten Messung, noch bevor eigene Historie da ist.
+        Grobe Orientierung ohne Gewähr: reale Erträge hängen von Standort, Dach,
+        Verschattung und Wetter ab. Der Eigenverbrauch ist aus deinem echten
+        Tagesprofil geschätzt – je besser Verbrauch und Sonne zusammenpassen
+        (z. B. Wärmepumpe/Warmwasser tagsüber, Batterie), desto höher.
       </div>
     </div>
-    <div class="card">
-      <h2>Hochrechnung übers Jahr</h2>
-      <div id="chart-forecast"></div>
-      <div class="note" id="forecast-note" style="margin-top:10px"></div>
+    <div class="card" id="pv-econ-live-card" hidden>
+      <h2><span class="info" data-info="pv-econ-live" role="button" aria-label="Info">i</span>💶 Wirtschaftlichkeit · gemessen <span class="r" id="pv-econ-live-head"></span></h2>
+      <div id="pv-econ-live"><div class="note">Lade die Messwerte deiner Anlage …</div></div>
+      <div id="pv-econ-live-back" style="margin-top:12px"></div>
+      <div class="note" id="pv-econ-live-note" style="margin-top:10px"></div>
     </div>
-    <div class="card">
-      <h2>Einordnung</h2>
-      <div id="insights"></div>
+    <div class="card" id="pv-night-card">
+      <h2><span class="info" data-info="pv-night" role="button" aria-label="Info">i</span>🌙 Nachtverbrauch &amp; Speichergröße</h2>
+      <div class="note" style="margin-bottom:10px">Wie viel Strom du von <b>Sonnenuntergang bis Sonnenaufgang</b> brauchst –
+        das muss der <b>Speicher</b> aus dem Tags-Überschuss überbrücken. Daraus ergibt sich die sinnvolle Speichergröße.</div>
+      <div id="pv-night-body"></div>
+      <div id="pv-night-chart" style="margin-top:10px"></div>
+      <div class="note" id="pv-night-note" style="margin-top:10px"></div>
+    </div>
+    <div class="card" id="pv-margin-card">
+      <h2><span class="info" data-info="pv-margin" role="button" aria-label="Info">i</span>📈 Ab wann lohnt mehr kWp?</h2>
+      <div class="note" style="margin-bottom:10px">Aus deinem Verbrauch &amp; Profil: wie viel <b>€/Jahr</b> jedes zusätzliche kWp bringt –
+        und ab wann der <b>Grenznutzen</b> unter die Kosten fällt. Darunter lohnt Ausbau kaum noch (außer du planst Mehrverbrauch).</div>
+      <div class="grid3" style="margin-bottom:8px">
+        <div><label>PV €/kWp</label><input id="pv-cost-kwp" type="number" min="0" step="50" inputmode="numeric" value="1400"></div>
+        <div><label>Speicher €/kWh</label><input id="pv-cost-kwh" type="number" min="0" step="50" inputmode="numeric" value="700"></div>
+        <div><label>Grundkosten €</label><input id="pv-cost-base" type="number" min="0" step="100" inputmode="numeric" value="2000"></div>
+      </div>
+      <div id="pv-margin-kpi"></div>
+      <div id="pv-margin-chart" style="margin-top:8px"></div>
+      <div class="legend" id="pv-margin-legend" style="margin-top:2px"></div>
+      <div id="pv-margin-chart2" style="margin-top:12px"></div>
+      <div class="legend" id="pv-margin-legend2" style="margin-top:2px"></div>
+      <div class="note" id="pv-margin-note" style="margin-top:10px"></div>
+    </div>
+    <div class="card" id="pv-product-card">
+      <h2><span class="info" data-info="pv-product" role="button" aria-label="Info">i</span>🧩 Konkrete Komponenten (Fronius + Speicher)</h2>
+      <div class="note" style="margin-bottom:10px">Vorschlag für deine aktuelle Planung (<b id="pv-product-head">– kWp</b>) – <b>ausbaufähig</b>:
+        Wechselrichter mit Reserve, Module jetzt, Speicher modular.</div>
+      <label style="display:block">Modul-Leistung (Wp) <span style="color:var(--muted)">Standard: AIKO Neostar (ABC) ~460</span></label>
+      <input id="pv-mod-wp" type="number" min="200" max="700" step="5" inputmode="numeric" value="460" style="width:auto">
+      <div id="pv-product-body" style="margin-top:10px"></div>
+      <div class="note" id="pv-product-note" style="margin-top:10px"></div>
+    </div>
+
+    <div class="card" id="pp-card">
+      <h2><span class="info" data-info="pvpick" role="button" aria-label="Info">i</span>🛒 Produktauswahl: welches System passt zu dir?</h2>
+      <div class="note" style="margin-bottom:12px">Aus deinem <b>Verbrauch</b> und deinen <b>Prioritäten</b> suche ich dir aus den hinterlegten Geräten das passende System – <b>ohne Fachchinesisch</b>. Begriffe erklärt das Glossar unten.</div>
+      <div class="grid3" id="pp-sizing"></div>
+      <div class="note" id="pp-sizing-note" style="margin:8px 0 14px"></div>
+      <h2 style="font-size:15px;margin-top:6px">Was ist dir wichtig?</h2>
+      <div class="note" style="margin-bottom:8px">Tippe an/aus – die Empfehlung sortiert sich neu.</div>
+      <div id="pp-prios" style="display:flex;flex-wrap:wrap;gap:8px"></div>
+      <div id="pp-ranking" style="margin-top:16px"></div>
+      <div id="pp-glossary" style="margin-top:14px"></div>
+      <div class="note" id="pp-note" style="margin-top:12px"></div>
+    </div>
+
+    <div class="card" id="bk-card">
+      <h2><span class="info" data-info="balkon" role="button" aria-label="Info">i</span>🌇 Balkonkraftwerk (800 W) <span class="r" id="bk-head"></span></h2>
+      <div class="note" style="margin-bottom:12px">
+        Steckersolar darfst du bis <b>800 W Einspeiseleistung</b> selbst installieren. Module dürfen <b>mehr</b> –
+        der Wechselrichter speist aber nur 800 W. Ein <b>Speicher</b> (z. B. Anker Solarbank) puffert den Mittags-Überschuss
+        und schiebt ihn als ≤800 W in den Abend, um deine <b>Grundlast</b> zu decken. Trag ein, was du planst:
+      </div>
+      <div class="grid2">
+        <div><label>Module (kWp)</label>
+          <input id="bk-kwp" type="number" step="0.1" min="0" inputmode="decimal" value="0.8"></div>
+        <div><label>Speicher (kWh)</label>
+          <input id="bk-batt" type="number" step="0.1" min="0" inputmode="decimal" value="1.6"></div>
+      </div>
+      <div class="grid2" style="margin-top:8px">
+        <div><label>Einspeise-Grenze</label>
+          <select id="bk-cap">
+            <option value="800" selected>800 W (Selbstbau)</option>
+            <option value="600">600 W</option>
+            <option value="2000">2000 W (mit Elektriker)</option>
+          </select></div>
+        <div><label>Verbrauch</label>
+          <select id="bk-load">
+            <option value="base" selected>Hausstrom (gemessen)</option>
+            <option value="all">Hausstrom + Wärmepumpe</option>
+          </select></div>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
+        <button class="btn sec bk-preset" data-kwp="0.8" data-batt="0">Nur Module 0,8 kWp</button>
+        <button class="btn sec bk-preset" data-kwp="2.0" data-batt="1.6">Solarbank 2 Pro (1,6 kWh)</button>
+        <button class="btn sec bk-preset" data-kwp="2.0" data-batt="3.2">+ Erweiterung (3,2 kWh)</button>
+        <button class="btn sec bk-preset" data-kwp="2.0" data-batt="5">Solarbank Max (5 kWh)</button>
+      </div>
+      <div class="grid2" id="bk-kpis" style="margin-top:14px"></div>
+      <div class="seg" id="bk-day" style="margin:14px 0 10px">
+        <button data-bd="summer" class="on">Sommertag</button>
+        <button data-bd="winter">Wintertag</button>
+      </div>
+      <div id="bk-daychart"></div>
+      <div class="legend" id="bk-day-legend" style="margin-top:8px"></div>
+      <h2 style="margin-top:18px">Übers Jahr</h2>
+      <div id="bk-yearchart"></div>
+      <div class="legend" id="bk-year-legend" style="margin-top:8px"></div>
+      <div class="note" id="bk-note" style="margin-top:10px"></div>
     </div>
   </section>
 
-  <!-- SETTINGS ------------------------------------------------------------>
+  <!-- BÖRSE (dynamischer Tarif) ------------------------------------------->
+  <section class="view" id="v-borse">
+    <div class="card" id="borse-off-card" hidden>
+      <h2>⚡ Börsenstrom (dynamischer Tarif)</h2>
+      <div class="note" style="line-height:1.6">
+        Mit einem <b>dynamischen Stromtarif</b> (z. B. Tibber, aWATTar, Ostrom) zahlst du
+        den <b>stündlichen Börsenpreis</b> statt eines Festpreises. Strom ist nachts und
+        mittags (viel Sonne/Wind) oft günstig, morgens und abends teuer. Wer flexible Lasten
+        (<b>Warmwasser, Waschmaschine, E-Auto</b>) in die günstigen Stunden legt, spart bares Geld.
+        <br><br>Aktiviere es im <b>Setup → „Dynamischer Börsentarif"</b>. Die App holt dann die
+        <b>Day-Ahead-Preise</b> (EPEX über aWATTar, kostenlos) und zeigt dir die besten Zeiten.
+      </div>
+    </div>
+    <div class="card" id="borse-now-card" hidden>
+      <div id="borse-now-banner"></div>
+    </div>
+    <div class="card" id="borse-worth-card" hidden>
+      <h2><span class="info" data-info="spot-worth" role="button" aria-label="Info">i</span>💶 Lohnt sich Börsenstrom für dich?</h2>
+      <div id="borse-worth-verdict"></div>
+      <div id="borse-worth-kpi" style="margin-top:10px"></div>
+      <div id="borse-worth-body" style="margin-top:10px"></div>
+      <div class="note" id="borse-worth-note" style="margin-top:10px"></div>
+    </div>
+    <div class="card" id="borse-price-card" hidden>
+      <h2><span class="info" data-info="spot" role="button" aria-label="Info">i</span>Börsenpreis je Stunde <span class="r" id="borse-now"></span></h2>
+      <div id="borse-chart"></div>
+      <div class="legend" id="borse-legend" style="margin-top:8px"></div>
+      <div class="note" id="borse-note" style="margin-top:8px"></div>
+    </div>
+    <div class="card" id="borse-best-card" hidden>
+      <h2>🕒 Beste Zeiten für flexible Lasten</h2>
+      <div id="borse-best"></div>
+    </div>
+    <div class="card" id="borse-co2-card">
+      <h2><span class="info" data-info="carbon" role="button" aria-label="Info">i</span>🌱 CO₂-Bilanz &amp; grünste Stunden</h2>
+      <div id="borse-co2-kpi"></div>
+      <div id="borse-co2-chart" style="margin-top:10px"></div>
+      <div class="legend" id="borse-co2-legend"></div>
+      <div class="note" id="borse-co2-note" style="margin-top:10px"></div>
+    </div>
+    <div class="card" id="smart-card">
+      <h2><span class="info" data-info="smart" role="button" aria-label="Info">i</span>🎯 Smart-Timer · beste Startzeit</h2>
+      <div class="note" style="margin-bottom:10px">
+        Wann solltest du Waschmaschine, Warmwasser oder E-Auto laufen lassen? Der Timer sucht das beste
+        Startfenster in den nächsten Stunden – nach <b>Preis</b>, <b>CO₂</b> oder <b>PV-Überschuss</b>.
+      </div>
+      <div class="grid2">
+        <div><label>Dauer (h)</label>
+          <input id="smart-dur" type="number" min="1" max="12" step="1" inputmode="numeric" value="2"></div>
+        <div><label>Energie gesamt (kWh)</label>
+          <input id="smart-kwh" type="number" min="0" step="0.5" inputmode="decimal" value="2"></div>
+      </div>
+      <label style="margin-top:10px; display:block">Worauf optimieren?</label>
+      <select id="smart-prio">
+        <option value="balanced">Ausgewogen (Preis + CO₂)</option>
+        <option value="money">Günstigster Preis</option>
+        <option value="co2">Wenigste CO₂</option>
+        <option value="pv">PV-Überschuss</option>
+      </select>
+      <div id="smart-result" style="margin-top:12px"></div>
+      <div class="note" id="smart-note" style="margin-top:8px"></div>
+    </div>
+    <div class="card" id="borse-batt-card" hidden>
+      <h2><span class="info" data-info="spot-batt" role="button" aria-label="Info">i</span>🔋 Speicher clever laden</h2>
+      <div id="borse-batt"></div>
+      <div class="note" id="borse-batt-note" style="margin-top:8px"></div>
+    </div>
+    <div class="card" id="borse-cost-card" hidden>
+      <h2><span class="info" data-info="spot-cost" role="button" aria-label="Info">i</span>Dynamisch vs. Festpreis</h2>
+      <div class="grid2">
+        <div class="kpi sm"><div class="v" id="borse-dyn">–</div><div class="l">Ø dynamisch (heute)</div></div>
+        <div class="kpi sm"><div class="v" id="borse-fix">–</div><div class="l">dein Festpreis</div></div>
+      </div>
+      <div id="borse-cost-body" style="margin-top:12px"></div>
+      <div class="note" id="borse-cost-note" style="margin-top:8px"></div>
+    </div>
+  </section>
+
+  <!-- KONZEPT (Tarifvergleich + Empfehlung) ------------------------------->
+  <section class="view" id="v-konzept">
+    <div class="card">
+      <h2><span class="info" data-info="konzept" role="button" aria-label="Info">i</span>💡 Dein Gesamt-Konzept</h2>
+      <div class="note" id="konzept-intro"></div>
+    </div>
+    <div class="card">
+      <h2>Tarifvergleich – ohne PV</h2>
+      <div id="konzept-nopv"></div>
+      <div class="note" id="konzept-nopv-note" style="margin-top:8px"></div>
+    </div>
+    <div class="card" id="konzept-pv-card">
+      <h2>Tarifvergleich – mit deiner PV</h2>
+      <div id="konzept-pv"></div>
+      <div class="note" id="konzept-pv-note" style="margin-top:8px"></div>
+    </div>
+    <div class="card" id="konzept-fin-card">
+      <h2><span class="info" data-info="finance" role="button" aria-label="Info">i</span>💰 Investition &amp; Finanzierung</h2>
+      <div class="grid2">
+        <div><label>Investition (€)</label>
+          <input id="fin-invest" type="number" min="0" step="500" inputmode="numeric" placeholder="z. B. 18000"></div>
+        <div><label>Kreditzins (% p. a.)</label>
+          <input id="fin-rate" type="number" min="0" step="0.1" inputmode="decimal" placeholder="z. B. 4"></div>
+        <div><label>Kreditlaufzeit (Jahre)</label>
+          <input id="fin-years" type="number" min="0" step="1" inputmode="numeric" placeholder="z. B. 10"></div>
+        <div><label>Strompreis-Steigerung (%/a)</label>
+          <input id="fin-infl" type="number" min="0" step="0.5" inputmode="decimal" placeholder="z. B. 3"></div>
+      </div>
+      <div id="fin-kpi" style="margin-top:12px"></div>
+      <div id="fin-chart" style="margin-top:10px"></div>
+      <div class="note" id="fin-note" style="margin-top:8px"></div>
+
+      <hr style="border:none;border-top:1px solid var(--card-bd,#2a2f3a);margin:16px 0">
+      <h3 style="margin:0 0 4px;font-size:15px">🚗 E-Auto-Vorteile</h3>
+      <div class="note" style="margin-bottom:10px">Fahrleistung &amp; Verbrauch kommen aus dem <b>PV</b>-Tab.
+        Hier der Vergleich zum Verbrenner plus Steuer/THG/Wartung.</div>
+      <div class="grid2">
+        <div><label>Verbrenner-Verbrauch (l/100 km)</label>
+          <input id="ev-l100" type="number" min="0" step="0.1" inputmode="decimal" placeholder="z. B. 7"></div>
+        <div><label>Sprit-Preis (€/l)</label>
+          <input id="ev-fuelp" type="number" min="0" step="0.01" inputmode="decimal" placeholder="z. B. 1,80"></div>
+        <div><label>Ladepreis (€/kWh)</label>
+          <input id="ev-chargep" type="number" min="0" step="0.01" inputmode="decimal" placeholder="z. B. 0,30"></div>
+        <div><label>Kfz-Steuer gespart (€/a)</label>
+          <input id="ev-tax" type="number" min="0" step="10" inputmode="numeric" placeholder="z. B. 120"></div>
+        <div><label>THG-Quote (€/a)</label>
+          <input id="ev-thg" type="number" min="0" step="10" inputmode="numeric" placeholder="z. B. 60"></div>
+        <div><label>Wartung gespart (€/a)</label>
+          <input id="ev-maint" type="number" min="0" step="10" inputmode="numeric" placeholder="z. B. 200"></div>
+      </div>
+      <label class="toggle" style="margin-top:10px;display:flex;gap:8px;align-items:flex-start;cursor:pointer">
+        <input type="checkbox" id="ev-incl" style="margin-top:2px">
+        <span>E-Auto-Vorteile in die <b>Amortisation</b> oben einbeziehen (gesamter Vorteil der Elektrifizierung).</span>
+      </label>
+      <div id="ev-kpi" style="margin-top:12px"></div>
+      <div class="note" id="ev-note" style="margin-top:8px"></div>
+    </div>
+    <div class="card">
+      <h2>🔧 Empfehlung für dich</h2>
+      <div id="konzept-reco"></div>
+    </div>
+  </section>
+
+  <!-- SETUP --------------------------------------------------------------->
   <section class="view" id="v-settings">
+    <div class="card">
+      <h2>📺 Wohn-Dashboard</h2>
+      <div class="note" style="margin-bottom:10px">Vollbild-Ansicht für ein <b>Wand-iPad</b> o. Ä.: Räume auf einen Blick,
+        Lüften-Hinweise und „jetzt waschen?“ (Börse/PV). Tipp: auf dem iPad als Lesezeichen auf
+        <b>…/#dash</b> speichern und zum Homescreen hinzufügen – dann startet es direkt im Dashboard.</div>
+      <div style="display:flex; flex-wrap:wrap; gap:8px">
+        <button class="btn" id="open-kiosk" style="width:auto;padding:10px 18px">📺 Dashboard öffnen</button>
+        <button class="btn sec" id="open-house" style="width:auto;padding:10px 18px">🏡 Haus-Dashboard</button>
+      </div>
+      <div class="note" style="margin-top:8px">Das <b>Haus-Dashboard</b> (…/#dash2) zeigt die PV-Anlage als Haus-Grafik mit den Live-Werten und der Tagesenergie. Zwischen beiden Dashboards wischen oder unten auf die Punkte tippen.</div>
+    </div>
     <div class="card">
       <h2>Status</h2>
       <div id="status-rows"></div>
+    </div>
+
+    <div class="card">
+      <h2><span class="info" data-info="tariff" role="button" aria-label="Info">i</span>Stromtarif</h2>
+      <label>Arbeitspreis Haushalt pro kWh (<span id="cur">€</span>)</label>
+      <input id="price" type="number" step="0.01" inputmode="decimal" value="0.35">
+      <label style="margin-top:10px; display:block">Grundpreis Haushalt (€ / Jahr)</label>
+      <input id="tar-hhbase" type="number" step="10" min="0" inputmode="numeric" placeholder="z. B. 120">
+      <label style="margin-top:12px; display:flex; align-items:center; gap:8px; cursor:pointer">
+        <input type="checkbox" id="tar-wp" style="width:auto"> 🔥 Eigener Wärmepumpen-Tarif (Zweitzähler)
+      </label>
+      <div class="grid2" id="tar-wp-row" style="margin-top:8px" hidden>
+        <div><label>WP-Arbeitspreis (€/kWh)</label>
+          <input id="tar-wpct" type="number" step="0.01" min="0" inputmode="decimal" placeholder="z. B. 0.25"></div>
+        <div><label>WP-Grundpreis (€/Jahr)</label>
+          <input id="tar-wpbase" type="number" step="10" min="0" inputmode="numeric" placeholder="z. B. 100"></div>
+        <div><label>Zweitzähler / Messkosten (€/Jahr)</label>
+          <input id="tar-meter2" type="number" step="10" min="0" inputmode="numeric" placeholder="z. B. 60"></div>
+      </div>
+      <label style="margin-top:10px; display:block">Börse-Grundpreis (€/Jahr, für den Tarifvergleich)</label>
+      <input id="tar-spotbase" type="number" step="10" min="0" inputmode="numeric" placeholder="z. B. 140">
+      <div class="note" id="tar-note" style="margin-top:8px">Wird lokal gespeichert und im Tab <b>Konzept</b> verglichen.</div>
     </div>
 
     <div class="card" id="pair-card">
@@ -262,8 +2094,8 @@
       <button class="btn sec" id="discover" style="margin-top:0">🔎 Controller automatisch finden</button>
       <div class="note" id="discover-note" style="margin:8px 0 4px"></div>
 
-      <label>IP-Adresse des Controllers II</label>
-      <input id="shc-ip" inputmode="decimal" placeholder="z. B. 192.168.1.50"
+      <label>IP-Adresse des Controllers II <a href="#" class="iptog-in" data-for="shc-ip">anzeigen</a></label>
+      <input id="shc-ip" class="ipsec hid" inputmode="decimal" placeholder="z. B. 192.168.1.50"
              autocomplete="off" autocapitalize="off" spellcheck="false">
       <label style="margin-top:10px; display:block">Systempasswort (aus der Ersteinrichtung)</label>
       <input id="shc-pw" type="password" placeholder="Systempasswort" autocomplete="off">
@@ -281,6 +2113,513 @@
       <div class="note" id="pair-note" style="margin-top:10px"></div>
     </div>
 
+    <div class="card" id="homecom-card">
+      <h2>🔥 Wärmepumpe (HomeCom)</h2>
+      <div class="note" id="hp-status" style="margin-bottom:10px"></div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px">
+        <button class="btn sec" id="hp-diag" style="width:auto; margin-top:0">🩺 Verbindung zur Bosch-Cloud testen</button>
+        <button class="btn sec" id="hp-diag-copy" style="width:auto; margin-top:0" hidden>📋 Ergebnis kopieren</button>
+      </div>
+      <div id="hp-diag-out" style="margin-bottom:10px"></div>
+      <div class="note" style="line-height:1.6">
+        <b>So verbindest du deine Bosch-Wärmepumpe:</b><br>
+        1. Auf „Login-Link öffnen" tippen und mit deiner <b>Bosch SingleKey ID</b> anmelden.<br>
+        2. Nach dem Login scheitert die Weiterleitung auf <code>com.bosch…</code> – das ist
+           normal. Du brauchst die <b>finale</b> Adresse mit <code>?code=…</code>.<br>
+        &nbsp;&nbsp;&nbsp;<b>Safari zeigt sie nicht</b> → am besten <b>Chrome am Mac</b>:
+           Entwicklertools (⌥⌘I) → <b>Network</b>, „Preserve log" an, anmelden, dann die
+           Zeile <code>…login?code=…</code> per Rechtsklick kopieren. Details: <code>docs/HEATPUMP.md</code>.<br>
+        3. Adresse hier einfügen und „Verbinden" tippen.
+      </div>
+      <button class="btn sec" id="hp-login" style="margin-top:10px">🔗 Login-Link öffnen</button>
+      <label style="margin-top:10px; display:block">Code oder Redirect-Adresse einfügen</label>
+      <input id="hp-code" placeholder="com.bosch.tt…?code=…  oder nur der Code"
+             autocomplete="off" autocapitalize="off" spellcheck="false">
+      <button class="btn" id="hp-connect">✅ Verbinden</button>
+      <div class="note" id="hp-connect-note" style="margin-top:10px"></div>
+    </div>
+
+    <div class="card" id="fr-card">
+      <h2><span class="info" data-info="fronius" role="button" aria-label="Info">i</span>☀️ PV-Anlage (Fronius) verbinden</h2>
+      <div class="note" id="fr-status" style="margin-bottom:10px"></div>
+      <div class="note" style="line-height:1.6; margin-bottom:10px">
+        Die App liest den Wechselrichter <b>direkt im Heimnetz</b> über die <b>Fronius Solar API</b> –
+        ohne Konto, ohne Cloud, <b>nur lesend</b> (es wird nichts am Wechselrichter verstellt).<br>
+        1. Der Wechselrichter muss im Heimnetz sein (LAN-Kabel oder WLAN – richtet meist der Installateur ein).<br>
+        2. <b>GEN24:</b> einmal die Weboberfläche öffnen (seine IP im Browser), als Benutzer <b>Customer</b> anmelden
+        (Passwort vom Installateur, vergeben bei der Inbetriebnahme) → <b>Kommunikation → Solar API</b> →
+        „Kommunikation über Solar API aktivieren" einschalten und speichern. <b>Ab Werk ist das aus.</b>
+        Die IP findest du in der Geräteliste deines Routers oder in der Fronius-App.<br>
+        3. Hier <b>„Im Netz suchen"</b> tippen oder die IP eintragen → <b>Verbinden</b>.
+      </div>
+      <label>IP-Adresse des Wechselrichters <a href="#" class="iptog-in" data-for="fr-host">anzeigen</a></label>
+      <input id="fr-host" class="ipsec hid" autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="url"
+             placeholder="z. B. 192.168.2.50">
+      <div style="display:flex; gap:8px; flex-wrap:wrap">
+        <button class="btn sec" id="fr-find" style="flex:1; min-width:140px">🔍 Im Netz suchen</button>
+        <button class="btn" id="fr-connect" style="flex:1; min-width:140px">✅ Verbinden</button>
+      </div>
+      <div id="fr-found" style="margin-top:8px"></div>
+      <div class="note" id="fr-note" style="margin-top:8px"></div>
+      <div id="fr-info" style="margin-top:10px"></div>
+      <details id="fr-diag" style="margin-top:10px">
+        <summary style="cursor:pointer; color:var(--accent); font-size:13px">🩺 Rohdaten des Wechselrichters (für die Fehlersuche)</summary>
+        <div class="note" style="margin:8px 0">Zeigt die unveränderten Antworten aller Solar-API-Abfragen. Stimmt etwas
+          nicht, den Text kopieren und mir schicken – damit lässt sich ein abweichendes Format schnell einbauen.</div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap">
+          <button class="btn sec" id="fr-probe" style="width:auto; margin-top:0">Rohdaten laden</button>
+          <button class="btn sec" id="fr-probe-copy" style="width:auto; margin-top:0" hidden>📋 Kopieren</button>
+        </div>
+        <pre id="fr-probe-out" hidden style="white-space:pre-wrap; word-break:break-all; font-size:11px; max-height:340px;
+             overflow:auto; background:var(--card2); padding:8px; border-radius:8px; margin-top:8px"></pre>
+      </details>
+      <button class="btn sec" id="fr-disconnect" style="margin-top:10px" hidden>Verbindung trennen</button>
+    </div>
+
+    <div class="card" id="dash-card">
+      <h2>🖥️ Wohn-Dashboard</h2>
+      <div class="note" style="line-height:1.6; margin-bottom:10px">
+        Vollbild-Ansicht für ein Wand-iPad: <a href="#dash">…/#dash öffnen</a>. Diese Einstellungen gelten für
+        <b>alle Geräte</b> – ein laufendes Dashboard übernimmt sie innerhalb einer Minute. Fürs <b>Apple TV</b> gibt es
+        eine eigene App (Anleitung im Projektordner: <code>docs/APPLETV.md</code>).
+      </div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap">
+        <div style="flex:1; min-width:160px"><label>Fenster-Hinweis blinkt ab (Sekunden)</label>
+          <input id="dash-win-s" type="number" min="1" max="86400" step="1" inputmode="numeric" placeholder="600"></div>
+        <div style="flex:1; min-width:160px"><label>Tonnen-Hinweis: Abende vorher</label>
+          <select id="dash-bin-days">
+            <option value="1">1 – am Vorabend</option><option value="2">2</option><option value="3">3</option>
+            <option value="4">4</option><option value="5">5</option>
+          </select></div>
+      </div>
+      <div class="note" id="dash-note" style="margin-top:8px"></div>
+      <div class="note" style="margin-top:6px; line-height:1.6">Standard: <b>600 s</b> (10 min) und <b>1 Abend</b>. Zum Testen
+        z. B. <b>1 Sekunde</b> – der Hinweis blinkt dann, sobald die Bridge das offene Fenster bemerkt hat (je nach Abfrage
+        bis etwa eine Minute). <a href="#" id="dash-reset" onclick="return false">Auf Standard zurücksetzen</a></div>
+      <div id="tvcons-setup">
+        <h3>📺 Apple TV: weitere Verbraucher</h3>
+        <div class="note" style="line-height:1.6; margin-bottom:8px">
+          Unter dem Energiefluss zeigt das Apple TV, was außer der Wärmepumpe gerade viel Strom zieht: Geräte mit
+          eigener Messung (Zwischenstecker) und – mit dem Smart Meter – den <b>Rest im Haus</b>, also alles, was nichts
+          einzeln misst (Herd, Wasserkocher …). Ab welcher Leistung ein Eintrag erscheint:
+        </div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap">
+          <div style="flex:1; min-width:160px"><label for="tvcons-dev">Gerät mit Messung ab</label>
+            <select id="tvcons-dev">
+              <option value="50">50 W</option><option value="100">100 W (Standard)</option><option value="200">200 W</option>
+              <option value="300">300 W</option><option value="500">500 W</option><option value="1000">1 kW</option>
+              <option value="2000">2 kW</option><option value="off">nie</option>
+            </select></div>
+          <div style="flex:1; min-width:160px"><label for="tvcons-rest">„Rest im Haus“ ab</label>
+            <select id="tvcons-rest">
+              <option value="150">150 W (Standard)</option><option value="300">300 W</option><option value="500">500 W</option>
+              <option value="1000">1 kW</option><option value="2000">2 kW</option><option value="off">nie</option>
+            </select></div>
+        </div>
+        <div class="note" id="tvcons-note" style="margin-top:8px; line-height:1.6"></div>
+      </div>
+      <div id="party-setup">
+        <h3>🎉 Feier-Modus</h3>
+        <div class="note" style="line-height:1.6; margin-bottom:8px">
+          Geburtstag oder Jahrestag? Dann zeigen <b>Wohn-Dashboard</b>, <b>Apple TV</b> und die App einen Glückwunsch mit
+          <b>Konfetti</b> – den ganzen Tag, um Mitternacht ist er vorbei. Von selbst bei einem <b>ganztägigen
+          Kalendertermin</b> mit „Geburtstag“, „Birthday“, „Doğum Günü“, „Jahrestag“, „Hochzeitstag“ oder 🎂 im Namen.
+          Der Text bleibt in der Bridge (wie die übrigen Einstellungen).
+        </div>
+        <label for="party-text">Glückwunsch (optional)</label>
+        <input id="party-text" maxlength="80" autocomplete="off" placeholder="z. B. Alles Gute zum Geburtstag, Liebling! 🎂">
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px">
+          <button class="btn" id="party-on" style="width:auto; margin-top:0">🎉 Heute feiern</button>
+          <button class="btn sec" id="party-off" style="width:auto; margin-top:0">Beenden</button>
+          <button class="btn sec" id="party-test" style="width:auto; margin-top:0">Konfetti testen</button>
+        </div>
+        <label style="display:flex; align-items:center; gap:8px; margin-top:12px; cursor:pointer"><input type="checkbox" id="party-auto"
+          style="width:auto; margin:0"> Geburtstage aus dem Kalender automatisch feiern</label>
+        <div class="note" id="party-note" style="margin-top:8px"></div>
+      </div>
+    </div>
+
+    <div class="card" id="routine-card">
+      <h2>🧒 Kinder-Routine</h2>
+      <div class="note" style="line-height:1.6; margin-bottom:10px">
+        Was die Kinder noch erledigen müssen – als <b>Abhakliste je Kind</b> im Wohn-Dashboard (antippen) und auf dem
+        <b>Apple TV</b> (mit der Fernbedienung abhaken). Wer alles geschafft hat, bekommt Konfetti und einen ⭐
+        (gezählt über 7 Tage). Namen und Aufgaben bleiben in der Bridge, wie die übrigen Einstellungen.
+      </div>
+      <label style="display:flex; align-items:center; gap:8px; cursor:pointer"><input type="checkbox" id="krt-on"
+        style="width:auto; margin:0"> Kinder-Routine anzeigen</label>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px">
+        <div style="flex:1; min-width:150px"><label for="krt-k1">Kind 1</label>
+          <div style="display:flex; gap:6px"><select id="krt-k1e" aria-label="Symbol Kind 1" style="width:64px"></select>
+            <input id="krt-k1" maxlength="24" autocomplete="off" placeholder="Name"></div></div>
+        <div style="flex:1; min-width:150px"><label for="krt-k2">Kind 2</label>
+          <div style="display:flex; gap:6px"><select id="krt-k2e" aria-label="Symbol Kind 2" style="width:64px"></select>
+            <input id="krt-k2" maxlength="24" autocomplete="off" placeholder="Name"></div></div>
+      </div>
+      <h3 style="margin:14px 0 4px; font-size:15px">🌙 Abendroutine</h3>
+      <div style="display:flex; gap:8px; flex-wrap:wrap">
+        <div style="flex:1; min-width:120px"><label for="krt-from">von</label><input id="krt-from" type="time" value="18:30"></div>
+        <div style="flex:1; min-width:120px"><label for="krt-to">bis</label><input id="krt-to" type="time" value="20:30"></div>
+      </div>
+      <label for="krt-items">Aufgaben – eine pro Zeile, ein Emoji vorne ist erlaubt. Nur für ein Kind: <code>Name: Aufgabe</code></label>
+      <textarea id="krt-items" rows="7" autocomplete="off" spellcheck="false"
+        style="width:100%; box-sizing:border-box; padding:10px 12px; border-radius:12px; border:1px solid var(--line);
+               background:var(--card2); color:var(--ink); font:14px/1.5 -apple-system,system-ui,sans-serif; resize:vertical"></textarea>
+      <button class="btn" id="krt-save">✅ Speichern</button>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px">
+        <button class="btn sec" id="krt-test" style="width:auto; margin-top:0">Heute zum Testen den ganzen Tag zeigen</button>
+        <button class="btn sec" id="krt-reset" style="width:auto; margin-top:0">Häkchen von heute löschen</button>
+      </div>
+      <div class="note" id="krt-note" style="margin-top:8px"></div>
+      <div id="krt-preview" style="margin-top:10px"></div>
+    </div>
+
+    <div class="card" id="football-card">
+      <h2>⚽ Fußball im Kalender</h2>
+      <div class="note" style="line-height:1.6; margin-bottom:10px">
+        Die Spiele deiner Mannschaften – Vereine und <b>Nationalmannschaften</b> – erscheinen als Termine im
+        Wohn-Dashboard und auf dem Apple TV (eine Stunde vorher als Hinweis), Ergebnisse im Laufband. Gesucht wird im
+        freien Verzeichnis <b>TheSportsDB</b>; die Bridge schickt dorthin nur den Mannschaftsnamen bzw. ihre Nummer.
+        Nationalmannschaften gehen auch auf Deutsch („Türkei“, „Deutschland“).
+      </div>
+      <div style="display:flex; gap:8px">
+        <input id="fbl-q" autocomplete="off" enterkeyhint="search" placeholder="Mannschaft suchen, z. B. Galatasaray" style="flex:1">
+        <button class="btn" id="fbl-search" style="width:auto; margin-top:0">Suchen</button>
+      </div>
+      <div id="fbl-found" style="margin-top:8px"></div>
+      <label style="margin-top:12px">Meine Mannschaften (höchstens 8)</label>
+      <div id="fbl-list"></div>
+      <div class="note" id="fbl-note" style="margin-top:8px"></div>
+    </div>
+
+    <div class="card" id="news-card">
+      <h2>📰 Nachrichten</h2>
+      <div class="note" style="line-height:1.6; margin-bottom:10px">
+        Schlagzeilen aus RSS-Feeds – im Wohn-Dashboard als Liste, auf dem Apple TV im Laufband und weiter unten als
+        Liste. Die Bridge holt sie alle 15 Minuten. Vorschläge antippen oder eine Feed-Adresse eintragen; vor dem
+        Übernehmen wird jeder Feed geprüft.
+      </div>
+      <div id="nws-presets" style="display:flex; gap:6px; flex-wrap:wrap"></div>
+      <div style="display:flex; gap:8px; margin-top:10px">
+        <input id="nws-url" inputmode="url" autocapitalize="off" autocomplete="off" spellcheck="false"
+          placeholder="Feed-Adresse (RSS/Atom), https://…" style="flex:1">
+        <button class="btn" id="nws-add" style="width:auto; margin-top:0">Prüfen &amp; übernehmen</button>
+      </div>
+      <label style="margin-top:12px">Meine Feeds (höchstens 6)</label>
+      <div id="nws-list"></div>
+      <div class="note" id="nws-note" style="margin-top:8px"></div>
+    </div>
+
+    <div class="card" id="radio-card">
+      <h2>📻 Radio auf dem Apple TV</h2>
+      <div class="note" style="line-height:1.6; margin-bottom:10px">
+        Sender, die die <b>Apple-TV-App</b> selbst abspielt – das Dashboard bleibt dabei vorne. Auf dem Fernseher in der
+        Senderleiste rechts oben auswählen und klicken, noch einmal klicken stoppt. Gesucht wird im freien
+        Senderverzeichnis <b>radio-browser.info</b>; die Bridge schickt dorthin nur den Suchbegriff.
+      </div>
+      <div style="display:flex; gap:8px">
+        <input id="rdo-q" autocomplete="off" enterkeyhint="search" placeholder="Sender suchen, z. B. Metropol FM" style="flex:1">
+        <button class="btn" id="rdo-search" style="width:auto; margin-top:0">Suchen</button>
+      </div>
+      <div id="rdo-found" style="margin-top:8px"></div>
+      <label style="margin-top:12px">Meine Sender (höchstens 6)</label>
+      <div id="rdo-list"></div>
+      <div id="rdo-now"></div>
+      <details style="margin-top:10px"><summary>Stream-Adresse selbst eintragen</summary>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:6px">
+          <input id="rdo-name" maxlength="40" autocomplete="off" placeholder="Name" style="flex:1; min-width:120px">
+          <input id="rdo-url" inputmode="url" autocapitalize="off" autocomplete="off" spellcheck="false" placeholder="https://…"
+            style="flex:2; min-width:180px">
+          <button class="btn sec" id="rdo-add" style="width:auto; margin-top:0">Hinzufügen</button>
+        </div>
+      </details>
+      <audio id="rdo-audio" preload="none"></audio>
+      <div class="note" id="rdo-note" style="margin-top:8px"></div>
+    </div>
+
+    <div class="card" id="school-card">
+      <h2>🎒 Stundenplan im Wohn-Dashboard</h2>
+      <div class="note" style="line-height:1.6; margin-bottom:10px">
+        Eine Zeile je Stunde: <code>Zeit | Mo | Di | Mi | Do | Fr</code>, „-“ = frei. Das Dashboard zeigt den heutigen
+        bzw. nächsten Schultag, die laufende Stunde und den Schulschluss, am Vorabend „Morgen Sport – Sportsachen
+        einpacken“. <b>Feiertage in NRW</b> erkennt es selbst; <b>Ferien</b>: ganztägiger Kalendertermin mit „Ferien“
+        oder „schulfrei“ im Namen. Der Plan bleibt in der Bridge (wie die übrigen Einstellungen).
+      </div>
+      <label>Titel (optional)</label>
+      <input id="school-title" autocomplete="off" placeholder="z. B. Stundenplan Klasse 1a">
+      <label>Stundenplan</label>
+      <textarea id="school-plan" rows="7" autocomplete="off" autocapitalize="off" spellcheck="false"
+        placeholder="08:10-08:55 | Deutsch | Mathe | Religion | Deutsch | Mathe"
+        style="width:100%; box-sizing:border-box; padding:10px 12px; border-radius:12px; border:1px solid var(--line);
+               background:var(--card2); color:var(--ink); font:13px ui-monospace,Menlo,monospace; resize:vertical"></textarea>
+      <div id="school-preview" style="margin-top:8px; overflow-x:auto"></div>
+      <button class="btn" id="school-save">✅ Speichern</button>
+      <div class="note" id="school-note" style="margin-top:8px"></div>
+    </div>
+
+    <div class="card" id="cal-card">
+      <h2>📅 Kalender im Wohn-Dashboard</h2>
+      <div class="note" id="cal-status" style="margin-bottom:10px"></div>
+      <div class="note" style="line-height:1.6; margin-bottom:10px">
+        Zeigt eure Termine auf dem Wohn-Dashboard (<b>…/#dash</b>) – heute, morgen und die nächsten Tage; was in der
+        nächsten Stunde ansteht und Mülltermine am Vorabend als Hinweis. <b>Nur lesend.</b><br>
+        <b>iPhone (iCloud):</b> Kalender-App → <b>Kalender</b> → <b>ⓘ</b> neben dem Kalender → <b>„Öffentlicher
+        Kalender“</b> einschalten → <b>„Link teilen …“</b> → kopieren (beginnt mit <code>webcal://</code>).<br>
+        <b>Google:</b> Kalender-Einstellungen → <b>„Privatadresse im iCal-Format“</b>.<br>
+        Mehrere Kalender: eine Adresse pro Zeile. Die Adressen bleiben <b>nur lokal in der Bridge</b> – wer sie kennt,
+        kann den Kalender lesen.
+      </div>
+      <label>Kalender-Adresse(n)</label>
+      <textarea id="cal-urls" rows="3" autocomplete="off" autocapitalize="off" spellcheck="false"
+        placeholder="webcal://p…-caldav.icloud.com/published/2/…"
+        style="width:100%; box-sizing:border-box; padding:10px 12px; border-radius:12px; border:1px solid var(--line);
+               background:var(--card2); color:var(--ink); font:inherit; font-size:14px; resize:vertical"></textarea>
+      <div style="display:flex; gap:8px; flex-wrap:wrap">
+        <button class="btn" id="cal-save" style="flex:1; min-width:140px">✅ Speichern &amp; prüfen</button>
+        <button class="btn sec" id="cal-clear" style="flex:1; min-width:140px" hidden>Entfernen</button>
+      </div>
+      <div class="note" id="cal-note" style="margin-top:8px; line-height:1.6"></div>
+    </div>
+
+    <div class="card" id="music-card">
+      <h2>🎵 Musik im Wohn-Dashboard (YouTube Music)</h2>
+      <div class="note" style="line-height:1.6; margin-bottom:10px">
+        Deine Playlists als Kacheln im Wohn-Dashboard. Antippen öffnet die Playlist in der <b>YouTube-Music-App</b> –
+        den HomePod wählst du dort über das Cast-/AirPlay-Symbol (oder per Kurzbefehl mit einem Tipp, siehe unten).
+        Kein Google-Login nötig: abgespielt wird in deiner YouTube-Music-App bzw. auf dem HomePod, mit deinem Konto dort.
+        <b>Link holen:</b> YouTube Music → Playlist → ⋮ / Teilen → <b>Link kopieren</b>.
+      </div>
+      <label>Playlist-Link</label>
+      <input id="music-url" autocomplete="off" autocapitalize="off" spellcheck="false"
+             placeholder="https://music.youtube.com/playlist?list=…">
+      <label>Name (optional – bei privaten Playlists sinnvoll)</label>
+      <input id="music-name" autocomplete="off" placeholder="z. B. Abendessen">
+      <button class="btn" id="music-add">➕ Playlist hinzufügen</button>
+      <div class="note" id="music-note" style="margin-top:6px"></div>
+      <div id="music-list" style="margin-top:6px"></div>
+      <label style="margin-top:12px; display:block">HomePods / Räume (durch Komma getrennt)</label>
+      <input id="music-rooms" autocomplete="off" placeholder="Wohnzimmer, Küche, Überall">
+      <label style="display:flex; gap:8px; align-items:center; margin-top:10px">
+        <input type="checkbox" id="music-sc" style="width:auto; margin:0"> Ein-Tipp über iOS-Kurzbefehle (HomePod im Dashboard wählen)</label>
+      <label>Name der Kurzbefehle beginnt mit</label>
+      <input id="music-prefix" autocomplete="off" placeholder="Musik ">
+      <div class="note" id="music-sc-names" style="margin-top:6px"></div>
+      <details class="chk-d" style="margin-top:8px"><summary>So legst du einen Kurzbefehl an (einmal je HomePod)</summary>
+        <ol class="chk-facts" style="margin-top:6px">
+          <li>App <b>Kurzbefehle</b> → <b>+</b> → Name genau wie oben angezeigt, z. B. „Musik Wohnzimmer“.</li>
+          <li>Aktion <b>„URLs öffnen“</b> → als URL die <b>Kurzbefehleingabe</b> wählen (das ist der Playlist-Link aus dem Dashboard).</li>
+          <li>Aktion <b>„Warten“</b> → 3 Sekunden.</li>
+          <li>Aktion <b>„Wiedergabe/Pause“</b> → auf <b>„Wiedergabe“</b> stellen.</li>
+          <li>Aktion <b>„Wiedergabeziel festlegen“</b> → den HomePod wählen (für „Überall“ mehrere).</li>
+        </ol>
+        <div class="note">Ich konnte das nicht auf einem iPhone testen: Startet die Musik nicht von selbst, die Schritte 4 und 5 tauschen
+          oder in YouTube Music einmal auf Play tippen. Läuft das Dashboard im „Geführten Zugriff“, darf es keine anderen Apps öffnen –
+          dann klappen weder App noch Kurzbefehl.</div>
+      </details>
+    </div>
+
+    <div class="card" id="awb-card">
+      <h2>🗑️ Müllabfuhr (AWB Köln)</h2>
+      <div class="note" id="awb-status" style="margin-bottom:10px; line-height:1.6"></div>
+      <div class="note" style="line-height:1.6; margin-bottom:10px">
+        Holt die Abfuhrtermine deiner Adresse direkt bei den <b>AWB Köln</b> und zeigt sie im Wohn-Dashboard –
+        mit Hinweis am Vorabend („Morgen: Biotonne“). Die Adresse bleibt <b>nur lokal in der Bridge</b> und geht
+        nur an awbkoeln.de. Hinweis: AWB hat dafür keine offizielle Schnittstelle; die App nutzt dieselbe Abfrage
+        wie der Abfuhrkalender auf awbkoeln.de.
+      </div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap">
+        <div style="flex:3; min-width:170px"><label>Straße</label>
+          <input id="awb-street" autocomplete="off" placeholder="z. B. Domkloster"></div>
+        <div style="flex:1; min-width:80px"><label>Hausnummer</label>
+          <input id="awb-nr" autocomplete="off" inputmode="text" placeholder="4"></div>
+      </div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap">
+        <button class="btn" id="awb-search" style="flex:1; min-width:140px">🔍 Adresse suchen</button>
+        <button class="btn sec" id="awb-clear" style="flex:1; min-width:140px" hidden>Entfernen</button>
+      </div>
+      <div id="awb-found" style="margin-top:8px"></div>
+      <div class="note" id="awb-note" style="margin-top:8px; line-height:1.6"></div>
+    </div>
+
+    <div class="card" id="export-card">
+      <h2>📤 Verbrauchsdaten exportieren (CSV)</h2>
+      <div class="note" style="line-height:1.6; margin-bottom:10px">
+        Lade deine <b>Tageswerte</b> (Smart Home + Wärmepumpe, kWh &amp; Kosten) als <b>CSV</b> herunter –
+        z. B. für Excel/Numbers oder die Steuer. Öffnet sich nur, wenn die Seite von der <b>Bridge</b> geladen ist.
+      </div>
+      <div style="display:flex; gap:8px; align-items:stretch">
+        <select id="export-days" style="flex:1">
+          <option value="90">letzte 90 Tage</option>
+          <option value="365" selected>letztes Jahr</option>
+          <option value="1825">alles (max. 5 Jahre)</option>
+        </select>
+        <button class="btn" id="export-csv" style="width:auto; white-space:nowrap; margin-top:0">⬇️ CSV laden</button>
+      </div>
+      <div class="note" id="export-note" style="margin-top:10px"></div>
+    </div>
+
+    <div class="card" id="hp-import-card">
+      <h2>📁 Wärmepumpen-Historie (CSV)</h2>
+      <div class="note" style="line-height:1.6; margin-bottom:10px">
+        Für <b>tag-genaue Vergangenheit</b>: exportiere in der <b>HomeCom Easy</b>-App/Website
+        deine Energiedaten als <b>CSV</b> (enthält Tag- und Monatswerte) und lade sie hier hoch.
+        Damit füllen sich <b>Verlauf, COP, Wärmekarte, Monatsbilanz und Prognose</b> mit echten
+        Daten – inkl. Aufteilung Heizung/Warmwasser. Die Datei bleibt <b>lokal</b> auf der Bridge.
+      </div>
+      <input type="file" id="hp-import" accept=".csv,text/csv"
+             style="padding:10px; background:var(--bg2); border:1px dashed var(--line)">
+      <div class="note" id="hp-import-note" style="margin-top:10px"></div>
+      <label style="margin-top:14px; display:block">🏗️ Bauphasen-Ende <span style="color:var(--muted)">(Monate davor gelten als Rohbau/Trocknung und werden für die Prognose ignoriert)</span></label>
+      <input type="date" id="hp-bau-end" value="2026-02-15" style="width:auto">
+      <button class="btn sec" id="hp-import-clear" style="margin-top:12px">🗑️ Importierte Historie löschen</button>
+      <div class="note" id="hp-import-clear-note" style="margin-top:8px"></div>
+    </div>
+
+    <div class="card" id="aeg-card" hidden>
+      <h2><span class="info" data-info="aeg" role="button" aria-label="Info">i</span>🧺 AEG / Electrolux verbinden</h2>
+      <div class="note" id="aeg-status" style="margin-bottom:10px"></div>
+      <div class="note" style="line-height:1.6">
+        <b>Waschmaschine/Trockner mit WLAN</b> (AEG/Electrolux) einbinden – zeigt Stromverbrauch
+        pro Waschgang und gesamt. So bekommst du die Zugangsdaten:<br>
+        1. Auf <b>developer.electrolux.one</b> mit <b>derselben E-Mail wie in der AEG-App</b>
+           registrieren und einloggen.<br>
+        2. Im <b>Dashboard</b> einen <b>API-Key</b> erstellen und einen <b>Access-</b> &amp;
+           <b>Refresh-Token</b> generieren.<br>
+        3. API-Key und Refresh-Token hier einfügen und „Verbinden" tippen. Alles bleibt
+           <b>lokal</b> auf der Bridge.
+      </div>
+      <button class="btn sec" id="aeg-dash" style="margin-top:10px">🔗 Developer-Dashboard öffnen</button>
+      <label style="margin-top:10px; display:block">API-Key</label>
+      <input id="aeg-key" placeholder="API-Key aus dem Dashboard"
+             autocomplete="off" autocapitalize="off" spellcheck="false">
+      <label style="margin-top:10px; display:block">Refresh-Token</label>
+      <input id="aeg-refresh" placeholder="Refresh-Token"
+             autocomplete="off" autocapitalize="off" spellcheck="false">
+      <label style="margin-top:10px; display:block">Access-Token <span style="color:var(--muted)">(optional)</span></label>
+      <input id="aeg-access" placeholder="Access-Token (optional)"
+             autocomplete="off" autocapitalize="off" spellcheck="false">
+      <button class="btn" id="aeg-connect">✅ Verbinden</button>
+      <button class="btn sec" id="aeg-disconnect" style="margin-top:8px">🛑 Deaktivieren (brauche ich nicht)</button>
+      <div class="note" id="aeg-connect-note" style="margin-top:10px"></div>
+      <label style="margin-top:12px; display:block">Ø kWh pro Waschgang <span style="color:var(--muted)">(nur falls dein Gerät keinen kWh-Wert meldet – dann wird darüber geschätzt)</span></label>
+      <input id="aeg-kpc" type="number" min="0" step="0.05" inputmode="decimal" placeholder="0.8">
+      <div class="note" id="aeg-kpc-note" style="margin-top:6px"></div>
+      <details style="margin-top:12px">
+        <summary style="cursor:pointer; color:var(--accent); font-size:13px">Diagnose: Rohdaten anzeigen ▾</summary>
+        <div class="note" style="margin:8px 0">Zeigt die tatsächlichen Feldnamen deines Geräts –
+          hilfreich, falls der Energiewert nicht stimmt.</div>
+        <button class="btn sec" id="aeg-probe">🔎 Gerät abfragen</button>
+        <pre id="aeg-probe-out" style="margin-top:10px; overflow:auto; max-height:300px; background:var(--bg2); padding:10px; border-radius:8px; font-size:11px; white-space:pre-wrap"></pre>
+      </details>
+    </div>
+
+    <div class="card">
+      <h2>🏠 Haushaltsstrom ergänzen</h2>
+      <div class="note" style="line-height:1.6; margin-bottom:10px">
+        Die Licht-/Rollladenmodule messen nur ihre eigenen Stromkreise – <b>nicht</b> Kühlschrank,
+        Herd, Waschmaschine, Router usw. Trag hier deinen <b>Jahresverbrauch von der Stromrechnung</b>
+        ein (nur Haushalt, <b>ohne</b> Wärmepumpe), dann rechnen Prognose & PV-Planer mit dem echten
+        Wert. Leer lassen = nur die gemessenen Module.
+      </div>
+      <label>Haushalts-Jahresverbrauch ohne Wärmepumpe (kWh)</label>
+      <input id="house-kwh" type="number" min="0" step="100" inputmode="numeric" placeholder="z. B. 2800">
+      <div class="note" id="house-note" style="margin-top:8px"></div>
+    </div>
+
+    <div class="card" id="meter-card">
+      <h2><span class="info" data-info="meter" role="button" aria-label="Info">i</span>🔢 Stromzähler &amp; Smart Meter</h2>
+      <div class="note" id="meter-intro" style="line-height:1.6; margin-bottom:10px">
+        Trag ab und zu deinen <b>Zählerstand vom Hauptstromzähler</b> ein (Gesamt = Haushalt
+        <b>+</b> Wärmepumpe). Aus zwei Ablesungen berechnet die App den <b>echten
+        Gesamtverbrauch</b>, deckt den <b>noch nicht gemessenen Hausstrom</b> auf und
+        <b>kalibriert die Prognosen</b>. Je mehr Ablesungen, desto genauer.
+      </div>
+      <div style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap">
+        <div style="flex:1; min-width:130px"><label>Datum</label>
+          <input id="meter-date" type="date"></div>
+        <div style="flex:1; min-width:100px"><label>Uhrzeit</label>
+          <input id="meter-time" type="time"></div>
+      </div>
+      <div style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap; margin-top:8px">
+        <div style="flex:1; min-width:130px"><label id="meter-kwh-l">Zählerstand (kWh)</label>
+          <input id="meter-kwh" type="number" min="0" step="0.1" inputmode="decimal" placeholder="z. B. 2337"></div>
+        <div style="flex:1; min-width:130px" id="meter-exp-box"><label>Einspeisung 2.8.0 (kWh, optional)</label>
+          <input id="meter-exp" type="number" min="0" step="0.1" inputmode="decimal" placeholder="leer lassen, wenn nicht abgelesen"></div>
+        <button class="btn" id="meter-add" style="flex:0 0 auto">Hinzufügen</button>
+      </div>
+      <div class="note" id="meter-note" style="margin-top:10px"></div>
+      <div id="meter-check" style="margin-top:4px"></div>
+      <div id="meter-list" style="margin-top:8px"></div>
+    </div>
+
+    <div class="card" id="spot-card">
+      <h2><span class="info" data-info="spot" role="button" aria-label="Info">i</span>⚡ Dynamischer Börsentarif</h2>
+      <div class="note" style="line-height:1.6; margin-bottom:10px">
+        Wenn du einen <b>dynamischen Tarif</b> hast (Tibber, aWATTar, Ostrom …), zeigt die App
+        die <b>stündlichen Börsenpreise</b> und die günstigsten Zeiten. Die Preise kommen von
+        <b>aWATTar/EPEX</b> (kostenlos, ohne Konto).
+      </div>
+      <label style="display:flex; align-items:center; gap:8px; cursor:pointer">
+        <input type="checkbox" id="spot-enabled" style="width:auto"> Börsentarif aktivieren
+      </label>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px">
+        <div style="flex:1; min-width:110px"><label>Land</label>
+          <select id="spot-market"><option value="de">Deutschland</option><option value="at">Österreich</option></select></div>
+        <div style="flex:1; min-width:110px"><label>Aufschlag ct/kWh</label>
+          <input id="spot-surcharge" type="number" min="0" step="0.5" inputmode="decimal" placeholder="15"></div>
+        <div style="flex:1; min-width:90px"><label>MwSt. %</label>
+          <input id="spot-vat" type="number" min="0" step="1" inputmode="decimal" placeholder="19"></div>
+      </div>
+      <div class="note" style="margin-top:8px">Verbraucherpreis = Börsenpreis × (1 + MwSt.) + Aufschlag
+        (Netzentgelte, Steuern, Abgaben, Marge). Steht auf deiner Tarifübersicht.</div>
+      <div class="note" id="spot-note" style="margin-top:8px"></div>
+      <div class="note" style="margin-top:8px; color:var(--muted)">Hast du <b>Tibber</b>? Dann verbinde unten dein
+        Konto – die App nutzt dann deine <b>echten Tarifpreise</b> statt der Börse-plus-Aufschlag-Schätzung.</div>
+    </div>
+
+    <div class="card" id="tibber-card">
+      <h2><span class="info" data-info="tibber" role="button" aria-label="Info">i</span>⚡ Tibber verbinden (echte Preise)</h2>
+      <div class="note" id="tibber-status" style="margin-bottom:10px"></div>
+      <div class="note" style="line-height:1.6; margin-bottom:10px">
+        Mit einem <b>Tibber</b>-Konto zeigt die App deine <b>tatsächlichen</b> stündlichen Tarifpreise
+        (all-in, inkl. Netz/Abgaben/MwSt.) – genauer als die Börse-Schätzung. So bekommst du den Token:<br>
+        1. Auf <b>developer.tibber.com</b> mit deinem Tibber-Konto einloggen →
+        2. <b>Access Token</b> erzeugen/kopieren →
+        3. hier einfügen. Der Token bleibt <b>lokal</b> auf der Bridge (in <code>config.json</code>).
+      </div>
+      <label>Tibber Access Token</label>
+      <input id="tibber-token" type="password" autocomplete="off" autocapitalize="off" spellcheck="false"
+             placeholder="Token aus developer.tibber.com">
+      <button class="btn" id="tibber-connect" style="margin-top:8px">Verbinden</button>
+      <div class="note" id="tibber-note" style="margin-top:8px"></div>
+    </div>
+
+    <div class="card" id="ha-card">
+      <h2><span class="info" data-info="ha" role="button" aria-label="Info">i</span>🏠 Home Assistant verbinden</h2>
+      <div class="note" id="ha-status" style="margin-bottom:10px"></div>
+      <div class="note" style="line-height:1.6; margin-bottom:10px">
+        Läuft bei dir <b>Home Assistant</b>? Dann kann die App beliebige <b>Leistung/Energie-Sensoren</b> von dort
+        lesen – z. B. einen Lesekopf am Hauptzähler, PV/Batterie oder andere Nicht-Bosch-Geräte. (Für messende
+        Steckdosen ist der <b>Bosch Smart Plug+</b> einfacher – der erscheint automatisch als Bosch-Zähler.) So geht's:<br>
+        1. In HA: Profil → <b>Langlebige Zugangs-Tokens</b> → Token erstellen.<br>
+        2. Adresse (z. B. <code>http://homeassistant.local:8123</code>) und Token hier eintragen.<br>
+        Token &amp; Adresse bleiben <b>lokal</b> auf der Bridge (in <code>config.json</code>).
+      </div>
+      <div class="grid2">
+        <div><label>Home-Assistant-Adresse <a href="#" class="iptog-in" data-for="ha-url">anzeigen</a></label>
+          <input id="ha-url" class="ipsec hid" autocomplete="off" autocapitalize="off" spellcheck="false"
+                 placeholder="http://homeassistant.local:8123"></div>
+        <div><label>Zugangs-Token</label>
+          <input id="ha-token" type="password" autocomplete="off" autocapitalize="off" spellcheck="false"
+                 placeholder="Long-Lived Access Token"></div>
+      </div>
+      <label style="margin-top:10px; display:block">Nur bestimmte Sensoren (optional, Komma-getrennt)</label>
+      <input id="ha-entities" autocomplete="off" autocapitalize="off" spellcheck="false"
+             placeholder="leer = alle Leistungs-/Energiesensoren">
+      <button class="btn" id="ha-connect" style="margin-top:8px">Verbinden</button>
+      <div class="note" id="ha-note" style="margin-top:8px"></div>
+    </div>
+
     <div class="card">
       <h2>Anzeige</h2>
       <label>Bridge-Adresse (leer = gleicher Server)</label>
@@ -289,6 +2628,21 @@
       <button class="btn sec" id="save-base">Adresse speichern &amp; neu laden</button>
       <button class="btn sec" id="use-demo">Demo-Daten anzeigen</button>
       <div class="note" id="conn-note" style="margin-top:10px"></div>
+    </div>
+
+    <div class="card" id="net-card">
+      <h2><span class="info" data-info="net" role="button" aria-label="Info">i</span>📶 Erreichbarkeit &amp; Fernzugriff <span class="r" id="net-head"></span></h2>
+      <div class="note" style="margin-bottom:8px;clear:both">Warum das iPhone die Bridge manchmal nicht erreicht – und wie es von unterwegs sicher klappt.</div>
+      <div id="net-body"><div class="note">Wird beim Öffnen dieses Tabs geladen …</div></div>
+    </div>
+
+    <div class="card" id="perf-card">
+      <h2>⏱ Startzeit <span class="r" id="perf-head"></span></h2>
+      <div class="note" style="margin-bottom:10px">Wie lange dieser Start gedauert hat – im Browser und auf der Bridge.
+        Zum Vergleichen vor/nach einer Änderung.</div>
+      <div id="perf-body"><div class="note">Wird beim Öffnen dieses Tabs gemessen …</div></div>
+      <button class="btn sec" id="perf-bench" style="width:auto;padding:7px 14px">Bridge kalt nachrechnen</button>
+      <div class="note" id="perf-note" style="margin-top:8px"></div>
     </div>
 
     <div class="card" id="rename-card">
@@ -302,11 +2656,33 @@
     </div>
 
     <div class="card">
-      <h2>App aktualisieren</h2>
+      <h2>Aktualisieren</h2>
       <div class="note" style="margin-bottom:6px">
-        Falls Änderungen nicht ankommen oder Elemente „hängen": Cache leeren und frisch laden.
+        <b>Bridge aktualisieren</b> holt den neuesten Code (git pull) und startet die
+        Bridge neu – so bekommst du neue Funktionen ohne den Mac anzufassen.
       </div>
-      <button class="btn" id="hard-refresh">🔄 Cache leeren &amp; neu laden</button>
+      <button class="btn" id="bridge-update">⬇️ Bridge aktualisieren &amp; neu starten</button>
+      <div class="note" id="bridge-update-note" style="margin:10px 0 14px"></div>
+      <div class="note" style="margin:10px 0 6px">
+        <b>Automatisch aktualisieren:</b> die Bridge prüft selbst regelmäßig auf
+        neue Versionen und zieht sie ohne Zutun. Ideal, wenn du Aufgaben per iPhone
+        schickst – die Änderungen sind dann von allein da.
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <select id="auto-update" style="flex:1;min-width:150px">
+          <option value="0">Aus</option>
+          <option value="15">Alle 15 Minuten</option>
+          <option value="30">Alle 30 Minuten</option>
+          <option value="60">Stündlich</option>
+          <option value="360">Alle 6 Stunden</option>
+          <option value="1440">Täglich</option>
+        </select>
+      </div>
+      <div class="note" id="auto-update-note" style="margin:8px 0 14px"></div>
+      <div class="note" style="margin-bottom:6px">
+        Falls die App-Oberfläche „hängt" oder alt aussieht: Cache leeren und frisch laden.
+      </div>
+      <button class="btn sec" id="hard-refresh">🔄 App-Cache leeren &amp; neu laden</button>
       <div class="note" id="version-note" style="margin-top:10px"></div>
     </div>
 
@@ -314,8 +2690,8 @@
       <h2>Info</h2>
       <div class="note">
         Diese App liest die Leistungs-/Energiedaten der Bosch „Licht-/Rollladensteuerung II"
-        über eine kleine lokale Bridge (Ordner <b>bridge/</b>). Daten bleiben in deinem
-        Heimnetz. Zum Home-Bildschirm hinzufügen: Teilen-Symbol → „Zum Home-Bildschirm".
+        über eine kleine lokale Bridge und – falls verbunden – deine Bosch-Wärmepumpe über
+        HomeCom Easy. Zum Home-Bildschirm hinzufügen: Teilen-Symbol → „Zum Home-Bildschirm".
       </div>
     </div>
     <div class="card">
@@ -326,20 +2702,89 @@
 </main>
 
 <nav id="nav">
-  <button data-v="live" class="on">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L4 14h6l-1 8 9-12h-6l1-8z"/></svg>Live</button>
-  <button data-v="use">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>Verbrauch</button>
+  <button data-v="overview" class="on">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>Übersicht</button>
+  <button data-v="today">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Heute</button>
+  <button data-v="history">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>Verlauf</button>
+  <button data-v="heatpump">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2s5 4.5 5 9a5 5 0 0 1-10 0c0-1.6.6-3 1.3-4.2"/></svg>Wärme</button>
   <button data-v="profile">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>Profil</button>
-  <button data-v="away">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21V9l9-6 9 6v12M9 21v-6h6v6"/></svg>Abwesenheit</button>
-  <button data-v="forecast">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 17l6-6 4 4 8-8M21 7v5h-5"/></svg>Prognose</button>
+  <button data-v="pv">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M19 5l-1.5 1.5M6.5 17.5L5 19"/></svg>PV</button>
+  <button data-v="borse">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg>Börse</button>
+  <button data-v="konzept">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21h6M10 21v-3M14 21v-3M12 3a6 6 0 0 0-4 10.5c.7.7 1 1.2 1 2.5h6c0-1.3.3-1.8 1-2.5A6 6 0 0 0 12 3z"/></svg>Konzept</button>
   <button data-v="settings">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></svg>Setup</button>
 </nav>
 
+<!-- KIOSK / WOHN-DASHBOARD (Vollbild für ein Wand-iPad) --------------------->
+<div id="kiosk" hidden>
+  <div id="kiosk-top">
+    <div>
+      <div id="kiosk-clock">–:–</div>
+      <div id="kiosk-date" class="k-sub"></div>
+    </div>
+    <div style="text-align:right">
+      <div id="kiosk-out" class="k-sub"></div>
+      <div id="kiosk-updated" class="k-sub" style="opacity:.6"></div>
+    </div>
+    <button id="kiosk-away" aria-label="Abwesend/Zuhause">🏠 Zuhause</button>
+    <button id="kiosk-theme" aria-label="Hell/Dunkel">🌙</button>
+    <button id="kiosk-exit" aria-label="Schließen">✕</button>
+  </div>
+  <div id="kiosk-party" class="party-banner" hidden role="button" aria-label="Glückwunsch – antippen für Konfetti"></div>
+  <div id="kiosk-alerts"></div>
+  <div id="kiosk-warn"></div>
+  <div id="kiosk-banner"></div>
+  <div id="kiosk-routine"></div>
+  <div id="kiosk-cs">
+    <div id="kiosk-cal"></div>
+    <div id="kiosk-school"></div>
+  </div>
+  <div id="kiosk-news"></div>
+  <div id="kiosk-music"></div>
+  <div id="kiosk-energy">
+    <div id="kiosk-flow"></div>
+    <div id="kiosk-today"></div>
+  </div>
+  <div id="kiosk-loads"></div>
+  <div id="kiosk-rooms"></div>
+  <div id="kiosk-vent" class="k-sub"></div>
+  <div class="dash-dots"><span class="on" aria-label="Wohn-Dashboard"></span><a href="#dash2" aria-label="Haus-Dashboard"></a></div>
+</div>
+
+<!-- DASHBOARD 2 (#dash2): das Haus als Bild mit den Live-Werten -------------->
+<div id="house2" hidden>
+  <div id="h2-top">
+    <div class="h2-site"><b>Zuhause</b><span id="h2-status">–</span></div>
+    <button id="h2-backup" aria-label="Notstrom-Status"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 11 12 3l9 8M5.5 9v11.5h13V9"/><path d="M12.8 10.5 10 15h4l-2.8 4.5" stroke-linecap="round"/></svg></button>
+    <button id="h2-more" aria-label="Menü"><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><circle cx="5" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="19" cy="12" r="1.9"/></svg></button>
+    <div id="h2-pop" hidden>
+      <a href="#dash" data-h2go="dash">📺 Wohn-Dashboard</a>
+      <a href="#pv" data-h2go="pv">☀️ PV-Auswertung</a>
+      <a href="#" data-h2go="app">← Zur App</a>
+    </div>
+  </div>
+  <div id="h2-party" class="party-banner" hidden role="button" aria-label="Glückwunsch – antippen für Konfetti"></div>
+  <div id="h2-msg" hidden></div>
+  <div id="h2-main">
+    <div id="h2-house"></div>
+    <div id="h2-side">
+      <div class="h2-head"><h3>Tägliche Energie</h3>
+        <a href="#pv" data-h2go="pv" aria-label="PV-Auswertung öffnen"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M4 20h16M7 16v-4M12 16V7M17 16v-6"/></svg></a></div>
+      <div id="h2-card" class="h2-card"></div>
+      <div id="h2-foot" class="h2-foot"></div>
+    </div>
+  </div>
+  <div class="dash-dots"><a href="#dash" data-h2go="dash" aria-label="Wohn-Dashboard"></a><span class="on" aria-label="Haus-Dashboard"></span></div>
+</div>
+
+<div id="toast" hidden></div>
 <script src="app.js"></script>
 </body>
 </html>

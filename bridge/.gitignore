@@ -6,3 +6,5 @@ shc-client-cert.pem
 shc-client-key.pem
 __pycache__/
 *.pyc
+.bridge.lock
+config.json.tmp
